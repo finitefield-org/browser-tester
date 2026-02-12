@@ -133,7 +133,10 @@ MVP対応:
 - リスナー登録: `document.*.addEventListener(...)`
 - 制御構文: `if/else`, 変数宣言, 代入, 三項演算子, 論理/比較演算子
 - DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`
-- DOM更新: `textContent`, `value`, `checked`, `classList.*`, `setAttribute/getAttribute`
+- DOM更新: `textContent`, `value`, `checked`, `className`, `id`, `name`, `classList.*`,
+  `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
+  `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
+  `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText`, `innerHTML`
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
 ### 7.3 Rust<->Scriptブリッジ
@@ -426,8 +429,8 @@ pub struct Runtime {
 6. DOM構築完了後にscriptを同期実行
 
 補足:
-- script実行中のDOM変更（`appendChild`等）を許可する場合は、DOM APIの整合性を優先し、`id_index`を都度更新する
-- まずは `appendChild/removeChild` を非対応にしてもよい（MVP安定化優先）
+- script実行中のDOM変更（`appendChild/removeChild/insertBefore`等）は、DOM APIの整合性を優先し、
+  `id_index`を都度更新する
 
 ## 21. スクリプト実行詳細
 
@@ -537,9 +540,7 @@ AssertionFailed: assert_text
 
 ## 27. 将来拡張ポイント
 
-- `innerHTML` 対応
-- `classList` API
-- `appendChild/removeChild`
+- `innerHTML` の仕様拡張（サニタイズ/DOMParser互換性の向上）
 - `setTimeout` + task queue
 - `radio` グループ排他
 - `form.elements` / `FormData` 的な最小API

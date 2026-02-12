@@ -212,6 +212,65 @@ impl Dom {
         Ok(())
     }
 
+    fn inner_html(&self, node_id: NodeId) -> Result<String> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "innerHTML target is not an element".into(),
+            ));
+        }
+        let mut out = String::new();
+        for child in &self.nodes[node_id.0].children {
+            out.push_str(&self.dump_node(*child));
+        }
+        Ok(out)
+    }
+
+    fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "innerHTML target is not an element".into(),
+            ));
+        }
+
+        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+
+        let old_children = std::mem::take(&mut self.nodes[node_id.0].children);
+        for child in old_children {
+            self.nodes[child.0].parent = None;
+        }
+
+        let children = fragment.nodes[fragment.root.0].children.clone();
+        for child in children {
+            let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id))?;
+        }
+
+        self.rebuild_id_index();
+        Ok(())
+    }
+
+    fn clone_subtree_from_dom(
+        &mut self,
+        source: &Dom,
+        source_node: NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<NodeId> {
+        let node_type = match &source.nodes[source_node.0].node_type {
+            NodeType::Document => {
+                return Err(Error::ScriptRuntime(
+                    "cannot clone document node into innerHTML target".into(),
+                ));
+            }
+            NodeType::Element(element) => NodeType::Element(element.clone()),
+            NodeType::Text(text) => NodeType::Text(text.clone()),
+        };
+
+        let node = self.create_node(parent, node_type);
+        for child in &source.nodes[source_node.0].children {
+            let _ = self.clone_subtree_from_dom(source, *child, Some(node))?;
+        }
+        Ok(node)
+    }
+
     fn value(&self, node_id: NodeId) -> Result<String> {
         let element = self
             .element(node_id)
@@ -357,6 +416,114 @@ impl Dom {
         self.nodes[parent.0].children.push(child);
         self.rebuild_id_index();
         Ok(())
+    }
+
+    fn prepend_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+        let reference = self.nodes[parent.0].children.first().copied();
+        if let Some(reference) = reference {
+            self.insert_before(parent, child, reference)
+        } else {
+            self.append_child(parent, child)
+        }
+    }
+
+    fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: NodeId) -> Result<()> {
+        if !self.can_have_children(parent) {
+            return Err(Error::ScriptRuntime(
+                "insertBefore target cannot have children".into(),
+            ));
+        }
+        if child == self.root || child == parent {
+            return Err(Error::ScriptRuntime("invalid insertBefore node".into()));
+        }
+        if !self.is_valid_node(child) || !self.is_valid_node(reference) {
+            return Err(Error::ScriptRuntime("insertBefore node is invalid".into()));
+        }
+        if self.parent(reference) != Some(parent) {
+            return Err(Error::ScriptRuntime(
+                "insertBefore reference is not a direct child".into(),
+            ));
+        }
+        if child == reference {
+            return Ok(());
+        }
+
+        // Prevent cycles: parent must not be inside child's subtree.
+        let mut cursor = Some(parent);
+        while let Some(node) = cursor {
+            if node == child {
+                return Err(Error::ScriptRuntime(
+                    "insertBefore would create a cycle".into(),
+                ));
+            }
+            cursor = self.parent(node);
+        }
+
+        if let Some(old_parent) = self.parent(child) {
+            self.nodes[old_parent.0].children.retain(|id| *id != child);
+        }
+
+        let Some(index) = self.nodes[parent.0]
+            .children
+            .iter()
+            .position(|id| *id == reference)
+        else {
+            return Err(Error::ScriptRuntime(
+                "insertBefore reference is missing".into(),
+            ));
+        };
+
+        self.nodes[child.0].parent = Some(parent);
+        self.nodes[parent.0].children.insert(index, child);
+        self.rebuild_id_index();
+        Ok(())
+    }
+
+    fn insert_after(&mut self, target: NodeId, child: NodeId) -> Result<()> {
+        let Some(parent) = self.parent(target) else {
+            return Ok(());
+        };
+        let pos = self.nodes[parent.0]
+            .children
+            .iter()
+            .position(|id| *id == target)
+            .ok_or_else(|| Error::ScriptRuntime("after target is detached".into()))?;
+        let next = self.nodes[parent.0].children.get(pos + 1).copied();
+        if let Some(next) = next {
+            self.insert_before(parent, child, next)
+        } else {
+            self.append_child(parent, child)
+        }
+    }
+
+    fn replace_with(&mut self, target: NodeId, child: NodeId) -> Result<()> {
+        let Some(parent) = self.parent(target) else {
+            return Ok(());
+        };
+        if target == child {
+            return Ok(());
+        }
+        self.insert_before(parent, child, target)?;
+        self.remove_child(parent, target)
+    }
+
+    fn insert_adjacent_node(
+        &mut self,
+        target: NodeId,
+        position: InsertAdjacentPosition,
+        node: NodeId,
+    ) -> Result<()> {
+        match position {
+            InsertAdjacentPosition::BeforeBegin => {
+                if let Some(parent) = self.parent(target) {
+                    self.insert_before(parent, node, target)?;
+                }
+                Ok(())
+            }
+            InsertAdjacentPosition::AfterBegin => self.prepend_child(target, node),
+            InsertAdjacentPosition::BeforeEnd => self.append_child(target, node),
+            InsertAdjacentPosition::AfterEnd => self.insert_after(target, node),
+        }
     }
 
     fn remove_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
@@ -979,6 +1146,7 @@ enum DomProp {
     Value,
     Checked,
     TextContent,
+    InnerHtml,
     ClassName,
     Id,
     Name,
@@ -1090,8 +1258,22 @@ enum EventMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeTreeMethod {
+    After,
+    Append,
     AppendChild,
+    Before,
+    ReplaceWith,
+    Prepend,
     RemoveChild,
+    InsertBefore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertAdjacentPosition {
+    BeforeBegin,
+    AfterBegin,
+    BeforeEnd,
+    AfterEnd,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1124,6 +1306,17 @@ enum Stmt {
         target: DomQuery,
         method: NodeTreeMethod,
         child: Expr,
+        reference: Option<Expr>,
+    },
+    InsertAdjacentElement {
+        target: DomQuery,
+        position: InsertAdjacentPosition,
+        node: Expr,
+    },
+    InsertAdjacentText {
+        target: DomQuery,
+        position: InsertAdjacentPosition,
+        text: Expr,
     },
     NodeRemove {
         target: DomQuery,
@@ -1642,6 +1835,7 @@ impl Harness {
                         DomProp::TextContent => {
                             self.dom.set_text_content(node, &value.as_string())?
                         }
+                        DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
                         DomProp::ClassName => {
@@ -1700,18 +1894,79 @@ impl Harness {
                     target,
                     method,
                     child,
+                    reference,
                 } => {
-                    let parent = self.resolve_dom_query_required_runtime(target, env)?;
+                    let target_node = self.resolve_dom_query_required_runtime(target, env)?;
                     let child = self.eval_expr(child, env, event_param, event)?;
                     let Value::Node(child) = child else {
                         return Err(Error::ScriptRuntime(
-                            "appendChild/removeChild argument must be an element reference".into(),
+                            "before/after/replaceWith/append/appendChild/prepend/removeChild/insertBefore argument must be an element reference".into(),
                         ));
                     };
                     match method {
-                        NodeTreeMethod::AppendChild => self.dom.append_child(parent, child)?,
-                        NodeTreeMethod::RemoveChild => self.dom.remove_child(parent, child)?,
+                        NodeTreeMethod::After => self.dom.insert_after(target_node, child)?,
+                        NodeTreeMethod::Append => self.dom.append_child(target_node, child)?,
+                        NodeTreeMethod::AppendChild => self.dom.append_child(target_node, child)?,
+                        NodeTreeMethod::Before => {
+                            let Some(parent) = self.dom.parent(target_node) else {
+                                continue;
+                            };
+                            self.dom.insert_before(parent, child, target_node)?;
+                        }
+                        NodeTreeMethod::ReplaceWith => {
+                            self.dom.replace_with(target_node, child)?;
+                        }
+                        NodeTreeMethod::Prepend => self.dom.prepend_child(target_node, child)?,
+                        NodeTreeMethod::RemoveChild => self.dom.remove_child(target_node, child)?,
+                        NodeTreeMethod::InsertBefore => {
+                            let Some(reference) = reference else {
+                                return Err(Error::ScriptRuntime(
+                                    "insertBefore requires reference node".into(),
+                                ));
+                            };
+                            let reference = self.eval_expr(reference, env, event_param, event)?;
+                            let Value::Node(reference) = reference else {
+                                return Err(Error::ScriptRuntime(
+                                    "insertBefore reference must be an element reference".into(),
+                                ));
+                            };
+                            self.dom.insert_before(target_node, child, reference)?;
+                        }
                     }
+                }
+                Stmt::InsertAdjacentElement {
+                    target,
+                    position,
+                    node,
+                } => {
+                    let target_node = self.resolve_dom_query_required_runtime(target, env)?;
+                    let node = self.eval_expr(node, env, event_param, event)?;
+                    let Value::Node(node) = node else {
+                        return Err(Error::ScriptRuntime(
+                            "insertAdjacentElement second argument must be an element reference"
+                                .into(),
+                        ));
+                    };
+                    self.dom
+                        .insert_adjacent_node(target_node, *position, node)?;
+                }
+                Stmt::InsertAdjacentText {
+                    target,
+                    position,
+                    text,
+                } => {
+                    let target_node = self.resolve_dom_query_required_runtime(target, env)?;
+                    let text = self.eval_expr(text, env, event_param, event)?;
+                    if matches!(
+                        position,
+                        InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd
+                    ) && self.dom.parent(target_node).is_none()
+                    {
+                        continue;
+                    }
+                    let text_node = self.dom.create_detached_text(text.as_string());
+                    self.dom
+                        .insert_adjacent_node(target_node, *position, text_node)?;
                 }
                 Stmt::NodeRemove { target } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -1861,6 +2116,7 @@ impl Harness {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
                     DomProp::TextContent => Ok(Value::String(self.dom.text_content(node))),
+                    DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
                     DomProp::ClassName => Ok(Value::String(
                         self.dom.attr(node, "class").unwrap_or_default(),
                     )),
@@ -2318,6 +2574,14 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_class_list_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_insert_adjacent_element_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_insert_adjacent_text_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -2926,6 +3190,109 @@ fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+    let lowered = src.to_ascii_lowercase();
+    match lowered.as_str() {
+        "beforebegin" => Ok(InsertAdjacentPosition::BeforeBegin),
+        "afterbegin" => Ok(InsertAdjacentPosition::AfterBegin),
+        "beforeend" => Ok(InsertAdjacentPosition::BeforeEnd),
+        "afterend" => Ok(InsertAdjacentPosition::AfterEnd),
+        _ => Err(Error::ScriptParse(format!(
+            "unsupported insertAdjacent position: {src}"
+        ))),
+    }
+}
+
+fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("insertAdjacentElement") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 2 {
+        return Err(Error::ScriptParse(format!(
+            "insertAdjacentElement requires 2 arguments: {stmt}"
+        )));
+    }
+
+    let position = parse_insert_adjacent_position(&parse_string_literal_exact(args[0].trim())?)?;
+    let node = parse_expr(args[1].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported insertAdjacentElement statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::InsertAdjacentElement {
+        target,
+        position,
+        node,
+    }))
+}
+
+fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("insertAdjacentText") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 2 {
+        return Err(Error::ScriptParse(format!(
+            "insertAdjacentText requires 2 arguments: {stmt}"
+        )));
+    }
+
+    let position = parse_insert_adjacent_position(&parse_string_literal_exact(args[0].trim())?)?;
+    let text = parse_expr(args[1].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported insertAdjacentText statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::InsertAdjacentText {
+        target,
+        position,
+        text,
+    }))
+}
+
 fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -2943,25 +3310,45 @@ fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     };
     let method = match method.as_str() {
+        "after" => NodeTreeMethod::After,
+        "append" => NodeTreeMethod::Append,
         "appendChild" => NodeTreeMethod::AppendChild,
+        "before" => NodeTreeMethod::Before,
+        "replaceWith" => NodeTreeMethod::ReplaceWith,
+        "prepend" => NodeTreeMethod::Prepend,
         "removeChild" => NodeTreeMethod::RemoveChild,
+        "insertBefore" => NodeTreeMethod::InsertBefore,
         _ => return Ok(None),
     };
     cursor.skip_ws();
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 {
+    let (method_name, expected_args) = match method {
+        NodeTreeMethod::After => ("after", 1),
+        NodeTreeMethod::Append => ("append", 1),
+        NodeTreeMethod::AppendChild => ("appendChild", 1),
+        NodeTreeMethod::Before => ("before", 1),
+        NodeTreeMethod::ReplaceWith => ("replaceWith", 1),
+        NodeTreeMethod::Prepend => ("prepend", 1),
+        NodeTreeMethod::RemoveChild => ("removeChild", 1),
+        NodeTreeMethod::InsertBefore => ("insertBefore", 2),
+    };
+    if args.len() != expected_args {
         return Err(Error::ScriptParse(format!(
-            "{} requires 1 argument: {}",
-            match method {
-                NodeTreeMethod::AppendChild => "appendChild",
-                NodeTreeMethod::RemoveChild => "removeChild",
-            },
+            "{} requires {} argument{}: {}",
+            method_name,
+            expected_args,
+            if expected_args == 1 { "" } else { "s" },
             stmt
         )));
     }
     let child = parse_expr(args[0].trim())?;
+    let reference = if method == NodeTreeMethod::InsertBefore {
+        Some(parse_expr(args[1].trim())?)
+    } else {
+        None
+    };
 
     cursor.skip_ws();
     cursor.consume_byte(b';');
@@ -2976,6 +3363,7 @@ fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         target,
         method,
         child,
+        reference,
     }))
 }
 
@@ -3508,6 +3896,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("value", None) => DomProp::Value,
         ("checked", None) => DomProp::Checked,
         ("textContent", None) => DomProp::TextContent,
+        ("innerHTML", None) => DomProp::InnerHtml,
         ("className", None) => DomProp::ClassName,
         ("id", None) => DomProp::Id,
         ("name", None) => DomProp::Name,
@@ -5579,6 +5968,278 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "0:1:X:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_before_inserts_new_node_before_reference() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='a'>A</span><span id='c'>C</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const b = document.createElement('span');
+            b.id = 'b';
+            b.textContent = 'B';
+            root.insertBefore(b, document.getElementById('c'));
+            document.getElementById('result').textContent =
+              root.textContent + ':' + document.querySelector('#root>#b').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ABC:B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_before_reorders_existing_child() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='a'>A</span><span id='b'>B</span><span id='c'>C</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            root.insertBefore(
+              document.getElementById('c'),
+              document.getElementById('a')
+            );
+            document.getElementById('result').textContent = root.textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "CAB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn append_alias_adds_child_to_end() -> Result<()> {
+        let html = r#"
+        <div id='root'><span>A</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const b = document.createElement('span');
+            b.id = 'b';
+            b.textContent = 'B';
+            root.append(b);
+            document.getElementById('result').textContent =
+              root.textContent + ':' + document.querySelector('#root>#b').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AB:B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn prepend_adds_child_to_start() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span><span id='c'>C</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const a = document.createElement('span');
+            a.id = 'a';
+            a.textContent = 'A';
+            root.prepend(a);
+            document.getElementById('result').textContent =
+              root.textContent + ':' + document.querySelector('#root>#a').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ABC:A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn before_and_after_insert_relative_to_target() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const b = document.getElementById('b');
+            const a = document.createElement('span');
+            a.id = 'a';
+            a.textContent = 'A';
+            const c = document.createElement('span');
+            c.id = 'c';
+            c.textContent = 'C';
+            b.before(a);
+            b.after(c);
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' +
+              document.querySelector('#root>#a').textContent + ':' +
+              document.querySelector('#root>#c').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ABC:A:C")?;
+        Ok(())
+    }
+
+    #[test]
+    fn replace_with_replaces_node_and_updates_id_index() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='old'>O</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const old = document.getElementById('old');
+            const neo = document.createElement('span');
+            neo.id = 'new';
+            neo.textContent = 'N';
+            old.replaceWith(neo);
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' +
+              document.querySelectorAll('#old').length + ':' +
+              document.querySelectorAll('#new').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "N:0:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_adjacent_element_positions_work() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const b = document.getElementById('b');
+            const a = document.createElement('span');
+            a.id = 'a';
+            a.textContent = 'A';
+            const c = document.createElement('span');
+            c.id = 'c';
+            c.textContent = 'C';
+            const d = document.createElement('span');
+            d.id = 'd';
+            d.textContent = 'D';
+            const e = document.createElement('span');
+            e.id = 'e';
+            e.textContent = 'E';
+            b.insertAdjacentElement('beforebegin', a);
+            b.insertAdjacentElement('afterbegin', d);
+            b.insertAdjacentElement('beforeend', e);
+            b.insertAdjacentElement('afterend', c);
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' +
+              document.querySelectorAll('#a').length + ':' +
+              document.querySelectorAll('#c').length + ':' +
+              document.querySelector('#b>#d').textContent + ':' +
+              document.querySelector('#b>#e').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ADBEC:1:1:D:E")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_adjacent_text_positions_and_expression_work() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <input id='v' value='Y'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const b = document.getElementById('b');
+            b.insertAdjacentText('beforebegin', 'A');
+            b.insertAdjacentText('afterbegin', 'X');
+            b.insertAdjacentText('beforeend', document.getElementById('v').value);
+            b.insertAdjacentText('afterend', 'C');
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' + b.textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AXBYC:XBY")?;
+        Ok(())
+    }
+
+    #[test]
+    fn inner_html_set_replaces_children_and_updates_id_index() -> Result<()> {
+        let html = r#"
+        <div id='box'><span id='old'>O</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.innerHTML = '<span id="new">N</span><b>B</b>';
+            const same = box.innerHTML === '<span id="new">N</span><b>B</b>';
+            document.getElementById('result').textContent =
+              box.textContent + ':' +
+              document.querySelectorAll('#old').length + ':' +
+              document.querySelectorAll('#new').length + ':' +
+              same;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "NB:0:1:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn inner_html_getter_returns_markup_with_text_nodes() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.innerHTML = 'A<i id="x">X</i>C';
+            document.getElementById('result').textContent =
+              box.innerHTML + ':' + document.getElementById('x').textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A<i id=\"x\">X</i>C:X")?;
         Ok(())
     }
 
