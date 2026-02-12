@@ -141,6 +141,7 @@ MVP対応:
   （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
   `clearTimeout(timerId)` / `clearInterval(timerId)`
 - 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
+- 乱数: `Math.random()`（決定論PRNGの整数値を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
 ### 7.3 Rust<->Scriptブリッジ
@@ -191,7 +192,8 @@ MVP対応:
 ### 9.3 決定論サポート
 - `Date.now()` は fake clock（`now_ms`）を返す
 - `now_ms` は `advance_time(ms)` / `flush()` によりのみ進む
-- `Math.random` のseed固定は将来拡張（未実装）
+- `Math.random()` は決定論PRNGで生成される
+- `Harness::set_random_seed(seed)` で乱数列を再現可能にする
 
 ## 10. テストハーネスAPI詳細
 
@@ -207,6 +209,7 @@ impl Harness {
     pub fn click(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()>;
+    pub fn set_random_seed(&mut self, seed: u64);
     pub fn now_ms(&self) -> i64;
     pub fn advance_time(&mut self, ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;

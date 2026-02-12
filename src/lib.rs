@@ -1209,6 +1209,7 @@ enum Expr {
     Bool(bool),
     Number(i64),
     DateNow,
+    MathRandom,
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -1491,6 +1492,7 @@ pub struct Harness {
     next_task_order: i64,
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
+    rng_state: u64,
     trace: bool,
 }
 
@@ -1506,6 +1508,7 @@ impl Harness {
             next_task_order: 0,
             running_timer_id: None,
             running_timer_canceled: false,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
             trace: false,
         };
 
@@ -1518,6 +1521,14 @@ impl Harness {
 
     pub fn enable_trace(&mut self, enabled: bool) {
         self.trace = enabled;
+    }
+
+    pub fn set_random_seed(&mut self, seed: u64) {
+        self.rng_state = if seed == 0 {
+            0xA5A5_A5A5_A5A5_A5A5
+        } else {
+            seed
+        };
     }
 
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
@@ -2240,6 +2251,7 @@ impl Harness {
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
+            Expr::MathRandom => Ok(Value::Number(self.next_random_i64())),
             Expr::Var(name) => env
                 .get(name)
                 .cloned()
@@ -2473,6 +2485,17 @@ impl Harness {
             Value::String(v) => v.parse::<i64>().unwrap_or(0),
             Value::Node(_) => 0,
         }
+    }
+
+    fn next_random_i64(&mut self) -> i64 {
+        // xorshift64*: simple deterministic PRNG for test runtime.
+        let mut x = self.rng_state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng_state = if x == 0 { 0xA5A5_A5A5_A5A5_A5A5 } else { x };
+        let out = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        (out & 0x7FFF_FFFF) as i64
     }
 
     fn schedule_timeout(
@@ -4065,6 +4088,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DateNow);
     }
 
+    if parse_math_random_expr(src)? {
+        return Ok(Expr::MathRandom);
+    }
+
     if let Some(tag_name) = parse_document_create_element_expr(src)? {
         return Ok(Expr::CreateElement(tag_name));
     }
@@ -4202,6 +4229,28 @@ fn parse_date_now_expr(src: &str) -> Result<bool> {
     }
     cursor.skip_ws();
     if !cursor.consume_ascii("now") {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    Ok(cursor.eof())
+}
+
+fn parse_math_random_expr(src: &str) -> Result<bool> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("Math") {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("random") {
         return Ok(false);
     }
     cursor.skip_ws();
@@ -6471,6 +6520,59 @@ mod tests {
         h.flush()?;
         h.assert_text("#result", "0:25")?;
         assert_eq!(h.now_ms(), 25);
+        Ok(())
+    }
+
+    #[test]
+    fn math_random_is_deterministic_with_seed() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              Math.random() + ':' + Math.random() + ':' + Math.random();
+          });
+        </script>
+        "#;
+
+        let mut h1 = Harness::from_html(html)?;
+        let mut h2 = Harness::from_html(html)?;
+        h1.set_random_seed(12345);
+        h2.set_random_seed(12345);
+
+        h1.click("#btn")?;
+        h2.click("#btn")?;
+
+        let out1 = h1.dump_dom("#result")?;
+        let out2 = h2.dump_dom("#result")?;
+        assert_eq!(out1, out2);
+        Ok(())
+    }
+
+    #[test]
+    fn math_random_seed_reset_repeats_sequence() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              Math.random() + ':' + Math.random();
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_random_seed(7);
+        h.click("#btn")?;
+        let first = h.dump_dom("#result")?;
+
+        h.set_random_seed(7);
+        h.click("#btn")?;
+        let second = h.dump_dom("#result")?;
+
+        assert_eq!(first, second);
         Ok(())
     }
 
