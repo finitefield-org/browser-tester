@@ -1523,6 +1523,8 @@ pub struct Harness {
     rng_state: u64,
     trace: bool,
     trace_logs: Vec<String>,
+    trace_log_limit: usize,
+    trace_to_stderr: bool,
 }
 
 impl Harness {
@@ -1541,6 +1543,8 @@ impl Harness {
             rng_state: 0x9E37_79B9_7F4A_7C15,
             trace: false,
             trace_logs: Vec::new(),
+            trace_log_limit: 10_000,
+            trace_to_stderr: true,
         };
 
         for script in scripts {
@@ -1556,6 +1560,23 @@ impl Harness {
 
     pub fn take_trace_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.trace_logs)
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.trace_to_stderr = enabled;
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()> {
+        if max_entries == 0 {
+            return Err(Error::ScriptRuntime(
+                "set_trace_log_limit requires at least 1 entry".into(),
+            ));
+        }
+        self.trace_log_limit = max_entries;
+        while self.trace_logs.len() > self.trace_log_limit {
+            self.trace_logs.remove(0);
+        }
+        Ok(())
     }
 
     pub fn set_random_seed(&mut self, seed: u64) {
@@ -2130,7 +2151,12 @@ impl Harness {
 
     fn trace_line(&mut self, line: String) {
         if self.trace {
-            eprintln!("{line}");
+            if self.trace_to_stderr {
+                eprintln!("{line}");
+            }
+            if self.trace_logs.len() >= self.trace_log_limit {
+                self.trace_logs.remove(0);
+            }
             self.trace_logs.push(line);
         }
     }
@@ -6263,6 +6289,26 @@ mod tests {
     }
 
     #[test]
+    fn trace_logs_collect_when_stderr_output_is_disabled() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {});
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.set_trace_stderr(false);
+        h.click("#btn")?;
+
+        let logs = h.take_trace_logs();
+        assert!(logs.iter().any(|line| line.contains("[event] click")));
+        assert!(logs.iter().any(|line| line.contains("[event] done click")));
+        Ok(())
+    }
+
+    #[test]
     fn trace_logs_are_empty_when_trace_is_disabled() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -6304,6 +6350,43 @@ mod tests {
         let logs = h.take_trace_logs();
         assert!(logs.iter().any(|line| line.contains("[timer] run id=1")));
         assert!(logs.iter().any(|line| line.contains("now_ms=5")));
+        Ok(())
+    }
+
+    #[test]
+    fn trace_log_limit_keeps_latest_entries() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.set_trace_log_limit(2)?;
+        h.dispatch("#btn", "alpha")?;
+        h.dispatch("#btn", "beta")?;
+        h.dispatch("#btn", "gamma")?;
+
+        let logs = h.take_trace_logs();
+        assert_eq!(logs.len(), 2);
+        assert!(logs.iter().any(|line| line.contains("done beta")));
+        assert!(logs.iter().any(|line| line.contains("done gamma")));
+        assert!(logs.iter().all(|line| !line.contains("done alpha")));
+        Ok(())
+    }
+
+    #[test]
+    fn set_trace_log_limit_rejects_zero() -> Result<()> {
+        let html = r#"<button id='btn'>run</button>"#;
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .set_trace_log_limit(0)
+            .expect_err("zero trace log limit should be rejected");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("set_trace_log_limit requires at least 1 entry"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
         Ok(())
     }
 

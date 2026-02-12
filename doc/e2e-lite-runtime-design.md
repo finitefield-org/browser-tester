@@ -235,6 +235,8 @@ impl Harness {
     pub fn run_next_timer(&mut self) -> Result<bool>;
     pub fn run_next_due_timer(&mut self) -> Result<bool>;
     pub fn take_trace_logs(&mut self) -> Vec<String>;
+    pub fn set_trace_stderr(&mut self, enabled: bool);
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()>;
 
     // Assert
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()>;
@@ -282,6 +284,8 @@ pub struct PendingTimer {
 
 - `Harness::enable_trace(true)` でイベントトレース有効化
 - トレースは標準エラーへ出力され、`take_trace_logs()` で取得してクリアできる
+- `set_trace_stderr(false)` で標準エラー出力を止め、ログ収集のみを有効化できる
+- 保持件数は既定 `10000`。`set_trace_log_limit(n)` で変更でき、超過時は古いログから捨てる
 - 出力例:
   - `[event] click target=#submit current=#submit phase=bubble default_prevented=false`
   - `[event] done submit target=#signup current=#signup outcome=completed default_prevented=false propagation_stopped=false immediate_stopped=false`
