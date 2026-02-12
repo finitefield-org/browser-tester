@@ -1522,6 +1522,8 @@ pub struct Harness {
     running_timer_canceled: bool,
     rng_state: u64,
     trace: bool,
+    trace_events: bool,
+    trace_timers: bool,
     trace_logs: Vec<String>,
     trace_log_limit: usize,
     trace_to_stderr: bool,
@@ -1542,6 +1544,8 @@ impl Harness {
             running_timer_canceled: false,
             rng_state: 0x9E37_79B9_7F4A_7C15,
             trace: false,
+            trace_events: true,
+            trace_timers: true,
             trace_logs: Vec::new(),
             trace_log_limit: 10_000,
             trace_to_stderr: true,
@@ -1564,6 +1568,14 @@ impl Harness {
 
     pub fn set_trace_stderr(&mut self, enabled: bool) {
         self.trace_to_stderr = enabled;
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.trace_events = enabled;
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.trace_timers = enabled;
     }
 
     pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()> {
@@ -1751,7 +1763,7 @@ impl Harness {
         if self.running_timer_id.is_some() {
             self.running_timer_canceled = true;
         }
-        self.trace_line(format!("[timer] clear_all cleared={cleared}"));
+        self.trace_timer_line(format!("[timer] clear_all cleared={cleared}"));
         cleared
     }
 
@@ -1776,8 +1788,14 @@ impl Harness {
                 "advance_time requires non-negative milliseconds".into(),
             ));
         }
+        let from = self.now_ms;
         self.now_ms = self.now_ms.saturating_add(delta_ms);
-        self.run_due_timers().map(|_| ())
+        let ran = self.run_due_timers_internal()?;
+        self.trace_timer_line(format!(
+            "[timer] advance delta_ms={} from={} to={} ran_due={}",
+            delta_ms, from, self.now_ms, ran
+        ));
+        Ok(())
     }
 
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()> {
@@ -1787,16 +1805,29 @@ impl Harness {
                 self.now_ms
             )));
         }
-        self.advance_time(target_ms - self.now_ms)
+        let from = self.now_ms;
+        self.now_ms = target_ms;
+        let ran = self.run_due_timers_internal()?;
+        self.trace_timer_line(format!(
+            "[timer] advance_to from={} to={} ran_due={}",
+            from, self.now_ms, ran
+        ));
+        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.run_timer_queue(None, true).map(|_| ())
+        let from = self.now_ms;
+        let ran = self.run_timer_queue(None, true)?;
+        self.trace_timer_line(format!(
+            "[timer] flush from={} to={} ran={}",
+            from, self.now_ms, ran
+        ));
+        Ok(())
     }
 
     pub fn run_next_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(None) else {
-            self.trace_line("[timer] run_next none".into());
+            self.trace_timer_line("[timer] run_next none".into());
             return Ok(false);
         };
 
@@ -1810,7 +1841,7 @@ impl Harness {
 
     pub fn run_next_due_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(Some(self.now_ms)) else {
-            self.trace_line("[timer] run_next_due none".into());
+            self.trace_timer_line("[timer] run_next_due none".into());
             return Ok(false);
         };
 
@@ -1820,6 +1851,15 @@ impl Harness {
     }
 
     pub fn run_due_timers(&mut self) -> Result<usize> {
+        let ran = self.run_due_timers_internal()?;
+        self.trace_timer_line(format!(
+            "[timer] run_due now_ms={} ran={}",
+            self.now_ms, ran
+        ));
+        Ok(ran)
+    }
+
+    fn run_due_timers_internal(&mut self) -> Result<usize> {
         self.run_timer_queue(Some(self.now_ms), false)
     }
 
@@ -1893,7 +1933,7 @@ impl Harness {
             .interval_ms
             .map(|value| value.to_string())
             .unwrap_or_else(|| "none".into());
-        self.trace_line(format!(
+        self.trace_timer_line(format!(
             "[timer] run id={} due_at={} interval_ms={} now_ms={}",
             task.id, task.due_at, interval_desc, self.now_ms
         ));
@@ -1925,7 +1965,7 @@ impl Harness {
                     handler: task.handler,
                     env: task.env,
                 });
-                self.trace_line(format!(
+                self.trace_timer_line(format!(
                     "[timer] requeue id={} due_at={} interval_ms={}",
                     task.id, due_at, delay_ms
                 ));
@@ -2121,7 +2161,7 @@ impl Harness {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
                 let current_label = self.trace_node_label(event.current_target);
-                self.trace_line(format!(
+                self.trace_event_line(format!(
                     "[event] {} target={} current={} phase={} default_prevented={}",
                     event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
@@ -2137,7 +2177,7 @@ impl Harness {
     fn trace_event_done(&mut self, event: &EventState, outcome: &str) {
         let target_label = self.trace_node_label(event.target);
         let current_label = self.trace_node_label(event.current_target);
-        self.trace_line(format!(
+        self.trace_event_line(format!(
             "[event] done {} target={} current={} outcome={} default_prevented={} propagation_stopped={} immediate_stopped={}",
             event.event_type,
             target_label,
@@ -2147,6 +2187,18 @@ impl Harness {
             event.propagation_stopped,
             event.immediate_propagation_stopped
         ));
+    }
+
+    fn trace_event_line(&mut self, line: String) {
+        if self.trace && self.trace_events {
+            self.trace_line(line);
+        }
+    }
+
+    fn trace_timer_line(&mut self, line: String) {
+        if self.trace && self.trace_timers {
+            self.trace_line(line);
+        }
     }
 
     fn trace_line(&mut self, line: String) {
@@ -2797,7 +2849,7 @@ impl Harness {
             handler,
             env: env.clone(),
         });
-        self.trace_line(format!(
+        self.trace_timer_line(format!(
             "[timer] schedule timeout id={} due_at={} delay_ms={}",
             id, due_at, delay_ms
         ));
@@ -2824,7 +2876,7 @@ impl Harness {
             handler,
             env: env.clone(),
         });
-        self.trace_line(format!(
+        self.trace_timer_line(format!(
             "[timer] schedule interval id={} due_at={} interval_ms={}",
             id, due_at, interval_ms
         ));
@@ -2840,7 +2892,7 @@ impl Harness {
             self.running_timer_canceled = true;
             running_canceled = true;
         }
-        self.trace_line(format!(
+        self.trace_timer_line(format!(
             "[timer] clear id={} removed={} running_canceled={}",
             id, removed, running_canceled
         ));
@@ -6309,6 +6361,55 @@ mod tests {
     }
 
     #[test]
+    fn trace_categories_can_disable_timer_logs() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.set_trace_stderr(false);
+        h.set_trace_timers(false);
+        h.click("#btn")?;
+
+        let logs = h.take_trace_logs();
+        assert!(logs.iter().any(|line| line.contains("[event] click")));
+        assert!(logs.iter().all(|line| !line.contains("[timer]")));
+        Ok(())
+    }
+
+    #[test]
+    fn trace_categories_can_disable_event_logs() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.set_trace_stderr(false);
+        h.set_trace_events(false);
+        h.click("#btn")?;
+
+        let logs = h.take_trace_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("[timer] schedule timeout id=1"))
+        );
+        assert!(logs.iter().all(|line| !line.contains("[event]")));
+        Ok(())
+    }
+
+    #[test]
     fn trace_logs_are_empty_when_trace_is_disabled() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -6350,6 +6451,47 @@ mod tests {
         let logs = h.take_trace_logs();
         assert!(logs.iter().any(|line| line.contains("[timer] run id=1")));
         assert!(logs.iter().any(|line| line.contains("now_ms=5")));
+        Ok(())
+    }
+
+    #[test]
+    fn trace_logs_capture_timer_api_summaries() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {}, 5);
+            setTimeout(() => {}, 10);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.set_trace_stderr(false);
+        h.click("#btn")?;
+        let _ = h.take_trace_logs();
+
+        h.advance_time(5)?;
+        let logs = h.take_trace_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("[timer] advance delta_ms=5 from=0 to=5 ran_due=1"))
+        );
+
+        assert_eq!(h.run_due_timers()?, 0);
+        let logs = h.take_trace_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("[timer] run_due now_ms=5 ran=0"))
+        );
+
+        h.flush()?;
+        let logs = h.take_trace_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("[timer] flush from=5 to=10 ran=1"))
+        );
         Ok(())
     }
 

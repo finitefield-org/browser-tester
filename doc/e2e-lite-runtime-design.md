@@ -61,36 +61,11 @@ flowchart LR
 - `runtime_core`: 初期化、スクリプト実行、タスクキュー
 - `test_harness`: 高水準のテスト操作API
 
-## 5. クレート構成（推奨）
+## 5. クレート構成（採用方針）
 
-```
-crates/
-  runtime-core/
-    src/lib.rs
-    src/runtime.rs
-    src/task_queue.rs
-  dom-core/
-    src/lib.rs
-    src/node.rs
-    src/document.rs
-    src/query.rs
-  event-system/
-    src/lib.rs
-    src/event.rs
-    src/dispatch.rs
-  script-runtime/
-    src/lib.rs
-    src/parser.rs
-    src/ast.rs
-    src/evaluator.rs
-    src/builtins.rs
-  test-harness/
-    src/lib.rs
-    src/actions.rs
-    src/assertions.rs
-```
-
-最初は単一クレートでも良いが、将来的な境界明確化のため上記分割を推奨。
+- 本プロジェクトは**単一クレートで実装する**
+- `src/lib.rs` を中心に、必要に応じて同一クレート内でモジュール分割する
+- `runtime-core` / `dom-core` などの別クレート分割は行わない
 
 ## 6. DOMモデル詳細
 
@@ -236,6 +211,8 @@ impl Harness {
     pub fn run_next_due_timer(&mut self) -> Result<bool>;
     pub fn take_trace_logs(&mut self) -> Vec<String>;
     pub fn set_trace_stderr(&mut self, enabled: bool);
+    pub fn set_trace_events(&mut self, enabled: bool);
+    pub fn set_trace_timers(&mut self, enabled: bool);
     pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()>;
 
     // Assert
@@ -285,12 +262,16 @@ pub struct PendingTimer {
 - `Harness::enable_trace(true)` でイベントトレース有効化
 - トレースは標準エラーへ出力され、`take_trace_logs()` で取得してクリアできる
 - `set_trace_stderr(false)` で標準エラー出力を止め、ログ収集のみを有効化できる
+- `set_trace_events(false)` / `set_trace_timers(false)` でカテゴリ単位のログ出力を制御できる
 - 保持件数は既定 `10000`。`set_trace_log_limit(n)` で変更でき、超過時は古いログから捨てる
+- タイマー制御API実行時はサマリ行（advance/advance_to/run_due/flush）を出力する
 - 出力例:
   - `[event] click target=#submit current=#submit phase=bubble default_prevented=false`
   - `[event] done submit target=#signup current=#signup outcome=completed default_prevented=false propagation_stopped=false immediate_stopped=false`
   - `[timer] schedule timeout id=1 due_at=10 delay_ms=10`
   - `[timer] run id=1 due_at=10 interval_ms=none now_ms=10`
+  - `[timer] advance delta_ms=5 from=0 to=5 ran_due=1`
+  - `[timer] flush from=5 to=10 ran=1`
 
 - `dump_dom(selector)` で部分DOMを文字列化
 
@@ -464,7 +445,11 @@ pub struct Runtime {
     pub script: ScriptRuntime,
     pub task_queue: TaskQueue,
     pub trace: bool,
+    pub trace_events: bool,
+    pub trace_timers: bool,
     pub trace_logs: Vec<String>,
+    pub trace_log_limit: usize,
+    pub trace_to_stderr: bool,
 }
 ```
 
