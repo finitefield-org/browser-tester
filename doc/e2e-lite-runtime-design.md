@@ -189,6 +189,7 @@ MVP対応:
 - 将来のため microtask風キューを保持
 - タイマーは実時間を待たず、fake clock（初期値 `0ms`）で決定論的に実行する
 - `harness.advance_time(ms)` で fake clock を進め、`due_at <= now` のタイマーのみ実行する
+- `harness.run_due_timers()` で `now_ms` を進めずに、`due_at <= now_ms` のタイマーのみ実行する
 - `harness.advance_time_to(targetMs)` で fake clock を絶対時刻へ進め、`due_at <= targetMs` のタイマーを実行する
 - `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
 - `harness.run_next_timer()` は次の1件だけ実行し、実行した場合 `true` を返す（空キューは `false`）
@@ -222,6 +223,7 @@ impl Harness {
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
     pub fn now_ms(&self) -> i64;
     pub fn pending_timers(&self) -> Vec<PendingTimer>;
+    pub fn run_due_timers(&mut self) -> Result<usize>;
     pub fn advance_time(&mut self, ms: i64) -> Result<()>;
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;

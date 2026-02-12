@@ -1733,7 +1733,7 @@ impl Harness {
             ));
         }
         self.now_ms = self.now_ms.saturating_add(delta_ms);
-        self.run_due_timers()
+        self.run_due_timers().map(|_| ())
     }
 
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()> {
@@ -1747,7 +1747,7 @@ impl Harness {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.run_timer_queue(None, true)
+        self.run_timer_queue(None, true).map(|_| ())
     }
 
     pub fn run_next_timer(&mut self) -> Result<bool> {
@@ -1763,11 +1763,11 @@ impl Harness {
         Ok(true)
     }
 
-    fn run_due_timers(&mut self) -> Result<()> {
+    pub fn run_due_timers(&mut self) -> Result<usize> {
         self.run_timer_queue(Some(self.now_ms), false)
     }
 
-    fn run_timer_queue(&mut self, due_limit: Option<i64>, advance_clock: bool) -> Result<()> {
+    fn run_timer_queue(&mut self, due_limit: Option<i64>, advance_clock: bool) -> Result<usize> {
         let mut steps = 0usize;
         while let Some(next_idx) = self.next_task_index(due_limit) {
             steps += 1;
@@ -1780,7 +1780,7 @@ impl Harness {
             }
             self.execute_timer_task(task)?;
         }
-        Ok(())
+        Ok(steps)
     }
 
     fn timer_step_limit_error(
@@ -6709,6 +6709,47 @@ mod tests {
         h.assert_text("#result", "A")?;
         h.flush()?;
         h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_due_timers_runs_only_currently_due_tasks() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 0);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert_eq!(h.now_ms(), 0);
+
+        let ran = h.run_due_timers()?;
+        assert_eq!(ran, 1);
+        assert_eq!(h.now_ms(), 0);
+        h.assert_text("#result", "A")?;
+
+        let ran = h.run_due_timers()?;
+        assert_eq!(ran, 0);
+        h.assert_text("#result", "A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_due_timers_returns_zero_for_empty_queue() -> Result<()> {
+        let html = r#"<button id='btn'>run</button>"#;
+        let mut h = Harness::from_html(html)?;
+        assert_eq!(h.run_due_timers()?, 0);
         Ok(())
     }
 
