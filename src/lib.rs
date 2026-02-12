@@ -20,6 +20,7 @@ pub enum Error {
         selector: String,
         expected: String,
         actual: String,
+        dom_snippet: String,
     },
 }
 
@@ -43,9 +44,10 @@ impl fmt::Display for Error {
                 selector,
                 expected,
                 actual,
+                dom_snippet,
             } => write!(
                 f,
-                "assertion failed for {selector}: expected {expected}, actual {actual}"
+                "assertion failed for {selector}: expected {expected}, actual {actual}, snippet {dom_snippet}"
             ),
         }
     }
@@ -234,6 +236,13 @@ impl Dom {
             .and_then(|e| e.attrs.get(name).cloned())
     }
 
+    fn has_attr(&self, node_id: NodeId, name: &str) -> Result<bool> {
+        let element = self
+            .element(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("hasAttribute target is not an element".into()))?;
+        Ok(element.attrs.contains_key(&name.to_ascii_lowercase()))
+    }
+
     fn set_attr(&mut self, node_id: NodeId, name: &str, value: &str) -> Result<()> {
         let old_id = if name.eq_ignore_ascii_case("id") {
             self.element(node_id)
@@ -262,6 +271,93 @@ impl Dom {
                 self.id_index.remove(&old);
             }
             self.id_index.insert(value.to_string(), node_id);
+        }
+
+        Ok(())
+    }
+
+    fn remove_attr(&mut self, node_id: NodeId, name: &str) -> Result<()> {
+        let lowered = name.to_ascii_lowercase();
+        let old_id = if lowered == "id" {
+            self.element(node_id)
+                .and_then(|element| element.attrs.get("id").cloned())
+        } else {
+            None
+        };
+
+        let element = self.element_mut(node_id).ok_or_else(|| {
+            Error::ScriptRuntime("removeAttribute target is not an element".into())
+        })?;
+        element.attrs.remove(&lowered);
+
+        if lowered == "value" {
+            element.value.clear();
+        } else if lowered == "checked" {
+            element.checked = false;
+        } else if lowered == "disabled" {
+            element.disabled = false;
+        }
+
+        if lowered == "id" {
+            if let Some(old) = old_id {
+                self.id_index.remove(&old);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn dataset_get(&self, node_id: NodeId, key: &str) -> Result<String> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "dataset target is not an element".into(),
+            ));
+        }
+        let name = dataset_key_to_attr_name(key);
+        Ok(self.attr(node_id, &name).unwrap_or_default())
+    }
+
+    fn dataset_set(&mut self, node_id: NodeId, key: &str, value: &str) -> Result<()> {
+        let name = dataset_key_to_attr_name(key);
+        self.set_attr(node_id, &name, value)
+    }
+
+    fn style_get(&self, node_id: NodeId, key: &str) -> Result<String> {
+        let element = self
+            .element(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("style target is not an element".into()))?;
+        let name = js_prop_to_css_name(key);
+        let decls = parse_style_declarations(element.attrs.get("style").map(String::as_str));
+        Ok(decls
+            .iter()
+            .find(|(prop, _)| prop == &name)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default())
+    }
+
+    fn style_set(&mut self, node_id: NodeId, key: &str, value: &str) -> Result<()> {
+        let name = js_prop_to_css_name(key);
+        let element = self
+            .element_mut(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("style target is not an element".into()))?;
+
+        let mut decls = parse_style_declarations(element.attrs.get("style").map(String::as_str));
+        if let Some(pos) = decls.iter().position(|(prop, _)| prop == &name) {
+            if value.is_empty() {
+                decls.remove(pos);
+            } else {
+                decls[pos].1 = value.to_string();
+            }
+        } else if !value.is_empty() {
+            decls.push((name, value.to_string()));
+        }
+
+        if decls.is_empty() {
+            element.attrs.remove("style");
+        } else {
+            element
+                .attrs
+                .insert("style".to_string(), serialize_style_declarations(&decls));
         }
 
         Ok(())
@@ -491,6 +587,81 @@ fn set_class_attr(element: &mut Element, classes: &[String]) {
     }
 }
 
+fn dataset_key_to_attr_name(key: &str) -> String {
+    format!("data-{}", js_prop_to_css_name(key))
+}
+
+fn js_prop_to_css_name(prop: &str) -> String {
+    let mut out = String::new();
+    for ch in prop.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('-');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn parse_style_declarations(style_attr: Option<&str>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(style_attr) = style_attr else {
+        return out;
+    };
+
+    for decl in style_attr.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = decl.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        let value = value.trim().to_string();
+        if let Some(pos) = out.iter().position(|(existing, _)| existing == &name) {
+            out[pos].1 = value;
+        } else {
+            out.push((name, value));
+        }
+    }
+
+    out
+}
+
+fn serialize_style_declarations(decls: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (idx, (name, value)) in decls.iter().enumerate() {
+        if idx > 0 {
+            out.push(' ');
+        }
+        out.push_str(name);
+        out.push_str(": ");
+        out.push_str(value);
+        out.push(';');
+    }
+    out
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut it = value.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = it.next() else {
+            return out;
+        };
+        out.push(ch);
+    }
+    if it.next().is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 enum SelectorStep {
     Id(String),
@@ -686,7 +857,7 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DomProp {
     Value,
     Checked,
@@ -694,9 +865,11 @@ enum DomProp {
     ClassName,
     Id,
     Name,
+    Dataset(String),
+    Style(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DomQuery {
     ById(String),
     BySelector(String),
@@ -717,14 +890,14 @@ impl DomQuery {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClassListMethod {
     Add,
     Remove,
     Toggle,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BinaryOp {
     Or,
     And,
@@ -736,7 +909,7 @@ enum BinaryOp {
     Ge,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventExprProp {
     Type,
     Target,
@@ -745,12 +918,13 @@ enum EventExprProp {
     CurrentTargetId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Expr {
     String(String),
     Bool(bool),
     Number(i64),
     Var(String),
+    DomRef(DomQuery),
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -771,6 +945,10 @@ enum Expr {
         target: DomQuery,
         name: String,
     },
+    DomHasAttribute {
+        target: DomQuery,
+        name: String,
+    },
     EventProp {
         event_var: String,
         prop: EventExprProp,
@@ -784,14 +962,14 @@ enum Expr {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventMethod {
     PreventDefault,
     StopPropagation,
     StopImmediatePropagation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Stmt {
     VarDecl {
         name: String,
@@ -813,6 +991,10 @@ enum Stmt {
         name: String,
         value: Expr,
     },
+    DomRemoveAttribute {
+        target: DomQuery,
+        name: String,
+    },
     ForEach {
         selector: String,
         item_var: String,
@@ -828,10 +1010,21 @@ enum Stmt {
         event_var: String,
         method: EventMethod,
     },
+    ListenerMutation {
+        target: DomQuery,
+        op: ListenerRegistrationOp,
+        event_type: String,
+        capture: bool,
+        handler: ScriptHandler,
+    },
+    DispatchEvent {
+        target: DomQuery,
+        event_type: Expr,
+    },
     Expr(Expr),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct ScriptHandler {
     event_param: Option<String>,
     stmts: Vec<Stmt>,
@@ -856,6 +1049,37 @@ impl ListenerStore {
             .entry(event)
             .or_default()
             .push(listener);
+    }
+
+    fn remove(
+        &mut self,
+        node_id: NodeId,
+        event: &str,
+        capture: bool,
+        handler: &ScriptHandler,
+    ) -> bool {
+        let Some(events) = self.map.get_mut(&node_id) else {
+            return false;
+        };
+        let Some(listeners) = events.get_mut(event) else {
+            return false;
+        };
+
+        if let Some(pos) = listeners
+            .iter()
+            .position(|listener| listener.capture == capture && listener.handler == *handler)
+        {
+            listeners.remove(pos);
+            if listeners.is_empty() {
+                events.remove(event);
+            }
+            if events.is_empty() {
+                self.map.remove(&node_id);
+            }
+            return true;
+        }
+
+        false
     }
 
     fn get(&self, node_id: NodeId, event: &str, capture: bool) -> Vec<Listener> {
@@ -1077,6 +1301,7 @@ impl Harness {
                 selector: selector.to_string(),
                 expected: expected.to_string(),
                 actual,
+                dom_snippet: self.node_snippet(target),
             });
         }
         Ok(())
@@ -1090,6 +1315,7 @@ impl Harness {
                 selector: selector.to_string(),
                 expected: expected.to_string(),
                 actual,
+                dom_snippet: self.node_snippet(target),
             });
         }
         Ok(())
@@ -1103,6 +1329,7 @@ impl Harness {
                 selector: selector.to_string(),
                 expected: expected.to_string(),
                 actual: actual.to_string(),
+                dom_snippet: self.node_snippet(target),
             });
         }
         Ok(())
@@ -1122,6 +1349,10 @@ impl Harness {
         self.dom
             .query_selector(selector)?
             .ok_or_else(|| Error::SelectorNotFound(selector.to_string()))
+    }
+
+    fn node_snippet(&self, node_id: NodeId) -> String {
+        truncate_chars(&self.dom.dump_node(node_id), 200)
     }
 
     fn resolve_form_for_submit(&self, target: NodeId) -> Option<NodeId> {
@@ -1285,6 +1516,12 @@ impl Harness {
                         }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
+                        DomProp::Dataset(key) => {
+                            self.dom.dataset_set(node, key, &value.as_string())?
+                        }
+                        DomProp::Style(prop) => {
+                            self.dom.style_set(node, prop, &value.as_string())?
+                        }
                     }
                 }
                 Stmt::ClassListCall {
@@ -1321,6 +1558,10 @@ impl Harness {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     let value = self.eval_expr(value, env, event_param, event)?;
                     self.dom.set_attr(node, name, &value.as_string())?;
+                }
+                Stmt::DomRemoveAttribute { target, name } => {
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    self.dom.remove_attr(node, name)?;
                 }
                 Stmt::ForEach {
                     selector,
@@ -1383,6 +1624,42 @@ impl Harness {
                         }
                     }
                 }
+                Stmt::ListenerMutation {
+                    target,
+                    op,
+                    event_type,
+                    capture,
+                    handler,
+                } => {
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    match op {
+                        ListenerRegistrationOp::Add => {
+                            self.listeners.add(
+                                node,
+                                event_type.clone(),
+                                Listener {
+                                    capture: *capture,
+                                    handler: handler.clone(),
+                                },
+                            );
+                        }
+                        ListenerRegistrationOp::Remove => {
+                            let _ = self.listeners.remove(node, event_type, *capture, handler);
+                        }
+                    }
+                }
+                Stmt::DispatchEvent { target, event_type } => {
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    let event_name = self
+                        .eval_expr(event_type, env, event_param, event)?
+                        .as_string();
+                    if event_name.is_empty() {
+                        return Err(Error::ScriptRuntime(
+                            "dispatchEvent requires non-empty event type".into(),
+                        ));
+                    }
+                    let _ = self.dispatch_event(node, &event_name)?;
+                }
                 Stmt::Expr(expr) => {
                     let _ = self.eval_expr(expr, env, event_param, event)?;
                 }
@@ -1407,6 +1684,10 @@ impl Harness {
                 .get(name)
                 .cloned()
                 .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}"))),
+            Expr::DomRef(target) => {
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
+                Ok(Value::Node(node))
+            }
             Expr::Binary { left, op, right } => {
                 let left = self.eval_expr(left, env, event_param, event)?;
                 let right = self.eval_expr(right, env, event_param, event)?;
@@ -1425,6 +1706,8 @@ impl Harness {
                     DomProp::Name => Ok(Value::String(
                         self.dom.attr(node, "name").unwrap_or_default(),
                     )),
+                    DomProp::Dataset(key) => Ok(Value::String(self.dom.dataset_get(node, key)?)),
+                    DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
                 }
             }
             Expr::ClassListContains { target, class_name } => {
@@ -1438,6 +1721,10 @@ impl Harness {
             Expr::DomGetAttribute { target, name } => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 Ok(Value::String(self.dom.attr(node, name).unwrap_or_default()))
+            }
+            Expr::DomHasAttribute { target, name } => {
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
+                Ok(Value::Bool(self.dom.has_attr(node, name)?))
             }
             Expr::EventProp { event_var, prop } => {
                 let Some(param) = event_param else {
@@ -1615,14 +1902,23 @@ impl Harness {
                 stmts: parse_block_statements(&reg.body)?,
             };
 
-            self.listeners.add(
-                target,
-                reg.event_type,
-                Listener {
-                    capture: reg.capture,
-                    handler,
-                },
-            );
+            match reg.op {
+                ListenerRegistrationOp::Add => {
+                    self.listeners.add(
+                        target,
+                        reg.event_type,
+                        Listener {
+                            capture: reg.capture,
+                            handler,
+                        },
+                    );
+                }
+                ListenerRegistrationOp::Remove => {
+                    let _ = self
+                        .listeners
+                        .remove(target, &reg.event_type, reg.capture, &handler);
+                }
+            }
 
             cursor.skip_ws_and_comments();
             if cursor.pos() == start {
@@ -1634,8 +1930,15 @@ impl Harness {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListenerRegistrationOp {
+    Add,
+    Remove,
+}
+
 #[derive(Debug)]
 struct ListenerRegistration {
+    op: ListenerRegistrationOp,
     target: DomQuery,
     event_type: String,
     event_param: Option<String>,
@@ -1649,7 +1952,18 @@ fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegist
     cursor.skip_ws();
     cursor.expect_byte(b'.')?;
     cursor.skip_ws();
-    cursor.expect_ascii("addEventListener")?;
+    let method = cursor
+        .parse_identifier()
+        .ok_or_else(|| Error::ScriptParse("expected listener method".into()))?;
+    let op = match method.as_str() {
+        "addEventListener" => ListenerRegistrationOp::Add,
+        "removeEventListener" => ListenerRegistrationOp::Remove,
+        _ => {
+            return Err(Error::ScriptParse(format!(
+                "unsupported listener method: {method}"
+            )));
+        }
+    };
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
     cursor.skip_ws();
@@ -1683,6 +1997,7 @@ fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegist
     cursor.consume_byte(b';');
 
     Ok(ListenerRegistration {
+        op,
         target,
         event_type,
         event_param,
@@ -1836,7 +2151,19 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_remove_attribute_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_class_list_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_listener_mutation_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_dispatch_event_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -2326,6 +2653,40 @@ fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("removeAttribute") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let name = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported removeAttribute statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::DomRemoveAttribute { target, name }))
+}
+
 fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -2392,6 +2753,115 @@ fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
         method,
         class_name,
         force,
+    }))
+}
+
+fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("dispatchEvent") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(format!(
+            "dispatchEvent requires 1 argument: {stmt}"
+        )));
+    }
+    let event_type = parse_expr(args[0].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported dispatchEvent statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::DispatchEvent { target, event_type }))
+}
+
+fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let op = match method.as_str() {
+        "addEventListener" => ListenerRegistrationOp::Add,
+        "removeEventListener" => ListenerRegistrationOp::Remove,
+        _ => return Ok(None),
+    };
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let event_type = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b',')?;
+    cursor.skip_ws();
+    let (event_param, body) = parse_callback(&mut cursor)?;
+
+    cursor.skip_ws();
+    let capture = if cursor.consume_byte(b',') {
+        cursor.skip_ws();
+        if cursor.consume_ascii("true") {
+            true
+        } else if cursor.consume_ascii("false") {
+            false
+        } else {
+            return Err(Error::ScriptParse(
+                "add/removeEventListener third argument must be true/false".into(),
+            ));
+        }
+    } else {
+        false
+    };
+
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported listener mutation statement tail: {stmt}"
+        )));
+    }
+
+    let handler = ScriptHandler {
+        event_param,
+        stmts: parse_block_statements(&body)?,
+    };
+    Ok(Some(Stmt::ListenerMutation {
+        target,
+        op,
+        event_type,
+        capture,
+        handler,
     }))
 }
 
@@ -2591,6 +3061,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DomGetAttribute { target, name });
     }
 
+    if let Some((target, name)) = parse_has_attribute_expr(src)? {
+        return Ok(Expr::DomHasAttribute { target, name });
+    }
+
+    if let Some(target) = parse_document_element_expr(src)? {
+        return Ok(Expr::DomRef(target));
+    }
+
     if let Some((event_var, prop)) = parse_event_property_expr(src)? {
         return Ok(Expr::EventProp { event_var, prop });
     }
@@ -2604,6 +3082,20 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     Err(Error::ScriptParse(format!("unsupported expression: {src}")))
+}
+
+fn parse_document_element_expr(src: &str) -> Result<Option<DomQuery>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let target = match parse_document_element_call(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(target))
 }
 
 fn parse_template_literal(src: &str) -> Result<Expr> {
@@ -2676,21 +3168,40 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     }
     cursor.skip_ws();
 
-    let prop = cursor
+    let head = cursor
         .parse_identifier()
         .ok_or_else(|| Error::ScriptParse(format!("expected property name in: {src}")))?;
 
-    let prop = match prop.as_str() {
-        "value" => DomProp::Value,
-        "checked" => DomProp::Checked,
-        "textContent" => DomProp::TextContent,
-        "className" => DomProp::ClassName,
-        "id" => DomProp::Id,
-        "name" => DomProp::Name,
+    cursor.skip_ws();
+    let nested = if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        Some(
+            cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse(format!("expected nested property in: {src}")))?,
+        )
+    } else {
+        None
+    };
+
+    let prop = match (head.as_str(), nested.as_ref()) {
+        ("value", None) => DomProp::Value,
+        ("checked", None) => DomProp::Checked,
+        ("textContent", None) => DomProp::TextContent,
+        ("className", None) => DomProp::ClassName,
+        ("id", None) => DomProp::Id,
+        ("name", None) => DomProp::Name,
+        ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
+        ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
+            let prop_label = if let Some(nested) = nested {
+                format!("{head}.{nested}")
+            } else {
+                head
+            };
             return Err(Error::ScriptParse(format!(
                 "unsupported DOM property '{}' in: {src}",
-                prop
+                prop_label
             )));
         }
     };
@@ -2717,6 +3228,36 @@ fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     }
     cursor.skip_ws();
     if !cursor.consume_ascii("getAttribute") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let name = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some((target, name)))
+}
+
+fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("hasAttribute") {
         return Ok(None);
     }
     cursor.skip_ws();
@@ -4163,6 +4704,69 @@ mod tests {
     }
 
     #[test]
+    fn query_selector_all_foreach_single_arg_callback_works() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.querySelectorAll('.item').forEach(item => {
+              item.classList.add('seen');
+              document.getElementById('result').textContent =
+                document.getElementById('result').textContent + item.textContent;
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn foreach_supports_nested_if_else_and_event_variable() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+        </ul>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            document.querySelectorAll('.item').forEach((item, idx) => {
+              if (idx === 1) {
+                if (event.target.id === 'btn') {
+                  item.classList.add('mid');
+                } else {
+                  item.classList.add('other');
+                }
+              } else {
+                item.classList.add('edge');
+              }
+            });
+            document.getElementById('result').textContent =
+              document.querySelectorAll('.edge').length + ':' +
+              document.querySelectorAll('.mid').length + ':' +
+              event.currentTarget.id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2:1:btn")?;
+        Ok(())
+    }
+
+    #[test]
     fn if_without_braces_with_else_on_next_statement_works() -> Result<()> {
         let html = r#"
         <input id='agree' type='checkbox'>
@@ -4272,6 +4876,153 @@ mod tests {
     }
 
     #[test]
+    fn dataset_property_read_write_works() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('box').dataset.userId = 'u42';
+            document.getElementById('box').dataset.planType = 'pro';
+            document.getElementById('result').textContent =
+              document.getElementById('box').dataset.userId + ':' +
+              document.getElementById('box').getAttribute('data-user-id') + ':' +
+              document.getElementById('box').dataset.planType;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "u42:u42:pro")?;
+        Ok(())
+    }
+
+    #[test]
+    fn style_property_read_write_works() -> Result<()> {
+        let html = r#"
+        <div id='box' style='color: blue;'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('box').style.backgroundColor = 'red';
+            document.getElementById('box').style.color = '';
+            document.getElementById('result').textContent =
+              document.getElementById('box').style.backgroundColor + ':' +
+              document.getElementById('box').style.color + ':' +
+              document.getElementById('box').getAttribute('style');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "red::background-color: red;")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dataset_camel_case_mapping_works() -> Result<()> {
+        let html = r#"
+        <div id='box' data-user-id='u1' data-plan-type='starter'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.dataset.accountStatus = 'active';
+            document.getElementById('result').textContent =
+              box.dataset.userId + ':' +
+              box.dataset.planType + ':' +
+              box.getAttribute('data-account-status');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "u1:starter:active")?;
+        Ok(())
+    }
+
+    #[test]
+    fn style_empty_value_removes_attribute_when_last_property() -> Result<()> {
+        let html = r#"
+        <div id='box' style='color: blue;'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.style.color = '';
+            document.getElementById('result').textContent =
+              box.getAttribute('style') === '' ? 'none' : 'some';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn style_overwrite_updates_existing_declaration_without_duplicate() -> Result<()> {
+        let html = r#"
+        <div id='box' style='color: blue; border-color: black;'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.style.color = 'red';
+            box.style.backgroundColor = 'white';
+            document.getElementById('result').textContent = box.getAttribute('style');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "color: red; border-color: black; background-color: white;",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn element_reference_expression_assignment_works() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            const box = document.getElementById('box');
+            const second = document.querySelectorAll('.item')[1];
+            box.textContent = second.textContent + ':' + event.target.id;
+            box.dataset.state = 'ok';
+            document.getElementById('result').textContent =
+              box.dataset.state + ':' + box.textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ok:B:btn")?;
+        Ok(())
+    }
+
+    #[test]
     fn event_properties_and_stop_immediate_propagation_work() -> Result<()> {
         let html = r#"
         <div id='root'>
@@ -4296,6 +5047,184 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "click:btn:btn")?;
+        Ok(())
+    }
+
+    #[test]
+    fn remove_event_listener_works_for_matching_handler() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = 'A';
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'B';
+          });
+          document.getElementById('btn').removeEventListener('click', () => {
+            document.getElementById('result').textContent = 'A';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_event_statement_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('box').addEventListener('custom', (event) => {
+            document.getElementById('result').textContent =
+              event.type + ':' + event.target.id + ':' + event.currentTarget.id;
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.dispatchEvent('custom');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "custom:box:box")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dynamic_add_event_listener_inside_handler_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.addEventListener('custom', () => {
+              document.getElementById('result').textContent = 'ok';
+            });
+            box.dispatchEvent('custom');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dynamic_remove_event_listener_inside_handler_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('box').addEventListener('custom', () => {
+            document.getElementById('result').textContent = 'A';
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.removeEventListener('custom', () => {
+              document.getElementById('result').textContent = 'A';
+            });
+            box.dispatchEvent('custom');
+            if (document.getElementById('result').textContent === '')
+              document.getElementById('result').textContent = 'none';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn assertion_failure_contains_dom_snippet() -> Result<()> {
+        let html = r#"
+        <p id='result'>NG</p>
+        "#;
+        let h = Harness::from_html(html)?;
+
+        let err = match h.assert_text("#result", "OK") {
+            Ok(()) => panic!("assert_text should fail"),
+            Err(err) => err,
+        };
+
+        match err {
+            Error::AssertionFailed {
+                selector,
+                expected,
+                actual,
+                dom_snippet,
+            } => {
+                assert_eq!(selector, "#result");
+                assert_eq!(expected, "OK");
+                assert_eq!(actual, "NG");
+                assert!(dom_snippet.contains("<p"));
+                assert!(dom_snippet.contains("NG"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_and_has_attribute_work() -> Result<()> {
+        let html = r#"
+        <div id='box' data-x='1' class='a'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const before = box.hasAttribute('data-x');
+            box.removeAttribute('data-x');
+            const after = box.hasAttribute('data-x');
+            box.removeAttribute('class');
+            document.getElementById('result').textContent =
+              before + ':' + after + ':' + box.className + ':' + box.getAttribute('data-x');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:false::")?;
+        Ok(())
+    }
+
+    #[test]
+    fn remove_id_attribute_updates_id_selector_index() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.removeAttribute('id');
+            document.getElementById('result').textContent =
+              document.querySelectorAll('#box').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0")?;
         Ok(())
     }
 
