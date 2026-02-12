@@ -1212,6 +1212,14 @@ enum Expr {
     DomRef(DomQuery),
     CreateElement(String),
     CreateTextNode(String),
+    SetTimeout {
+        handler: ScriptHandler,
+        delay_ms: Box<Expr>,
+    },
+    SetInterval {
+        handler: ScriptHandler,
+        delay_ms: Box<Expr>,
+    },
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -1317,6 +1325,17 @@ enum Stmt {
         target: DomQuery,
         position: InsertAdjacentPosition,
         text: Expr,
+    },
+    SetTimeout {
+        handler: ScriptHandler,
+        delay_ms: Expr,
+    },
+    SetInterval {
+        handler: ScriptHandler,
+        delay_ms: Expr,
+    },
+    ClearTimeout {
+        timer_id: Expr,
     },
     NodeRemove {
         target: DomQuery,
@@ -1452,9 +1471,25 @@ struct ParseOutput {
     scripts: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ScheduledTask {
+    id: i64,
+    due_at: i64,
+    order: i64,
+    interval_ms: Option<i64>,
+    handler: ScriptHandler,
+    env: HashMap<String, Value>,
+}
+
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
+    task_queue: Vec<ScheduledTask>,
+    now_ms: i64,
+    next_timer_id: i64,
+    next_task_order: i64,
+    running_timer_id: Option<i64>,
+    running_timer_canceled: bool,
     trace: bool,
 }
 
@@ -1464,6 +1499,12 @@ impl Harness {
         let mut harness = Self {
             dom,
             listeners: ListenerStore::default(),
+            task_queue: Vec::new(),
+            now_ms: 0,
+            next_timer_id: 1,
+            next_task_order: 0,
+            running_timer_id: None,
+            running_timer_canceled: false,
             trace: false,
         };
 
@@ -1615,7 +1656,93 @@ impl Harness {
         Ok(())
     }
 
+    pub fn now_ms(&self) -> i64 {
+        self.now_ms
+    }
+
+    pub fn advance_time(&mut self, delta_ms: i64) -> Result<()> {
+        if delta_ms < 0 {
+            return Err(Error::ScriptRuntime(
+                "advance_time requires non-negative milliseconds".into(),
+            ));
+        }
+        self.now_ms = self.now_ms.saturating_add(delta_ms);
+        self.run_due_timers()
+    }
+
     pub fn flush(&mut self) -> Result<()> {
+        self.run_timer_queue(None, true)
+    }
+
+    fn run_due_timers(&mut self) -> Result<()> {
+        self.run_timer_queue(Some(self.now_ms), false)
+    }
+
+    fn run_timer_queue(&mut self, due_limit: Option<i64>, advance_clock: bool) -> Result<()> {
+        const MAX_FLUSH_STEPS: usize = 10_000;
+        let mut steps = 0usize;
+        while let Some(next_idx) = self.next_task_index(due_limit) {
+            steps += 1;
+            if steps > MAX_FLUSH_STEPS {
+                return Err(Error::ScriptRuntime(
+                    "flush exceeded max task steps (possible uncleared setInterval)".into(),
+                ));
+            }
+            let task = self.task_queue.remove(next_idx);
+            if advance_clock && task.due_at > self.now_ms {
+                self.now_ms = task.due_at;
+            }
+            self.execute_timer_task(task)?;
+        }
+        Ok(())
+    }
+
+    fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
+        self.task_queue
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                if let Some(limit) = due_limit {
+                    task.due_at <= limit
+                } else {
+                    true
+                }
+            })
+            .min_by_key(|(_, task)| (task.due_at, task.order))
+            .map(|(idx, _)| idx)
+    }
+
+    fn execute_timer_task(&mut self, mut task: ScheduledTask) -> Result<()> {
+        self.running_timer_id = Some(task.id);
+        self.running_timer_canceled = false;
+        let mut event = EventState::new("timeout", self.dom.root);
+        self.execute_stmts(
+            &task.handler.stmts,
+            &task.handler.event_param,
+            &mut event,
+            &mut task.env,
+        )?;
+        let canceled = self.running_timer_canceled;
+        self.running_timer_id = None;
+        self.running_timer_canceled = false;
+
+        if let Some(interval_ms) = task.interval_ms {
+            if !canceled {
+                let delay_ms = interval_ms.max(0);
+                let due_at = task.due_at.saturating_add(delay_ms);
+                let order = self.next_task_order;
+                self.next_task_order += 1;
+                self.task_queue.push(ScheduledTask {
+                    id: task.id,
+                    due_at,
+                    order,
+                    interval_ms: Some(delay_ms),
+                    handler: task.handler,
+                    env: task.env,
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -1826,7 +1953,14 @@ impl Harness {
             match stmt {
                 Stmt::VarDecl { name, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
-                    env.insert(name.clone(), value);
+                    env.insert(name.clone(), value.clone());
+                    if matches!(expr, Expr::SetTimeout { .. } | Expr::SetInterval { .. }) {
+                        if let Value::Number(timer_id) = value {
+                            for task in self.task_queue.iter_mut().filter(|t| t.id == timer_id) {
+                                task.env.insert(name.clone(), Value::Number(timer_id));
+                            }
+                        }
+                    }
                 }
                 Stmt::DomAssign { target, prop, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -1968,6 +2102,21 @@ impl Harness {
                     self.dom
                         .insert_adjacent_node(target_node, *position, text_node)?;
                 }
+                Stmt::SetTimeout { handler, delay_ms } => {
+                    let delay = self.eval_expr(delay_ms, env, event_param, event)?;
+                    let delay = Self::value_to_i64(&delay);
+                    let _ = self.schedule_timeout(handler.clone(), delay, env);
+                }
+                Stmt::SetInterval { handler, delay_ms } => {
+                    let interval = self.eval_expr(delay_ms, env, event_param, event)?;
+                    let interval = Self::value_to_i64(&interval);
+                    let _ = self.schedule_interval(handler.clone(), interval, env);
+                }
+                Stmt::ClearTimeout { timer_id } => {
+                    let timer_id = self.eval_expr(timer_id, env, event_param, event)?;
+                    let timer_id = Self::value_to_i64(&timer_id);
+                    self.clear_timeout(timer_id);
+                }
                 Stmt::NodeRemove { target } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     self.dom.remove_node(node)?;
@@ -2104,6 +2253,18 @@ impl Harness {
             Expr::CreateTextNode(text) => {
                 let node = self.dom.create_detached_text(text.clone());
                 Ok(Value::Node(node))
+            }
+            Expr::SetTimeout { handler, delay_ms } => {
+                let delay = self.eval_expr(delay_ms, env, event_param, event)?;
+                let delay = Self::value_to_i64(&delay);
+                let id = self.schedule_timeout(handler.clone(), delay, env);
+                Ok(Value::Number(id))
+            }
+            Expr::SetInterval { handler, delay_ms } => {
+                let interval = self.eval_expr(delay_ms, env, event_param, event)?;
+                let interval = Self::value_to_i64(&interval);
+                let id = self.schedule_interval(handler.clone(), interval, env);
+                Ok(Value::Number(id))
             }
             Expr::Binary { left, op, right } => {
                 let left = self.eval_expr(left, env, event_param, event)?;
@@ -2295,6 +2456,74 @@ impl Harness {
             .tag_name(node)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("node-{}", node.0))
+    }
+
+    fn value_to_i64(value: &Value) -> i64 {
+        match value {
+            Value::Number(v) => *v,
+            Value::Bool(v) => {
+                if *v {
+                    1
+                } else {
+                    0
+                }
+            }
+            Value::String(v) => v.parse::<i64>().unwrap_or(0),
+            Value::Node(_) => 0,
+        }
+    }
+
+    fn schedule_timeout(
+        &mut self,
+        handler: ScriptHandler,
+        delay_ms: i64,
+        env: &HashMap<String, Value>,
+    ) -> i64 {
+        let delay_ms = delay_ms.max(0);
+        let due_at = self.now_ms + delay_ms;
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+        let order = self.next_task_order;
+        self.next_task_order += 1;
+        self.task_queue.push(ScheduledTask {
+            id,
+            due_at,
+            order,
+            interval_ms: None,
+            handler,
+            env: env.clone(),
+        });
+        id
+    }
+
+    fn schedule_interval(
+        &mut self,
+        handler: ScriptHandler,
+        interval_ms: i64,
+        env: &HashMap<String, Value>,
+    ) -> i64 {
+        let interval_ms = interval_ms.max(0);
+        let due_at = self.now_ms + interval_ms;
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+        let order = self.next_task_order;
+        self.next_task_order += 1;
+        self.task_queue.push(ScheduledTask {
+            id,
+            due_at,
+            order,
+            interval_ms: Some(interval_ms),
+            handler,
+            env: env.clone(),
+        });
+        id
+    }
+
+    fn clear_timeout(&mut self, id: i64) {
+        self.task_queue.retain(|task| task.id != id);
+        if self.running_timer_id == Some(id) {
+            self.running_timer_canceled = true;
+        }
     }
 
     fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
@@ -2582,6 +2811,18 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_insert_adjacent_text_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_set_timeout_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_set_interval_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_clear_timeout_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -3293,6 +3534,129 @@ fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_set_timer_call(
+    cursor: &mut Cursor<'_>,
+    timer_name: &str,
+) -> Result<Option<(ScriptHandler, Expr)>> {
+    cursor.skip_ws();
+    if !cursor.consume_ascii(timer_name) {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() || args.len() > 2 {
+        return Err(Error::ScriptParse(format!(
+            "{timer_name} requires 1 or 2 arguments"
+        )));
+    }
+
+    let mut callback_cursor = Cursor::new(args[0].trim());
+    let (event_param, body) = parse_callback(&mut callback_cursor)?;
+    callback_cursor.skip_ws();
+    if !callback_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported {timer_name} callback: {}",
+            args[0].trim()
+        )));
+    }
+
+    let delay_ms = if args.len() == 2 {
+        parse_expr(args[1].trim())?
+    } else {
+        Expr::Number(0)
+    };
+
+    Ok(Some((
+        ScriptHandler {
+            event_param,
+            stmts: parse_block_statements(&body)?,
+        },
+        delay_ms,
+    )))
+}
+
+fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(ScriptHandler, Expr)>> {
+    parse_set_timer_call(cursor, "setTimeout")
+}
+
+fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(ScriptHandler, Expr)>> {
+    parse_set_timer_call(cursor, "setInterval")
+}
+
+fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported setTimeout statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::SetTimeout { handler, delay_ms }))
+}
+
+fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported setInterval statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::SetInterval { handler, delay_ms }))
+}
+
+fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    let method = if cursor.consume_ascii("clearTimeout") {
+        "clearTimeout"
+    } else if cursor.consume_ascii("clearInterval") {
+        "clearInterval"
+    } else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(format!(
+            "{method} requires 1 argument: {stmt}"
+        )));
+    }
+    let timer_id = parse_expr(args[0].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported {method} statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::ClearTimeout { timer_id }))
+}
+
 fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -3703,6 +4067,20 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::CreateTextNode(text));
     }
 
+    if let Some((handler, delay_ms)) = parse_set_timeout_expr(src)? {
+        return Ok(Expr::SetTimeout {
+            handler,
+            delay_ms: Box::new(delay_ms),
+        });
+    }
+
+    if let Some((handler, delay_ms)) = parse_set_interval_expr(src)? {
+        return Ok(Expr::SetInterval {
+            handler,
+            delay_ms: Box::new(delay_ms),
+        });
+    }
+
     if let Some((target, class_name)) = parse_class_list_contains_expr(src)? {
         return Ok(Expr::ClassListContains { target, class_name });
     }
@@ -3804,6 +4182,30 @@ fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(text))
+}
+
+fn parse_set_timeout_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
+    let mut cursor = Cursor::new(src);
+    let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((handler, delay_ms)))
+}
+
+fn parse_set_interval_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
+    let mut cursor = Cursor::new(src);
+    let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((handler, delay_ms)))
 }
 
 fn parse_template_literal(src: &str) -> Result<Expr> {
@@ -5856,6 +6258,238 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_timeout_runs_on_flush_and_captures_env() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = 'A';
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A")?;
+        h.flush()?;
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_timeout_respects_delay_order_and_nested_queueing() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + '1';
+            }, 10);
+            setTimeout(() => {
+              result.textContent = result.textContent + '0';
+              setTimeout(() => {
+                result.textContent = result.textContent + 'N';
+              });
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.flush()?;
+        h.assert_text("#result", "0N1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn fake_time_advance_controls_timer_execution() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + '0';
+            }, 0);
+            setTimeout(() => {
+              result.textContent = result.textContent + '1';
+            }, 10);
+            setTimeout(() => {
+              result.textContent = result.textContent + '2';
+            }, 20);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        assert_eq!(h.now_ms(), 0);
+
+        h.advance_time(0)?;
+        h.assert_text("#result", "0")?;
+        assert_eq!(h.now_ms(), 0);
+
+        h.advance_time(9)?;
+        h.assert_text("#result", "0")?;
+        assert_eq!(h.now_ms(), 9);
+
+        h.advance_time(1)?;
+        h.assert_text("#result", "01")?;
+        assert_eq!(h.now_ms(), 10);
+
+        h.advance_time(10)?;
+        h.assert_text("#result", "012")?;
+        assert_eq!(h.now_ms(), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn fake_time_advance_runs_interval_ticks_by_due_time() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const id = setInterval(() => {
+              result.textContent = result.textContent + 'I';
+              if (result.textContent === 'III') clearInterval(id);
+            }, 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+
+        h.advance_time(4)?;
+        h.assert_text("#result", "")?;
+
+        h.advance_time(1)?;
+        h.assert_text("#result", "I")?;
+
+        h.advance_time(10)?;
+        h.assert_text("#result", "III")?;
+
+        h.advance_time(100)?;
+        h.assert_text("#result", "III")?;
+        Ok(())
+    }
+
+    #[test]
+    fn clear_timeout_cancels_task_and_set_timeout_returns_ids() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const first = setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 5);
+            const second = setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 0);
+            clearTimeout(first);
+            result.textContent = first + ':' + second + ':';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:2:")?;
+        h.flush()?;
+        h.assert_text("#result", "1:2:B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn clear_timeout_unknown_id_is_ignored() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            clearTimeout(999);
+            setTimeout(() => {
+              document.getElementById('result').textContent = 'ok';
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.flush()?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_interval_repeats_and_clear_interval_stops_requeue() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const id = setInterval(() => {
+              result.textContent = result.textContent + 'I';
+              if (result.textContent === '1:III') clearInterval(id);
+            }, 0);
+            result.textContent = id + ':';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:")?;
+        h.flush()?;
+        h.assert_text("#result", "1:III")?;
+        h.flush()?;
+        h.assert_text("#result", "1:III")?;
+        Ok(())
+    }
+
+    #[test]
+    fn clear_timeout_can_cancel_interval_id() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const id = setInterval(() => {
+              result.textContent = result.textContent + 'X';
+            }, 0);
+            clearTimeout(id);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.flush()?;
+        h.assert_text("#result", "")?;
         Ok(())
     }
 

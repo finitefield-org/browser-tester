@@ -137,6 +137,9 @@ MVP対応:
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText`, `innerHTML`
+- タイマー: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
+  （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
+  `clearTimeout(timerId)` / `clearInterval(timerId)`
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
 ### 7.3 Rust<->Scriptブリッジ
@@ -180,7 +183,9 @@ MVP対応:
 ### 9.2 タスクキュー
 - MVPは同期実行が基本
 - 将来のため microtask風キューを保持
-- `harness.flush()` で明示排出可能
+- タイマーは実時間を待たず、fake clock（初期値 `0ms`）で決定論的に実行する
+- `harness.advance_time(ms)` で fake clock を進め、`due_at <= now` のタイマーのみ実行する
+- `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
 
 ### 9.3 決定論サポート
 - `Date.now`, `Math.random` を固定値注入可能にする
@@ -200,6 +205,8 @@ impl Harness {
     pub fn click(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()>;
+    pub fn now_ms(&self) -> i64;
+    pub fn advance_time(&mut self, ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;
 
     // Assert
@@ -541,7 +548,7 @@ AssertionFailed: assert_text
 ## 27. 将来拡張ポイント
 
 - `innerHTML` の仕様拡張（サニタイズ/DOMParser互換性の向上）
-- `setTimeout` + task queue
+- タイマー相当の安全制御（`flush` ステップ上限や診断情報の改善）
 - `radio` グループ排他
 - `form.elements` / `FormData` 的な最小API
 
