@@ -140,6 +140,7 @@ MVP対応:
 - タイマー: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
   `clearTimeout(timerId)` / `clearInterval(timerId)`
+- 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
 ### 7.3 Rust<->Scriptブリッジ
@@ -188,8 +189,9 @@ MVP対応:
 - `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
 
 ### 9.3 決定論サポート
-- `Date.now`, `Math.random` を固定値注入可能にする
-- テストごとにseed指定
+- `Date.now()` は fake clock（`now_ms`）を返す
+- `now_ms` は `advance_time(ms)` / `flush()` によりのみ進む
+- `Math.random` のseed固定は将来拡張（未実装）
 
 ## 10. テストハーネスAPI詳細
 

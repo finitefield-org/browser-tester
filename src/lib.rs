@@ -1208,6 +1208,7 @@ enum Expr {
     String(String),
     Bool(bool),
     Number(i64),
+    DateNow,
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -2238,6 +2239,7 @@ impl Harness {
             Expr::String(value) => Ok(Value::String(value.clone())),
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Number(value) => Ok(Value::Number(*value)),
+            Expr::DateNow => Ok(Value::Number(self.now_ms)),
             Expr::Var(name) => env
                 .get(name)
                 .cloned()
@@ -4059,6 +4061,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::String(value));
     }
 
+    if parse_date_now_expr(src)? {
+        return Ok(Expr::DateNow);
+    }
+
     if let Some(tag_name) = parse_document_create_element_expr(src)? {
         return Ok(Expr::CreateElement(tag_name));
     }
@@ -4182,6 +4188,28 @@ fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(text))
+}
+
+fn parse_date_now_expr(src: &str) -> Result<bool> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("Date") {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("now") {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    Ok(cursor.eof())
 }
 
 fn parse_set_timeout_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
@@ -6389,6 +6417,60 @@ mod tests {
 
         h.advance_time(100)?;
         h.assert_text("#result", "III")?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_now_uses_fake_clock_for_handlers_and_timers() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = Date.now() + ':';
+            setTimeout(() => {
+              result.textContent = result.textContent + Date.now();
+            }, 10);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.advance_time(7)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "7:")?;
+
+        h.advance_time(9)?;
+        h.assert_text("#result", "7:")?;
+
+        h.advance_time(1)?;
+        h.assert_text("#result", "7:17")?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_now_with_flush_advances_to_timer_due_time() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = Date.now();
+            setTimeout(() => {
+              result.textContent = result.textContent + ':' + Date.now();
+            }, 25);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0")?;
+        h.flush()?;
+        h.assert_text("#result", "0:25")?;
+        assert_eq!(h.now_ms(), 25);
         Ok(())
     }
 
