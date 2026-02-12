@@ -184,7 +184,9 @@ impl Dom {
 
     fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<()> {
         if self.element(node_id).is_none() {
-            return Err(Error::ScriptRuntime("textContent target is not an element".into()));
+            return Err(Error::ScriptRuntime(
+                "textContent target is not an element".into(),
+            ));
         }
         self.nodes[node_id.0].children.clear();
         if !value.is_empty() {
@@ -314,7 +316,7 @@ impl Dom {
         let steps = parse_selector_chain(selector)?;
 
         if steps.len() == 1 {
-            if let SelectorStep::Id(id) = &steps[0] {
+            if let SelectorStep::Id(id) = &steps[0].step {
                 return Ok(self.by_id(id).into_iter().collect());
             }
         }
@@ -340,28 +342,56 @@ impl Dom {
         }
     }
 
-    fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorStep]) -> bool {
+    fn all_element_nodes(&self) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        self.collect_elements_dfs(self.root, &mut out);
+        out
+    }
+
+    fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorPart]) -> bool {
         if steps.is_empty() {
             return false;
         }
-        if !self.matches_step(node_id, &steps[steps.len() - 1]) {
+        if !self.matches_step(node_id, &steps[steps.len() - 1].step) {
             return false;
         }
 
-        let mut cursor_parent = self.parent(node_id);
-        for step in steps[..steps.len() - 1].iter().rev() {
-            let mut found = None;
-            while let Some(parent) = cursor_parent {
-                if self.matches_step(parent, step) {
-                    found = Some(parent);
-                    cursor_parent = self.parent(parent);
-                    break;
+        let mut current = node_id;
+        for idx in (1..steps.len()).rev() {
+            let prev_step = &steps[idx - 1].step;
+            let combinator = steps[idx]
+                .combinator
+                .unwrap_or(SelectorCombinator::Descendant);
+
+            let matched = match combinator {
+                SelectorCombinator::Child => {
+                    let Some(parent) = self.parent(current) else {
+                        return false;
+                    };
+                    if self.matches_step(parent, prev_step) {
+                        Some(parent)
+                    } else {
+                        None
+                    }
                 }
-                cursor_parent = self.parent(parent);
-            }
-            if found.is_none() {
+                SelectorCombinator::Descendant => {
+                    let mut cursor = self.parent(current);
+                    let mut found = None;
+                    while let Some(parent) = cursor {
+                        if self.matches_step(parent, prev_step) {
+                            found = Some(parent);
+                            break;
+                        }
+                        cursor = self.parent(parent);
+                    }
+                    found
+                }
+            };
+
+            let Some(matched) = matched else {
                 return false;
-            }
+            };
+            current = matched;
         }
 
         true
@@ -379,6 +409,7 @@ impl Dom {
             SelectorStep::TagClass { tag, class_name } => {
                 element.tag_name.eq_ignore_ascii_case(tag) && has_class(element, class_name)
             }
+            SelectorStep::AttrExists { key } => element.attrs.contains_key(key),
             SelectorStep::AttrEq { key, value } => element.attrs.get(key) == Some(value),
         }
     }
@@ -456,9 +487,7 @@ fn set_class_attr(element: &mut Element, classes: &[String]) {
     if classes.is_empty() {
         element.attrs.remove("class");
     } else {
-        element
-            .attrs
-            .insert("class".to_string(), classes.join(" "));
+        element.attrs.insert("class".to_string(), classes.join(" "));
     }
 }
 
@@ -468,26 +497,106 @@ enum SelectorStep {
     Class(String),
     Tag(String),
     TagClass { tag: String, class_name: String },
+    AttrExists { key: String },
     AttrEq { key: String, value: String },
 }
 
-fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorStep>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorCombinator {
+    Descendant,
+    Child,
+}
+
+#[derive(Debug, Clone)]
+struct SelectorPart {
+    step: SelectorStep,
+    // Relation to previous (left) selector part.
+    combinator: Option<SelectorCombinator>,
+}
+
+fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
     let selector = selector.trim();
     if selector.is_empty() {
         return Err(Error::UnsupportedSelector(selector.into()));
     }
 
-    let parts = selector.split_whitespace();
+    let tokens = tokenize_selector(selector)?;
     let mut steps = Vec::new();
-    for part in parts {
-        steps.push(parse_selector_step(part)?);
+    let mut pending_combinator: Option<SelectorCombinator> = None;
+
+    for token in tokens {
+        if token == ">" {
+            if pending_combinator.is_some() || steps.is_empty() {
+                return Err(Error::UnsupportedSelector(selector.into()));
+            }
+            pending_combinator = Some(SelectorCombinator::Child);
+            continue;
+        }
+
+        let step = parse_selector_step(&token)?;
+        let combinator = if steps.is_empty() {
+            None
+        } else {
+            Some(
+                pending_combinator
+                    .take()
+                    .unwrap_or(SelectorCombinator::Descendant),
+            )
+        };
+        steps.push(SelectorPart { step, combinator });
     }
 
-    if steps.is_empty() {
+    if steps.is_empty() || pending_combinator.is_some() {
         return Err(Error::UnsupportedSelector(selector.into()));
     }
 
     Ok(steps)
+}
+
+fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut bracket_depth = 0usize;
+
+    for ch in selector.chars() {
+        match ch {
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                if bracket_depth == 0 {
+                    return Err(Error::UnsupportedSelector(selector.into()));
+                }
+                bracket_depth -= 1;
+                current.push(ch);
+            }
+            '>' if bracket_depth == 0 => {
+                if !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                }
+                current.clear();
+                tokens.push(">".to_string());
+            }
+            ch if ch.is_ascii_whitespace() && bracket_depth == 0 => {
+                if !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if bracket_depth != 0 {
+        return Err(Error::UnsupportedSelector(selector.into()));
+    }
+
+    if !current.trim().is_empty() {
+        tokens.push(current.trim().to_string());
+    }
+
+    Ok(tokens)
 }
 
 fn parse_selector_step(part: &str) -> Result<SelectorStep> {
@@ -507,15 +616,23 @@ fn parse_selector_step(part: &str) -> Result<SelectorStep> {
 
     if part.starts_with('[') && part.ends_with(']') {
         let body = &part[1..part.len() - 1];
-        let (key, value) = body
-            .split_once('=')
-            .ok_or_else(|| Error::UnsupportedSelector(part.into()))?;
-        let key = key.trim().to_string();
-        let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
+        if let Some((key, value)) = body.split_once('=') {
+            let key = key.trim().to_string();
+            let value = value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            if key.is_empty() {
+                return Err(Error::UnsupportedSelector(part.into()));
+            }
+            return Ok(SelectorStep::AttrEq { key, value });
+        }
+        let key = body.trim().to_string();
         if key.is_empty() {
             return Err(Error::UnsupportedSelector(part.into()));
         }
-        return Ok(SelectorStep::AttrEq { key, value });
+        return Ok(SelectorStep::AttrExists { key });
     }
 
     if let Some((tag, class_name)) = part.split_once('.') {
@@ -540,6 +657,7 @@ enum Value {
     String(String),
     Bool(bool),
     Number(i64),
+    Node(NodeId),
 }
 
 impl Value {
@@ -548,6 +666,7 @@ impl Value {
             Self::Bool(v) => *v,
             Self::String(v) => !v.is_empty(),
             Self::Number(v) => *v != 0,
+            Self::Node(_) => true,
         }
     }
 
@@ -562,6 +681,7 @@ impl Value {
                 }
             }
             Self::Number(v) => v.to_string(),
+            Self::Node(node) => format!("node-{}", node.0),
         }
     }
 }
@@ -581,6 +701,7 @@ enum DomQuery {
     ById(String),
     BySelector(String),
     BySelectorAllIndex { selector: String, index: usize },
+    Var(String),
 }
 
 impl DomQuery {
@@ -591,6 +712,7 @@ impl DomQuery {
             Self::BySelectorAllIndex { selector, index } => {
                 format!("document.querySelectorAll('{selector}')[{index}]")
             }
+            Self::Var(name) => name.clone(),
         }
     }
 }
@@ -634,12 +756,17 @@ enum Expr {
         op: BinaryOp,
         right: Box<Expr>,
     },
-    DomRead { target: DomQuery, prop: DomProp },
+    DomRead {
+        target: DomQuery,
+        prop: DomProp,
+    },
     ClassListContains {
         target: DomQuery,
         class_name: String,
     },
-    QuerySelectorAllLength { selector: String },
+    QuerySelectorAllLength {
+        selector: String,
+    },
     DomGetAttribute {
         target: DomQuery,
         name: String,
@@ -685,6 +812,12 @@ enum Stmt {
         target: DomQuery,
         name: String,
         value: Expr,
+    },
+    ForEach {
+        selector: String,
+        item_var: String,
+        index_var: Option<String>,
+        body: Vec<Stmt>,
     },
     If {
         cond: Expr,
@@ -797,6 +930,9 @@ impl Harness {
 
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
+        if self.dom.disabled(target) {
+            return Ok(());
+        }
 
         let tag = self
             .dom
@@ -823,6 +959,9 @@ impl Harness {
 
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
         let target = self.select_one(selector)?;
+        if self.dom.disabled(target) {
+            return Ok(());
+        }
         let tag = self
             .dom
             .tag_name(target)
@@ -851,6 +990,9 @@ impl Harness {
 
         let current = self.dom.checked(target)?;
         if current != checked {
+            if kind == "radio" && checked {
+                self.uncheck_other_radios_in_group(target)?;
+            }
             self.dom.set_checked(target, checked)?;
             self.dispatch_event(target, "input")?;
             self.dispatch_event(target, "change")?;
@@ -875,6 +1017,16 @@ impl Harness {
             self.dom.set_checked(target, !current)?;
             self.dispatch_event(target, "input")?;
             self.dispatch_event(target, "change")?;
+        }
+
+        if is_radio_input(&self.dom, target) {
+            let current = self.dom.checked(target)?;
+            if !current {
+                self.uncheck_other_radios_in_group(target)?;
+                self.dom.set_checked(target, true)?;
+                self.dispatch_event(target, "input")?;
+                self.dispatch_event(target, "change")?;
+            }
         }
 
         if is_submit_control(&self.dom, target) {
@@ -984,6 +1136,47 @@ impl Harness {
         self.dom.find_ancestor_by_tag(target, "form")
     }
 
+    fn form_owner(&self, node_id: NodeId) -> Option<NodeId> {
+        if self
+            .dom
+            .tag_name(node_id)
+            .map(|t| t.eq_ignore_ascii_case("form"))
+            .unwrap_or(false)
+        {
+            Some(node_id)
+        } else {
+            self.dom.find_ancestor_by_tag(node_id, "form")
+        }
+    }
+
+    fn uncheck_other_radios_in_group(&mut self, target: NodeId) -> Result<()> {
+        let target_name = self.dom.attr(target, "name").unwrap_or_default();
+        if target_name.is_empty() {
+            return Ok(());
+        }
+        let target_form = self.form_owner(target);
+
+        for node in self.dom.all_element_nodes() {
+            if node == target {
+                continue;
+            }
+            if !is_radio_input(&self.dom, node) {
+                continue;
+            }
+            if self.dom.attr(node, "name").unwrap_or_default() != target_name {
+                continue;
+            }
+            if self.form_owner(node) != target_form {
+                continue;
+            }
+            if self.dom.checked(node)? {
+                self.dom.set_checked(node, false)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn dispatch_event(&mut self, target: NodeId, event_type: &str) -> Result<EventState> {
         let mut event = EventState::new(event_type, target);
 
@@ -1037,17 +1230,19 @@ impl Harness {
         Ok(event)
     }
 
-    fn invoke_listeners(&mut self, node_id: NodeId, event: &mut EventState, capture: bool) -> Result<()> {
+    fn invoke_listeners(
+        &mut self,
+        node_id: NodeId,
+        event: &mut EventState,
+        capture: bool,
+    ) -> Result<()> {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
             if self.trace {
                 let phase = if capture { "capture" } else { "bubble" };
                 eprintln!(
                     "[event] {} target={} current={} phase={}",
-                    event.event_type,
-                    node_id.0,
-                    event.current_target.0,
-                    phase
+                    event.event_type, node_id.0, event.current_target.0, phase
                 );
             }
             self.execute_handler(&listener.handler, event)?;
@@ -1078,12 +1273,16 @@ impl Harness {
                 }
                 Stmt::DomAssign { target, prop, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
-                    let node = self.resolve_dom_query_required_runtime(target)?;
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
                     match prop {
-                        DomProp::TextContent => self.dom.set_text_content(node, &value.as_string())?,
+                        DomProp::TextContent => {
+                            self.dom.set_text_content(node, &value.as_string())?
+                        }
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
-                        DomProp::ClassName => self.dom.set_attr(node, "class", &value.as_string())?,
+                        DomProp::ClassName => {
+                            self.dom.set_attr(node, "class", &value.as_string())?
+                        }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                     }
@@ -1094,14 +1293,15 @@ impl Harness {
                     class_name,
                     force,
                 } => {
-                    let node = self.resolve_dom_query_required_runtime(target)?;
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
                     match method {
                         ClassListMethod::Add => self.dom.class_add(node, class_name)?,
                         ClassListMethod::Remove => self.dom.class_remove(node, class_name)?,
                         ClassListMethod::Toggle => {
                             if let Some(force_expr) = force {
-                                let force_value =
-                                    self.eval_expr(force_expr, env, event_param, event)?.truthy();
+                                let force_value = self
+                                    .eval_expr(force_expr, env, event_param, event)?
+                                    .truthy();
                                 if force_value {
                                     self.dom.class_add(node, class_name)?;
                                 } else {
@@ -1118,9 +1318,40 @@ impl Harness {
                     name,
                     value,
                 } => {
-                    let node = self.resolve_dom_query_required_runtime(target)?;
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
                     let value = self.eval_expr(value, env, event_param, event)?;
                     self.dom.set_attr(node, name, &value.as_string())?;
+                }
+                Stmt::ForEach {
+                    selector,
+                    item_var,
+                    index_var,
+                    body,
+                } => {
+                    let items = self.dom.query_selector_all(selector)?;
+                    let prev_item = env.get(item_var).cloned();
+                    let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
+
+                    for (idx, node) in items.iter().enumerate() {
+                        env.insert(item_var.clone(), Value::Node(*node));
+                        if let Some(index_var) = index_var {
+                            env.insert(index_var.clone(), Value::Number(idx as i64));
+                        }
+                        self.execute_stmts(body, event_param, event, env)?;
+                    }
+
+                    if let Some(prev) = prev_item {
+                        env.insert(item_var.clone(), prev);
+                    } else {
+                        env.remove(item_var);
+                    }
+                    if let Some(index_var) = index_var {
+                        if let Some(prev) = prev_index {
+                            env.insert(index_var.clone(), prev);
+                        } else {
+                            env.remove(index_var);
+                        }
+                    }
                 }
                 Stmt::If {
                     cond,
@@ -1156,10 +1387,6 @@ impl Harness {
                     let _ = self.eval_expr(expr, env, event_param, event)?;
                 }
             }
-
-            if event.immediate_propagation_stopped {
-                break;
-            }
         }
 
         Ok(())
@@ -1186,7 +1413,7 @@ impl Harness {
                 self.eval_binary(op, &left, &right)
             }
             Expr::DomRead { target, prop } => {
-                let node = self.resolve_dom_query_required_runtime(target)?;
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
                 match prop {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
@@ -1201,7 +1428,7 @@ impl Harness {
                 }
             }
             Expr::ClassListContains { target, class_name } => {
-                let node = self.resolve_dom_query_required_runtime(target)?;
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
                 Ok(Value::Bool(self.dom.class_contains(node, class_name)?))
             }
             Expr::QuerySelectorAllLength { selector } => {
@@ -1209,7 +1436,7 @@ impl Harness {
                 Ok(Value::Number(len))
             }
             Expr::DomGetAttribute { target, name } => {
-                let node = self.resolve_dom_query_required_runtime(target)?;
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
                 Ok(Value::String(self.dom.attr(node, name).unwrap_or_default()))
             }
             Expr::EventProp { event_var, prop } => {
@@ -1235,9 +1462,11 @@ impl Harness {
                     EventExprProp::TargetId => {
                         Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
                     }
-                    EventExprProp::CurrentTargetId => {
-                        Value::String(self.dom.attr(event.current_target, "id").unwrap_or_default())
-                    }
+                    EventExprProp::CurrentTargetId => Value::String(
+                        self.dom
+                            .attr(event.current_target, "id")
+                            .unwrap_or_default(),
+                    ),
                 };
                 Ok(value)
             }
@@ -1287,6 +1516,7 @@ impl Harness {
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Number(l), Value::Number(r)) => l == r,
             (Value::String(l), Value::String(r)) => l == r,
+            (Value::Node(l), Value::Node(r)) => l == r,
             _ => false,
         }
     }
@@ -1305,7 +1535,7 @@ impl Harness {
         }
     }
 
-    fn resolve_dom_query(&self, target: &DomQuery) -> Result<Option<NodeId>> {
+    fn resolve_dom_query_static(&self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
             DomQuery::BySelector(selector) => self.dom.query_selector(selector),
@@ -1313,12 +1543,41 @@ impl Harness {
                 let all = self.dom.query_selector_all(selector)?;
                 Ok(all.get(*index).copied())
             }
+            DomQuery::Var(_) => Err(Error::ScriptRuntime(
+                "element variable cannot be resolved in static context".into(),
+            )),
         }
     }
 
-    fn resolve_dom_query_required_runtime(&self, target: &DomQuery) -> Result<NodeId> {
-        self.resolve_dom_query(target)?
-            .ok_or_else(|| Error::ScriptRuntime(format!("{} returned null", target.describe_call())))
+    fn resolve_dom_query_runtime(
+        &self,
+        target: &DomQuery,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<NodeId>> {
+        match target {
+            DomQuery::Var(name) => match env.get(name) {
+                Some(Value::Node(node)) => Ok(Some(*node)),
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an element reference",
+                    name
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown element variable: {}",
+                    name
+                ))),
+            },
+            _ => self.resolve_dom_query_static(target),
+        }
+    }
+
+    fn resolve_dom_query_required_runtime(
+        &self,
+        target: &DomQuery,
+        env: &HashMap<String, Value>,
+    ) -> Result<NodeId> {
+        self.resolve_dom_query_runtime(target, env)?.ok_or_else(|| {
+            Error::ScriptRuntime(format!("{} returned null", target.describe_call()))
+        })
     }
 
     fn event_node_label(&self, node: NodeId) -> String {
@@ -1344,7 +1603,7 @@ impl Harness {
             let start = cursor.pos();
             let reg = parse_listener_registration(&mut cursor)?;
 
-            let target = self.resolve_dom_query(&reg.target)?.ok_or_else(|| {
+            let target = self.resolve_dom_query_static(&reg.target)?.ok_or_else(|| {
                 Error::ScriptParse(format!(
                     "listener target {} not found in HTML",
                     reg.target.describe_call()
@@ -1430,6 +1689,22 @@ fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegist
         body,
         capture,
     })
+}
+
+fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+    cursor.skip_ws();
+    let start = cursor.pos();
+    if let Ok(target) = parse_document_element_call(cursor) {
+        return Ok(target);
+    }
+    cursor.set_pos(start);
+    if let Some(name) = cursor.parse_identifier() {
+        return Ok(DomQuery::Var(name));
+    }
+    Err(Error::ScriptParse(format!(
+        "expected element target at {}",
+        start
+    )))
 }
 
 fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
@@ -1542,6 +1817,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     let stmt = stmt.trim();
 
     if let Some(parsed) = parse_if_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_query_selector_all_foreach_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -1894,10 +2173,119 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
 }
 
+fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    if !cursor.consume_ascii("document") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("querySelectorAll") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let selector = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("forEach") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let callback_src = cursor.read_balanced_block(b'(', b')')?;
+    let (item_var, index_var, body) = parse_for_each_callback(&callback_src)?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported forEach statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::ForEach {
+        selector,
+        item_var,
+        index_var,
+        body,
+    }))
+}
+
+fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
+    let mut cursor = Cursor::new(src.trim());
+    cursor.skip_ws();
+
+    let (item_var, index_var) = if cursor.consume_byte(b'(') {
+        let params_src = cursor.read_until_byte(b')')?;
+        cursor.expect_byte(b')')?;
+        let params = split_top_level_by_char(params_src.trim(), b',');
+        if params.is_empty() || params.len() > 2 {
+            return Err(Error::ScriptParse(format!(
+                "forEach callback must have one or two parameters: {src}"
+            )));
+        }
+
+        let item = params[0].trim();
+        if !is_ident(item) {
+            return Err(Error::ScriptParse(format!(
+                "invalid forEach item parameter '{item}'"
+            )));
+        }
+
+        let index = if params.len() == 2 {
+            let idx = params[1].trim();
+            if !is_ident(idx) {
+                return Err(Error::ScriptParse(format!(
+                    "invalid forEach index parameter '{idx}'"
+                )));
+            }
+            Some(idx.to_string())
+        } else {
+            None
+        };
+
+        (item.to_string(), index)
+    } else {
+        let Some(item) = cursor.parse_identifier() else {
+            return Err(Error::ScriptParse(format!(
+                "invalid forEach callback parameters: {src}"
+            )));
+        };
+        (item, None)
+    };
+
+    cursor.skip_ws();
+    cursor.expect_ascii("=>")?;
+    cursor.skip_ws();
+    let body = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported forEach callback tail: {src}"
+        )));
+    }
+
+    Ok((item_var, index_var, parse_block_statements(&body)?))
+}
+
 fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
@@ -1941,7 +2329,7 @@ fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
 fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
@@ -2144,12 +2532,7 @@ fn parse_unary_expr(src: &str) -> Result<Expr> {
     parse_primary(src)
 }
 
-fn fold_binary<F, G>(
-    parts: Vec<&str>,
-    ops: Vec<&str>,
-    parse_leaf: F,
-    map_op: G,
-) -> Result<Expr>
+fn fold_binary<F, G>(parts: Vec<&str>, ops: Vec<&str>, parse_leaf: F, map_op: G) -> Result<Expr>
 where
     F: Fn(&str) -> Result<Expr>,
     G: Fn(&str) -> BinaryOp,
@@ -2189,7 +2572,9 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return parse_template_literal(src);
     }
 
-    if (src.starts_with('\'') && src.ends_with('\'')) || (src.starts_with('"') && src.ends_with('"')) {
+    if (src.starts_with('\'') && src.ends_with('\''))
+        || (src.starts_with('"') && src.ends_with('"'))
+    {
         let value = parse_string_literal_exact(src)?;
         return Ok(Expr::String(value));
     }
@@ -2280,13 +2665,15 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
 
     cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
     cursor.skip_ws();
 
     let prop = cursor
@@ -2319,7 +2706,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
 fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
@@ -2389,7 +2776,7 @@ fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
@@ -3283,6 +3670,22 @@ fn is_checkbox_input(dom: &Dom, node_id: NodeId) -> bool {
         .unwrap_or(false)
 }
 
+fn is_radio_input(dom: &Dom, node_id: NodeId) -> bool {
+    let Some(element) = dom.element(node_id) else {
+        return false;
+    };
+
+    if !element.tag_name.eq_ignore_ascii_case("input") {
+        return false;
+    }
+
+    element
+        .attrs
+        .get("type")
+        .map(|kind| kind.eq_ignore_ascii_case("radio"))
+        .unwrap_or(false)
+}
+
 fn is_submit_control(dom: &Dom, node_id: NodeId) -> bool {
     let Some(element) = dom.element(node_id) else {
         return false;
@@ -3326,6 +3729,10 @@ impl<'a> Cursor<'a> {
         self.i
     }
 
+    fn set_pos(&mut self, pos: usize) {
+        self.i = pos;
+    }
+
     fn bytes(&self) -> &'a [u8] {
         self.src.as_bytes()
     }
@@ -3349,8 +3756,7 @@ impl<'a> Cursor<'a> {
         } else {
             Err(Error::ScriptParse(format!(
                 "expected '{}' at {}",
-                b as char,
-                self.i
+                b as char, self.i
             )))
         }
     }
@@ -3728,6 +4134,35 @@ mod tests {
     }
 
     #[test]
+    fn query_selector_all_foreach_and_element_variables_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.querySelectorAll('.item').forEach((item, idx) => {
+              item.setAttribute('data-idx', idx);
+              item.classList.toggle('picked', idx === 1);
+              document.getElementById('result').textContent =
+                document.getElementById('result').textContent + item.textContent + item.getAttribute('data-idx');
+            });
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + ':' + document.querySelectorAll('.item')[1].classList.contains('picked');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A0B1:true")?;
+        Ok(())
+    }
+
+    #[test]
     fn if_without_braces_with_else_on_next_statement_works() -> Result<()> {
         let html = r#"
         <input id='agree' type='checkbox'>
@@ -3861,6 +4296,79 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "click:btn:btn")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_child_combinator_and_attr_exists_work() -> Result<()> {
+        let html = r#"
+        <div id='wrap'>
+          <div><span id='nested' data-role='x'></span></div>
+          <span id='direct' data-role='x'></span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.querySelector('#wrap>[data-role]').id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "direct")?;
+        Ok(())
+    }
+
+    #[test]
+    fn radio_group_exclusive_selection_works() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='r1' type='radio' name='plan'>
+          <input id='r2' type='radio' name='plan'>
+        </form>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#r1")?;
+        h.assert_checked("#r1", true)?;
+        h.assert_checked("#r2", false)?;
+        h.click("#r2")?;
+        h.assert_checked("#r1", false)?;
+        h.assert_checked("#r2", true)?;
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_controls_ignore_user_actions() -> Result<()> {
+        let html = r#"
+        <input id='name' disabled value='init'>
+        <input id='agree' type='checkbox' disabled checked>
+        <p id='result'></p>
+        <script>
+          document.getElementById('name').addEventListener('input', () => {
+            document.getElementById('result').textContent = 'name-input';
+          });
+          document.getElementById('agree').addEventListener('change', () => {
+            document.getElementById('result').textContent = 'agree-change';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.type_text("#name", "next")?;
+        h.assert_value("#name", "init")?;
+        h.assert_text("#result", "")?;
+
+        h.click("#agree")?;
+        h.assert_checked("#agree", true)?;
+        h.assert_text("#result", "")?;
+
+        h.set_checked("#agree", false)?;
+        h.assert_checked("#agree", true)?;
+        h.assert_text("#result", "")?;
         Ok(())
     }
 }

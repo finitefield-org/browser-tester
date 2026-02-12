@@ -49,14 +49,14 @@ flowchart LR
   H --> R["runtime_core"]
   R --> D["dom_core"]
   R --> E["event_system"]
-  R --> J["js_runtime (Boa)"]
-  D <--> J
-  E <--> D
+  R --> S["script_runtime (self-implemented)"]
+  D <--> S
+  E <--> S
 ```
 
 モジュール:
 - `dom_core`: DOM木、セレクタ、属性/プロパティ
-- `js_runtime`: JSエンジン統合とWeb APIバインディング
+- `script_runtime`: 自前パーサ + 自前評価器（JSサブセット）
 - `event_system`: イベント伝播と既定動作
 - `runtime_core`: 初期化、スクリプト実行、タスクキュー
 - `test_harness`: 高水準のテスト操作API
@@ -78,10 +78,12 @@ crates/
     src/lib.rs
     src/event.rs
     src/dispatch.rs
-  js-runtime/
+  script-runtime/
     src/lib.rs
-    src/boa_bindings.rs
-    src/web_api/*.rs
+    src/parser.rs
+    src/ast.rs
+    src/evaluator.rs
+    src/builtins.rs
   test-harness/
     src/lib.rs
     src/actions.rs
@@ -120,32 +122,24 @@ MVP対応:
 
 非対応セレクタは明示的エラーにする（サイレント無視しない）。
 
-## 7. JSランタイム詳細
+## 7. スクリプトランタイム詳細
 
-### 7.1 エンジン選定
-- 第一候補: `boa_engine`（純Rust、配布容易）
-- 代替: `rquickjs`（互換性高めだが依存増）
+### 7.1 実装方式
+- 外部JSエンジンは使わない（純Rustの自前実装）
+- `<script>`文字列を自前パーサでASTへ変換し、自前評価器で実行
+- 対応範囲はテスト用途に必要なJSサブセットへ限定し、非対応構文は`ScriptParse`で明示エラー
 
-本設計は `boa_engine` を前提に記載。
+### 7.2 対応する構文/DOM API（最小）
+- リスナー登録: `document.*.addEventListener(...)`
+- 制御構文: `if/else`, 変数宣言, 代入, 三項演算子, 論理/比較演算子
+- DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`
+- DOM更新: `textContent`, `value`, `checked`, `classList.*`, `setAttribute/getAttribute`
+- イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
-### 7.2 グローバルオブジェクト
-JSへ公開する最小API:
-- `window`
-- `document`
-  - `getElementById`
-  - `querySelector`, `querySelectorAll`
-  - `createElement`（将来拡張）
-- `Element`
-  - `textContent` getter/setter
-  - `getAttribute`, `setAttribute`
-  - `addEventListener`, `removeEventListener`, `dispatchEvent`
-- `HTMLInputElement`
-  - `value`, `checked`
-
-### 7.3 Rust<->JSブリッジ
-- JS objectに`NodeId`を内部フィールドとして保持
-- メソッド呼び出し時に `NodeId` をRust側へ渡してDOM操作
-- DOM更新後は必要に応じてid index等を同期
+### 7.3 Rust<->Scriptブリッジ
+- ASTノード内の`DomQuery`/`DomProp`を介してDOMへアクセス
+- イベント実行時は `EventState` とローカル変数環境 `env` を評価器へ渡す
+- DOM更新時は必要に応じて`id_index`を同期する
 
 ## 8. イベントシステム詳細
 
@@ -175,7 +169,7 @@ JSへ公開する最小API:
 ## 9. Runtime実行モデル
 
 ### 9.1 初期化
-1. HTML parse (`html5ever`)
+1. HTML parse（自前HTMLパーサ）
 2. DOM構築
 3. `<script>`を文書順で同期実行
 4. 初期タスクキュー実行
@@ -312,12 +306,12 @@ fn submit_updates_result() -> anyhow::Result<()> {
 
 ## 16. 技術選定
 
-推奨クレート:
-- HTML parse: `html5ever`
-- Selector: `selectors`（または`kuchiki`連携）
-- JS engine: `boa_engine`
-- Error: `thiserror`
-- Snapshot test: `insta`
+実装方針:
+- HTML parse: 自前実装
+- Selector: 自前実装
+- Script runtime: 自前パーサ + 自前評価器
+- Error: 独自 `Error` enum
+- 外部依存は極小（現状は標準ライブラリ中心）
 
 ## 17. 既知リスクと対策
 
@@ -394,7 +388,7 @@ pub struct ListenerEntry {
     pub id: ListenerId,
     pub event_type: String,
     pub use_capture: bool,
-    pub callback: JsCallbackRef,
+    pub callback: ScriptHandler,
 }
 
 pub struct ListenerStore {
@@ -414,7 +408,7 @@ pub struct ListenerStore {
 pub struct Runtime {
     pub document: Document,
     pub listeners: ListenerStore,
-    pub js: JsEngine,
+    pub script: ScriptRuntime,
     pub task_queue: TaskQueue,
     pub trace: bool,
 }
@@ -435,30 +429,31 @@ pub struct Runtime {
 - script実行中のDOM変更（`appendChild`等）を許可する場合は、DOM APIの整合性を優先し、`id_index`を都度更新する
 - まずは `appendChild/removeChild` を非対応にしてもよい（MVP安定化優先）
 
-## 21. JSブリッジ詳細
+## 21. スクリプト実行詳細
 
-### 21.1 オブジェクトモデル
-- `DocumentRef` と `ElementRef` をJSへ露出
-- 各JSオブジェクトの内部スロットに `NodeId` を保存
-- API呼び出し時に `NodeId` の生存確認を行う（削除済みノード対策）
+### 21.1 実行モデル
+- `<script>`を文単位で解析してリスナー登録情報へ変換
+- リスナー本文は `Stmt` / `Expr` のASTへ変換して保持
+- イベント発火時に `execute_stmts` でASTを評価し、DOMへ副作用を反映
 
 ### 21.2 代表APIのRust側シグネチャ
 
 ```rust
-fn js_document_get_element_by_id(ctx: &mut JsContext, id: String) -> JsValue;
-fn js_document_query_selector(ctx: &mut JsContext, selector: String) -> JsValue;
-fn js_element_add_event_listener(
-    ctx: &mut JsContext,
-    this_node: NodeId,
-    event_type: String,
-    callback: JsValue,
-    use_capture: bool,
-) -> JsResult<()>;
+fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegistration>;
+fn parse_block_statements(body: &str) -> Result<Vec<Stmt>>;
+fn execute_stmts(
+    &mut self,
+    stmts: &[Stmt],
+    event_param: &Option<String>,
+    event: &mut EventState,
+    env: &mut std::collections::HashMap<String, Value>,
+) -> Result<()>;
 ```
 
 ### 21.3 例外方針
-- Rust側エラーはJS例外に変換（`TypeError`または`Error`）
-- JS例外は `JsException { message, stack }` としてHarnessへ返却
+- 構文エラーは `ScriptParse`
+- 実行時エラーは `ScriptRuntime`
+- 失敗時はセレクタ・期待値/実値を返す（Assertion系）
 
 ## 22. イベント仕様の厳密化
 
@@ -534,7 +529,7 @@ AssertionFailed: assert_text
 
 1. `dom_core`: Arena/Node/selector/id_index
 2. `event_system`: listener登録とdispatch
-3. `js_runtime`: `document`, `Element`, listener bridge
+3. `script_runtime`: parser/evaluator と `document`, `Element` 操作
 4. `runtime_core`: parse -> build -> script実行
 5. `test_harness`: action/assert API
 6. 仕様テスト整備
@@ -556,7 +551,7 @@ AssertionFailed: assert_text
 2週間想定:
 - Day 1-2: DOM + selector MVP
 - Day 3-4: イベントdispatch MVP
-- Day 5-6: JS bridge (`getElementById`, `addEventListener`)
+- Day 5-6: script parser/evaluator（`getElementById`, `addEventListener`）
 - Day 7-8: Harness action/assert
 - Day 9-10: 契約テスト + 失敗表示改善
 
