@@ -141,6 +141,21 @@ impl Dom {
         id
     }
 
+    fn create_detached_element(&mut self, tag_name: String) -> NodeId {
+        let element = Element {
+            tag_name,
+            attrs: HashMap::new(),
+            value: String::new(),
+            checked: false,
+            disabled: false,
+        };
+        self.create_node(None, NodeType::Element(element))
+    }
+
+    fn create_detached_text(&mut self, text: String) -> NodeId {
+        self.create_node(None, NodeType::Text(text))
+    }
+
     fn create_text(&mut self, parent: NodeId, text: String) -> NodeId {
         self.create_node(Some(parent), NodeType::Text(text))
     }
@@ -250,6 +265,7 @@ impl Dom {
         } else {
             None
         };
+        let connected = self.is_connected(node_id);
 
         let element = self
             .element_mut(node_id)
@@ -266,11 +282,13 @@ impl Dom {
             element.disabled = true;
         }
 
-        if lowered == "id" {
+        if lowered == "id" && connected {
             if let Some(old) = old_id {
                 self.id_index.remove(&old);
             }
-            self.id_index.insert(value.to_string(), node_id);
+            if !value.is_empty() {
+                self.id_index.insert(value.to_string(), node_id);
+            }
         }
 
         Ok(())
@@ -284,6 +302,7 @@ impl Dom {
         } else {
             None
         };
+        let connected = self.is_connected(node_id);
 
         let element = self.element_mut(node_id).ok_or_else(|| {
             Error::ScriptRuntime("removeAttribute target is not an element".into())
@@ -298,13 +317,68 @@ impl Dom {
             element.disabled = false;
         }
 
-        if lowered == "id" {
+        if lowered == "id" && connected {
             if let Some(old) = old_id {
                 self.id_index.remove(&old);
             }
         }
 
         Ok(())
+    }
+
+    fn append_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+        if !self.can_have_children(parent) {
+            return Err(Error::ScriptRuntime(
+                "appendChild target cannot have children".into(),
+            ));
+        }
+        if child == self.root || child == parent {
+            return Err(Error::ScriptRuntime("invalid appendChild node".into()));
+        }
+        if !self.is_valid_node(child) {
+            return Err(Error::ScriptRuntime("appendChild node is invalid".into()));
+        }
+
+        // Prevent cycles: parent must not be inside child's subtree.
+        let mut cursor = Some(parent);
+        while let Some(node) = cursor {
+            if node == child {
+                return Err(Error::ScriptRuntime(
+                    "appendChild would create a cycle".into(),
+                ));
+            }
+            cursor = self.parent(node);
+        }
+
+        if let Some(old_parent) = self.parent(child) {
+            self.nodes[old_parent.0].children.retain(|id| *id != child);
+        }
+        self.nodes[child.0].parent = Some(parent);
+        self.nodes[parent.0].children.push(child);
+        self.rebuild_id_index();
+        Ok(())
+    }
+
+    fn remove_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+        if self.parent(child) != Some(parent) {
+            return Err(Error::ScriptRuntime(
+                "removeChild target is not a direct child".into(),
+            ));
+        }
+        self.nodes[parent.0].children.retain(|id| *id != child);
+        self.nodes[child.0].parent = None;
+        self.rebuild_id_index();
+        Ok(())
+    }
+
+    fn remove_node(&mut self, node: NodeId) -> Result<()> {
+        if node == self.root {
+            return Err(Error::ScriptRuntime("cannot remove document root".into()));
+        }
+        let Some(parent) = self.parent(node) else {
+            return Ok(());
+        };
+        self.remove_child(parent, node)
     }
 
     fn dataset_get(&self, node_id: NodeId, key: &str) -> Result<String> {
@@ -427,6 +501,49 @@ impl Dom {
             }
         }
         Ok(matched)
+    }
+
+    fn can_have_children(&self, node_id: NodeId) -> bool {
+        matches!(
+            self.nodes.get(node_id.0).map(|n| &n.node_type),
+            Some(NodeType::Document | NodeType::Element(_))
+        )
+    }
+
+    fn is_valid_node(&self, node_id: NodeId) -> bool {
+        node_id.0 < self.nodes.len()
+    }
+
+    fn is_connected(&self, node_id: NodeId) -> bool {
+        let mut cursor = Some(node_id);
+        while let Some(node) = cursor {
+            if node == self.root {
+                return true;
+            }
+            cursor = self.parent(node);
+        }
+        false
+    }
+
+    fn rebuild_id_index(&mut self) {
+        let mut next = HashMap::new();
+        let mut stack = vec![self.root];
+        while let Some(node) = stack.pop() {
+            match &self.nodes[node.0].node_type {
+                NodeType::Element(element) => {
+                    if let Some(id) = element.attrs.get("id") {
+                        if !id.is_empty() {
+                            next.insert(id.clone(), node);
+                        }
+                    }
+                }
+                NodeType::Document | NodeType::Text(_) => {}
+            }
+            for child in self.nodes[node.0].children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        self.id_index = next;
     }
 
     fn collect_elements_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
@@ -925,6 +1042,8 @@ enum Expr {
     Number(i64),
     Var(String),
     DomRef(DomQuery),
+    CreateElement(String),
+    CreateTextNode(String),
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -969,6 +1088,12 @@ enum EventMethod {
     StopImmediatePropagation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeTreeMethod {
+    AppendChild,
+    RemoveChild,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Stmt {
     VarDecl {
@@ -994,6 +1119,14 @@ enum Stmt {
     DomRemoveAttribute {
         target: DomQuery,
         name: String,
+    },
+    NodeTreeMutation {
+        target: DomQuery,
+        method: NodeTreeMethod,
+        child: Expr,
+    },
+    NodeRemove {
+        target: DomQuery,
     },
     ForEach {
         selector: String,
@@ -1563,6 +1696,27 @@ impl Harness {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     self.dom.remove_attr(node, name)?;
                 }
+                Stmt::NodeTreeMutation {
+                    target,
+                    method,
+                    child,
+                } => {
+                    let parent = self.resolve_dom_query_required_runtime(target, env)?;
+                    let child = self.eval_expr(child, env, event_param, event)?;
+                    let Value::Node(child) = child else {
+                        return Err(Error::ScriptRuntime(
+                            "appendChild/removeChild argument must be an element reference".into(),
+                        ));
+                    };
+                    match method {
+                        NodeTreeMethod::AppendChild => self.dom.append_child(parent, child)?,
+                        NodeTreeMethod::RemoveChild => self.dom.remove_child(parent, child)?,
+                    }
+                }
+                Stmt::NodeRemove { target } => {
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    self.dom.remove_node(node)?;
+                }
                 Stmt::ForEach {
                     selector,
                     item_var,
@@ -1670,7 +1824,7 @@ impl Harness {
     }
 
     fn eval_expr(
-        &self,
+        &mut self,
         expr: &Expr,
         env: &HashMap<String, Value>,
         event_param: &Option<String>,
@@ -1686,6 +1840,14 @@ impl Harness {
                 .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}"))),
             Expr::DomRef(target) => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
+                Ok(Value::Node(node))
+            }
+            Expr::CreateElement(tag_name) => {
+                let node = self.dom.create_detached_element(tag_name.clone());
+                Ok(Value::Node(node))
+            }
+            Expr::CreateTextNode(text) => {
+                let node = self.dom.create_detached_text(text.clone());
                 Ok(Value::Node(node))
             }
             Expr::Binary { left, op, right } => {
@@ -2156,6 +2318,14 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_class_list_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_node_tree_mutation_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_node_remove_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -2756,6 +2926,94 @@ fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let method = match method.as_str() {
+        "appendChild" => NodeTreeMethod::AppendChild,
+        "removeChild" => NodeTreeMethod::RemoveChild,
+        _ => return Ok(None),
+    };
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(format!(
+            "{} requires 1 argument: {}",
+            match method {
+                NodeTreeMethod::AppendChild => "appendChild",
+                NodeTreeMethod::RemoveChild => "removeChild",
+            },
+            stmt
+        )));
+    }
+    let child = parse_expr(args[0].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported node tree mutation statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::NodeTreeMutation {
+        target,
+        method,
+        child,
+    }))
+}
+
+fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if method != "remove" {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported remove() statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::NodeRemove { target }))
+}
+
 fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -3049,6 +3307,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::String(value));
     }
 
+    if let Some(tag_name) = parse_document_create_element_expr(src)? {
+        return Ok(Expr::CreateElement(tag_name));
+    }
+
+    if let Some(text) = parse_document_create_text_node_expr(src)? {
+        return Ok(Expr::CreateTextNode(text));
+    }
+
     if let Some((target, class_name)) = parse_class_list_contains_expr(src)? {
         return Ok(Expr::ClassListContains { target, class_name });
     }
@@ -3096,6 +3362,60 @@ fn parse_document_element_expr(src: &str) -> Result<Option<DomQuery>> {
         return Ok(None);
     }
     Ok(Some(target))
+}
+
+fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("document") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("createElement") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let tag_name = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(tag_name.to_ascii_lowercase()))
+}
+
+fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("document") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("createTextNode") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let text = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(text))
 }
 
 fn parse_template_literal(src: &str) -> Result<Expr> {
@@ -5225,6 +5545,117 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn create_element_append_and_remove_child_work() -> Result<()> {
+        let html = r#"
+        <div id='root'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const node = document.createElement('span');
+            node.id = 'tmp';
+            node.textContent = 'X';
+
+            document.getElementById('result').textContent =
+              document.querySelectorAll('#tmp').length + ':';
+            root.appendChild(node);
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent +
+              document.querySelectorAll('#tmp').length + ':' +
+              document.querySelector('#root>#tmp').textContent;
+            root.removeChild(node);
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + ':' +
+              document.querySelectorAll('#tmp').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0:1:X:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn detached_element_id_is_not_queryable_until_attached() -> Result<()> {
+        let html = r#"
+        <div id='root'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const node = document.createElement('div');
+            node.id = 'late';
+            document.getElementById('result').textContent =
+              document.querySelectorAll('#late').length + ':';
+            document.getElementById('root').appendChild(node);
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent +
+              document.querySelectorAll('#late').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn create_text_node_append_and_remove_work() -> Result<()> {
+        let html = r#"
+        <div id='root'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const text = document.createTextNode('A');
+            root.appendChild(text);
+            document.getElementById('result').textContent = root.textContent + ':';
+            text.remove();
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + root.textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A:")?;
+        Ok(())
+    }
+
+    #[test]
+    fn node_remove_detaches_and_updates_id_index() -> Result<()> {
+        let html = r#"
+        <div id='root'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const el = document.createElement('div');
+            el.id = 'gone';
+            root.appendChild(el);
+            el.remove();
+            el.remove();
+            document.getElementById('result').textContent =
+              document.querySelectorAll('#gone').length + ':' + root.textContent;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0:")?;
         Ok(())
     }
 
