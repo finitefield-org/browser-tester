@@ -193,6 +193,9 @@ MVP対応:
 - `harness.advance_time_to(targetMs)` で fake clock を絶対時刻へ進め、`due_at <= targetMs` のタイマーを実行する
 - `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
 - `harness.run_next_timer()` は次の1件だけ実行し、実行した場合 `true` を返す（空キューは `false`）
+- `harness.run_next_due_timer()` は `due_at <= now_ms` の次の1件だけ実行し、実行した場合 `true` を返す
+- `harness.clear_timer(timerId)` は指定timer IDを削除し、削除対象が存在した場合 `true` を返す
+- `harness.clear_all_timers()` はキュー中タイマーを全削除し、削除件数を返す
 - 安全上限は既定で `10000`（`harness.set_timer_step_limit(max_steps)` で変更可能）
 - `harness.flush()` / `advance_time()` で安全上限超過時は、
   `now_ms`, `due_limit`, `pending_tasks`, `next_task` を含む診断付きエラーを返す
@@ -222,12 +225,16 @@ impl Harness {
     pub fn set_random_seed(&mut self, seed: u64);
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
     pub fn now_ms(&self) -> i64;
+    pub fn clear_timer(&mut self, timer_id: i64) -> bool;
+    pub fn clear_all_timers(&mut self) -> usize;
     pub fn pending_timers(&self) -> Vec<PendingTimer>;
     pub fn run_due_timers(&mut self) -> Result<usize>;
     pub fn advance_time(&mut self, ms: i64) -> Result<()>;
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;
     pub fn run_next_timer(&mut self) -> Result<bool>;
+    pub fn run_next_due_timer(&mut self) -> Result<bool>;
+    pub fn take_trace_logs(&mut self) -> Vec<String>;
 
     // Assert
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()>;
@@ -274,6 +281,7 @@ pub struct PendingTimer {
 ## 12. ログ・デバッグ
 
 - `Harness::enable_trace(true)` でイベントトレース有効化
+- トレースは標準エラーへ出力され、`take_trace_logs()` で取得してクリアできる
 - 出力例:
   - `[event] click target=#submit phase=target`
   - `[event] submit target=form#signup phase=bubble defaultPrevented=false`
@@ -450,6 +458,7 @@ pub struct Runtime {
     pub script: ScriptRuntime,
     pub task_queue: TaskQueue,
     pub trace: bool,
+    pub trace_logs: Vec<String>,
 }
 ```
 

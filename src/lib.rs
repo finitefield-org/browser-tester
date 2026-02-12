@@ -1522,6 +1522,7 @@ pub struct Harness {
     running_timer_canceled: bool,
     rng_state: u64,
     trace: bool,
+    trace_logs: Vec<String>,
 }
 
 impl Harness {
@@ -1539,6 +1540,7 @@ impl Harness {
             running_timer_canceled: false,
             rng_state: 0x9E37_79B9_7F4A_7C15,
             trace: false,
+            trace_logs: Vec::new(),
         };
 
         for script in scripts {
@@ -1550,6 +1552,10 @@ impl Harness {
 
     pub fn enable_trace(&mut self, enabled: bool) {
         self.trace = enabled;
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.trace_logs)
     }
 
     pub fn set_random_seed(&mut self, seed: u64) {
@@ -1711,6 +1717,22 @@ impl Harness {
         self.now_ms
     }
 
+    pub fn clear_timer(&mut self, timer_id: i64) -> bool {
+        let existed = self.running_timer_id == Some(timer_id)
+            || self.task_queue.iter().any(|task| task.id == timer_id);
+        self.clear_timeout(timer_id);
+        existed
+    }
+
+    pub fn clear_all_timers(&mut self) -> usize {
+        let cleared = self.task_queue.len();
+        self.task_queue.clear();
+        if self.running_timer_id.is_some() {
+            self.running_timer_canceled = true;
+        }
+        cleared
+    }
+
     pub fn pending_timers(&self) -> Vec<PendingTimer> {
         let mut timers = self
             .task_queue
@@ -1759,6 +1781,16 @@ impl Harness {
         if task.due_at > self.now_ms {
             self.now_ms = task.due_at;
         }
+        self.execute_timer_task(task)?;
+        Ok(true)
+    }
+
+    pub fn run_next_due_timer(&mut self) -> Result<bool> {
+        let Some(next_idx) = self.next_task_index(Some(self.now_ms)) else {
+            return Ok(false);
+        };
+
+        let task = self.task_queue.remove(next_idx);
         self.execute_timer_task(task)?;
         Ok(true)
     }
@@ -2044,10 +2076,10 @@ impl Harness {
         for listener in listeners {
             if self.trace {
                 let phase = if capture { "capture" } else { "bubble" };
-                eprintln!(
+                self.trace_line(format!(
                     "[event] {} target={} current={} phase={}",
                     event.event_type, node_id.0, event.current_target.0, phase
-                );
+                ));
             }
             self.execute_handler(&listener.handler, event)?;
             if event.immediate_propagation_stopped {
@@ -2055,6 +2087,13 @@ impl Harness {
             }
         }
         Ok(())
+    }
+
+    fn trace_line(&mut self, line: String) {
+        if self.trace {
+            eprintln!("{line}");
+            self.trace_logs.push(line);
+        }
     }
 
     fn execute_handler(&mut self, handler: &ScriptHandler, event: &mut EventState) -> Result<()> {
@@ -6137,6 +6176,41 @@ mod tests {
     }
 
     #[test]
+    fn trace_logs_capture_events_when_enabled() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {});
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.click("#btn")?;
+
+        let logs = h.take_trace_logs();
+        assert!(logs.iter().any(|line| line.contains("[event] click")));
+        assert!(logs.iter().any(|line| line.contains("phase=bubble")));
+        assert!(h.take_trace_logs().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn trace_logs_are_empty_when_trace_is_disabled() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {});
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert!(h.take_trace_logs().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn query_selector_if_else_and_class_list_work() -> Result<()> {
         let html = r#"
         <div id='box' class='base'></div>
@@ -6750,6 +6824,105 @@ mod tests {
         let html = r#"<button id='btn'>run</button>"#;
         let mut h = Harness::from_html(html)?;
         assert_eq!(h.run_due_timers()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_timer_cancels_specific_pending_timer() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 5);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert!(h.clear_timer(1));
+        assert!(!h.clear_timer(1));
+        assert!(!h.clear_timer(999));
+
+        h.advance_time(0)?;
+        h.assert_text("#result", "B")?;
+        h.advance_time(10)?;
+        h.assert_text("#result", "B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn clear_all_timers_empties_pending_queue() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = 'A';
+            }, 0);
+            setInterval(() => {
+              result.textContent = 'B';
+            }, 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert_eq!(h.pending_timers().len(), 2);
+        assert_eq!(h.clear_all_timers(), 2);
+        assert!(h.pending_timers().is_empty());
+        h.flush()?;
+        h.assert_text("#result", "")?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_next_due_timer_runs_only_one_due_task_without_advancing_clock() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 0);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert_eq!(h.now_ms(), 0);
+
+        assert!(h.run_next_due_timer()?);
+        assert_eq!(h.now_ms(), 0);
+        h.assert_text("#result", "A")?;
+
+        assert!(!h.run_next_due_timer()?);
+        assert_eq!(h.now_ms(), 0);
+        h.assert_text("#result", "A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_next_due_timer_returns_false_for_empty_queue() -> Result<()> {
+        let html = r#"<button id='btn'>run</button>"#;
+        let mut h = Harness::from_html(html)?;
+        assert!(!h.run_next_due_timer()?);
         Ok(())
     }
 
