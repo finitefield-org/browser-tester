@@ -931,6 +931,17 @@ fn serialize_style_declarations(decls: &[(String, String)]) -> String {
     out
 }
 
+fn format_float(value: f64) -> String {
+    let mut out = format!("{:.16}", value);
+    while out.contains('.') && out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+    out
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut it = value.chars();
     let mut out = String::new();
@@ -1112,6 +1123,7 @@ enum Value {
     String(String),
     Bool(bool),
     Number(i64),
+    Float(f64),
     Node(NodeId),
 }
 
@@ -1121,6 +1133,7 @@ impl Value {
             Self::Bool(v) => *v,
             Self::String(v) => !v.is_empty(),
             Self::Number(v) => *v != 0,
+            Self::Float(v) => *v != 0.0,
             Self::Node(_) => true,
         }
     }
@@ -1136,6 +1149,7 @@ impl Value {
                 }
             }
             Self::Number(v) => v.to_string(),
+            Self::Float(v) => format_float(*v),
             Self::Node(node) => format!("node-{}", node.0),
         }
     }
@@ -1192,6 +1206,9 @@ enum BinaryOp {
     Gt,
     Le,
     Ge,
+    Sub,
+    Mul,
+    Div,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1208,6 +1225,7 @@ enum Expr {
     String(String),
     Bool(bool),
     Number(i64),
+    Float(f64),
     DateNow,
     MathRandom,
     Var(String),
@@ -1250,6 +1268,7 @@ enum Expr {
         event_var: String,
         prop: EventExprProp,
     },
+    Neg(Box<Expr>),
     Not(Box<Expr>),
     Add(Vec<Expr>),
     Ternary {
@@ -1488,6 +1507,7 @@ pub struct Harness {
     listeners: ListenerStore,
     task_queue: Vec<ScheduledTask>,
     now_ms: i64,
+    timer_step_limit: usize,
     next_timer_id: i64,
     next_task_order: i64,
     running_timer_id: Option<i64>,
@@ -1504,6 +1524,7 @@ impl Harness {
             listeners: ListenerStore::default(),
             task_queue: Vec::new(),
             now_ms: 0,
+            timer_step_limit: 10_000,
             next_timer_id: 1,
             next_task_order: 0,
             running_timer_id: None,
@@ -1529,6 +1550,16 @@ impl Harness {
         } else {
             seed
         };
+    }
+
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
+        if max_steps == 0 {
+            return Err(Error::ScriptRuntime(
+                "set_timer_step_limit requires at least 1 step".into(),
+            ));
+        }
+        self.timer_step_limit = max_steps;
+        Ok(())
     }
 
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
@@ -1691,14 +1722,11 @@ impl Harness {
     }
 
     fn run_timer_queue(&mut self, due_limit: Option<i64>, advance_clock: bool) -> Result<()> {
-        const MAX_FLUSH_STEPS: usize = 10_000;
         let mut steps = 0usize;
         while let Some(next_idx) = self.next_task_index(due_limit) {
             steps += 1;
-            if steps > MAX_FLUSH_STEPS {
-                return Err(Error::ScriptRuntime(
-                    "flush exceeded max task steps (possible uncleared setInterval)".into(),
-                ));
+            if steps > self.timer_step_limit {
+                return Err(self.timer_step_limit_error(self.timer_step_limit, steps, due_limit));
             }
             let task = self.task_queue.remove(next_idx);
             if advance_clock && task.due_at > self.now_ms {
@@ -1707,6 +1735,40 @@ impl Harness {
             self.execute_timer_task(task)?;
         }
         Ok(())
+    }
+
+    fn timer_step_limit_error(
+        &self,
+        max_steps: usize,
+        steps: usize,
+        due_limit: Option<i64>,
+    ) -> Error {
+        let due_limit_desc = due_limit
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".into());
+
+        let next_task_desc = self
+            .next_task_index(due_limit)
+            .and_then(|idx| self.task_queue.get(idx))
+            .map(|task| {
+                let interval_desc = task
+                    .interval_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".into());
+                format!(
+                    "id={},due_at={},interval_ms={}",
+                    task.id, task.due_at, interval_desc
+                )
+            })
+            .unwrap_or_else(|| "none".into());
+
+        Error::ScriptRuntime(format!(
+            "flush exceeded max task steps (possible uncleared setInterval): limit={max_steps}, steps={steps}, now_ms={}, due_limit={}, pending_tasks={}, next_task={}",
+            self.now_ms,
+            due_limit_desc,
+            self.task_queue.len(),
+            next_task_desc
+        ))
     }
 
     fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
@@ -2250,8 +2312,9 @@ impl Harness {
             Expr::String(value) => Ok(Value::String(value.clone())),
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Number(value) => Ok(Value::Number(*value)),
+            Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
-            Expr::MathRandom => Ok(Value::Number(self.next_random_i64())),
+            Expr::MathRandom => Ok(Value::Float(self.next_random_f64())),
             Expr::Var(name) => env
                 .get(name)
                 .cloned()
@@ -2350,17 +2413,32 @@ impl Harness {
                 };
                 Ok(value)
             }
+            Expr::Neg(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                match value {
+                    Value::Number(v) => Ok(Value::Number(-v)),
+                    Value::Float(v) => Ok(Value::Float(-v)),
+                    other => Ok(Value::Float(-self.numeric_value(&other))),
+                }
+            }
             Expr::Not(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
                 Ok(Value::Bool(!value.truthy()))
             }
             Expr::Add(parts) => {
-                let mut out = String::new();
-                for part in parts {
-                    let value = self.eval_expr(part, env, event_param, event)?;
-                    out.push_str(&value.as_string());
+                if parts.is_empty() {
+                    return Ok(Value::String(String::new()));
                 }
-                Ok(Value::String(out))
+                let mut iter = parts.iter();
+                let first = iter
+                    .next()
+                    .ok_or_else(|| Error::ScriptRuntime("empty add expression".into()))?;
+                let mut acc = self.eval_expr(first, env, event_param, event)?;
+                for part in iter {
+                    let rhs = self.eval_expr(part, env, event_param, event)?;
+                    acc = self.add_values(&acc, &rhs);
+                }
+                Ok(acc)
             }
             Expr::Ternary {
                 cond,
@@ -2387,6 +2465,15 @@ impl Harness {
             BinaryOp::Gt => Value::Bool(self.compare(left, right, |l, r| l > r)),
             BinaryOp::Le => Value::Bool(self.compare(left, right, |l, r| l <= r)),
             BinaryOp::Ge => Value::Bool(self.compare(left, right, |l, r| l >= r)),
+            BinaryOp::Sub => Value::Float(self.numeric_value(left) - self.numeric_value(right)),
+            BinaryOp::Mul => Value::Float(self.numeric_value(left) * self.numeric_value(right)),
+            BinaryOp::Div => {
+                let rhs = self.numeric_value(right);
+                if rhs == 0.0 {
+                    return Err(Error::ScriptRuntime("division by zero".into()));
+                }
+                Value::Float(self.numeric_value(left) / rhs)
+            }
         };
         Ok(out)
     }
@@ -2395,6 +2482,9 @@ impl Harness {
         match (left, right) {
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Number(l), Value::Number(r)) => l == r,
+            (Value::Float(l), Value::Float(r)) => l == r,
+            (Value::Number(l), Value::Float(r)) => (*l as f64) == *r,
+            (Value::Float(l), Value::Number(r)) => *l == (*r as f64),
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             _ => false,
@@ -2403,15 +2493,35 @@ impl Harness {
 
     fn compare<F>(&self, left: &Value, right: &Value, op: F) -> bool
     where
-        F: Fn(i64, i64) -> bool,
+        F: Fn(f64, f64) -> bool,
     {
+        let l = self.numeric_value(left);
+        let r = self.numeric_value(right);
+        op(l, r)
+    }
+
+    fn add_values(&self, left: &Value, right: &Value) -> Value {
+        if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
+            return Value::String(format!("{}{}", left.as_string(), right.as_string()));
+        }
+
         match (left, right) {
-            (Value::Number(l), Value::Number(r)) => op(*l, *r),
-            _ => {
-                let l = left.as_string();
-                let r = right.as_string();
-                op(l.parse::<i64>().unwrap_or(0), r.parse::<i64>().unwrap_or(0))
+            (Value::Number(l), Value::Number(r)) => {
+                if let Some(sum) = l.checked_add(*r) {
+                    Value::Number(sum)
+                } else {
+                    Value::Float((*l as f64) + (*r as f64))
+                }
             }
+            _ => Value::Float(self.numeric_value(left) + self.numeric_value(right)),
+        }
+    }
+
+    fn numeric_value(&self, value: &Value) -> f64 {
+        match value {
+            Value::Number(v) => *v as f64,
+            Value::Float(v) => *v,
+            _ => value.as_string().parse::<f64>().unwrap_or(0.0),
         }
     }
 
@@ -2475,6 +2585,7 @@ impl Harness {
     fn value_to_i64(value: &Value) -> i64 {
         match value {
             Value::Number(v) => *v,
+            Value::Float(v) => *v as i64,
             Value::Bool(v) => {
                 if *v {
                     1
@@ -2482,12 +2593,16 @@ impl Harness {
                     0
                 }
             }
-            Value::String(v) => v.parse::<i64>().unwrap_or(0),
+            Value::String(v) => v
+                .parse::<i64>()
+                .ok()
+                .or_else(|| v.parse::<f64>().ok().map(|n| n as i64))
+                .unwrap_or(0),
             Value::Node(_) => 0,
         }
     }
 
-    fn next_random_i64(&mut self) -> i64 {
+    fn next_random_f64(&mut self) -> f64 {
         // xorshift64*: simple deterministic PRNG for test runtime.
         let mut x = self.rng_state;
         x ^= x >> 12;
@@ -2495,7 +2610,9 @@ impl Harness {
         x ^= x >> 27;
         self.rng_state = if x == 0 { 0xA5A5_A5A5_A5A5_A5A5 } else { x };
         let out = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
-        (out & 0x7FFF_FFFF) as i64
+        // Convert top 53 bits to [0.0, 1.0).
+        let mantissa = out >> 11;
+        (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
     }
 
     fn schedule_timeout(
@@ -4016,20 +4133,171 @@ fn parse_relational_expr(src: &str) -> Result<Expr> {
 
 fn parse_add_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
-    let plus_parts = split_top_level_by_char(src, b'+');
-    if plus_parts.len() >= 2 {
-        let mut parts = Vec::new();
-        for part in plus_parts {
-            parts.push(parse_unary_expr(part.trim())?);
-        }
-        return Ok(Expr::Add(parts));
+    let (parts, ops) = split_top_level_add_sub(src);
+    if ops.is_empty() {
+        return parse_mul_expr(src);
     }
 
-    parse_unary_expr(src)
+    if parts.iter().any(|part| part.trim().is_empty()) {
+        return Err(Error::ScriptParse(format!(
+            "invalid additive expression: {src}"
+        )));
+    }
+
+    let mut expr = parse_mul_expr(parts[0].trim())?;
+    for (idx, op) in ops.iter().enumerate() {
+        let rhs = parse_mul_expr(parts[idx + 1].trim())?;
+        if *op == '+' {
+            expr = append_concat_expr(expr, rhs);
+        } else {
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::Sub,
+                right: Box::new(rhs),
+            };
+        }
+    }
+
+    Ok(expr)
+}
+
+fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
+    match lhs {
+        Expr::Add(mut parts) => {
+            parts.push(rhs);
+            Expr::Add(parts)
+        }
+        other => Expr::Add(vec![other, rhs]),
+    }
+}
+
+fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
+    let bytes = src.as_bytes();
+    let mut parts = Vec::new();
+    let mut ops = Vec::new();
+    let mut start = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b'+' | b'-' if paren == 0 && bracket == 0 && brace == 0 => {
+                    if is_add_sub_binary_operator(bytes, i) {
+                        if let Some(part) = src.get(start..i) {
+                            parts.push(part);
+                        }
+                        ops.push(b as char);
+                        start = i + 1;
+                    }
+                }
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if let Some(part) = src.get(start..) {
+        parts.push(part);
+    }
+
+    (parts, ops)
+}
+
+fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
+    if idx >= bytes.len() {
+        return false;
+    }
+    let mut left = idx;
+    while left > 0 && bytes[left - 1].is_ascii_whitespace() {
+        left -= 1;
+    }
+    if left == 0 {
+        return false;
+    }
+    let prev = bytes[left - 1];
+    !matches!(
+        prev,
+        b'(' | b'['
+            | b'{'
+            | b','
+            | b'?'
+            | b':'
+            | b'='
+            | b'!'
+            | b'<'
+            | b'>'
+            | b'&'
+            | b'|'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'/'
+    )
+}
+
+fn parse_mul_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &["*", "/"]);
+    if ops.is_empty() {
+        return parse_unary_expr(src);
+    }
+    fold_binary(parts, ops, parse_unary_expr, |op| match op {
+        "*" => BinaryOp::Mul,
+        "/" => BinaryOp::Div,
+        _ => unreachable!(),
+    })
 }
 
 fn parse_unary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
+    if let Some(rest) = src.strip_prefix('-') {
+        let inner = parse_unary_expr(rest.trim())?;
+        return Ok(Expr::Neg(Box::new(inner)));
+    }
     if let Some(rest) = src.strip_prefix('!') {
         let inner = parse_unary_expr(rest.trim())?;
         return Ok(Expr::Not(Box::new(inner)));
@@ -4066,11 +4334,8 @@ fn parse_primary(src: &str) -> Result<Expr> {
     if src == "false" {
         return Ok(Expr::Bool(false));
     }
-    if src.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        let n: i64 = src
-            .parse()
-            .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
-        return Ok(Expr::Number(n));
+    if let Some(numeric) = parse_numeric_literal(src)? {
+        return Ok(numeric);
     }
 
     if src.starts_with('`') && src.ends_with('`') && src.len() >= 2 {
@@ -4147,6 +4412,45 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     Err(Error::ScriptParse(format!("unsupported expression: {src}")))
+}
+
+fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
+    if src.is_empty() {
+        return Ok(None);
+    }
+
+    if src.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        let n: i64 = src
+            .parse()
+            .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+        return Ok(Some(Expr::Number(n)));
+    }
+
+    let mut dot_count = 0usize;
+    for b in src.as_bytes() {
+        if *b == b'.' {
+            dot_count += 1;
+        } else if !b.is_ascii_digit() {
+            return Ok(None);
+        }
+    }
+
+    if dot_count != 1 {
+        return Ok(None);
+    }
+    if src.starts_with('.') || src.ends_with('.') {
+        return Ok(None);
+    }
+
+    let n: f64 = src
+        .parse()
+        .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+    if !n.is_finite() {
+        return Err(Error::ScriptParse(format!(
+            "invalid numeric literal: {src}"
+        )));
+    }
+    Ok(Some(Expr::Float(n)))
 }
 
 fn parse_document_element_expr(src: &str) -> Result<Option<DomQuery>> {
@@ -6551,6 +6855,180 @@ mod tests {
     }
 
     #[test]
+    fn math_random_returns_unit_interval() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const r = Math.random();
+            if (r >= 0 && r < 1) document.getElementById('result').textContent = 'ok';
+            else document.getElementById('result').textContent = 'ng';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_random_seed(42);
+        h.click("#btn")?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_numeric_literals_work_in_comparisons_and_assignment() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 0.5;
+            const b = 1.0;
+            if (a < b && a === 0.5 && b >= 1)
+              document.getElementById('result').textContent = a;
+            else
+              document.getElementById('result').textContent = 'ng';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0.5")?;
+        Ok(())
+    }
+
+    #[test]
+    fn multiplication_and_division_work_for_numbers() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 6 * 7;
+            const b = 5 / 2;
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "42:2.5")?;
+        Ok(())
+    }
+
+    #[test]
+    fn subtraction_and_unary_minus_work_for_numbers() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 10 - 3;
+            const b = -2;
+            const c = 1 - -2;
+            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "7:-2:3")?;
+        Ok(())
+    }
+
+    #[test]
+    fn addition_supports_numeric_and_string_left_fold() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 1 + 2;
+            const b = 1 + 2 + 'x';
+            const c = 1 + '2' + 3;
+            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:3x:123")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_delay_accepts_arithmetic_expression() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {
+              document.getElementById('result').textContent = 'ok';
+            }, 5 * 2);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(9)?;
+        h.assert_text("#result", "")?;
+        h.advance_time(1)?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_delay_accepts_addition_expression() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {
+              document.getElementById('result').textContent = 'ok';
+            }, 5 + 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(10)?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_delay_accepts_subtraction_expression() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {
+              document.getElementById('result').textContent = 'ok';
+            }, 15 - 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(10)?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
     fn math_random_seed_reset_repeats_sequence() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -6674,6 +7152,76 @@ mod tests {
         h.click("#btn")?;
         h.flush()?;
         h.assert_text("#result", "")?;
+        Ok(())
+    }
+
+    #[test]
+    fn flush_step_limit_error_contains_timer_diagnostics() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setInterval(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        let err = h
+            .flush()
+            .expect_err("flush should fail on uncleared interval");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("flush exceeded max task steps"));
+                assert!(msg.contains("limit=10000"));
+                assert!(msg.contains("pending_tasks="));
+                assert!(msg.contains("next_task=id=1"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timer_step_limit_can_be_configured() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setInterval(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_timer_step_limit(3)?;
+        h.click("#btn")?;
+        let err = h
+            .flush()
+            .expect_err("flush should fail with configured small step limit");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("limit=3"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timer_step_limit_rejects_zero() -> Result<()> {
+        let html = r#"<button id='btn'>run</button>"#;
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .set_timer_step_limit(0)
+            .expect_err("zero step limit should be rejected");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("set_timer_step_limit requires at least 1 step"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
         Ok(())
     }
 

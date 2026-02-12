@@ -132,6 +132,8 @@ MVP対応:
 ### 7.2 対応する構文/DOM API（最小）
 - リスナー登録: `document.*.addEventListener(...)`
 - 制御構文: `if/else`, 変数宣言, 代入, 三項演算子, 論理/比較演算子
+- 数値リテラル: 整数（例: `1`）と小数（例: `0.5`）
+- 算術演算子: `+`, `-`, `*`, `/`（単項マイナス対応。`+` は左結合で評価し、数値同士は加算・文字列が含まれる場合は連結）
 - DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`
 - DOM更新: `textContent`, `value`, `checked`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
@@ -141,7 +143,7 @@ MVP対応:
   （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
   `clearTimeout(timerId)` / `clearInterval(timerId)`
 - 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
-- 乱数: `Math.random()`（決定論PRNGの整数値を返す）
+- 乱数: `Math.random()`（決定論PRNGの浮動小数 `0.0 <= x < 1.0` を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 
 ### 7.3 Rust<->Scriptブリッジ
@@ -188,6 +190,9 @@ MVP対応:
 - タイマーは実時間を待たず、fake clock（初期値 `0ms`）で決定論的に実行する
 - `harness.advance_time(ms)` で fake clock を進め、`due_at <= now` のタイマーのみ実行する
 - `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
+- 安全上限は既定で `10000`（`harness.set_timer_step_limit(max_steps)` で変更可能）
+- `harness.flush()` / `advance_time()` で安全上限超過時は、
+  `now_ms`, `due_limit`, `pending_tasks`, `next_task` を含む診断付きエラーを返す
 
 ### 9.3 決定論サポート
 - `Date.now()` は fake clock（`now_ms`）を返す
@@ -210,6 +215,7 @@ impl Harness {
     pub fn submit(&mut self, selector: &str) -> Result<()>;
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()>;
     pub fn set_random_seed(&mut self, seed: u64);
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
     pub fn now_ms(&self) -> i64;
     pub fn advance_time(&mut self, ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;
