@@ -1730,6 +1730,7 @@ impl Harness {
         if self.running_timer_id.is_some() {
             self.running_timer_canceled = true;
         }
+        self.trace_line(format!("[timer] clear_all cleared={cleared}"));
         cleared
     }
 
@@ -1774,6 +1775,7 @@ impl Harness {
 
     pub fn run_next_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(None) else {
+            self.trace_line("[timer] run_next none".into());
             return Ok(false);
         };
 
@@ -1787,6 +1789,7 @@ impl Harness {
 
     pub fn run_next_due_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(Some(self.now_ms)) else {
+            self.trace_line("[timer] run_next_due none".into());
             return Ok(false);
         };
 
@@ -1865,6 +1868,15 @@ impl Harness {
     }
 
     fn execute_timer_task(&mut self, mut task: ScheduledTask) -> Result<()> {
+        let interval_desc = task
+            .interval_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".into());
+        self.trace_line(format!(
+            "[timer] run id={} due_at={} interval_ms={} now_ms={}",
+            task.id, task.due_at, interval_desc, self.now_ms
+        ));
+
         self.running_timer_id = Some(task.id);
         self.running_timer_canceled = false;
         let mut event = EventState::new("timeout", self.dom.root);
@@ -1892,6 +1904,10 @@ impl Harness {
                     handler: task.handler,
                     env: task.env,
                 });
+                self.trace_line(format!(
+                    "[timer] requeue id={} due_at={} interval_ms={}",
+                    task.id, due_at, delay_ms
+                ));
             }
         }
 
@@ -2025,6 +2041,7 @@ impl Harness {
         path.reverse();
 
         if path.is_empty() {
+            self.trace_event_done(&event, "empty_path");
             return Ok(event);
         }
 
@@ -2034,6 +2051,7 @@ impl Harness {
                 event.current_target = *node;
                 self.invoke_listeners(*node, &mut event, true)?;
                 if event.propagation_stopped {
+                    self.trace_event_done(&event, "propagation_stopped");
                     return Ok(event);
                 }
             }
@@ -2043,12 +2061,14 @@ impl Harness {
         event.current_target = target;
         self.invoke_listeners(target, &mut event, true)?;
         if event.propagation_stopped {
+            self.trace_event_done(&event, "propagation_stopped");
             return Ok(event);
         }
 
         // Target phase: bubble listeners.
         self.invoke_listeners(target, &mut event, false)?;
         if event.propagation_stopped {
+            self.trace_event_done(&event, "propagation_stopped");
             return Ok(event);
         }
 
@@ -2058,11 +2078,13 @@ impl Harness {
                 event.current_target = *node;
                 self.invoke_listeners(*node, &mut event, false)?;
                 if event.propagation_stopped {
+                    self.trace_event_done(&event, "propagation_stopped");
                     return Ok(event);
                 }
             }
         }
 
+        self.trace_event_done(&event, "completed");
         Ok(event)
     }
 
@@ -2076,9 +2098,11 @@ impl Harness {
         for listener in listeners {
             if self.trace {
                 let phase = if capture { "capture" } else { "bubble" };
+                let target_label = self.trace_node_label(event.target);
+                let current_label = self.trace_node_label(event.current_target);
                 self.trace_line(format!(
-                    "[event] {} target={} current={} phase={}",
-                    event.event_type, node_id.0, event.current_target.0, phase
+                    "[event] {} target={} current={} phase={} default_prevented={}",
+                    event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
             }
             self.execute_handler(&listener.handler, event)?;
@@ -2087,6 +2111,21 @@ impl Harness {
             }
         }
         Ok(())
+    }
+
+    fn trace_event_done(&mut self, event: &EventState, outcome: &str) {
+        let target_label = self.trace_node_label(event.target);
+        let current_label = self.trace_node_label(event.current_target);
+        self.trace_line(format!(
+            "[event] done {} target={} current={} outcome={} default_prevented={} propagation_stopped={} immediate_stopped={}",
+            event.event_type,
+            target_label,
+            current_label,
+            outcome,
+            event.default_prevented,
+            event.propagation_stopped,
+            event.immediate_propagation_stopped
+        ));
     }
 
     fn trace_line(&mut self, line: String) {
@@ -2667,6 +2706,18 @@ impl Harness {
             .unwrap_or_else(|| format!("node-{}", node.0))
     }
 
+    fn trace_node_label(&self, node: NodeId) -> String {
+        if let Some(id) = self.dom.attr(node, "id") {
+            if !id.is_empty() {
+                return format!("#{id}");
+            }
+        }
+        self.dom
+            .tag_name(node)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("node-{}", node.0))
+    }
+
     fn value_to_i64(value: &Value) -> i64 {
         match value {
             Value::Number(v) => *v,
@@ -2720,6 +2771,10 @@ impl Harness {
             handler,
             env: env.clone(),
         });
+        self.trace_line(format!(
+            "[timer] schedule timeout id={} due_at={} delay_ms={}",
+            id, due_at, delay_ms
+        ));
         id
     }
 
@@ -2743,14 +2798,26 @@ impl Harness {
             handler,
             env: env.clone(),
         });
+        self.trace_line(format!(
+            "[timer] schedule interval id={} due_at={} interval_ms={}",
+            id, due_at, interval_ms
+        ));
         id
     }
 
     fn clear_timeout(&mut self, id: i64) {
+        let before = self.task_queue.len();
         self.task_queue.retain(|task| task.id != id);
+        let removed = before.saturating_sub(self.task_queue.len());
+        let mut running_canceled = false;
         if self.running_timer_id == Some(id) {
             self.running_timer_canceled = true;
+            running_canceled = true;
         }
+        self.trace_line(format!(
+            "[timer] clear id={} removed={} running_canceled={}",
+            id, removed, running_canceled
+        ));
     }
 
     fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
@@ -6207,6 +6274,60 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         assert!(h.take_trace_logs().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn trace_logs_capture_timer_lifecycle_when_enabled() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {}, 5);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.click("#btn")?;
+
+        let logs = h.take_trace_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("[timer] schedule timeout id=1"))
+        );
+        assert!(logs.iter().any(|line| line.contains("due_at=5")));
+        assert!(logs.iter().any(|line| line.contains("delay_ms=5")));
+
+        assert!(h.run_next_timer()?);
+        let logs = h.take_trace_logs();
+        assert!(logs.iter().any(|line| line.contains("[timer] run id=1")));
+        assert!(logs.iter().any(|line| line.contains("now_ms=5")));
+        Ok(())
+    }
+
+    #[test]
+    fn trace_logs_event_done_contains_default_prevented_and_labels() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            event.preventDefault();
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enable_trace(true);
+        h.click("#btn")?;
+        let logs = h.take_trace_logs();
+        assert!(logs.iter().any(|line| line.contains("[event] click")));
+        assert!(logs.iter().any(|line| line.contains("target=#btn")));
+        assert!(
+            logs.iter().any(|line| line.contains("[event] done click")
+                && line.contains("default_prevented=true"))
+        );
         Ok(())
     }
 

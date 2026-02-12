@@ -283,8 +283,10 @@ pub struct PendingTimer {
 - `Harness::enable_trace(true)` でイベントトレース有効化
 - トレースは標準エラーへ出力され、`take_trace_logs()` で取得してクリアできる
 - 出力例:
-  - `[event] click target=#submit phase=target`
-  - `[event] submit target=form#signup phase=bubble defaultPrevented=false`
+  - `[event] click target=#submit current=#submit phase=bubble default_prevented=false`
+  - `[event] done submit target=#signup current=#signup outcome=completed default_prevented=false propagation_stopped=false immediate_stopped=false`
+  - `[timer] schedule timeout id=1 due_at=10 delay_ms=10`
+  - `[timer] run id=1 due_at=10 interval_ms=none now_ms=10`
 
 - `dump_dom(selector)` で部分DOMを文字列化
 
