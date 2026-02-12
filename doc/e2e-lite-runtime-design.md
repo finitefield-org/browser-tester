@@ -92,8 +92,10 @@ flowchart LR
 
 ### 6.3 セレクタ
 MVP対応:
-- `#id`, `.class`, `tag`, `tag.class`, `[name=value]`
-- 子孫結合子（空白）
+- 単純/複合: `#id`, `.class`, `tag`, `[name]`, `[name=value]`,
+  `tag#id.class[attr=value][attr2]`
+- 結合子: 子孫（空白）, 子（`>`）, 隣接兄弟（`+`）, 後続兄弟（`~`）
+- グループ: `A, B`（重複は除外し、文書順で返す）
 
 非対応セレクタは明示的エラーにする（サイレント無視しない）。
 

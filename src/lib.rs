@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt;
 
@@ -650,10 +650,10 @@ impl Dom {
     }
 
     fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>> {
-        let steps = parse_selector_chain(selector)?;
+        let groups = parse_selector_groups(selector)?;
 
-        if steps.len() == 1 {
-            if let SelectorStep::Id(id) = &steps[0].step {
+        if groups.len() == 1 && groups[0].len() == 1 {
+            if let Some(id) = groups[0][0].step.id_only() {
                 return Ok(self.by_id(id).into_iter().collect());
             }
         }
@@ -661,9 +661,14 @@ impl Dom {
         let mut ids = Vec::new();
         self.collect_elements_dfs(self.root, &mut ids);
 
+        let mut seen = HashSet::new();
         let mut matched = Vec::new();
         for candidate in ids {
-            if self.matches_selector_chain(candidate, &steps) {
+            if groups
+                .iter()
+                .any(|steps| self.matches_selector_chain(candidate, steps))
+                && seen.insert(candidate)
+            {
                 matched.push(candidate);
             }
         }
@@ -766,6 +771,21 @@ impl Dom {
                     }
                     found
                 }
+                SelectorCombinator::AdjacentSibling => self
+                    .previous_element_sibling(current)
+                    .filter(|sibling| self.matches_step(*sibling, prev_step)),
+                SelectorCombinator::GeneralSibling => {
+                    let mut cursor = self.previous_element_sibling(current);
+                    let mut found = None;
+                    while let Some(sibling) = cursor {
+                        if self.matches_step(sibling, prev_step) {
+                            found = Some(sibling);
+                            break;
+                        }
+                        cursor = self.previous_element_sibling(sibling);
+                    }
+                    found
+                }
             };
 
             let Some(matched) = matched else {
@@ -782,16 +802,49 @@ impl Dom {
             return false;
         };
 
-        match step {
-            SelectorStep::Id(id) => element.attrs.get("id") == Some(id),
-            SelectorStep::Class(class_name) => has_class(element, class_name),
-            SelectorStep::Tag(tag) => element.tag_name.eq_ignore_ascii_case(tag),
-            SelectorStep::TagClass { tag, class_name } => {
-                element.tag_name.eq_ignore_ascii_case(tag) && has_class(element, class_name)
+        if let Some(tag) = &step.tag {
+            if !element.tag_name.eq_ignore_ascii_case(tag) {
+                return false;
             }
-            SelectorStep::AttrExists { key } => element.attrs.contains_key(key),
-            SelectorStep::AttrEq { key, value } => element.attrs.get(key) == Some(value),
         }
+
+        if let Some(id) = &step.id {
+            if element.attrs.get("id") != Some(id) {
+                return false;
+            }
+        }
+
+        if step
+            .classes
+            .iter()
+            .any(|class_name| !has_class(element, class_name))
+        {
+            return false;
+        }
+
+        for cond in &step.attrs {
+            let matched = match cond {
+                SelectorAttrCondition::Exists { key } => element.attrs.contains_key(key),
+                SelectorAttrCondition::Eq { key, value } => element.attrs.get(key) == Some(value),
+            };
+            if !matched {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn previous_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
+        let parent = self.parent(node_id)?;
+        let children = &self.nodes[parent.0].children;
+        let pos = children.iter().position(|id| *id == node_id)?;
+        for sibling in children[..pos].iter().rev() {
+            if self.element(*sibling).is_some() {
+                return Some(*sibling);
+            }
+        }
+        None
     }
 
     fn find_ancestor_by_tag(&self, node_id: NodeId, tag: &str) -> Option<NodeId> {
@@ -958,19 +1011,35 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 }
 
 #[derive(Debug, Clone)]
-enum SelectorStep {
-    Id(String),
-    Class(String),
-    Tag(String),
-    TagClass { tag: String, class_name: String },
-    AttrExists { key: String },
-    AttrEq { key: String, value: String },
+enum SelectorAttrCondition {
+    Exists { key: String },
+    Eq { key: String, value: String },
+}
+
+#[derive(Debug, Clone, Default)]
+struct SelectorStep {
+    tag: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
+    attrs: Vec<SelectorAttrCondition>,
+}
+
+impl SelectorStep {
+    fn id_only(&self) -> Option<&str> {
+        if self.tag.is_none() && self.classes.is_empty() && self.attrs.is_empty() {
+            self.id.as_deref()
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectorCombinator {
     Descendant,
     Child,
+    AdjacentSibling,
+    GeneralSibling,
 }
 
 #[derive(Debug, Clone)]
@@ -991,11 +1060,16 @@ fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
     let mut pending_combinator: Option<SelectorCombinator> = None;
 
     for token in tokens {
-        if token == ">" {
+        if token == ">" || token == "+" || token == "~" {
             if pending_combinator.is_some() || steps.is_empty() {
                 return Err(Error::UnsupportedSelector(selector.into()));
             }
-            pending_combinator = Some(SelectorCombinator::Child);
+            pending_combinator = Some(match token.as_str() {
+                ">" => SelectorCombinator::Child,
+                "+" => SelectorCombinator::AdjacentSibling,
+                "~" => SelectorCombinator::GeneralSibling,
+                _ => unreachable!(),
+            });
             continue;
         }
 
@@ -1019,6 +1093,57 @@ fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
     Ok(steps)
 }
 
+fn parse_selector_groups(selector: &str) -> Result<Vec<Vec<SelectorPart>>> {
+    let groups = split_selector_groups(selector)?;
+    let mut parsed = Vec::with_capacity(groups.len());
+    for group in groups {
+        parsed.push(parse_selector_chain(&group)?);
+    }
+    Ok(parsed)
+}
+
+fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
+    let mut groups = Vec::new();
+    let mut current = String::new();
+    let mut bracket_depth = 0usize;
+
+    for ch in selector.chars() {
+        match ch {
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                if bracket_depth == 0 {
+                    return Err(Error::UnsupportedSelector(selector.into()));
+                }
+                bracket_depth -= 1;
+                current.push(ch);
+            }
+            ',' if bracket_depth == 0 => {
+                let trimmed = current.trim();
+                if trimmed.is_empty() {
+                    return Err(Error::UnsupportedSelector(selector.into()));
+                }
+                groups.push(trimmed.to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if bracket_depth != 0 {
+        return Err(Error::UnsupportedSelector(selector.into()));
+    }
+
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        return Err(Error::UnsupportedSelector(selector.into()));
+    }
+    groups.push(trimmed.to_string());
+    Ok(groups)
+}
+
 fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -1037,12 +1162,12 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
                 bracket_depth -= 1;
                 current.push(ch);
             }
-            '>' if bracket_depth == 0 => {
+            '>' | '+' | '~' if bracket_depth == 0 => {
                 if !current.trim().is_empty() {
                     tokens.push(current.trim().to_string());
                 }
                 current.clear();
-                tokens.push(">".to_string());
+                tokens.push(ch.to_string());
             }
             ch if ch.is_ascii_whitespace() && bracket_depth == 0 => {
                 if !current.trim().is_empty() {
@@ -1066,56 +1191,137 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
 }
 
 fn parse_selector_step(part: &str) -> Result<SelectorStep> {
-    if let Some(stripped) = part.strip_prefix('#') {
-        if stripped.is_empty() {
-            return Err(Error::UnsupportedSelector(part.into()));
-        }
-        return Ok(SelectorStep::Id(stripped.to_string()));
+    let part = part.trim();
+    if part.is_empty() {
+        return Err(Error::UnsupportedSelector(part.into()));
     }
 
-    if let Some(stripped) = part.strip_prefix('.') {
-        if stripped.is_empty() {
-            return Err(Error::UnsupportedSelector(part.into()));
-        }
-        return Ok(SelectorStep::Class(stripped.to_string()));
-    }
+    let bytes = part.as_bytes();
+    let mut i = 0usize;
+    let mut step = SelectorStep::default();
 
-    if part.starts_with('[') && part.ends_with(']') {
-        let body = &part[1..part.len() - 1];
-        if let Some((key, value)) = body.split_once('=') {
-            let key = key.trim().to_string();
-            let value = value
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string();
-            if key.is_empty() {
-                return Err(Error::UnsupportedSelector(part.into()));
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                i += 1;
+                let Some((id, next)) = parse_selector_ident(part, i) else {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                };
+                if step.id.replace(id).is_some() {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                }
+                i = next;
             }
-            return Ok(SelectorStep::AttrEq { key, value });
+            b'.' => {
+                i += 1;
+                let Some((class_name, next)) = parse_selector_ident(part, i) else {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                };
+                step.classes.push(class_name);
+                i = next;
+            }
+            b'[' => {
+                let (attr, next) = parse_selector_attr_condition(part, i)?;
+                step.attrs.push(attr);
+                i = next;
+            }
+            _ => {
+                if step.tag.is_some() || step.id.is_some() || !step.classes.is_empty() {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                }
+                let Some((tag, next)) = parse_selector_ident(part, i) else {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                };
+                step.tag = Some(tag);
+                i = next;
+            }
         }
-        let key = body.trim().to_string();
-        if key.is_empty() {
-            return Err(Error::UnsupportedSelector(part.into()));
-        }
-        return Ok(SelectorStep::AttrExists { key });
     }
 
-    if let Some((tag, class_name)) = part.split_once('.') {
-        if tag.is_empty() || class_name.is_empty() {
-            return Err(Error::UnsupportedSelector(part.into()));
+    if step.tag.is_none() && step.id.is_none() && step.classes.is_empty() && step.attrs.is_empty() {
+        return Err(Error::UnsupportedSelector(part.into()));
+    }
+    Ok(step)
+}
+
+fn parse_selector_ident(src: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = src.as_bytes();
+    if start >= bytes.len() || !is_selector_ident_char(bytes[start]) {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < bytes.len() && is_selector_ident_char(bytes[end]) {
+        end += 1;
+    }
+    Some((src.get(start..end)?.to_string(), end))
+}
+
+fn is_selector_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+fn parse_selector_attr_condition(
+    src: &str,
+    open_bracket: usize,
+) -> Result<(SelectorAttrCondition, usize)> {
+    let bytes = src.as_bytes();
+    let mut i = open_bracket + 1;
+    let mut quote: Option<u8> = None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' {
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
         }
-        return Ok(SelectorStep::TagClass {
-            tag: tag.to_string(),
-            class_name: class_name.to_string(),
-        });
+
+        if b == b'\'' || b == b'"' {
+            quote = Some(b);
+            i += 1;
+            continue;
+        }
+
+        if b == b']' {
+            let Some(body) = src.get(open_bracket + 1..i) else {
+                return Err(Error::UnsupportedSelector(src.into()));
+            };
+            let body = body.trim();
+            if body.is_empty() {
+                return Err(Error::UnsupportedSelector(src.into()));
+            }
+            let cond = if let Some((key, value)) = body.split_once('=') {
+                let key = key.trim().to_string();
+                if key.is_empty() {
+                    return Err(Error::UnsupportedSelector(src.into()));
+                }
+                let value = value.trim();
+                let value = if (value.starts_with('\"') && value.ends_with('\"'))
+                    || (value.starts_with('\'') && value.ends_with('\''))
+                {
+                    value[1..value.len() - 1].to_string()
+                } else {
+                    value.to_string()
+                };
+                SelectorAttrCondition::Eq { key, value }
+            } else {
+                SelectorAttrCondition::Exists {
+                    key: body.to_string(),
+                }
+            };
+            return Ok((cond, i + 1));
+        }
+
+        i += 1;
     }
 
-    if is_ident(part) {
-        return Ok(SelectorStep::Tag(part.to_string()));
-    }
-
-    Err(Error::UnsupportedSelector(part.into()))
+    Err(Error::UnsupportedSelector(src.into()))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -8515,6 +8721,95 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "direct")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_group_and_document_order_dedup_work() -> Result<()> {
+        let html = r#"
+        <div>
+          <span id='second'></span>
+          <span id='first'></span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const firstMatch = document.querySelector('#first, #second').id;
+            const same = document.querySelectorAll('#first, #first').length;
+            const both = document.querySelectorAll('#first, #second').length;
+            document.getElementById('result').textContent =
+              firstMatch + ':' + same + ':' + both;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "second:1:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_adjacent_and_general_sibling_combinators_work() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='a' class='item'>A</li>
+          <li id='b' class='item'>B</li>
+          <li id='c' class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const adjacent = document.querySelector('#a + .item').id;
+            const siblings = document.querySelectorAll('#a ~ .item').length;
+            document.getElementById('result').textContent = adjacent + ':' + siblings;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "b:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_compound_tag_id_class_and_attr_work() -> Result<()> {
+        let html = r#"
+        <div>
+          <span id='target' class='x y' data-role='main' data-on='1'></span>
+          <span id='other' class='x' data-role='main'></span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const exact = document.querySelector("span#target.x.y[data-role='main'][data-on]").id;
+            const many = document.querySelectorAll("span.x[data-role='main']").length;
+            document.getElementById('result').textContent = exact + ':' + many;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "target:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_trailing_group_separator_is_rejected() -> Result<()> {
+        let html = r#"<div id='x'></div>"#;
+        let h = Harness::from_html(html)?;
+        let err = h
+            .assert_exists("#x,")
+            .expect_err("selector should be invalid");
+        match err {
+            Error::UnsupportedSelector(selector) => assert_eq!(selector, "#x,"),
+            other => panic!("unexpected error: {other:?}"),
+        }
         Ok(())
     }
 
