@@ -1502,6 +1502,14 @@ struct ScheduledTask {
     env: HashMap<String, Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTimer {
+    pub id: i64,
+    pub due_at: i64,
+    pub order: i64,
+    pub interval_ms: Option<i64>,
+}
+
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
@@ -1703,6 +1711,21 @@ impl Harness {
         self.now_ms
     }
 
+    pub fn pending_timers(&self) -> Vec<PendingTimer> {
+        let mut timers = self
+            .task_queue
+            .iter()
+            .map(|task| PendingTimer {
+                id: task.id,
+                due_at: task.due_at,
+                order: task.order,
+                interval_ms: task.interval_ms,
+            })
+            .collect::<Vec<_>>();
+        timers.sort_by_key(|timer| (timer.due_at, timer.order));
+        timers
+    }
+
     pub fn advance_time(&mut self, delta_ms: i64) -> Result<()> {
         if delta_ms < 0 {
             return Err(Error::ScriptRuntime(
@@ -1713,8 +1736,31 @@ impl Harness {
         self.run_due_timers()
     }
 
+    pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()> {
+        if target_ms < self.now_ms {
+            return Err(Error::ScriptRuntime(format!(
+                "advance_time_to requires target >= now_ms (target={target_ms}, now_ms={})",
+                self.now_ms
+            )));
+        }
+        self.advance_time(target_ms - self.now_ms)
+    }
+
     pub fn flush(&mut self) -> Result<()> {
         self.run_timer_queue(None, true)
+    }
+
+    pub fn run_next_timer(&mut self) -> Result<bool> {
+        let Some(next_idx) = self.next_task_index(None) else {
+            return Ok(false);
+        };
+
+        let task = self.task_queue.remove(next_idx);
+        if task.due_at > self.now_ms {
+            self.now_ms = task.due_at;
+        }
+        self.execute_timer_task(task)?;
+        Ok(true)
     }
 
     fn run_due_timers(&mut self) -> Result<()> {
@@ -1756,8 +1802,8 @@ impl Harness {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "none".into());
                 format!(
-                    "id={},due_at={},interval_ms={}",
-                    task.id, task.due_at, interval_desc
+                    "id={},due_at={},order={},interval_ms={}",
+                    task.id, task.due_at, task.order, interval_desc
                 )
             })
             .unwrap_or_else(|| "none".into());
@@ -6667,6 +6713,180 @@ mod tests {
     }
 
     #[test]
+    fn pending_timers_returns_due_ordered_snapshot() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(() => {}, 10);
+            setInterval(() => {}, 5);
+            setTimeout(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        let timers = h.pending_timers();
+        assert_eq!(
+            timers,
+            vec![
+                PendingTimer {
+                    id: 3,
+                    due_at: 0,
+                    order: 2,
+                    interval_ms: None,
+                },
+                PendingTimer {
+                    id: 2,
+                    due_at: 5,
+                    order: 1,
+                    interval_ms: Some(5),
+                },
+                PendingTimer {
+                    id: 1,
+                    due_at: 10,
+                    order: 0,
+                    interval_ms: None,
+                },
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_timers_reflects_advance_time_execution() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setInterval(() => {}, 5);
+            setTimeout(() => {}, 7);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.advance_time(5)?;
+
+        let timers = h.pending_timers();
+        assert_eq!(
+            timers,
+            vec![
+                PendingTimer {
+                    id: 2,
+                    due_at: 7,
+                    order: 1,
+                    interval_ms: None,
+                },
+                PendingTimer {
+                    id: 1,
+                    due_at: 10,
+                    order: 2,
+                    interval_ms: Some(5),
+                },
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn run_next_timer_executes_single_task_in_due_order() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 10);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 0);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'C';
+            }, 10);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        assert_eq!(h.now_ms(), 0);
+
+        assert!(h.run_next_timer()?);
+        assert_eq!(h.now_ms(), 0);
+        h.assert_text("#result", "B")?;
+
+        assert!(h.run_next_timer()?);
+        assert_eq!(h.now_ms(), 10);
+        h.assert_text("#result", "BA")?;
+
+        assert!(h.run_next_timer()?);
+        assert_eq!(h.now_ms(), 10);
+        h.assert_text("#result", "BAC")?;
+
+        assert!(!h.run_next_timer()?);
+        assert_eq!(h.now_ms(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn advance_time_to_runs_due_timers_until_target() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            setTimeout(() => {
+              result.textContent = result.textContent + 'A';
+            }, 5);
+            setTimeout(() => {
+              result.textContent = result.textContent + 'B';
+            }, 10);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.advance_time_to(7)?;
+        assert_eq!(h.now_ms(), 7);
+        h.assert_text("#result", "A")?;
+
+        h.advance_time_to(10)?;
+        assert_eq!(h.now_ms(), 10);
+        h.assert_text("#result", "AB")?;
+
+        h.advance_time_to(10)?;
+        assert_eq!(h.now_ms(), 10);
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn advance_time_to_rejects_past_target() -> Result<()> {
+        let html = r#"<button id='btn'>run</button>"#;
+        let mut h = Harness::from_html(html)?;
+        h.advance_time(3)?;
+        let err = h
+            .advance_time_to(2)
+            .expect_err("advance_time_to with past target should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("advance_time_to requires target >= now_ms"));
+                assert!(msg.contains("target=2"));
+                assert!(msg.contains("now_ms=3"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn set_timeout_respects_delay_order_and_nested_queueing() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -7219,6 +7439,35 @@ mod tests {
         match err {
             Error::ScriptRuntime(msg) => {
                 assert!(msg.contains("set_timer_step_limit requires at least 1 step"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn advance_time_step_limit_error_contains_due_limit() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setInterval(() => {}, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_timer_step_limit(2)?;
+        h.click("#btn")?;
+        let err = h
+            .advance_time(7)
+            .expect_err("advance_time should fail with configured small step limit");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("limit=2"));
+                assert!(msg.contains("now_ms=7"));
+                assert!(msg.contains("due_limit=7"));
+                assert!(msg.contains("next_task=id=1"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

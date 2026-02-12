@@ -189,10 +189,14 @@ MVP対応:
 - 将来のため microtask風キューを保持
 - タイマーは実時間を待たず、fake clock（初期値 `0ms`）で決定論的に実行する
 - `harness.advance_time(ms)` で fake clock を進め、`due_at <= now` のタイマーのみ実行する
+- `harness.advance_time_to(targetMs)` で fake clock を絶対時刻へ進め、`due_at <= targetMs` のタイマーを実行する
 - `harness.flush()` は fake clock を必要分だけ先送りして、キューが空になるまで実行する
+- `harness.run_next_timer()` は次の1件だけ実行し、実行した場合 `true` を返す（空キューは `false`）
 - 安全上限は既定で `10000`（`harness.set_timer_step_limit(max_steps)` で変更可能）
 - `harness.flush()` / `advance_time()` で安全上限超過時は、
   `now_ms`, `due_limit`, `pending_tasks`, `next_task` を含む診断付きエラーを返す
+  （`due_limit` は `flush()` では `none`、`advance_time(ms)` では更新後の `now_ms`）
+- `harness.pending_timers()` で現在キュー中のタイマー（`due_at`,`order` 昇順）を取得できる
 
 ### 9.3 決定論サポート
 - `Date.now()` は fake clock（`now_ms`）を返す
@@ -217,14 +221,26 @@ impl Harness {
     pub fn set_random_seed(&mut self, seed: u64);
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
     pub fn now_ms(&self) -> i64;
+    pub fn pending_timers(&self) -> Vec<PendingTimer>;
     pub fn advance_time(&mut self, ms: i64) -> Result<()>;
+    pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()>;
     pub fn flush(&mut self) -> Result<()>;
+    pub fn run_next_timer(&mut self) -> Result<bool>;
 
     // Assert
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()>;
     pub fn assert_value(&self, selector: &str, expected: &str) -> Result<()>;
     pub fn assert_checked(&self, selector: &str, expected: bool) -> Result<()>;
     pub fn assert_exists(&self, selector: &str) -> Result<()>;
+}
+```
+
+```rust
+pub struct PendingTimer {
+    pub id: i64,
+    pub due_at: i64,
+    pub order: i64,
+    pub interval_ms: Option<i64>,
 }
 ```
 
