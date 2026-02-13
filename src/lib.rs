@@ -79,6 +79,8 @@ struct Element {
     value: String,
     checked: bool,
     disabled: bool,
+    readonly: bool,
+    required: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -124,12 +126,16 @@ impl Dom {
         let value = attrs.get("value").cloned().unwrap_or_default();
         let checked = attrs.contains_key("checked");
         let disabled = attrs.contains_key("disabled");
+        let readonly = attrs.contains_key("readonly");
+        let required = attrs.contains_key("required");
         let element = Element {
             tag_name,
             attrs,
             value,
             checked,
             disabled,
+            readonly,
+            required,
         };
         let id = self.create_node(Some(parent), NodeType::Element(element));
         if let Some(id_attr) = self
@@ -148,6 +154,8 @@ impl Dom {
             value: String::new(),
             checked: false,
             disabled: false,
+            readonly: false,
+            required: false,
         };
         self.create_node(None, NodeType::Element(element))
     }
@@ -180,6 +188,17 @@ impl Dom {
 
     fn parent(&self, node_id: NodeId) -> Option<NodeId> {
         self.nodes[node_id.0].parent
+    }
+
+    fn is_descendant_of(&self, node_id: NodeId, ancestor: NodeId) -> bool {
+        let mut cursor = self.parent(node_id);
+        while let Some(current) = cursor {
+            if current == ancestor {
+                return true;
+            }
+            cursor = self.parent(current);
+        }
+        false
     }
 
     fn by_id(&self, id: &str) -> Option<NodeId> {
@@ -459,6 +478,14 @@ impl Dom {
         self.element(node_id).map(|e| e.disabled).unwrap_or(false)
     }
 
+    fn readonly(&self, node_id: NodeId) -> bool {
+        self.element(node_id).map(|e| e.readonly).unwrap_or(false)
+    }
+
+    fn required(&self, node_id: NodeId) -> bool {
+        self.element(node_id).map(|e| e.required).unwrap_or(false)
+    }
+
     fn attr(&self, node_id: NodeId, name: &str) -> Option<String> {
         self.element(node_id)
             .and_then(|e| e.attrs.get(name).cloned())
@@ -493,6 +520,10 @@ impl Dom {
                 element.checked = true;
             } else if lowered == "disabled" {
                 element.disabled = true;
+            } else if lowered == "readonly" {
+                element.readonly = true;
+            } else if lowered == "required" {
+                element.required = true;
             }
             (is_option, lowered)
         };
@@ -535,6 +566,10 @@ impl Dom {
                 element.checked = false;
             } else if lowered == "disabled" {
                 element.disabled = false;
+            } else if lowered == "readonly" {
+                element.readonly = false;
+            } else if lowered == "required" {
+                element.required = false;
             }
             is_option
         };
@@ -771,6 +806,78 @@ impl Dom {
         Ok(())
     }
 
+    fn offset_left(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "offsetLeft target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn offset_top(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "offsetTop target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn offset_width(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "offsetWidth target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn offset_height(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "offsetHeight target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn scroll_width(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "scrollWidth target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn scroll_height(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "scrollHeight target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn scroll_left(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "scrollLeft target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
+    fn scroll_top(&self, node_id: NodeId) -> Result<i64> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "scrollTop target is not an element".into(),
+            ));
+        }
+        Ok(0)
+    }
+
     fn class_contains(&self, node_id: NodeId, class_name: &str) -> Result<bool> {
         let element = self
             .element(node_id)
@@ -842,6 +949,61 @@ impl Dom {
         Ok(matched)
     }
 
+    fn query_selector_from(&self, root: &NodeId, selector: &str) -> Result<Option<NodeId>> {
+        let all = self.query_selector_all_from(root, selector)?;
+        Ok(all.into_iter().next())
+    }
+
+    fn query_selector_all_from(&self, root: &NodeId, selector: &str) -> Result<Vec<NodeId>> {
+        let groups = parse_selector_groups(selector)?;
+
+        let mut ids = Vec::new();
+        self.collect_elements_descendants_dfs(*root, &mut ids);
+
+        let mut seen = HashSet::new();
+        let mut matched = Vec::new();
+        for candidate in ids {
+            if groups
+                .iter()
+                .any(|steps| self.matches_selector_chain(candidate, steps))
+                && seen.insert(candidate)
+            {
+                matched.push(candidate);
+            }
+        }
+        Ok(matched)
+    }
+
+    fn matches_selector(&self, node_id: NodeId, selector: &str) -> Result<bool> {
+        if self.element(node_id).is_none() {
+            return Ok(false);
+        }
+
+        let groups = parse_selector_groups(selector)?;
+        Ok(groups
+            .iter()
+            .any(|steps| self.matches_selector_chain(node_id, steps)))
+    }
+
+    fn closest(&self, node_id: NodeId, selector: &str) -> Result<Option<NodeId>> {
+        if self.element(node_id).is_none() {
+            return Ok(None);
+        }
+
+        let groups = parse_selector_groups(selector)?;
+        let mut cursor = Some(node_id);
+        while let Some(current) = cursor {
+            if groups
+                .iter()
+                .any(|steps| self.matches_selector_chain(current, steps))
+            {
+                return Ok(Some(current));
+            }
+            cursor = self.parent(current);
+        }
+        Ok(None)
+    }
+
     fn can_have_children(&self, node_id: NodeId) -> bool {
         matches!(
             self.nodes.get(node_id.0).map(|n| &n.node_type),
@@ -889,6 +1051,12 @@ impl Dom {
         if matches!(self.nodes[node_id.0].node_type, NodeType::Element(_)) {
             out.push(node_id);
         }
+        for child in &self.nodes[node_id.0].children {
+            self.collect_elements_dfs(*child, out);
+        }
+    }
+
+    fn collect_elements_descendants_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
         for child in &self.nodes[node_id.0].children {
             self.collect_elements_dfs(*child, out);
         }
@@ -1007,9 +1175,46 @@ impl Dom {
             let matched = match pseudo {
                 SelectorPseudoClass::FirstChild => self.is_first_element_child(node_id),
                 SelectorPseudoClass::LastChild => self.is_last_element_child(node_id),
+                SelectorPseudoClass::FirstOfType => self.is_first_of_type(node_id),
+                SelectorPseudoClass::LastOfType => self.is_last_of_type(node_id),
+                SelectorPseudoClass::OnlyChild => self.is_only_element_child(node_id),
+                SelectorPseudoClass::OnlyOfType => self.is_only_of_type(node_id),
+                SelectorPseudoClass::Checked => {
+                    self.element(node_id).is_some_and(|node| node.checked)
+                }
+                SelectorPseudoClass::Disabled => {
+                    self.element(node_id).is_some_and(|node| node.disabled)
+                }
+                SelectorPseudoClass::Enabled => {
+                    self.element(node_id).is_some_and(|node| !node.disabled)
+                }
+                SelectorPseudoClass::Required => {
+                    self.element(node_id).is_some_and(|node| node.required)
+                }
+                SelectorPseudoClass::Optional => {
+                    self.element(node_id).is_none_or(|node| !node.required)
+                }
+                SelectorPseudoClass::Readonly => {
+                    self.element(node_id).is_some_and(|node| node.readonly)
+                }
+                SelectorPseudoClass::Readwrite => {
+                    self.element(node_id).is_none_or(|node| !node.readonly)
+                }
+                SelectorPseudoClass::NthOfType(selector) => {
+                    self.is_nth_element_of_type(node_id, selector)
+                }
+                SelectorPseudoClass::NthLastOfType(selector) => {
+                    self.is_nth_last_element_of_type(node_id, selector)
+                }
+                SelectorPseudoClass::NthLastChild(selector) => {
+                    self.is_nth_last_element_child(node_id, selector)
+                }
                 SelectorPseudoClass::NthChild(selector) => {
                     self.is_nth_element_child(node_id, selector)
                 }
+                SelectorPseudoClass::Not(inners) => !inners
+                    .iter()
+                    .any(|inner| self.matches_selector_chain(node_id, inner)),
             };
             if !matched {
                 return false;
@@ -1027,18 +1232,175 @@ impl Dom {
         self.next_element_sibling(node_id).is_none()
     }
 
-    fn is_nth_element_child(
-        &self,
-        node_id: NodeId,
-        selector: &NthChildSelector,
-    ) -> bool {
+    fn is_only_element_child(&self, node_id: NodeId) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let mut count = 0usize;
+        for child in &self.nodes[parent.0].children {
+            if self.element(*child).is_some() {
+                count += 1;
+            }
+        }
+        count == 1
+    }
+
+    fn is_nth_element_child(&self, node_id: NodeId, selector: &NthChildSelector) -> bool {
         let Some(index) = self.element_index(node_id) else {
             return false;
         };
+        self.is_nth_index_element_child(index, selector)
+    }
+
+    fn is_nth_last_element_child(&self, node_id: NodeId, selector: &NthChildSelector) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let mut index = 0usize;
+        let mut target = None;
+        for child in &self.nodes[parent.0].children {
+            if self.element(*child).is_none() {
+                continue;
+            }
+            index += 1;
+            if *child == node_id {
+                target = Some(index);
+            }
+        }
+        let Some(target) = target else {
+            return false;
+        };
+        let total = index;
+        let index_from_last = (total + 1) - target;
+        self.is_nth_index_element_child(index_from_last, selector)
+    }
+
+    fn is_nth_element_of_type(&self, node_id: NodeId, selector: &NthChildSelector) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let Some(tag_name) = self.tag_name(node_id) else {
+            return false;
+        };
+        let mut index = 0usize;
+        let mut target = None;
+        for child in &self.nodes[parent.0].children {
+            let Some(element) = self.element(*child) else {
+                continue;
+            };
+            if element.tag_name != tag_name {
+                continue;
+            }
+            index += 1;
+            if *child == node_id {
+                target = Some(index);
+            }
+        }
+        let Some(target) = target else {
+            return false;
+        };
+        self.is_nth_index_element_child(target, selector)
+    }
+
+    fn is_nth_last_element_of_type(&self, node_id: NodeId, selector: &NthChildSelector) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let Some(tag_name) = self.tag_name(node_id) else {
+            return false;
+        };
+        let mut index = 0usize;
+        let mut target = None;
+        for child in &self.nodes[parent.0].children {
+            let Some(element) = self.element(*child) else {
+                continue;
+            };
+            if element.tag_name != tag_name {
+                continue;
+            }
+            index += 1;
+            if *child == node_id {
+                target = Some(index);
+            }
+        }
+        let Some(target) = target else {
+            return false;
+        };
+        let total = index;
+        let index_from_last = (total + 1) - target;
+        self.is_nth_index_element_child(index_from_last, selector)
+    }
+
+    fn is_first_of_type(&self, node_id: NodeId) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let Some(tag_name) = self.tag_name(node_id) else {
+            return false;
+        };
+
+        for child in &self.nodes[parent.0].children {
+            let Some(element) = self.element(*child) else {
+                continue;
+            };
+            if element.tag_name == tag_name {
+                return *child == node_id;
+            }
+        }
+        false
+    }
+
+    fn is_only_of_type(&self, node_id: NodeId) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let Some(tag_name) = self.tag_name(node_id) else {
+            return false;
+        };
+        let mut same_type_count = 0usize;
+        for child in &self.nodes[parent.0].children {
+            let Some(element) = self.element(*child) else {
+                continue;
+            };
+            if element.tag_name == tag_name {
+                same_type_count += 1;
+            }
+        }
+        same_type_count == 1
+    }
+
+    fn is_last_of_type(&self, node_id: NodeId) -> bool {
+        let Some(parent) = self.parent(node_id) else {
+            return false;
+        };
+        let Some(tag_name) = self.tag_name(node_id) else {
+            return false;
+        };
+
+        for child in self.nodes[parent.0].children.iter().rev() {
+            let Some(element) = self.element(*child) else {
+                continue;
+            };
+            if element.tag_name == tag_name {
+                return *child == node_id;
+            }
+        }
+        false
+    }
+
+    fn is_nth_index_element_child(&self, index: usize, selector: &NthChildSelector) -> bool {
         match selector {
             NthChildSelector::Exact(expected) => index == *expected,
             NthChildSelector::Odd => index % 2 == 1,
             NthChildSelector::Even => index % 2 == 0,
+            NthChildSelector::AnPlusB(a, b) => {
+                let index = index as i64;
+                let diff = index - *b;
+                if *a == 0 {
+                    return diff == 0;
+                }
+                diff % *a == 0 && (diff / *a) >= 0
+            }
         }
     }
 
@@ -1244,7 +1606,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     out
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SelectorAttrCondition {
     Exists { key: String },
     Eq { key: String, value: String },
@@ -1254,7 +1616,22 @@ enum SelectorAttrCondition {
 enum SelectorPseudoClass {
     FirstChild,
     LastChild,
+    FirstOfType,
+    LastOfType,
+    OnlyChild,
+    OnlyOfType,
+    Checked,
+    Disabled,
+    Enabled,
+    Required,
+    Optional,
+    Readonly,
+    Readwrite,
+    NthOfType(NthChildSelector),
+    NthLastOfType(NthChildSelector),
+    Not(Vec<Vec<SelectorPart>>),
     NthChild(NthChildSelector),
+    NthLastChild(NthChildSelector),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1262,9 +1639,10 @@ enum NthChildSelector {
     Exact(usize),
     Odd,
     Even,
+    AnPlusB(i64, i64),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct SelectorStep {
     tag: Option<String>,
     universal: bool,
@@ -1297,7 +1675,7 @@ enum SelectorCombinator {
     GeneralSibling,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectorPart {
     step: SelectorStep,
     // Relation to previous (left) selector part.
@@ -1361,6 +1739,7 @@ fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
     let mut groups = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
+    let mut paren_depth = 0usize;
 
     for ch in selector.chars() {
         match ch {
@@ -1375,7 +1754,18 @@ fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
                 bracket_depth -= 1;
                 current.push(ch);
             }
-            ',' if bracket_depth == 0 => {
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(Error::UnsupportedSelector(selector.into()));
+                }
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            ',' if bracket_depth == 0 && paren_depth == 0 => {
                 let trimmed = current.trim();
                 if trimmed.is_empty() {
                     return Err(Error::UnsupportedSelector(selector.into()));
@@ -1388,6 +1778,9 @@ fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
     }
 
     if bracket_depth != 0 {
+        return Err(Error::UnsupportedSelector(selector.into()));
+    }
+    if paren_depth != 0 {
         return Err(Error::UnsupportedSelector(selector.into()));
     }
 
@@ -1403,6 +1796,7 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
+    let mut paren_depth = 0usize;
 
     for ch in selector.chars() {
         match ch {
@@ -1417,14 +1811,25 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
                 bracket_depth -= 1;
                 current.push(ch);
             }
-            '>' | '+' | '~' if bracket_depth == 0 => {
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(Error::UnsupportedSelector(selector.into()));
+                }
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            '>' | '+' | '~' if bracket_depth == 0 && paren_depth == 0 => {
                 if !current.trim().is_empty() {
                     tokens.push(current.trim().to_string());
                 }
                 current.clear();
                 tokens.push(ch.to_string());
             }
-            ch if ch.is_ascii_whitespace() && bracket_depth == 0 => {
+            ch if ch.is_ascii_whitespace() && bracket_depth == 0 && paren_depth == 0 => {
                 if !current.trim().is_empty() {
                     tokens.push(current.trim().to_string());
                 }
@@ -1435,6 +1840,9 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
     }
 
     if bracket_depth != 0 {
+        return Err(Error::UnsupportedSelector(selector.into()));
+    }
+    if paren_depth != 0 {
         return Err(Error::UnsupportedSelector(selector.into()));
     }
 
@@ -1543,32 +1951,180 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
         }
     }
 
-    if let Some(rest) = tail.strip_prefix("nth-child(") {
+    if let Some(rest) = tail.strip_prefix("first-of-type") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "first-of-type".len();
+            return Some((SelectorPseudoClass::FirstOfType, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("last-of-type") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "last-of-type".len();
+            return Some((SelectorPseudoClass::LastOfType, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("only-child") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "only-child".len();
+            return Some((SelectorPseudoClass::OnlyChild, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("only-of-type") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "only-of-type".len();
+            return Some((SelectorPseudoClass::OnlyOfType, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("checked") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "checked".len();
+            return Some((SelectorPseudoClass::Checked, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("disabled") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "disabled".len();
+            return Some((SelectorPseudoClass::Disabled, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("required") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "required".len();
+            return Some((SelectorPseudoClass::Required, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("optional") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "optional".len();
+            return Some((SelectorPseudoClass::Optional, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("read-only") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "read-only".len();
+            return Some((SelectorPseudoClass::Readonly, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("read-write") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "read-write".len();
+            return Some((SelectorPseudoClass::Readwrite, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("enabled") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "enabled".len();
+            return Some((SelectorPseudoClass::Enabled, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("not(") {
         let body = rest;
-        let Some(close_pos) = body.find(')') else {
+        let Some(close_pos) = find_matching_paren(body) else {
             return None;
         };
         let raw = body[..close_pos].trim();
         if raw.is_empty() {
             return None;
         }
-        let selector = match raw.to_ascii_lowercase().as_str() {
-            "odd" => NthChildSelector::Odd,
-            "even" => NthChildSelector::Even,
-            other => {
-                if other.starts_with('+') || other.starts_with('-') {
-                    return None;
-                }
-                let value = other.parse::<usize>().ok()?;
-                if value == 0 {
-                    return None;
-                }
-                NthChildSelector::Exact(value)
-            }
-        };
-        if raw.starts_with('+') || raw.starts_with('-') {
+        let mut groups = split_selector_groups(raw).ok()?;
+        if groups.is_empty() {
             return None;
         }
+        let mut inners = Vec::with_capacity(groups.len());
+        for group in &mut groups {
+            let chain = parse_selector_chain(group.trim()).ok()?;
+            if chain.is_empty() {
+                return None;
+            }
+            inners.push(chain);
+        }
+        let next = start + "not(".len() + close_pos + 1;
+        if let Some(ch) = part.as_bytes().get(next) {
+            if !is_selector_continuation(ch) {
+                return None;
+            }
+        }
+        return Some((SelectorPseudoClass::Not(inners), next));
+    }
+
+    if let Some(rest) = tail.strip_prefix("nth-last-of-type(") {
+        let body = rest;
+        let Some(close_pos) = find_matching_paren(body) else {
+            return None;
+        };
+        let raw = body[..close_pos].trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let selector = parse_nth_child_selector(raw)?;
+        let next = start + "nth-last-of-type(".len() + close_pos + 1;
+        if let Some(ch) = part.as_bytes().get(next) {
+            if !is_selector_continuation(ch) {
+                return None;
+            }
+        }
+        return Some((SelectorPseudoClass::NthLastOfType(selector), next));
+    }
+
+    if let Some(rest) = tail.strip_prefix("nth-of-type(") {
+        let body = rest;
+        let Some(close_pos) = find_matching_paren(body) else {
+            return None;
+        };
+        let raw = body[..close_pos].trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let selector = parse_nth_child_selector(raw)?;
+        let next = start + "nth-of-type(".len() + close_pos + 1;
+        if let Some(ch) = part.as_bytes().get(next) {
+            if !is_selector_continuation(ch) {
+                return None;
+            }
+        }
+        return Some((SelectorPseudoClass::NthOfType(selector), next));
+    }
+
+    if let Some(rest) = tail.strip_prefix("nth-last-child(") {
+        let body = rest;
+        let Some(close_pos) = find_matching_paren(body) else {
+            return None;
+        };
+        let raw = body[..close_pos].trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let selector = parse_nth_child_selector(raw)?;
+        let next = start + "nth-last-child(".len() + close_pos + 1;
+        if let Some(ch) = part.as_bytes().get(next) {
+            if !is_selector_continuation(ch) {
+                return None;
+            }
+        }
+        return Some((SelectorPseudoClass::NthLastChild(selector), next));
+    }
+
+    if let Some(rest) = tail.strip_prefix("nth-child(") {
+        let body = rest;
+        let Some(close_pos) = find_matching_paren(body) else {
+            return None;
+        };
+        let raw = body[..close_pos].trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let selector = parse_nth_child_selector(raw)?;
         let next = start + "nth-child(".len() + close_pos + 1;
         if let Some(ch) = part.as_bytes().get(next) {
             if !is_selector_continuation(ch) {
@@ -1579,6 +2135,130 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
     }
 
     None
+}
+
+fn find_matching_paren(body: &str) -> Option<usize> {
+    let mut paren_depth = 1usize;
+    let mut bracket_depth = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+
+    for (idx, b) in body.bytes().enumerate() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if b == b'\\' {
+                escaped = true;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+            continue;
+        }
+
+        match b {
+            b'\'' | b'"' => quote = Some(b),
+            b'[' => {
+                bracket_depth += 1;
+            }
+            b']' => {
+                if bracket_depth == 0 {
+                    return None;
+                }
+                bracket_depth -= 1;
+            }
+            b'(' if bracket_depth == 0 => {
+                paren_depth += 1;
+            }
+            b')' if bracket_depth == 0 => {
+                paren_depth = paren_depth.checked_sub(1)?;
+                if paren_depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_nth_child_selector(raw: &str) -> Option<NthChildSelector> {
+    let compact = raw
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if compact.is_empty() {
+        return None;
+    }
+
+    match compact.as_str() {
+        "odd" => Some(NthChildSelector::Odd),
+        "even" => Some(NthChildSelector::Even),
+        other => {
+            if other.contains('n') {
+                parse_nth_child_expression(other)
+            } else {
+                if other.starts_with('+') || other.starts_with('-') {
+                    None
+                } else {
+                    let value = other.parse::<usize>().ok()?;
+                    if value == 0 {
+                        None
+                    } else {
+                        Some(NthChildSelector::Exact(value))
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_nth_child_expression(raw: &str) -> Option<NthChildSelector> {
+    let expr = raw
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect::<String>();
+    let expr = expr.to_ascii_lowercase();
+    if expr.matches('n').count() != 1 {
+        return None;
+    }
+    if expr.starts_with(|c: char| c == '+' || c == '-') && expr.len() == 1 {
+        return None;
+    }
+
+    let n_pos = expr.find('n')?;
+    let (a_part, rest) = expr.split_at(n_pos);
+    let b_part = &rest[1..];
+
+    let a = match a_part {
+        "" => 1,
+        "-" => -1,
+        "+" => return None,
+        _ => a_part.parse::<i64>().ok()?,
+    };
+
+    if b_part.is_empty() {
+        return Some(NthChildSelector::AnPlusB(a, 0));
+    }
+
+    let mut sign = 1;
+    let raw_b = if let Some(rest) = b_part.strip_prefix('+') {
+        rest
+    } else if let Some(rest) = b_part.strip_prefix('-') {
+        sign = -1;
+        rest
+    } else {
+        return None;
+    };
+    if raw_b.is_empty() {
+        return None;
+    }
+    let b = raw_b.parse::<i64>().ok()?;
+    Some(NthChildSelector::AnPlusB(a, b * sign))
 }
 
 fn is_selector_continuation(next: &u8) -> bool {
@@ -1671,6 +2351,7 @@ enum Value {
     Bool(bool),
     Number(i64),
     Float(f64),
+    Null,
     Node(NodeId),
     FormData(Vec<(String, String)>),
 }
@@ -1682,6 +2363,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
+            Self::Null => false,
             Self::Node(_) => true,
             Self::FormData(_) => true,
         }
@@ -1699,6 +2381,7 @@ impl Value {
             }
             Self::Number(v) => v.to_string(),
             Self::Float(v) => format_float(*v),
+            Self::Null => "null".into(),
             Self::Node(node) => format!("node-{}", node.0),
             Self::FormData(_) => "[object FormData]".into(),
         }
@@ -1709,21 +2392,49 @@ impl Value {
 enum DomProp {
     Value,
     Checked,
+    Readonly,
+    Required,
+    Disabled,
     TextContent,
     InnerHtml,
     ClassName,
     Id,
     Name,
+    OffsetWidth,
+    OffsetHeight,
+    OffsetLeft,
+    OffsetTop,
+    ScrollWidth,
+    ScrollHeight,
+    ScrollLeft,
+    ScrollTop,
     Dataset(String),
     Style(String),
+    ActiveElement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DomQuery {
+    DocumentRoot,
     ById(String),
     BySelector(String),
-    BySelectorAllIndex { selector: String, index: usize },
-    FormElementsIndex { form: Box<DomQuery>, index: usize },
+    BySelectorAllIndex {
+        selector: String,
+        index: usize,
+    },
+    QuerySelector {
+        target: Box<DomQuery>,
+        selector: String,
+    },
+    QuerySelectorAllIndex {
+        target: Box<DomQuery>,
+        selector: String,
+        index: usize,
+    },
+    FormElementsIndex {
+        form: Box<DomQuery>,
+        index: usize,
+    },
     Var(String),
 }
 
@@ -1736,10 +2447,24 @@ enum FormDataSource {
 impl DomQuery {
     fn describe_call(&self) -> String {
         match self {
+            Self::DocumentRoot => "document".into(),
             Self::ById(id) => format!("document.getElementById('{id}')"),
             Self::BySelector(selector) => format!("document.querySelector('{selector}')"),
             Self::BySelectorAllIndex { selector, index } => {
                 format!("document.querySelectorAll('{selector}')[{index}]")
+            }
+            Self::QuerySelector { target, selector } => {
+                format!("{}.querySelector('{selector}')", target.describe_call())
+            }
+            Self::QuerySelectorAllIndex {
+                target,
+                selector,
+                index,
+            } => {
+                format!(
+                    "{}.querySelectorAll('{selector}')[{index}]",
+                    target.describe_call()
+                )
             }
             Self::FormElementsIndex { form, index } => {
                 format!("{}.elements[{index}]", form.describe_call())
@@ -1772,6 +2497,12 @@ enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VarAssignOp {
+    Assign,
+    Add,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventExprProp {
     Type,
     Target,
@@ -1784,6 +2515,7 @@ enum EventExprProp {
 enum Expr {
     String(String),
     Bool(bool),
+    Null,
     Number(i64),
     Float(f64),
     DateNow,
@@ -1808,6 +2540,18 @@ enum Expr {
     DomRead {
         target: DomQuery,
         prop: DomProp,
+    },
+    DomMatches {
+        target: DomQuery,
+        selector: String,
+    },
+    DomClosest {
+        target: DomQuery,
+        selector: String,
+    },
+    DomComputedStyleProperty {
+        target: DomQuery,
+        property: String,
     },
     ClassListContains {
         target: DomQuery,
@@ -1889,6 +2633,11 @@ enum Stmt {
         name: String,
         expr: Expr,
     },
+    VarAssign {
+        name: String,
+        op: VarAssignOp,
+        expr: Expr,
+    },
     FormDataAppend {
         target_var: String,
         name: Expr,
@@ -1945,6 +2694,7 @@ enum Stmt {
         target: DomQuery,
     },
     ForEach {
+        target: Option<DomQuery>,
         selector: String,
         item_var: String,
         index_var: Option<String>,
@@ -1970,7 +2720,17 @@ enum Stmt {
         target: DomQuery,
         event_type: Expr,
     },
+    DomMethodCall {
+        target: DomQuery,
+        method: DomMethod,
+    },
     Expr(Expr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DomMethod {
+    Focus,
+    Blur,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2096,7 +2856,9 @@ pub struct PendingTimer {
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
+    script_env: HashMap<String, Value>,
     task_queue: Vec<ScheduledTask>,
+    active_element: Option<NodeId>,
     now_ms: i64,
     timer_step_limit: usize,
     next_timer_id: i64,
@@ -2118,7 +2880,9 @@ impl Harness {
         let mut harness = Self {
             dom,
             listeners: ListenerStore::default(),
+            script_env: HashMap::new(),
             task_queue: Vec::new(),
+            active_element: None,
             now_ms: 0,
             timer_step_limit: 10_000,
             next_timer_id: 1,
@@ -2195,6 +2959,9 @@ impl Harness {
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         if self.dom.disabled(target) {
+            return Ok(());
+        }
+        if self.dom.readonly(target) {
             return Ok(());
         }
 
@@ -2300,6 +3067,16 @@ impl Harness {
         }
 
         Ok(())
+    }
+
+    pub fn focus(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        self.focus_node(target)
+    }
+
+    pub fn blur(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        self.blur_node(target)
     }
 
     pub fn submit(&mut self, selector: &str) -> Result<()> {
@@ -2785,6 +3562,18 @@ impl Harness {
     }
 
     fn dispatch_event(&mut self, target: NodeId, event_type: &str) -> Result<EventState> {
+        let mut env = self.script_env.clone();
+        let event = self.dispatch_event_with_env(target, event_type, &mut env)?;
+        self.script_env = env;
+        Ok(event)
+    }
+
+    fn dispatch_event_with_env(
+        &mut self,
+        target: NodeId,
+        event_type: &str,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
         let mut event = EventState::new(event_type, target);
 
         let mut path = Vec::new();
@@ -2804,7 +3593,7 @@ impl Harness {
         if path.len() >= 2 {
             for node in &path[..path.len() - 1] {
                 event.current_target = *node;
-                self.invoke_listeners(*node, &mut event, true)?;
+                self.invoke_listeners(*node, &mut event, env, true)?;
                 if event.propagation_stopped {
                     self.trace_event_done(&event, "propagation_stopped");
                     return Ok(event);
@@ -2814,14 +3603,14 @@ impl Harness {
 
         // Target phase: capture listeners first.
         event.current_target = target;
-        self.invoke_listeners(target, &mut event, true)?;
+        self.invoke_listeners(target, &mut event, env, true)?;
         if event.propagation_stopped {
             self.trace_event_done(&event, "propagation_stopped");
             return Ok(event);
         }
 
         // Target phase: bubble listeners.
-        self.invoke_listeners(target, &mut event, false)?;
+        self.invoke_listeners(target, &mut event, env, false)?;
         if event.propagation_stopped {
             self.trace_event_done(&event, "propagation_stopped");
             return Ok(event);
@@ -2831,7 +3620,7 @@ impl Harness {
         if path.len() >= 2 {
             for node in path[..path.len() - 1].iter().rev() {
                 event.current_target = *node;
-                self.invoke_listeners(*node, &mut event, false)?;
+                self.invoke_listeners(*node, &mut event, env, false)?;
                 if event.propagation_stopped {
                     self.trace_event_done(&event, "propagation_stopped");
                     return Ok(event);
@@ -2843,10 +3632,59 @@ impl Harness {
         Ok(event)
     }
 
+    fn focus_node(&mut self, node: NodeId) -> Result<()> {
+        let mut env = self.script_env.clone();
+        self.focus_node_with_env(node, &mut env)?;
+        self.script_env = env;
+        Ok(())
+    }
+
+    fn focus_node_with_env(
+        &mut self,
+        node: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.dom.disabled(node) {
+            return Ok(());
+        }
+
+        if self.active_element == Some(node) {
+            return Ok(());
+        }
+
+        if let Some(current) = self.active_element {
+            self.blur_node_with_env(current, env)?;
+        }
+
+        self.active_element = Some(node);
+        self.dispatch_event_with_env(node, "focusin", env)?;
+        self.dispatch_event_with_env(node, "focus", env)?;
+        Ok(())
+    }
+
+    fn blur_node(&mut self, node: NodeId) -> Result<()> {
+        let mut env = self.script_env.clone();
+        self.blur_node_with_env(node, &mut env)?;
+        self.script_env = env;
+        Ok(())
+    }
+
+    fn blur_node_with_env(&mut self, node: NodeId, env: &mut HashMap<String, Value>) -> Result<()> {
+        if self.active_element != Some(node) {
+            return Ok(());
+        }
+
+        self.dispatch_event_with_env(node, "focusout", env)?;
+        self.dispatch_event_with_env(node, "blur", env)?;
+        self.active_element = None;
+        Ok(())
+    }
+
     fn invoke_listeners(
         &mut self,
         node_id: NodeId,
         event: &mut EventState,
+        env: &mut HashMap<String, Value>,
         capture: bool,
     ) -> Result<()> {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
@@ -2855,12 +3693,12 @@ impl Harness {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
                 let current_label = self.trace_node_label(event.current_target);
-                self.trace_event_line(format!(
-                    "[event] {} target={} current={} phase={} default_prevented={}",
-                    event.event_type, target_label, current_label, phase, event.default_prevented
-                ));
+            self.trace_event_line(format!(
+                "[event] {} target={} current={} phase={} default_prevented={}",
+                event.event_type, target_label, current_label, phase, event.default_prevented
+            ));
             }
-            self.execute_handler(&listener.handler, event)?;
+            self.execute_handler(&listener.handler, event, env)?;
             if event.immediate_propagation_stopped {
                 break;
             }
@@ -2907,9 +3745,13 @@ impl Harness {
         }
     }
 
-    fn execute_handler(&mut self, handler: &ScriptHandler, event: &mut EventState) -> Result<()> {
-        let mut env: HashMap<String, Value> = HashMap::new();
-        self.execute_stmts(&handler.stmts, &handler.event_param, event, &mut env)
+    fn execute_handler(
+        &mut self,
+        handler: &ScriptHandler,
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        self.execute_stmts(&handler.stmts, &handler.event_param, event, env)
     }
 
     fn execute_stmts(
@@ -2924,13 +3766,21 @@ impl Harness {
                 Stmt::VarDecl { name, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
                     env.insert(name.clone(), value.clone());
-                    if matches!(expr, Expr::SetTimeout { .. } | Expr::SetInterval { .. }) {
-                        if let Value::Number(timer_id) = value {
-                            for task in self.task_queue.iter_mut().filter(|t| t.id == timer_id) {
-                                task.env.insert(name.clone(), Value::Number(timer_id));
-                            }
-                        }
-                    }
+                    self.bind_timer_id_to_task_env(name, expr, &value);
+                }
+                Stmt::VarAssign { name, op, expr } => {
+                    let value = self.eval_expr(expr, env, event_param, event)?;
+                    let previous = env
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
+
+                    let next = match op {
+                        VarAssignOp::Assign => value,
+                        VarAssignOp::Add => self.add_values(&previous, &value),
+                    };
+                    env.insert(name.clone(), next.clone());
+                    self.bind_timer_id_to_task_env(name, expr, &next);
                 }
                 Stmt::FormDataAppend {
                     target_var,
@@ -2960,11 +3810,44 @@ impl Harness {
                         DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
+                        DomProp::Readonly => {
+                            if value.truthy() {
+                                self.dom.set_attr(node, "readonly", "true")?;
+                            } else {
+                                self.dom.remove_attr(node, "readonly")?;
+                            }
+                        }
+                        DomProp::Required => {
+                            if value.truthy() {
+                                self.dom.set_attr(node, "required", "true")?;
+                            } else {
+                                self.dom.remove_attr(node, "required")?;
+                            }
+                        }
+                        DomProp::Disabled => {
+                            if value.truthy() {
+                                self.dom.set_attr(node, "disabled", "true")?;
+                            } else {
+                                self.dom.remove_attr(node, "disabled")?;
+                            }
+                        }
                         DomProp::ClassName => {
                             self.dom.set_attr(node, "class", &value.as_string())?
                         }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
+                        DomProp::OffsetWidth
+                        | DomProp::OffsetHeight
+                        | DomProp::OffsetLeft
+                        | DomProp::OffsetTop
+                        | DomProp::ScrollWidth
+                        | DomProp::ScrollHeight
+                        | DomProp::ScrollLeft
+                        | DomProp::ScrollTop
+                        | DomProp::ActiveElement => {
+                            let call = self.describe_dom_prop(prop);
+                            return Err(Error::ScriptRuntime(format!("{call} is read-only")));
+                        }
                         DomProp::Dataset(key) => {
                             self.dom.dataset_set(node, key, &value.as_string())?
                         }
@@ -3107,15 +3990,30 @@ impl Harness {
                 }
                 Stmt::NodeRemove { target } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    if let Some(active) = self.active_element {
+                        if active == node || self.dom.is_descendant_of(active, node) {
+                            self.active_element = None;
+                        }
+                    }
                     self.dom.remove_node(node)?;
                 }
                 Stmt::ForEach {
+                    target,
                     selector,
                     item_var,
                     index_var,
                     body,
                 } => {
-                    let items = self.dom.query_selector_all(selector)?;
+                    let items = if let Some(target) = target {
+                        match self.resolve_dom_query_runtime(target, env)? {
+                            Some(target_node) => {
+                                self.dom.query_selector_all_from(&target_node, selector)?
+                            }
+                            None => Vec::new(),
+                        }
+                    } else {
+                        self.dom.query_selector_all(selector)?
+                    };
                     let prev_item = env.get(item_var).cloned();
                     let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
 
@@ -3194,6 +4092,13 @@ impl Harness {
                         }
                     }
                 }
+                Stmt::DomMethodCall { target, method } => {
+                    let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    match method {
+                        DomMethod::Focus => self.focus_node_with_env(node, env)?,
+                        DomMethod::Blur => self.blur_node_with_env(node, env)?,
+                    }
+                }
                 Stmt::DispatchEvent { target, event_type } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     let event_name = self
@@ -3204,7 +4109,7 @@ impl Harness {
                             "dispatchEvent requires non-empty event type".into(),
                         ));
                     }
-                    let _ = self.dispatch_event(node, &event_name)?;
+                    let _ = self.dispatch_event_with_env(node, &event_name, env)?;
                 }
                 Stmt::Expr(expr) => {
                     let _ = self.eval_expr(expr, env, event_param, event)?;
@@ -3213,6 +4118,23 @@ impl Harness {
         }
 
         Ok(())
+    }
+
+    fn bind_timer_id_to_task_env(
+        &mut self,
+        name: &str,
+        expr: &Expr,
+        value: &Value,
+    ) {
+        if !matches!(expr, Expr::SetTimeout { .. } | Expr::SetInterval { .. }) {
+            return;
+        }
+        let Value::Number(timer_id) = value else {
+            return;
+        };
+        for task in self.task_queue.iter_mut().filter(|task| task.id == *timer_id) {
+            task.env.insert(name.to_string(), value.clone());
+        }
     }
 
     fn eval_expr(
@@ -3225,6 +4147,7 @@ impl Harness {
         match expr {
             Expr::String(value) => Ok(Value::String(value.clone())),
             Expr::Bool(value) => Ok(Value::Bool(*value)),
+            Expr::Null => Ok(Value::Null),
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
@@ -3267,6 +4190,9 @@ impl Harness {
                 match prop {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
+                    DomProp::Readonly => Ok(Value::Bool(self.dom.readonly(node))),
+                    DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
+                    DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
                     DomProp::TextContent => Ok(Value::String(self.dom.text_content(node))),
                     DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
                     DomProp::ClassName => Ok(Value::String(
@@ -3278,7 +4204,33 @@ impl Harness {
                     )),
                     DomProp::Dataset(key) => Ok(Value::String(self.dom.dataset_get(node, key)?)),
                     DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
+                    DomProp::OffsetWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
+                    DomProp::OffsetHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
+                    DomProp::OffsetLeft => Ok(Value::Number(self.dom.offset_left(node)?)),
+                    DomProp::OffsetTop => Ok(Value::Number(self.dom.offset_top(node)?)),
+                    DomProp::ScrollWidth => Ok(Value::Number(self.dom.scroll_width(node)?)),
+                    DomProp::ScrollHeight => Ok(Value::Number(self.dom.scroll_height(node)?)),
+                    DomProp::ScrollLeft => Ok(Value::Number(self.dom.scroll_left(node)?)),
+                    DomProp::ScrollTop => Ok(Value::Number(self.dom.scroll_top(node)?)),
+                    DomProp::ActiveElement => Ok(self
+                        .active_element
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
                 }
+            }
+            Expr::DomMatches { target, selector } => {
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
+                let result = self.dom.matches_selector(node, selector)?;
+                Ok(Value::Bool(result))
+            }
+            Expr::DomClosest { target, selector } => {
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
+                let result = self.dom.closest(node, selector)?;
+                Ok(result.map_or(Value::Null, Value::Node))
+            }
+            Expr::DomComputedStyleProperty { target, property } => {
+                let node = self.resolve_dom_query_required_runtime(target, env)?;
+                Ok(Value::String(self.dom.style_get(node, property)?))
             }
             Expr::ClassListContains { target, class_name } => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -3432,6 +4384,7 @@ impl Harness {
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::FormData(l), Value::FormData(r)) => l == r,
+            (Value::Null, Value::Null) => true,
             _ => false,
         }
     }
@@ -3466,16 +4419,35 @@ impl Harness {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
+            Value::Null => 0.0,
             _ => value.as_string().parse::<f64>().unwrap_or(0.0),
         }
     }
 
     fn resolve_dom_query_static(&self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
+            DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
             DomQuery::BySelector(selector) => self.dom.query_selector(selector),
             DomQuery::BySelectorAllIndex { selector, index } => {
                 let all = self.dom.query_selector_all(selector)?;
+                Ok(all.get(*index).copied())
+            }
+            DomQuery::QuerySelector { target, selector } => {
+                let Some(target_node) = self.resolve_dom_query_static(target)? else {
+                    return Ok(None);
+                };
+                self.dom.query_selector_from(&target_node, selector)
+            }
+            DomQuery::QuerySelectorAllIndex {
+                target,
+                selector,
+                index,
+            } => {
+                let Some(target_node) = self.resolve_dom_query_static(target)? else {
+                    return Ok(None);
+                };
+                let all = self.dom.query_selector_all_from(&target_node, selector)?;
                 Ok(all.get(*index).copied())
             }
             DomQuery::FormElementsIndex { form, index } => {
@@ -3497,6 +4469,7 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> Result<Option<NodeId>> {
         match target {
+            DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
             DomQuery::Var(name) => match env.get(name) {
                 Some(Value::Node(node)) => Ok(Some(*node)),
                 Some(_) => Err(Error::ScriptRuntime(format!(
@@ -3508,6 +4481,23 @@ impl Harness {
                     name
                 ))),
             },
+            DomQuery::QuerySelector { target, selector } => {
+                let Some(target_node) = self.resolve_dom_query_runtime(target, env)? else {
+                    return Ok(None);
+                };
+                self.dom.query_selector_from(&target_node, selector)
+            }
+            DomQuery::QuerySelectorAllIndex {
+                target,
+                selector,
+                index,
+            } => {
+                let Some(target_node) = self.resolve_dom_query_runtime(target, env)? else {
+                    return Ok(None);
+                };
+                let all = self.dom.query_selector_all_from(&target_node, selector)?;
+                Ok(all.get(*index).copied())
+            }
             DomQuery::FormElementsIndex { form, index } => {
                 let Some(form_node) = self.resolve_dom_query_runtime(form, env)? else {
                     return Ok(None);
@@ -3527,6 +4517,32 @@ impl Harness {
         self.resolve_dom_query_runtime(target, env)?.ok_or_else(|| {
             Error::ScriptRuntime(format!("{} returned null", target.describe_call()))
         })
+    }
+
+    fn describe_dom_prop(&self, prop: &DomProp) -> String {
+        match prop {
+            DomProp::Value => "value".into(),
+            DomProp::Checked => "checked".into(),
+            DomProp::Readonly => "readonly".into(),
+            DomProp::Required => "required".into(),
+            DomProp::Disabled => "disabled".into(),
+            DomProp::TextContent => "textContent".into(),
+            DomProp::InnerHtml => "innerHTML".into(),
+            DomProp::ClassName => "className".into(),
+            DomProp::Id => "id".into(),
+            DomProp::Name => "name".into(),
+            DomProp::OffsetWidth => "offsetWidth".into(),
+            DomProp::OffsetHeight => "offsetHeight".into(),
+            DomProp::OffsetLeft => "offsetLeft".into(),
+            DomProp::OffsetTop => "offsetTop".into(),
+            DomProp::ScrollWidth => "scrollWidth".into(),
+            DomProp::ScrollHeight => "scrollHeight".into(),
+            DomProp::ScrollLeft => "scrollLeft".into(),
+            DomProp::ScrollTop => "scrollTop".into(),
+            DomProp::Dataset(_) => "dataset".into(),
+            DomProp::Style(_) => "style".into(),
+            DomProp::ActiveElement => "activeElement".into(),
+        }
     }
 
     fn event_node_label(&self, node: NodeId) -> String {
@@ -3571,6 +4587,7 @@ impl Harness {
                 .unwrap_or(0),
             Value::Node(_) => 0,
             Value::FormData(_) => 0,
+            Value::Null => 0,
         }
     }
 
@@ -3657,51 +4674,11 @@ impl Harness {
     }
 
     fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
-        let mut cursor = Cursor::new(script);
-        while !cursor.eof() {
-            cursor.skip_ws_and_comments();
-            if cursor.eof() {
-                break;
-            }
-
-            let start = cursor.pos();
-            let reg = parse_listener_registration(&mut cursor)?;
-
-            let target = self.resolve_dom_query_static(&reg.target)?.ok_or_else(|| {
-                Error::ScriptParse(format!(
-                    "listener target {} not found in HTML",
-                    reg.target.describe_call()
-                ))
-            })?;
-
-            let handler = ScriptHandler {
-                event_param: reg.event_param,
-                stmts: parse_block_statements(&reg.body)?,
-            };
-
-            match reg.op {
-                ListenerRegistrationOp::Add => {
-                    self.listeners.add(
-                        target,
-                        reg.event_type,
-                        Listener {
-                            capture: reg.capture,
-                            handler,
-                        },
-                    );
-                }
-                ListenerRegistrationOp::Remove => {
-                    let _ = self
-                        .listeners
-                        .remove(target, &reg.event_type, reg.capture, &handler);
-                }
-            }
-
-            cursor.skip_ws_and_comments();
-            if cursor.pos() == start {
-                return Err(Error::ScriptParse("failed to consume script input".into()));
-            }
-        }
+        let stmts = parse_block_statements(script)?;
+        let mut event = EventState::new("script", self.dom.root);
+        let mut env = self.script_env.clone();
+        self.execute_stmts(&stmts, &None, &mut event, &mut env)?;
+        self.script_env = env;
 
         Ok(())
     }
@@ -3713,85 +4690,86 @@ enum ListenerRegistrationOp {
     Remove,
 }
 
-#[derive(Debug)]
-struct ListenerRegistration {
-    op: ListenerRegistrationOp,
-    target: DomQuery,
-    event_type: String,
-    event_param: Option<String>,
-    body: String,
-    capture: bool,
-}
-
-fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegistration> {
-    let target = parse_document_element_call(cursor)?;
-
-    cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
-    cursor.skip_ws();
-    let method = cursor
-        .parse_identifier()
-        .ok_or_else(|| Error::ScriptParse("expected listener method".into()))?;
-    let op = match method.as_str() {
-        "addEventListener" => ListenerRegistrationOp::Add,
-        "removeEventListener" => ListenerRegistrationOp::Remove,
-        _ => {
-            return Err(Error::ScriptParse(format!(
-                "unsupported listener method: {method}"
-            )));
-        }
-    };
-    cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-
-    let event_type = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b',')?;
-    cursor.skip_ws();
-
-    let (event_param, body) = parse_callback(cursor)?;
-
-    cursor.skip_ws();
-    let capture = if cursor.consume_byte(b',') {
-        cursor.skip_ws();
-        if cursor.consume_ascii("true") {
-            true
-        } else if cursor.consume_ascii("false") {
-            false
-        } else {
-            return Err(Error::ScriptParse(
-                "addEventListener third argument must be true/false".into(),
-            ));
-        }
-    } else {
-        false
-    };
-
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
-    cursor.skip_ws();
-    cursor.consume_byte(b';');
-
-    Ok(ListenerRegistration {
-        op,
-        target,
-        event_type,
-        event_param,
-        body,
-        capture,
-    })
-}
-
 fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
-    if let Ok(target) = parse_form_elements_item_target(cursor) {
+    let mut target = if let Ok(target) = parse_form_elements_item_target(cursor) {
+        target
+    } else {
+        cursor.set_pos(start);
+        parse_document_or_var_target(cursor)?
+    };
+
+    loop {
+        cursor.skip_ws();
+        let dot_pos = cursor.pos();
+        if !cursor.consume_byte(b'.') {
+            break;
+        }
+
+        cursor.skip_ws();
+        let method = match cursor.parse_identifier() {
+            Some(method) => method,
+            None => {
+                cursor.set_pos(dot_pos);
+                break;
+            }
+        };
+
+        match method.as_str() {
+            "querySelector" => {
+                cursor.skip_ws();
+                cursor.expect_byte(b'(')?;
+                cursor.skip_ws();
+                let selector = cursor.parse_string_literal()?;
+                cursor.skip_ws();
+                cursor.expect_byte(b')')?;
+                cursor.skip_ws();
+                target = DomQuery::QuerySelector {
+                    target: Box::new(target),
+                    selector,
+                };
+            }
+            "querySelectorAll" => {
+                cursor.skip_ws();
+                cursor.expect_byte(b'(')?;
+                cursor.skip_ws();
+                let selector = cursor.parse_string_literal()?;
+                cursor.skip_ws();
+                cursor.expect_byte(b')')?;
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'[') {
+                    cursor.set_pos(dot_pos);
+                    break;
+                }
+                cursor.skip_ws();
+                let index = cursor.parse_usize()?;
+                cursor.skip_ws();
+                cursor.expect_byte(b']')?;
+                cursor.skip_ws();
+                target = DomQuery::QuerySelectorAllIndex {
+                    target: Box::new(target),
+                    selector,
+                    index,
+                };
+            }
+            _ => {
+                cursor.set_pos(dot_pos);
+                break;
+            }
+        }
+    }
+    Ok(target)
+}
+
+fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+    let start = cursor.pos();
+    if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
     }
     cursor.set_pos(start);
-    if let Ok(target) = parse_document_element_call(cursor) {
-        return Ok(target);
+    if cursor.consume_ascii("document") {
+        return Ok(DomQuery::DocumentRoot);
     }
     cursor.set_pos(start);
     if let Some(name) = cursor.parse_identifier() {
@@ -3957,7 +4935,15 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_var_assign(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_form_data_append_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_dom_method_call_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -4330,6 +5316,40 @@ fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let Some((name, op_len, value_src)) = find_top_level_var_assignment(stmt) else {
+        return Ok(None);
+    };
+
+    if name.is_empty() || !is_ident(&name) {
+        return Ok(None);
+    }
+
+    let op = if op_len == 2 {
+        VarAssignOp::Add
+    } else {
+        VarAssignOp::Assign
+    };
+
+    let expr = parse_expr(value_src)?;
+    Ok(Some(Stmt::VarAssign {
+        name: name.to_string(),
+        op,
+        expr,
+    }))
+}
+
+fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
+    let (eq_pos, op_len) = find_top_level_assignment(stmt)?;
+    let lhs = stmt[..eq_pos].trim();
+    if lhs.is_empty() {
+        return None;
+    }
+
+    Some((lhs.to_string(), op_len, stmt.get(eq_pos + op_len..).unwrap_or_default()))
+}
+
 fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -4378,13 +5398,66 @@ fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let Some(method_name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let method = match method_name.as_str() {
+        "focus" => DomMethod::Focus,
+        "blur" => DomMethod::Blur,
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    let args = cursor.read_balanced_block(b'(', b')')?;
+    if !args.trim().is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "{} takes no arguments: {stmt}",
+            method_name
+        )));
+    }
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported {} statement tail: {stmt}",
+            method_name
+        )));
+    }
+
+    Ok(Some(Stmt::DomMethodCall { target, method }))
+}
+
 fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
-    let Some(eq_pos) = find_top_level_char(stmt, b'=') else {
+    let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
 
     let lhs = stmt[..eq_pos].trim();
-    let rhs = stmt[eq_pos + 1..].trim();
+    let rhs = stmt[eq_pos + op_len..].trim();
+
+    if lhs.is_empty() {
+        return Ok(None);
+    }
+
+    if op_len != 1 {
+        return Ok(None);
+    }
 
     let Some((target, prop)) = parse_dom_access(lhs)? else {
         return Ok(None);
@@ -4399,9 +5472,10 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
-    if !cursor.consume_ascii("document") {
-        return Ok(None);
-    }
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
         return Ok(None);
@@ -4439,6 +5513,7 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     Ok(Some(Stmt::ForEach {
+        target: Some(target),
         selector,
         item_var,
         index_var,
@@ -5223,7 +6298,7 @@ fn parse_add_expr(src: &str) -> Result<Expr> {
 
     let mut expr = parse_mul_expr(parts[0].trim())?;
     for (idx, op) in ops.iter().enumerate() {
-        let rhs = parse_mul_expr(parts[idx + 1].trim())?;
+        let rhs = parse_expr(parts[idx + 1].trim())?;
         if *op == '+' {
             expr = append_concat_expr(expr, rhs);
         } else {
@@ -5411,6 +6486,9 @@ fn parse_primary(src: &str) -> Result<Expr> {
     if src == "false" {
         return Ok(Expr::Bool(false));
     }
+    if src == "null" {
+        return Ok(Expr::Null);
+    }
     if let Some(numeric) = parse_numeric_literal(src)? {
         return Ok(numeric);
     }
@@ -5492,12 +6570,16 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DomHasAttribute { target, name });
     }
 
-    if let Some(target) = parse_form_elements_item_expr(src)? {
-        return Ok(Expr::DomRef(target));
+    if let Some((target, selector)) = parse_dom_matches_expr(src)? {
+        return Ok(Expr::DomMatches { target, selector });
     }
 
-    if let Some(target) = parse_document_element_expr(src)? {
-        return Ok(Expr::DomRef(target));
+    if let Some((target, selector)) = parse_dom_closest_expr(src)? {
+        return Ok(Expr::DomClosest { target, selector });
+    }
+
+    if let Some((target, property)) = parse_dom_computed_style_property_expr(src)? {
+        return Ok(Expr::DomComputedStyleProperty { target, property });
     }
 
     if let Some((event_var, prop)) = parse_event_property_expr(src)? {
@@ -5506,6 +6588,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some((target, prop)) = parse_dom_access(src)? {
         return Ok(Expr::DomRead { target, prop });
+    }
+
+    if let Some(target) = parse_element_ref_expr(src)? {
+        return Ok(Expr::DomRef(target));
     }
 
     if is_ident(src) {
@@ -5554,15 +6640,15 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::Float(n)))
 }
 
-fn parse_document_element_expr(src: &str) -> Result<Option<DomQuery>> {
+fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
-    let target = match parse_document_element_call(&mut cursor) {
+    let target = match parse_element_target(&mut cursor) {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
     cursor.skip_ws();
-    if !cursor.eof() {
+    if cursor.eof() && matches!(target, DomQuery::Var(_)) {
         return Ok(None);
     }
     Ok(Some(target))
@@ -5779,11 +6865,23 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let prop = match (head.as_str(), nested.as_ref()) {
         ("value", None) => DomProp::Value,
         ("checked", None) => DomProp::Checked,
+        ("readonly", None) | ("readOnly", None) => DomProp::Readonly,
+        ("required", None) => DomProp::Required,
+        ("disabled", None) => DomProp::Disabled,
         ("textContent", None) => DomProp::TextContent,
         ("innerHTML", None) => DomProp::InnerHtml,
         ("className", None) => DomProp::ClassName,
         ("id", None) => DomProp::Id,
         ("name", None) => DomProp::Name,
+        ("offsetWidth", None) => DomProp::OffsetWidth,
+        ("offsetHeight", None) => DomProp::OffsetHeight,
+        ("offsetLeft", None) => DomProp::OffsetLeft,
+        ("offsetTop", None) => DomProp::OffsetTop,
+        ("scrollWidth", None) => DomProp::ScrollWidth,
+        ("scrollHeight", None) => DomProp::ScrollHeight,
+        ("scrollLeft", None) => DomProp::ScrollLeft,
+        ("scrollTop", None) => DomProp::ScrollTop,
+        ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::ActiveElement,
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
@@ -5798,11 +6896,6 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
             )));
         }
     };
-
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
 
     Ok(Some((target, prop)))
 }
@@ -5865,6 +6958,97 @@ fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     }
 
     Ok(Some((target, name)))
+}
+
+fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("matches") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let selector = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some((target, selector)))
+}
+
+fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("closest") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let selector = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some((target, selector)))
+}
+
+fn parse_dom_computed_style_property_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("getComputedStyle") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let target = parse_element_target(&mut cursor)?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b'.')?;
+    cursor.skip_ws();
+    if !cursor.consume_ascii("getPropertyValue") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let property = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((target, property)))
 }
 
 fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)>> {
@@ -6008,20 +7192,6 @@ fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
         return Ok(None);
     }
     Ok(Some(form))
-}
-
-fn parse_form_elements_item_expr(src: &str) -> Result<Option<DomQuery>> {
-    let mut cursor = Cursor::new(src);
-    cursor.skip_ws();
-    let target = match parse_form_elements_item_target(&mut cursor) {
-        Ok(target) => target,
-        Err(_) => return Ok(None),
-    };
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
-    Ok(Some(target))
 }
 
 fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
@@ -6365,6 +7535,81 @@ fn find_top_level_char(src: &str, target: u8) -> Option<usize> {
             }
         }
 
+        i += 1;
+    }
+
+    None
+}
+
+fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b'=' => {
+                    if paren == 0 && bracket == 0 && brace == 0 {
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'=' {
+                            if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+                                i += 2;
+                            } else {
+                                i += 1;
+                            }
+                        } else if i > 0 && bytes[i - 1] == b'+' {
+                            return Some((i - 1, 2));
+                        } else {
+                            return Some((i, 1));
+                        }
+                    }
+                }
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
         i += 1;
     }
 
@@ -8162,6 +9407,77 @@ mod tests {
     }
 
     #[test]
+    fn element_matches_method_works() -> Result<()> {
+        let html = r#"
+        <div id='container'>
+          <button id='target' class='item primary'></button>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const direct = document.getElementById('target').matches('#target.item');
+            const byTag = document.getElementById('target').matches('button');
+            const bySelectorMismatch = document.getElementById('target').matches('.secondary');
+            document.getElementById('result').textContent =
+              direct + ':' + byTag + ':' + bySelectorMismatch;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn element_closest_method_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <section id='scope'>
+            <div id='container'>
+              <button id='btn'>run</button>
+            </div>
+          </section>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const scoped = document.getElementById('btn').closest('section');
+            const selfMatch = document.getElementById('btn').closest('#btn');
+            document.getElementById('result').textContent =
+              scoped.id + ':' + selfMatch.id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "scope:btn")?;
+        Ok(())
+    }
+
+    #[test]
+    fn element_closest_method_returns_null_when_not_found() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const matched = document.getElementById('btn').closest('section');
+            document.getElementById('result').textContent = matched ? 'found' : 'missing';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "missing")?;
+        Ok(())
+    }
+
+    #[test]
     fn query_selector_all_foreach_and_element_variables_work() -> Result<()> {
         let html = r#"
         <ul>
@@ -8387,6 +9703,37 @@ mod tests {
     }
 
     #[test]
+    fn disabled_property_read_write_works() -> Result<()> {
+        let html = r#"
+        <input id='name' value='init'>
+        <button id='toggle'>toggle-disabled</button>
+        <button id='enable'>enable</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('toggle').addEventListener('click', () => {
+            document.getElementById('name').disabled = true;
+            document.getElementById('result').textContent =
+              document.getElementById('name').disabled + ':' +
+              document.getElementById('name').getAttribute('disabled');
+          });
+          document.getElementById('enable').addEventListener('click', () => {
+            document.getElementById('name').disabled = false;
+            document.getElementById('result').textContent =
+              document.getElementById('name').disabled + ':' +
+              document.getElementById('name').getAttribute('disabled');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#toggle")?;
+        h.assert_text("#result", "true:true")?;
+        h.click("#enable")?;
+        h.assert_text("#result", "false:")?;
+        Ok(())
+    }
+
+    #[test]
     fn style_property_read_write_works() -> Result<()> {
         let html = r#"
         <div id='box' style='color: blue;'></div>
@@ -8411,6 +9758,52 @@ mod tests {
     }
 
     #[test]
+    fn offset_and_scroll_properties_are_read_only_and_queryable() -> Result<()> {
+        let html = r#"
+        <div id='box' style='width: 120px; height: 90px;'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            document.getElementById('result').textContent =
+              box.offsetWidth + ':' + box.offsetHeight + ':' +
+              box.offsetTop + ':' + box.offsetLeft + ':' +
+              box.scrollWidth + ':' + box.scrollHeight + ':' +
+              box.scrollTop + ':' + box.scrollLeft;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0:0:0:0:0:0:0:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn offset_property_assignment_is_rejected() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('box').scrollTop = 10;
+            document.getElementById('box').offsetWidth = 100;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("scrollTop/offsetWidth assignment should fail");
+        assert!(format!("{err}").contains("is read-only"));
+        Ok(())
+    }
+
+    #[test]
     fn dataset_camel_case_mapping_works() -> Result<()> {
         let html = r#"
         <div id='box' data-user-id='u1' data-plan-type='starter'></div>
@@ -8431,6 +9824,145 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "u1:starter:active")?;
+        Ok(())
+    }
+
+    #[test]
+    fn focus_and_blur_update_active_element_and_events() -> Result<()> {
+        let html = r#"
+        <input id='a'>
+        <input id='b'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const a = document.getElementById('a');
+          const b = document.getElementById('b');
+          let order = '';
+
+          a.addEventListener('focus', () => {
+            order += 'aF';
+          });
+          a.addEventListener('blur', () => {
+            order += 'aB';
+          });
+          b.addEventListener('focus', () => {
+            order += 'bF';
+          });
+          b.addEventListener('blur', () => {
+            order += 'bB';
+          });
+
+          document.getElementById('btn').addEventListener('click', () => {
+            a.focus();
+            b.focus();
+            b.blur();
+            document.getElementById('result').textContent =
+              order + ':' + (document.activeElement === null ? 'none' : 'active');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "aFaBbFbB:none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn focus_in_and_focus_out_events_are_dispatched() -> Result<()> {
+        let html = r#"
+        <input id='a'>
+        <input id='b'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const a = document.getElementById('a');
+          const b = document.getElementById('b');
+          let order = '';
+
+          a.addEventListener('focusin', () => {
+            order += 'aI';
+          });
+          a.addEventListener('focus', () => {
+            order += 'aF';
+          });
+          a.addEventListener('focusout', () => {
+            order += 'aO';
+          });
+          a.addEventListener('blur', () => {
+            order += 'aB';
+          });
+
+          b.addEventListener('focusin', () => {
+            order += 'bI';
+          });
+          b.addEventListener('focus', () => {
+            order += 'bF';
+          });
+          b.addEventListener('focusout', () => {
+            order += 'bO';
+          });
+          b.addEventListener('blur', () => {
+            order += 'bB';
+          });
+
+          document.getElementById('btn').addEventListener('click', () => {
+            a.focus();
+            b.focus();
+            b.blur();
+            document.getElementById('result').textContent =
+              order + ':' + (document.activeElement === null ? 'none' : 'active');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "aIaFaOaBbIbFbObB:none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn focus_skips_disabled_element() -> Result<()> {
+        let html = r#"
+        <input id='name' disabled>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('name').focus();
+            document.getElementById('result').textContent = document.activeElement ? 'has' : 'none';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn active_element_assignment_is_read_only() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.activeElement = null;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("activeElement should be read-only");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("read-only"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
         Ok(())
     }
 
@@ -8478,6 +10010,29 @@ mod tests {
             "#result",
             "color: red; border-color: black; background-color: white;",
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn get_computed_style_property_value_works() -> Result<()> {
+        let html = r#"
+        <div id='box' style='color: blue; background-color: transparent;'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.style.color = 'red';
+            const color = getComputedStyle(box).getPropertyValue('color');
+            const missing = getComputedStyle(box).getPropertyValue('padding-top');
+            document.getElementById('result').textContent = color + ':' + missing;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "red:")?;
         Ok(())
     }
 
@@ -10220,6 +11775,31 @@ mod tests {
     }
 
     #[test]
+    fn selector_nth_child_n_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='one' class='item'>A</li>
+          <li id='two' class='item'>B</li>
+          <li id='three' class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const every = document.querySelector('li:nth-child(n)').id;
+            const count = document.querySelectorAll('li:nth-child( n )').length;
+            document.getElementById('result').textContent = every + ':' + count;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "one:3")?;
+        Ok(())
+    }
+
+    #[test]
     fn selector_parse_rejects_invalid_nth_child() {
         assert!(
             parse_selector_step("li:nth-child(0)").is_err(),
@@ -10230,9 +11810,564 @@ mod tests {
             "negative nth-child should be invalid in this engine"
         );
         assert!(
-            parse_selector_step("li:nth-child(2n+1)").is_err(),
-            "expression nth-child should be invalid in this engine"
+            parse_selector_step("li:nth-child(2n+)").is_err(),
+            "malformed expression nth-child should be rejected"
         );
+        assert!(
+            parse_selector_step("li:nth-child(n1)").is_err(),
+            "invalid expression nth-child should be rejected"
+        );
+        assert!(
+            parse_selector_step("li:nth-last-child(n1)").is_err(),
+            "invalid expression nth-last-child should be rejected"
+        );
+        assert!(
+            parse_selector_step("li:nth-last-child(0)").is_err(),
+            "nth-last-child(0) should be invalid in this engine"
+        );
+        assert!(
+            parse_selector_step("li:nth-last-child(2n+)").is_err(),
+            "malformed expression nth-last-child should be rejected"
+        );
+        assert!(
+            parse_selector_step("li:nth-of-type(0)").is_err(),
+            "nth-of-type(0) should be invalid in this engine"
+        );
+        assert!(
+            parse_selector_step("li:nth-of-type(2n+)").is_err(),
+            "malformed expression nth-of-type should be rejected"
+        );
+        assert!(
+            parse_selector_step("li:nth-last-of-type(2n+)").is_err(),
+            "malformed expression nth-last-of-type should be rejected"
+        );
+        assert!(
+            parse_selector_step("li:nth-last-of-type(0)").is_err(),
+            "nth-last-of-type(0) should be invalid in this engine"
+        );
+        assert!(
+            parse_selector_step("li:not()").is_err(),
+            "empty :not should be invalid"
+        );
+
+        assert_eq!(
+            split_selector_groups("li:not([data='a,b']) , #x").map(|groups| groups.len()),
+            Ok(2)
+        );
+        assert_eq!(
+            parse_selector_groups("li:not(.skip, #first), #x").map(|groups| groups.len()),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn selector_nth_child_an_plus_b_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='one' class='item'>A</li>
+          <li id='two' class='item'>B</li>
+          <li id='three' class='item'>C</li>
+          <li id='four' class='item'>D</li>
+          <li id='five' class='item'>E</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first_odd = document.querySelector('li:nth-child(2n+1)').id;
+            const odd_count = document.querySelectorAll('li:nth-child(2n+1)').length;
+            const shifted = document.querySelector('li:nth-child(-n+3)').id;
+            document.getElementById('result').textContent = first_odd + ':' + odd_count + ':' + shifted;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "one:3:one")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_last_child_an_plus_b_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='one' class='item'>A</li>
+          <li id='two' class='item'>B</li>
+          <li id='three' class='item'>C</li>
+          <li id='four' class='item'>D</li>
+          <li id='five' class='item'>E</li>
+          <li id='six' class='item'>F</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('li:nth-last-child(2n+1)').id;
+            const count = document.querySelectorAll('li:nth-last-child(2n+1)').length;
+            const shifted = document.querySelector('li:nth-last-child(-n+3)').id;
+            document.getElementById('result').textContent = first + ':' + count + ':' + shifted;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "two:3:four")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_of_type_works() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='first-li'>A</li>
+          <span id='only-span'>S</span>
+          <li id='second-li'>B</li>
+          <em id='not-li'>E</em>
+          <li id='third-li'>C</li>
+          <li id='fourth-li'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const odd = document.querySelector('li:nth-of-type(odd)').id;
+            const even = document.querySelector('li:nth-of-type(even)').id;
+            const exact = document.querySelector('li:nth-of-type(3)').id;
+            const expression = document.querySelectorAll('li:nth-of-type(2n)').length;
+            document.getElementById('result').textContent = odd + ':' + even + ':' + exact + ':' + expression;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "first-li:second-li:third-li:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_of_type_n_works() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='first-li'>A</li>
+          <span id='only-span'>S</span>
+          <li id='second-li'>B</li>
+          <em id='not-li'>E</em>
+          <li id='third-li'>C</li>
+          <li id='fourth-li'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('li:nth-of-type(n)').id;
+            const all = document.querySelectorAll('li:nth-of-type(n)').length;
+            document.getElementById('result').textContent = first + ':' + all;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "first-li:4")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_last_of_type_works() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='first-li'>A</li>
+          <span id='only-span'>S</span>
+          <li id='second-li'>B</li>
+          <em id='not-li'>E</em>
+          <li id='third-li'>C</li>
+          <li id='fourth-li'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const odd = document.querySelector('li:nth-last-of-type(odd)').id;
+            const even = document.querySelector('li:nth-last-of-type(even)').id;
+            const exact = document.querySelector('li:nth-last-of-type(2)').id;
+            const expression = document.querySelectorAll('li:nth-last-of-type(2n)').length;
+            document.getElementById('result').textContent = odd + ':' + even + ':' + exact + ':' + expression;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "second-li:first-li:third-li:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_last_of_type_n_works() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='first-li'>A</li>
+          <span id='only-span'>S</span>
+          <li id='second-li'>B</li>
+          <em id='not-li'>E</em>
+          <li id='third-li'>C</li>
+          <li id='fourth-li'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('li:nth-last-of-type(n)').id;
+            const all = document.querySelectorAll('li:nth-last-of-type(n)').length;
+            document.getElementById('result').textContent = first + ':' + all;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "first-li:4")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <span id='a' class='target'>A</span>
+          <span id='b'>B</span>
+          <span id='c' class='target'>C</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.target)').id;
+            const total = document.querySelectorAll('span:not(.target)').length;
+            const explicit = document.querySelector('span:not(#b)').id;
+            document.getElementById('result').textContent = first + ':' + total + ':' + explicit;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "b:1:a")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nested_not_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <li id='a' class='target'>A</li>
+          <li id='b'>B</li>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const matched = document.querySelector('li:not(:not(.target))').id;
+            const total = document.querySelectorAll('li:not(:not(.target))').length;
+            document.getElementById('result').textContent = matched + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "a:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_multiple_selectors_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <li id='first' class='target'>A</li>
+          <li id='middle'>B</li>
+          <li id='skip' class='skip'>C</li>
+          <li id='last'>D</li>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('li:not(.skip, #first)').id;
+            const total = document.querySelectorAll('li:not(.skip, #first)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "middle:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_complex_selector_list_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='forbidden' class='scope'>
+            <span id='forbidden-a'>A</span>
+            <span id='forbidden-b'>B</span>
+          </div>
+          <span id='skip-me'>C</span>
+          <div id='safe'>
+            <span id='safe-a'>D</span>
+          </div>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.scope *, #skip-me)').id;
+            const total = document.querySelectorAll('span:not(.scope *, #skip-me)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "safe-a:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_complex_selector_adjacent_combinator_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='scope' class='scope'></div>
+          <span id='excluded'>A</span>
+          <span id='included'>B</span>
+          <span id='included-2'>C</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.scope + span)').id;
+            const total = document.querySelectorAll('span:not(.scope + span)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "included:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_complex_selector_general_sibling_combinator_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <span id='included-before'>A</span>
+          <div id='scope' class='scope'></div>
+          <span id='excluded-1'>B</span>
+          <span id='excluded-2'>C</span>
+          <p>between</p>
+          <span id='excluded-3'>D</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.scope ~ span)').id;
+            const total = document.querySelectorAll('span:not(.scope ~ span)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "included-before:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_complex_selector_list_general_sibling_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <span id='included-before'>A</span>
+          <div id='scope' class='scope'></div>
+          <span id='excluded-id'>B</span>
+          <span id='excluded-sibling'>C</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.scope ~ span, #excluded-id)').id;
+            const total = document.querySelectorAll('span:not(.scope ~ span, #excluded-id)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "included-before:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_complex_selector_child_combinator_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='scope' class='scope'>
+            <span id='excluded'>A</span>
+          </div>
+          <span id='included'>B</span>
+          <span id='included-2'>C</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('span:not(.scope > span)').id;
+            const total = document.querySelectorAll('span:not(.scope > span)').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "included:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_not_with_multiple_not_chain_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <li id='both' class='foo bar'>A</li>
+          <li id='foo-only' class='foo'>B</li>
+          <li id='bar-only' class='bar'>C</li>
+          <li id='none'>D</li>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('li:not(:not(.foo), :not(.bar))').id;
+            const total = document.querySelectorAll('li:not(:not(.foo), :not(.bar))').length;
+            document.getElementById('result').textContent = first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "both:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_first_last_of_type_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <p id='first-p'>A</p>
+          <span id='first-span'>B</span>
+          <p id='last-p'>C</p>
+          <span id='middle-span'>D</span>
+          <span id='last-span'>E</span>
+          <li id='first-li'>F</li>
+          <li id='last-li'>G</li>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const firstSpan = document.querySelector('span:first-of-type').id;
+            const lastSpan = document.querySelector('span:last-of-type').id;
+            const firstP = document.querySelector('p:first-of-type').id;
+            const lastP = document.querySelector('p:last-of-type').id;
+            const firstLi = document.querySelector('li:first-of-type').id;
+            const lastLi = document.querySelector('li:last-of-type').id;
+            document.getElementById('result').textContent = firstSpan + ':' + lastSpan + ':' + firstP + ':' + lastP + ':' + firstLi + ':' + lastLi;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "first-span:last-span:first-p:last-p:first-li:last-li",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_only_child_and_only_of_type_works() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='single-p'>
+            <p id='lonely-p'>A</p>
+          </div>
+          <div id='group'>
+            <span id='only-span'>B</span>
+          </div>
+          <section id='mixed-of-type'>
+            <span id='mixed-only-span'>C</span>
+            <em id='mixed-only-em'>D</em>
+          </section>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const lonely = document.querySelector('p:only-child').id;
+            const onlySpanInGroup = document.querySelector('#group span:only-child').id;
+            const onlySpanOfType = document.querySelector('#mixed-of-type span:only-of-type').id;
+            const onlyEmOfType = document.querySelector('#mixed-of-type em:only-of-type').id;
+            document.getElementById('result').textContent = lonely + ':' + onlySpanInGroup + ':' + onlySpanOfType + ':' + onlyEmOfType;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "lonely-p:only-span:mixed-only-span:mixed-only-em",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_checked_disabled_enabled_works() -> Result<()> {
+        let html = r#"
+        <input id='enabled' value='ok'>
+        <input id='disabled' disabled value='ng'>
+        <input id='unchecked' type='checkbox'>
+        <input id='checked' type='checkbox' checked>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const checked = document.querySelector('input:checked').id;
+            const disabled = document.querySelector('input:disabled').id;
+            const enabled = document.querySelector('input:enabled').id;
+            document.getElementById('result').textContent = checked + ':' + disabled + ':' + enabled;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "checked:disabled:enabled")?;
+        Ok(())
     }
 
     #[test]
@@ -10271,6 +12406,443 @@ mod tests {
             even.pseudo_classes,
             vec![SelectorPseudoClass::NthChild(NthChildSelector::Even)]
         );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_child_n() {
+        let n = parse_selector_step("li:nth-child(n)").expect("parse should succeed");
+        assert_eq!(
+            n.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::AnPlusB(1, 0))]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_last_child_an_plus_b() {
+        let direct = parse_selector_step("li:nth-last-child(2n+1)").expect("parse should succeed");
+        assert_eq!(
+            direct.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastChild(
+                NthChildSelector::AnPlusB(2, 1)
+            )]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_last_child_odd_even_exact() {
+        let odd = parse_selector_step("li:nth-last-child(odd)").expect("parse should succeed");
+        let even = parse_selector_step("li:nth-last-child(even)").expect("parse should succeed");
+        let exact = parse_selector_step("li:nth-last-child(2)").expect("parse should succeed");
+        assert_eq!(
+            odd.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastChild(NthChildSelector::Odd)]
+        );
+        assert_eq!(
+            even.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastChild(NthChildSelector::Even)]
+        );
+        assert_eq!(
+            exact.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastChild(NthChildSelector::Exact(
+                2
+            ))]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_child_an_plus_b() {
+        let direct = parse_selector_step("li:nth-child(2n+1)").expect("parse should succeed");
+        let shifted = parse_selector_step("li:nth-child(-n+3)").expect("parse should succeed");
+        assert_eq!(
+            direct.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::AnPlusB(
+                2, 1
+            ))]
+        );
+        assert_eq!(
+            shifted.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::AnPlusB(
+                -1, 3
+            ))]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_first_last_of_type() {
+        let first = parse_selector_step("li:first-of-type").expect("parse should succeed");
+        let last = parse_selector_step("li:last-of-type").expect("parse should succeed");
+        assert_eq!(first.pseudo_classes, vec![SelectorPseudoClass::FirstOfType]);
+        assert_eq!(last.pseudo_classes, vec![SelectorPseudoClass::LastOfType]);
+    }
+
+    #[test]
+    fn selector_parse_supports_only_child_and_only_of_type() {
+        let only_child = parse_selector_step("li:only-child").expect("parse should succeed");
+        let only_of_type = parse_selector_step("li:only-of-type").expect("parse should succeed");
+        assert_eq!(
+            only_child.pseudo_classes,
+            vec![SelectorPseudoClass::OnlyChild]
+        );
+        assert_eq!(
+            only_of_type.pseudo_classes,
+            vec![SelectorPseudoClass::OnlyOfType]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_checked_disabled_enabled() {
+        let checked = parse_selector_step("input:checked").expect("parse should succeed");
+        let disabled = parse_selector_step("input:disabled").expect("parse should succeed");
+        let enabled = parse_selector_step("input:enabled").expect("parse should succeed");
+        assert_eq!(checked.pseudo_classes, vec![SelectorPseudoClass::Checked]);
+        assert_eq!(disabled.pseudo_classes, vec![SelectorPseudoClass::Disabled]);
+        assert_eq!(enabled.pseudo_classes, vec![SelectorPseudoClass::Enabled]);
+    }
+
+    #[test]
+    fn selector_parse_supports_not() {
+        let by_id = parse_selector_step("span:not(#x)").expect("parse should succeed");
+        let by_class = parse_selector_step("span:not(.x)").expect("parse should succeed");
+        let nested = parse_selector_step("span:not(:not(.x))").expect("parse should succeed");
+        let with_attribute =
+            parse_selector_step("li:not([data='a,b'])").expect("parse should succeed");
+        if let SelectorPseudoClass::Not(inners) = &by_id.pseudo_classes[0] {
+            assert_eq!(inners.len(), 1);
+            assert_eq!(inners[0].len(), 1);
+            assert_eq!(inners[0][0].step.id.as_deref(), Some("x"));
+        } else {
+            panic!("expected not pseudo");
+        }
+        if let SelectorPseudoClass::Not(inners) = &by_class.pseudo_classes[0] {
+            assert_eq!(inners.len(), 1);
+            assert_eq!(inners[0].len(), 1);
+            assert_eq!(inners[0][0].step.tag.as_deref(), None);
+            assert_eq!(inners[0][0].step.classes.as_slice(), &["x"]);
+        } else {
+            panic!("expected not pseudo");
+        }
+        if let SelectorPseudoClass::Not(inners) = &nested.pseudo_classes[0] {
+            assert_eq!(inners.len(), 1);
+            assert_eq!(inners[0].len(), 1);
+            if let SelectorPseudoClass::Not(inner_inners) = &inners[0][0].step.pseudo_classes[0] {
+                assert_eq!(inner_inners.len(), 1);
+                assert_eq!(inner_inners[0][0].step.tag.as_deref(), None);
+                assert_eq!(inner_inners[0][0].step.classes.as_slice(), &["x"]);
+                assert!(inner_inners[0][0].step.pseudo_classes.is_empty());
+            } else {
+                panic!("expected nested not pseudo");
+            }
+        } else {
+            panic!("expected not pseudo");
+        }
+        if let SelectorPseudoClass::Not(inners) = &with_attribute.pseudo_classes[0] {
+            assert_eq!(inners.len(), 1);
+            assert_eq!(inners[0].len(), 1);
+            let inner = &inners[0][0].step;
+            assert_eq!(
+                inner.attrs,
+                vec![SelectorAttrCondition::Eq {
+                    key: "data".into(),
+                    value: "a,b".into()
+                }]
+            );
+            assert!(inner.classes.is_empty());
+            assert!(inner.id.is_none());
+            assert!(inner.pseudo_classes.is_empty());
+            assert!(!inner.universal);
+        } else {
+            panic!("expected not pseudo");
+        }
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_multiple_selectors() {
+        let multi =
+            parse_selector_step("li:not(.a, #target, :not(.skip))").expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &multi.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+        assert_eq!(inners.len(), 3);
+        assert_eq!(inners[0].len(), 1);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["a"]);
+
+        assert_eq!(inners[1].len(), 1);
+        assert_eq!(inners[1][0].step.id.as_deref(), Some("target"));
+
+        assert_eq!(inners[2].len(), 1);
+        assert_eq!(inners[2][0].step.pseudo_classes.len(), 1);
+        let inner = &inners[2][0].step.pseudo_classes[0];
+        assert!(matches!(inner, SelectorPseudoClass::Not(_)));
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_multiple_not_pseudos() {
+        let parsed = parse_selector_step("li:not(:not(.foo), :not(.bar))")
+            .expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 2);
+
+        assert_eq!(inners[0].len(), 1);
+        assert_eq!(inners[0][0].step.pseudo_classes.len(), 1);
+        let first = &inners[0][0].step.pseudo_classes[0];
+        if let SelectorPseudoClass::Not(inner_inners) = first {
+            assert_eq!(inner_inners.len(), 1);
+            assert_eq!(inner_inners[0][0].step.classes.as_slice(), &["foo"]);
+        } else {
+            panic!("expected nested not pseudo in first arg");
+        }
+
+        assert_eq!(inners[1].len(), 1);
+        assert_eq!(inners[1][0].step.pseudo_classes.len(), 1);
+        let second = &inners[1][0].step.pseudo_classes[0];
+        if let SelectorPseudoClass::Not(inner_inners) = second {
+            assert_eq!(inner_inners.len(), 1);
+            assert_eq!(inner_inners[0][0].step.classes.as_slice(), &["bar"]);
+        } else {
+            panic!("expected nested not pseudo in second arg");
+        }
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_complex_selector_list() {
+        let parsed = parse_selector_step("span:not(.scope *, #skip-me, .area :not(.nested .leaf))")
+            .expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 3);
+
+        assert_eq!(inners[0].len(), 2);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["scope"]);
+        assert!(inners[0][0].combinator.is_none());
+        assert_eq!(inners[0][1].step.tag.as_deref(), None);
+        assert!(inners[0][1].step.universal);
+        assert_eq!(
+            inners[0][1].combinator,
+            Some(SelectorCombinator::Descendant)
+        );
+
+        assert_eq!(inners[1].len(), 1);
+        assert_eq!(inners[1][0].step.id.as_deref(), Some("skip-me"));
+        assert!(inners[1][0].combinator.is_none());
+
+        assert_eq!(inners[2].len(), 2);
+        assert_eq!(inners[2][0].step.classes.as_slice(), &["area"]);
+        assert_eq!(inners[2][1].step.pseudo_classes.len(), 1);
+        let nested = &inners[2][1].step.pseudo_classes[0];
+        if let SelectorPseudoClass::Not(nested_inners) = nested {
+            assert_eq!(nested_inners.len(), 1);
+            assert_eq!(nested_inners[0].len(), 2);
+            assert_eq!(nested_inners[0][0].step.classes.as_slice(), &["nested"]);
+            assert_eq!(nested_inners[0][1].step.classes.as_slice(), &["leaf"]);
+            assert_eq!(
+                nested_inners[0][1].combinator,
+                Some(SelectorCombinator::Descendant)
+            );
+        } else {
+            panic!("expected nested not pseudo");
+        }
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_adjacent_selector() {
+        let parsed = parse_selector_step("span:not(.scope + span)").expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 1);
+        assert_eq!(inners[0].len(), 2);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["scope"]);
+        assert_eq!(inners[0][1].step.tag.as_deref(), Some("span"));
+        assert_eq!(
+            inners[0][1].combinator,
+            Some(SelectorCombinator::AdjacentSibling)
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_selector_list_general_sibling_selector() {
+        let parsed =
+            parse_selector_step("span:not(.scope ~ span, #excluded-id)")
+                .expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 2);
+        assert_eq!(inners[0].len(), 2);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["scope"]);
+        assert_eq!(inners[0][1].step.tag.as_deref(), Some("span"));
+        assert_eq!(
+            inners[0][1].combinator,
+            Some(SelectorCombinator::GeneralSibling)
+        );
+
+        assert_eq!(inners[1].len(), 1);
+        assert_eq!(inners[1][0].step.id.as_deref(), Some("excluded-id"));
+        assert!(inners[1][0].combinator.is_none());
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_general_sibling_selector() {
+        let parsed =
+            parse_selector_step("span:not(.scope ~ span)").expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 1);
+        assert_eq!(inners[0].len(), 2);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["scope"]);
+        assert_eq!(inners[0][1].step.tag.as_deref(), Some("span"));
+        assert_eq!(
+            inners[0][1].combinator,
+            Some(SelectorCombinator::GeneralSibling)
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_not_with_child_selector() {
+        let parsed = parse_selector_step("span:not(.scope > span)").expect("parse should succeed");
+        let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
+            panic!("expected not pseudo");
+        };
+
+        assert_eq!(inners.len(), 1);
+        assert_eq!(inners[0].len(), 2);
+        assert_eq!(inners[0][0].step.classes.as_slice(), &["scope"]);
+        assert_eq!(inners[0][1].step.tag.as_deref(), Some("span"));
+        assert_eq!(inners[0][1].combinator, Some(SelectorCombinator::Child));
+    }
+
+    #[test]
+    fn selector_parse_rejects_invalid_not_argument_forms() {
+        assert!(parse_selector_step("span:not()").is_err());
+        assert!(parse_selector_step("span:not(,)").is_err());
+        assert!(parse_selector_step("span:not(.a,,#b)").is_err());
+        assert!(parse_selector_step("span:not(.a,").is_err());
+        assert!(parse_selector_step("span:not(.a,#b,)").is_err());
+    }
+
+    #[test]
+    fn selector_parse_rejects_unclosed_not_parenthesis() {
+        assert!(parse_selector_step("span:not(.a, #b").is_err());
+        assert!(parse_selector_step("span:not(:not(.a)").is_err());
+    }
+
+    #[test]
+    fn selector_runtime_rejects_invalid_not_selector() -> Result<()> {
+        let html = "<div id='root'></div>";
+        let h = Harness::from_html(html)?;
+
+        let err = h
+            .assert_exists("span:not()")
+            .expect_err("invalid selector should be rejected");
+        match err {
+            Error::UnsupportedSelector(selector) => assert_eq!(selector, "span:not()"),
+            other => panic!("expected unsupported selector error, got: {other:?}"),
+        }
+
+        let err = h
+            .assert_exists("span:not(.a,)")
+            .expect_err("invalid selector should be rejected");
+        match err {
+            Error::UnsupportedSelector(selector) => assert_eq!(selector, "span:not(.a,)"),
+            other => panic!("expected unsupported selector error, got: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_of_type() {
+        let odd = parse_selector_step("li:nth-of-type(odd)").expect("parse should succeed");
+        let expr = parse_selector_step("li:nth-of-type(2n)").expect("parse should succeed");
+        let n = parse_selector_step("li:nth-of-type(n)").expect("parse should succeed");
+        let exact = parse_selector_step("li:nth-of-type(3)").expect("parse should succeed");
+        assert_eq!(
+            odd.pseudo_classes,
+            vec![SelectorPseudoClass::NthOfType(NthChildSelector::Odd)]
+        );
+        assert_eq!(
+            expr.pseudo_classes,
+            vec![SelectorPseudoClass::NthOfType(NthChildSelector::AnPlusB(
+                2, 0
+            ))]
+        );
+        assert_eq!(
+            n.pseudo_classes,
+            vec![SelectorPseudoClass::NthOfType(NthChildSelector::AnPlusB(
+                1, 0
+            ))]
+        );
+        assert_eq!(
+            exact.pseudo_classes,
+            vec![SelectorPseudoClass::NthOfType(NthChildSelector::Exact(3))]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_last_of_type() {
+        let odd = parse_selector_step("li:nth-last-of-type(odd)").expect("parse should succeed");
+        let even = parse_selector_step("li:nth-last-of-type(even)").expect("parse should succeed");
+        let n = parse_selector_step("li:nth-last-of-type(n)").expect("parse should succeed");
+        let exact = parse_selector_step("li:nth-last-of-type(2)").expect("parse should succeed");
+        assert_eq!(
+            odd.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastOfType(NthChildSelector::Odd)]
+        );
+        assert_eq!(
+            even.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastOfType(NthChildSelector::Even)]
+        );
+        assert_eq!(
+            n.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastOfType(NthChildSelector::AnPlusB(
+                1, 0
+            ))]
+        );
+        assert_eq!(
+            exact.pseudo_classes,
+            vec![SelectorPseudoClass::NthLastOfType(NthChildSelector::Exact(
+                2
+            ))]
+        );
+    }
+
+    #[test]
+    fn selector_nth_last_child_odd_even_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='one' class='item'>A</li>
+          <li id='two' class='item'>B</li>
+          <li id='three' class='item'>C</li>
+          <li id='four' class='item'>D</li>
+          <li id='five' class='item'>E</li>
+          <li id='six' class='item'>F</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const odd = document.querySelector('li:nth-last-child(odd)').id;
+            const even = document.querySelector('li:nth-last-child(even)').id;
+            const second_last = document.querySelector('li:nth-last-child(2)').id;
+            const total = document.querySelectorAll('li:nth-last-child(odd)').length;
+            document.getElementById('result').textContent = odd + ':' + even + ':' + second_last + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "two:one:five:3")?;
+        Ok(())
     }
 
     #[test]
@@ -10320,6 +12892,49 @@ mod tests {
         h.set_checked("#agree", false)?;
         h.assert_checked("#agree", true)?;
         h.assert_text("#result", "")?;
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_property_prevents_user_actions_and_can_be_cleared() -> Result<()> {
+        let html = r#"
+        <input id='name' value='init'>
+        <input id='agree' type='checkbox' checked>
+        <button id='disable'>disable</button>
+        <button id='enable'>enable</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('disable').addEventListener('click', () => {
+            document.getElementById('name').disabled = true;
+            document.getElementById('agree').disabled = true;
+          });
+          document.getElementById('enable').addEventListener('click', () => {
+            document.getElementById('name').disabled = false;
+            document.getElementById('agree').disabled = false;
+          });
+          document.getElementById('name').addEventListener('input', () => {
+            document.getElementById('result').textContent = 'name-input';
+          });
+          document.getElementById('agree').addEventListener('change', () => {
+            document.getElementById('result').textContent = 'agree-change';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#disable")?;
+
+        h.type_text("#name", "next")?;
+        h.assert_value("#name", "init")?;
+        h.click("#agree")?;
+        h.assert_checked("#agree", true)?;
+        h.assert_text("#result", "")?;
+
+        h.click("#enable")?;
+        h.type_text("#name", "next")?;
+        h.set_checked("#agree", false)?;
+        h.assert_value("#name", "next")?;
+        h.assert_checked("#agree", false)?;
         Ok(())
     }
 }

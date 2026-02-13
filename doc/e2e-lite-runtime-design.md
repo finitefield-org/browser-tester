@@ -115,8 +115,10 @@ MVP対応:
   `form.elements.length`, `form.elements[index]`,
   `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
   `formData.getAll(name).length`
-- DOM更新: `textContent`, `value`, `checked`, `className`, `id`, `name`, `classList.*`,
+- DOM更新: `textContent`, `value`, `checked`, `disabled`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
+  `matches(selector)`, `closest(selector)`（未一致時は `null`）,
+  `getComputedStyle(element).getPropertyValue(property)`
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText`, `innerHTML`
 - タイマー: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
@@ -125,6 +127,19 @@ MVP対応:
 - 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
 - 乱数: `Math.random()`（決定論PRNGの浮動小数 `0.0 <= x < 1.0` を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
+- `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft`（最小実装として数値返却）
+
+#### 7.2.1 非対応DOM APIの優先順位
+- 第一優先: テストに必須なDOM参照・更新（`getElementById`, `querySelector*`, `textContent`, `value`, `checked`, `disabled`, `classList`, `dataset`, `style`, `append*`/`remove*`系）
+- 第二優先: タイマー/イベント/フォーム関連（`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `preventDefault`, `FormData`, `submit`）
+- 第三優先: `focus` などの表示・計測系API
+- 非対応は `ScriptParse`/`Runtime` レイヤで明示エラーとして失敗させる（静かな無視はしない）
+- 優先拡張順は `dataset/style` → DOMイベント周り → `offset/scroll`（読取最小実装） → その他表示・計測系
+
+#### 7.2.2 パーサ判定順（実装メモ）
+- `event.currentTarget` と `document.getElementById(...).matches(...)`/`closest(...)` のような式は、`DomRef` 判定以前に
+  `event`/`DOMメソッド` 判定を行う（`document.getElementById(...).textContent` の誤解釈を防止）
+- この順序で、既知の `ScriptParse` 例外系（`event` と `DOM` の同名プロパティ衝突）を回避している
 
 `FormData` の簡易仕様（テスト用途）:
 - `new FormData(form)` は `form.elements` を走査してスナップショットを作る
@@ -539,15 +554,38 @@ fn execute_stmts(
 MVP実装案:
 - 文字列を簡易パースして `SelectorAst` を作る
 - 右から左へのマッチングで親探索
-- 対応セレクタ: `#id`, `.class`, `タグ`, `[attr]`, `[attr='value']`, `*`, `:first-child`, `:last-child`, `:nth-child(n)`, 子孫/子/隣接/一般兄弟結合子
-- `:nth-child(n)` は現時点では `1,2,3...` のみ受け付ける（0/負数/式系は未対応）
+- 対応セレクタ: `#id`, `.class`, `タグ`, `[attr]`, `[attr='value']`, `*`,
+  `:first-child`, `:last-child`, `:first-of-type`, `:last-of-type`,
+  `:only-child`, `:only-of-type`,
+  `:nth-child(n)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`,
+  `:nth-last-child(n|odd|even|an+b)`,
+  `:nth-of-type(n|odd|even|an+b)`, `:nth-last-of-type(n|odd|even|an+b)`,
+  `:checked`, `:disabled`, `:enabled`,
+  `:not(selector)`（selector-list 対応）など, 子孫/子/隣接/一般兄弟結合子
+- `:nth-child(an+b)` は `2n+1`, `-n+3`, `n+1` などをサポート。`n` は1ベース要素インデックス。
+- `:nth-last-child(an+b|odd|even|n)` も同様に1ベース要素インデックスの末尾基準でサポート。
 - 属性値比較は現在 `=` のみ対応
 
 ```rust
 enum SelectorPseudoClass {
     FirstChild,
     LastChild,
-    NthChild(usize),
+    FirstOfType,
+    LastOfType,
+    OnlyChild,
+    OnlyOfType,
+    NthOfType(NthChildSelector),
+    NthLastOfType(NthChildSelector),
+    Not(Vec<Vec<SelectorPart>>),
+    NthChild(NthChildSelector),
+    NthLastChild(NthChildSelector),
+}
+
+enum NthChildSelector {
+    Exact(usize),
+    Odd,
+    Even,
+    AnPlusB(i64, i64),
 }
 
 struct SelectorStep {
