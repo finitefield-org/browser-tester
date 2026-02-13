@@ -2705,6 +2705,7 @@ enum Value {
     Node(NodeId),
     NodeList(Vec<NodeId>),
     FormData(Vec<(String, String)>),
+    Function(ScriptHandler),
 }
 
 impl Value {
@@ -2719,6 +2720,7 @@ impl Value {
             Self::Node(_) => true,
             Self::NodeList(nodes) => !nodes.is_empty(),
             Self::FormData(_) => true,
+            Self::Function(_) => true,
         }
     }
 
@@ -2739,6 +2741,7 @@ impl Value {
             Self::Node(node) => format!("node-{}", node.0),
             Self::NodeList(_) => "[object NodeList]".into(),
             Self::FormData(_) => "[object FormData]".into(),
+            Self::Function(_) => "[object Function]".into(),
         }
     }
 }
@@ -2769,6 +2772,28 @@ enum DomProp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum DomIndex {
+    Static(usize),
+    Dynamic(String),
+}
+
+impl DomIndex {
+    fn describe(&self) -> String {
+        match self {
+            Self::Static(index) => index.to_string(),
+            Self::Dynamic(expr) => expr.clone(),
+        }
+    }
+
+    fn static_index(&self) -> Option<usize> {
+        match self {
+            Self::Static(index) => Some(*index),
+            Self::Dynamic(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DomQuery {
     DocumentRoot,
     ById(String),
@@ -2778,7 +2803,7 @@ enum DomQuery {
     },
     BySelectorAllIndex {
         selector: String,
-        index: usize,
+        index: DomIndex,
     },
     QuerySelector {
         target: Box<DomQuery>,
@@ -2790,16 +2815,16 @@ enum DomQuery {
     },
     Index {
         target: Box<DomQuery>,
-        index: usize,
+        index: DomIndex,
     },
     QuerySelectorAllIndex {
         target: Box<DomQuery>,
         selector: String,
-        index: usize,
+        index: DomIndex,
     },
     FormElementsIndex {
         form: Box<DomQuery>,
-        index: usize,
+        index: DomIndex,
     },
     Var(String),
 }
@@ -2818,7 +2843,10 @@ impl DomQuery {
             Self::BySelector(selector) => format!("document.querySelector('{selector}')"),
             Self::BySelectorAll { selector } => format!("document.querySelectorAll('{selector}')"),
             Self::BySelectorAllIndex { selector, index } => {
-                format!("document.querySelectorAll('{selector}')[{index}]")
+                format!(
+                    "document.querySelectorAll('{selector}')[{}]",
+                    index.describe()
+                )
             }
             Self::QuerySelector { target, selector } => {
                 format!("{}.querySelector('{selector}')", target.describe_call())
@@ -2827,7 +2855,7 @@ impl DomQuery {
                 format!("{}.querySelectorAll('{selector}')", target.describe_call())
             }
             Self::Index { target, index } => {
-                format!("{}[{index}]", target.describe_call())
+                format!("{}[{}]", target.describe_call(), index.describe())
             }
             Self::QuerySelectorAllIndex {
                 target,
@@ -2835,12 +2863,13 @@ impl DomQuery {
                 index,
             } => {
                 format!(
-                    "{}.querySelectorAll('{selector}')[{index}]",
-                    target.describe_call()
+                    "{}.querySelectorAll('{selector}')[{}]",
+                    target.describe_call(),
+                    index.describe()
                 )
             }
             Self::FormElementsIndex { form, index } => {
-                format!("{}.elements[{index}]", form.describe_call())
+                format!("{}.elements[{}]", form.describe_call(), index.describe())
             }
             Self::Var(name) => name.clone(),
         }
@@ -2922,12 +2951,15 @@ enum Expr {
     CreateElement(String),
     CreateTextNode(String),
     SetTimeout {
-        handler: ScriptHandler,
+        handler: TimerInvocation,
         delay_ms: Box<Expr>,
     },
     SetInterval {
-        handler: ScriptHandler,
+        handler: TimerInvocation,
         delay_ms: Box<Expr>,
+    },
+    Function {
+        handler: ScriptHandler,
     },
     QueueMicrotask {
         handler: ScriptHandler,
@@ -3099,11 +3131,11 @@ enum Stmt {
         html: Expr,
     },
     SetTimeout {
-        handler: ScriptHandler,
+        handler: TimerInvocation,
         delay_ms: Expr,
     },
     SetInterval {
-        handler: ScriptHandler,
+        handler: TimerInvocation,
         delay_ms: Expr,
     },
     QueueMicrotask {
@@ -3128,6 +3160,22 @@ enum Stmt {
         post: Option<Box<Stmt>>,
         body: Vec<Stmt>,
     },
+    ForIn {
+        item_var: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    ForOf {
+        item_var: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    DoWhile {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    Break,
+    Continue,
     While {
         cond: Expr,
         body: Vec<Stmt>,
@@ -3165,6 +3213,8 @@ enum Stmt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecFlow {
     Continue,
+    Break,
+    ContinueLoop,
     Return,
 }
 
@@ -3177,8 +3227,33 @@ enum DomMethod {
 
 #[derive(Debug, Clone, PartialEq)]
 struct ScriptHandler {
-    event_param: Option<String>,
+    params: Vec<String>,
     stmts: Vec<Stmt>,
+}
+
+impl ScriptHandler {
+    fn first_event_param(&self) -> Option<&str> {
+        self.params.first().map(String::as_str)
+    }
+
+    fn bind_event_params(&self, args: &[Value], env: &mut HashMap<String, Value>) {
+        for (index, name) in self.params.iter().enumerate() {
+            let value = args.get(index).cloned().unwrap_or(Value::Undefined);
+            env.insert(name.clone(), value);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TimerCallback {
+    Inline(ScriptHandler),
+    Reference(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TimerInvocation {
+    callback: TimerCallback,
+    args: Vec<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -3287,7 +3362,8 @@ struct ScheduledTask {
     due_at: i64,
     order: i64,
     interval_ms: Option<i64>,
-    handler: ScriptHandler,
+    callback: TimerCallback,
+    callback_args: Vec<Value>,
     env: HashMap<String, Value>,
 }
 
@@ -3776,13 +3852,8 @@ impl Harness {
         self.running_timer_canceled = false;
         let mut event = EventState::new("timeout", self.dom.root, self.now_ms);
         self.run_in_task_context(|this| {
-            this.execute_stmts(
-                &task.handler.stmts,
-                &task.handler.event_param,
-                &mut event,
-                &mut task.env,
-            )
-            .map(|_| ())
+            this.execute_timer_task_callback(&task.callback, &task.callback_args, &mut event, &mut task.env)
+                .map(|_| ())
         })?;
         let canceled = self.running_timer_canceled;
         self.running_timer_id = None;
@@ -3799,7 +3870,8 @@ impl Harness {
                     due_at,
                     order,
                     interval_ms: Some(delay_ms),
-                    handler: task.handler,
+                    callback: task.callback,
+                    callback_args: task.callback_args,
                     env: task.env,
                 });
                 self.trace_timer_line(format!(
@@ -3978,7 +4050,7 @@ impl Harness {
     }
 
     fn eval_form_data_source(
-        &self,
+        &mut self,
         source: &FormDataSource,
         env: &HashMap<String, Value>,
     ) -> Result<Vec<(String, String)>> {
@@ -4254,9 +4326,13 @@ impl Harness {
             }
 
             let mut event = EventState::new("microtask", self.dom.root, self.now_ms);
+            let event_param = task
+                .handler
+                .first_event_param()
+                .map(|event_param| event_param.to_string());
             let run = self.execute_stmts(
                 &task.handler.stmts,
-                &task.handler.event_param,
+                &event_param,
                 &mut event,
                 &mut task.env,
             );
@@ -4292,8 +4368,52 @@ impl Harness {
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        match self.execute_stmts(&handler.stmts, &handler.event_param, event, env)? {
+        let event_param = handler
+            .first_event_param()
+            .map(|event_param| event_param.to_string());
+        match self.execute_stmts(&handler.stmts, &event_param, event, env)? {
             ExecFlow::Continue => Ok(()),
+            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
+            ExecFlow::ContinueLoop => {
+                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
+            }
+            ExecFlow::Return => Ok(()),
+        }
+    }
+
+    fn execute_timer_task_callback(
+        &mut self,
+        callback: &TimerCallback,
+        callback_args: &[Value],
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let handler = match callback {
+            TimerCallback::Inline(handler) => handler.clone(),
+            TimerCallback::Reference(name) => {
+                let value = env
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
+                let Value::Function(handler) = value else {
+                    return Err(Error::ScriptRuntime(format!(
+                        "timer callback '{name}' is not a function"
+                    )));
+                };
+                handler
+            }
+        };
+        handler.bind_event_params(callback_args, env);
+
+        let event_param = handler
+            .first_event_param()
+            .map(|event_param| event_param.to_string());
+        match self.execute_stmts(&handler.stmts, &event_param, event, env)? {
+            ExecFlow::Continue => Ok(()),
+            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
+            ExecFlow::ContinueLoop => {
+                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
+            }
             ExecFlow::Return => Ok(()),
         }
     }
@@ -4486,7 +4606,9 @@ impl Harness {
                         }
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
-                            ExecFlow::Return => {}
+                            ExecFlow::Break => break,
+                            ExecFlow::ContinueLoop => continue,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                     }
 
@@ -4609,12 +4731,28 @@ impl Harness {
                 Stmt::SetTimeout { handler, delay_ms } => {
                     let delay = self.eval_expr(delay_ms, env, event_param, event)?;
                     let delay = Self::value_to_i64(&delay);
-                    let _ = self.schedule_timeout(handler.clone(), delay, env);
+                    let callback_args = handler
+                        .args
+                        .iter()
+                        .map(|arg| self.eval_expr(arg, env, event_param, event))
+                        .collect::<Result<Vec<_>>>()?;
+                    let _ =
+                        self.schedule_timeout(handler.callback.clone(), delay, callback_args, env);
                 }
                 Stmt::SetInterval { handler, delay_ms } => {
                     let interval = self.eval_expr(delay_ms, env, event_param, event)?;
                     let interval = Self::value_to_i64(&interval);
-                    let _ = self.schedule_interval(handler.clone(), interval, env);
+                    let callback_args = handler
+                        .args
+                        .iter()
+                        .map(|arg| self.eval_expr(arg, env, event_param, event))
+                        .collect::<Result<Vec<_>>>()?;
+                    let _ = self.schedule_interval(
+                        handler.callback.clone(),
+                        interval,
+                        callback_args,
+                        env,
+                    );
                 }
                 Stmt::QueueMicrotask { handler } => {
                     self.queue_microtask(handler.clone(), env);
@@ -4666,7 +4804,9 @@ impl Harness {
                         }
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
-                            ExecFlow::Return => {}
+                            ExecFlow::Break => break,
+                            ExecFlow::ContinueLoop => continue,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                     }
 
@@ -4690,10 +4830,21 @@ impl Harness {
                     body,
                 } => {
                     if let Some(init) = init.as_deref() {
-                        if let ExecFlow::Return = self
+                        match self
                             .execute_stmts(std::slice::from_ref(init), event_param, event, env)?
                         {
-                            return Ok(ExecFlow::Return);
+                            ExecFlow::Continue => {}
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                            ExecFlow::Break => {
+                                return Err(Error::ScriptRuntime(
+                                    "break statement outside of loop".into(),
+                                ))
+                            }
+                            ExecFlow::ContinueLoop => {
+                                return Err(Error::ScriptRuntime(
+                                    "continue statement outside of loop".into(),
+                                ))
+                            }
                         }
                     }
 
@@ -4706,22 +4857,131 @@ impl Harness {
                         if !should_run {
                             break;
                         }
-                        if let ExecFlow::Return = self.execute_stmts(body, event_param, event, env)? {
-                            return Ok(ExecFlow::Return);
+
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::ContinueLoop => {
+                                if let Some(post) = post.as_deref() {
+                                    match self.execute_stmts(
+                                        std::slice::from_ref(post),
+                                        event_param,
+                                        event,
+                                        env,
+                                    )? {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return => return Ok(ExecFlow::Return),
+                                        ExecFlow::Break | ExecFlow::ContinueLoop => {
+                                            return Err(Error::ScriptRuntime(
+                                                "invalid loop control in post expression".into(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            ExecFlow::Break => break,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                         if let Some(post) = post.as_deref() {
-                            if let ExecFlow::Return = self
-                                .execute_stmts(std::slice::from_ref(post), event_param, event, env)?
-                            {
-                                return Ok(ExecFlow::Return);
+                            match self.execute_stmts(std::slice::from_ref(post), event_param, event, env)? {
+                                ExecFlow::Continue => {}
+                                ExecFlow::Return => return Ok(ExecFlow::Return),
+                                ExecFlow::Break | ExecFlow::ContinueLoop => {
+                                    return Err(Error::ScriptRuntime(
+                                        "invalid loop control in post expression".into(),
+                                    ))
+                                }
                             }
                         }
                     }
                 }
+                Stmt::ForIn {
+                    item_var,
+                    iterable,
+                    body,
+                } => {
+                    let iterable = self.eval_expr(iterable, env, event_param, event)?;
+                    let nodes = match iterable {
+                        Value::NodeList(nodes) => nodes,
+                        Value::Null | Value::Undefined => Vec::new(),
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "for...in iterable must be a NodeList".into(),
+                            ));
+                        }
+                    };
+
+                    let prev_item = env.get(item_var).cloned();
+                    for (idx, _node) in nodes.iter().enumerate() {
+                        env.insert(item_var.clone(), Value::Number(idx as i64));
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::ContinueLoop => continue,
+                            ExecFlow::Break => break,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                        }
+                    }
+                    if let Some(prev) = prev_item {
+                        env.insert(item_var.clone(), prev);
+                    } else {
+                        env.remove(item_var);
+                    }
+                }
+                Stmt::ForOf {
+                    item_var,
+                    iterable,
+                    body,
+                } => {
+                    let iterable = self.eval_expr(iterable, env, event_param, event)?;
+                    let nodes = match iterable {
+                        Value::NodeList(nodes) => nodes
+                            .into_iter()
+                            .map(Value::Node)
+                            .collect::<Vec<_>>(),
+                        Value::Null | Value::Undefined => Vec::new(),
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "for...of iterable must be a NodeList".into(),
+                            ));
+                        }
+                    };
+
+                    let prev_item = env.get(item_var).cloned();
+                    for item in nodes {
+                        env.insert(item_var.clone(), item);
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::ContinueLoop => continue,
+                            ExecFlow::Break => break,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                        }
+                    }
+                    if let Some(prev) = prev_item {
+                        env.insert(item_var.clone(), prev);
+                    } else {
+                        env.remove(item_var);
+                    }
+                }
                 Stmt::While { cond, body } => {
                     while self.eval_expr(cond, env, event_param, event)?.truthy() {
-                        if let ExecFlow::Return = self.execute_stmts(body, event_param, event, env)? {
-                            return Ok(ExecFlow::Return);
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::ContinueLoop => continue,
+                            ExecFlow::Break => break,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                        }
+                    }
+                }
+                Stmt::DoWhile { cond, body } => {
+                    loop {
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::ContinueLoop => {}
+                            ExecFlow::Break => break,
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                        }
+                        if !self.eval_expr(cond, env, event_param, event)?.truthy() {
+                            break;
                         }
                     }
                 }
@@ -4732,19 +4992,25 @@ impl Harness {
                 } => {
                     let cond = self.eval_expr(cond, env, event_param, event)?;
                     if cond.truthy() {
-                        if let ExecFlow::Return = self.execute_stmts(then_stmts, event_param, event, env)?
-                        {
-                            return Ok(ExecFlow::Return);
+                        match self.execute_stmts(then_stmts, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     } else {
-                        if let ExecFlow::Return = self.execute_stmts(else_stmts, event_param, event, env)?
-                        {
-                            return Ok(ExecFlow::Return);
+                        match self.execute_stmts(else_stmts, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     }
                 }
                 Stmt::Return { value: _ } => {
                     return Ok(ExecFlow::Return);
+                }
+                Stmt::Break => {
+                    return Ok(ExecFlow::Break);
+                }
+                Stmt::Continue => {
+                    return Ok(ExecFlow::ContinueLoop);
                 }
                 Stmt::EventCall { event_var, method } => {
                     if let Some(param) = event_param {
@@ -4876,16 +5142,27 @@ impl Harness {
                 let node = self.dom.create_detached_text(text.clone());
                 Ok(Value::Node(node))
             }
+            Expr::Function { handler } => Ok(Value::Function(handler.clone())),
             Expr::SetTimeout { handler, delay_ms } => {
                 let delay = self.eval_expr(delay_ms, env, event_param, event)?;
                 let delay = Self::value_to_i64(&delay);
-                let id = self.schedule_timeout(handler.clone(), delay, env);
+                let callback_args = handler
+                    .args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
+                let id = self.schedule_timeout(handler.callback.clone(), delay, callback_args, env);
                 Ok(Value::Number(id))
             }
             Expr::SetInterval { handler, delay_ms } => {
                 let interval = self.eval_expr(delay_ms, env, event_param, event)?;
                 let interval = Self::value_to_i64(&interval);
-                let id = self.schedule_interval(handler.clone(), interval, env);
+                let callback_args = handler
+                    .args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
+                let id = self.schedule_interval(handler.callback.clone(), interval, callback_args, env);
                 Ok(Value::Number(id))
             }
             Expr::QueueMicrotask { handler } => {
@@ -5062,7 +5339,7 @@ impl Harness {
                     Ok(Value::Bool(true))
                 }
             },
-            Expr::TypeOf(inner) => {
+                    Expr::TypeOf(inner) => {
                 let js_type = match inner.as_ref() {
                     Expr::Var(name) => env.get(name).map_or("undefined", |value| match value {
                         Value::Null => "object",
@@ -5070,6 +5347,7 @@ impl Harness {
                         Value::Number(_) | Value::Float(_) => "number",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
+                        Value::Function(_) => "function",
                         Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
                     }),
                     _ => {
@@ -5080,6 +5358,7 @@ impl Harness {
                             Value::Number(_) | Value::Float(_) => "number",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
+                            Value::Function(_) => "function",
                             Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
                         }
                     }
@@ -5298,7 +5577,7 @@ impl Harness {
         numeric.trunc().rem_euclid(4_294_967_296.0) as u32
     }
 
-    fn resolve_dom_query_list_static(&self, target: &DomQuery) -> Result<Option<Vec<NodeId>>> {
+    fn resolve_dom_query_list_static(&mut self, target: &DomQuery) -> Result<Option<Vec<NodeId>>> {
         match target {
             DomQuery::BySelectorAll { selector } => {
                 Ok(Some(self.dom.query_selector_all(selector)?))
@@ -5315,14 +5594,20 @@ impl Harness {
                 let Some(list) = self.resolve_dom_query_list_static(target)? else {
                     return Ok(None);
                 };
-                Ok(list.get(*index).copied().map(|node| vec![node]))
+                let index = self.resolve_runtime_dom_index(index, None)?;
+                Ok(list.get(index).copied().map(|node| vec![node]))
             }
-            DomQuery::BySelectorAllIndex { selector, index } => Ok(self
-                .dom
-                .query_selector_all(selector)?
-                .get(*index)
-                .copied()
-                .map(|node| vec![node])),
+            DomQuery::BySelectorAllIndex { selector, index } => {
+                let index = index
+                    .static_index()
+                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
+                Ok(self
+                    .dom
+                    .query_selector_all(selector)?
+                    .get(index)
+                    .copied()
+                    .map(|node| vec![node]))
+            }
             DomQuery::QuerySelectorAllIndex {
                 target,
                 selector,
@@ -5331,8 +5616,11 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
+                let index = index
+                    .static_index()
+                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
                 let list = self.dom.query_selector_all_from(&target_node, selector)?;
-                Ok(list.get(*index).copied().map(|node| vec![node]))
+                Ok(list.get(index).copied().map(|node| vec![node]))
             }
             DomQuery::Var(_) => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
@@ -5342,7 +5630,7 @@ impl Harness {
     }
 
     fn resolve_dom_query_list_runtime(
-        &self,
+        &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
     ) -> Result<Option<Vec<NodeId>>> {
@@ -5366,7 +5654,7 @@ impl Harness {
         }
     }
 
-    fn resolve_dom_query_static(&self, target: &DomQuery) -> Result<Option<NodeId>> {
+    fn resolve_dom_query_static(&mut self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
@@ -5375,14 +5663,18 @@ impl Harness {
                 "cannot use querySelectorAll result as single element".into(),
             )),
             DomQuery::BySelectorAllIndex { selector, index } => {
+                let index = index
+                    .static_index()
+                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
                 let all = self.dom.query_selector_all(selector)?;
-                Ok(all.get(*index).copied())
+                Ok(all.get(index).copied())
             }
             DomQuery::Index { target, index } => {
                 let Some(list) = self.resolve_dom_query_list_static(target)? else {
                     return Ok(None);
                 };
-                Ok(list.get(*index).copied())
+                let index = self.resolve_runtime_dom_index(index, None)?;
+                Ok(list.get(index).copied())
             }
             DomQuery::QuerySelector { target, selector } => {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
@@ -5401,15 +5693,19 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
+                let index = index
+                    .static_index()
+                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
                 let all = self.dom.query_selector_all_from(&target_node, selector)?;
-                Ok(all.get(*index).copied())
+                Ok(all.get(index).copied())
             }
             DomQuery::FormElementsIndex { form, index } => {
                 let Some(form_node) = self.resolve_dom_query_static(form)? else {
                     return Ok(None);
                 };
                 let all = self.form_elements(form_node)?;
-                Ok(all.get(*index).copied())
+                let index = self.resolve_runtime_dom_index(index, None)?;
+                Ok(all.get(index).copied())
             }
             DomQuery::Var(_) => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
@@ -5418,7 +5714,7 @@ impl Harness {
     }
 
     fn resolve_dom_query_runtime(
-        &self,
+        &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
     ) -> Result<Option<NodeId>> {
@@ -5449,7 +5745,8 @@ impl Harness {
                 let Some(list) = self.resolve_dom_query_list_runtime(target, env)? else {
                     return Ok(None);
                 };
-                Ok(list.get(*index).copied())
+                let index = self.resolve_runtime_dom_index(index, Some(env))?;
+                Ok(list.get(index).copied())
             }
             DomQuery::QuerySelector { target, selector } => {
                 let Some(target_node) = self.resolve_dom_query_runtime(target, env)? else {
@@ -5465,28 +5762,50 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_runtime(target, env)? else {
                     return Ok(None);
                 };
+                let index = self.resolve_runtime_dom_index(index, Some(env))?;
                 let all = self.dom.query_selector_all_from(&target_node, selector)?;
-                Ok(all.get(*index).copied())
+                Ok(all.get(index).copied())
             }
             DomQuery::FormElementsIndex { form, index } => {
                 let Some(form_node) = self.resolve_dom_query_runtime(form, env)? else {
                     return Ok(None);
                 };
                 let all = self.form_elements(form_node)?;
-                Ok(all.get(*index).copied())
+                let index = self.resolve_runtime_dom_index(index, Some(env))?;
+                Ok(all.get(index).copied())
             }
             _ => self.resolve_dom_query_static(target),
         }
     }
 
     fn resolve_dom_query_required_runtime(
-        &self,
+        &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
     ) -> Result<NodeId> {
         self.resolve_dom_query_runtime(target, env)?.ok_or_else(|| {
             Error::ScriptRuntime(format!("{} returned null", target.describe_call()))
         })
+    }
+
+    fn resolve_runtime_dom_index(
+        &mut self,
+        index: &DomIndex,
+        env: Option<&HashMap<String, Value>>,
+    ) -> Result<usize> {
+        match index {
+            DomIndex::Static(index) => Ok(*index),
+            DomIndex::Dynamic(expr_src) => {
+                let expr = parse_expr(expr_src)?;
+                let event = EventState::new("script", self.dom.root, self.now_ms);
+                let value = self.eval_expr(&expr, env.ok_or_else(|| {
+                    Error::ScriptRuntime("dynamic index requires runtime context".into())
+                })?, &None, &event)?;
+                self.value_as_index(&value).ok_or_else(|| {
+                    Error::ScriptRuntime(format!("invalid index expression: {expr_src}"))
+                })
+            }
+        }
     }
 
     fn describe_dom_prop(&self, prop: &DomProp) -> String {
@@ -5558,6 +5877,7 @@ impl Harness {
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
             Value::FormData(_) => 0,
+            Value::Function(_) => 0,
             Value::Null => 0,
             Value::Undefined => 0,
         }
@@ -5578,8 +5898,9 @@ impl Harness {
 
     fn schedule_timeout(
         &mut self,
-        handler: ScriptHandler,
+        callback: TimerCallback,
         delay_ms: i64,
+        callback_args: Vec<Value>,
         env: &HashMap<String, Value>,
     ) -> i64 {
         let delay_ms = delay_ms.max(0);
@@ -5593,7 +5914,8 @@ impl Harness {
             due_at,
             order,
             interval_ms: None,
-            handler,
+            callback,
+            callback_args,
             env: env.clone(),
         });
         self.trace_timer_line(format!(
@@ -5605,8 +5927,9 @@ impl Harness {
 
     fn schedule_interval(
         &mut self,
-        handler: ScriptHandler,
+        callback: TimerCallback,
         interval_ms: i64,
+        callback_args: Vec<Value>,
         env: &HashMap<String, Value>,
     ) -> i64 {
         let interval_ms = interval_ms.max(0);
@@ -5620,7 +5943,8 @@ impl Harness {
             due_at,
             order,
             interval_ms: Some(interval_ms),
-            handler,
+            callback,
+            callback_args,
             env: env.clone(),
         });
         self.trace_timer_line(format!(
@@ -5733,8 +6057,8 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         }
 
         cursor.skip_ws();
-        let index = match cursor.parse_usize() {
-            Ok(index) => index,
+        let index_src = match cursor.read_until_byte(b']') {
+            Ok(index_src) => index_src,
             Err(_) => {
                 cursor.set_pos(index_pos);
                 break;
@@ -5742,9 +6066,18 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         };
         cursor.skip_ws();
         cursor.expect_byte(b']')?;
-        target = DomQuery::Index {
-            target: Box::new(target),
-            index,
+        let index = parse_dom_query_index(&index_src)?;
+        target = match target {
+            DomQuery::BySelectorAll { selector } => DomQuery::BySelectorAllIndex { selector, index },
+            DomQuery::QuerySelectorAll { target, selector } => DomQuery::QuerySelectorAllIndex {
+                target,
+                selector,
+                index,
+            },
+            _ => DomQuery::Index {
+                target: Box::new(target),
+                index,
+            },
         };
         cursor.skip_ws();
     }
@@ -5772,20 +6105,37 @@ fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
 
 fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let form = parse_form_elements_base(cursor)?;
-    cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
-    cursor.skip_ws();
-    cursor.expect_ascii("elements")?;
-    cursor.skip_ws();
-    cursor.expect_byte(b'[')?;
-    cursor.skip_ws();
-    let index = cursor.parse_usize()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b']')?;
-    Ok(DomQuery::FormElementsIndex {
-        form: Box::new(form),
-        index,
-    })
+        cursor.skip_ws();
+        cursor.expect_byte(b'.')?;
+        cursor.skip_ws();
+        cursor.expect_ascii("elements")?;
+        cursor.skip_ws();
+        cursor.expect_byte(b'[')?;
+        cursor.skip_ws();
+        let index_src = cursor.read_until_byte(b']')?;
+        cursor.skip_ws();
+        cursor.expect_byte(b']')?;
+        let index = parse_dom_query_index(&index_src)?;
+        Ok(DomQuery::FormElementsIndex {
+            form: Box::new(form),
+            index,
+        })
+}
+
+fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
+    let src = strip_js_comments(src).trim().to_string();
+    if src.is_empty() {
+        return Err(Error::ScriptParse("empty index".into()));
+    }
+
+    let expr = parse_expr(&src)?;
+    if let Expr::Number(index) = expr {
+        return usize::try_from(index)
+            .map(DomIndex::Static)
+            .map_err(|_| Error::ScriptParse(format!("invalid index: {src}")));
+    }
+
+    Ok(DomIndex::Dynamic(src))
 }
 
 fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
@@ -5859,10 +6209,80 @@ fn parse_callback_parameter_list(
     Ok(params)
 }
 
-fn parse_callback(cursor: &mut Cursor<'_>) -> Result<(Option<String>, String)> {
+fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<String> {
+    cursor.skip_ws();
+    if cursor.peek() == Some(b'{') {
+        return cursor.read_balanced_block(b'{', b'}');
+    }
+
+    let src = cursor
+        .src
+        .get(cursor.i..)
+        .ok_or_else(|| Error::ScriptParse("expected callback body".into()))?;
+    let mut end = src.len();
+
+    while end > 0 {
+        let raw = src.get(0..end).ok_or_else(|| Error::ScriptParse("invalid callback body".into()))?;
+        let expr_src = raw.trim();
+        if expr_src.is_empty() {
+            break;
+        }
+
+        let stripped = strip_js_comments(expr_src);
+        let stripped = stripped.trim();
+        if !stripped.is_empty() {
+            if parse_expr(stripped).is_ok() {
+                cursor.set_pos(cursor.i + expr_src.len());
+                return Ok(stripped.to_string());
+            }
+        }
+
+        end -= 1;
+    }
+
+    Err(Error::ScriptParse("expected callback body".into()))
+}
+
+fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    if !src.starts_with("function") && !src.contains("=>") {
+        return Ok(None);
+    }
+
+    let mut cursor = Cursor::new(src);
+    let parsed = match parse_callback(&mut cursor, usize::MAX, "function parameters") {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            if src.starts_with("function") {
+                return Err(err);
+            }
+            return Ok(None);
+        }
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let (params, body) = parsed;
+    let stmts = parse_block_statements(&body)?;
+    Ok(Some(Expr::Function {
+        handler: ScriptHandler {
+            params,
+            stmts,
+        },
+    }))
+}
+
+fn parse_callback(
+    cursor: &mut Cursor<'_>,
+    max_params: usize,
+    label: &str,
+) -> Result<(Vec<String>, String)> {
     cursor.skip_ws();
 
-    let event_param = if cursor
+    let params = if cursor
         .src
         .get(cursor.i..)
         .is_some_and(|src| src.starts_with("function"))
@@ -5884,30 +6304,50 @@ fn parse_callback(cursor: &mut Cursor<'_>) -> Result<(Option<String>, String)> {
 
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(&params, 1, "callback parameters")?;
-        let event_param = params.into_iter().next();
-
+        let params = parse_callback_parameter_list(&params, max_params, label)?;
         cursor.skip_ws();
         let body = cursor.read_balanced_block(b'{', b'}')?;
-        return Ok((event_param, body));
+        return Ok((params, body));
     } else if cursor.consume_byte(b'(') {
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(&params, 1, "callback parameters")?;
-        params.into_iter().next()
+        let params = parse_callback_parameter_list(&params, max_params, label)?;
+        params
     } else {
         let ident = cursor
             .parse_identifier()
             .ok_or_else(|| Error::ScriptParse("expected callback parameter or ()".into()))?;
-        Some(ident)
+        vec![ident]
     };
 
     cursor.skip_ws();
     cursor.expect_ascii("=>")?;
-    cursor.skip_ws();
+    let body = parse_arrow_or_block_body(cursor)?;
+    Ok((params, body))
+}
 
-    let body = cursor.read_balanced_block(b'{', b'}')?;
-    Ok((event_param, body))
+fn parse_timer_callback(
+    timer_name: &str,
+    src: &str,
+) -> Result<TimerCallback> {
+    let mut cursor = Cursor::new(src);
+    if let Ok((params, body)) = parse_callback(&mut cursor, usize::MAX, "timer callback parameters") {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(TimerCallback::Inline(ScriptHandler {
+                params,
+                stmts: parse_block_statements(&body)?,
+            }));
+        }
+    }
+
+    match parse_expr(src)? {
+        Expr::Function { handler } => Ok(TimerCallback::Inline(handler)),
+        Expr::Var(name) => Ok(TimerCallback::Reference(name)),
+        _ => Err(Error::ScriptParse(format!(
+            "unsupported {timer_name} callback: {src}"
+        ))),
+    }
 }
 
 fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
@@ -5950,6 +6390,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_do_while_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_while_stmt(stmt)? {
         return Ok(parsed);
     }
@@ -5959,6 +6403,14 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_return_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_break_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_continue_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -6289,6 +6741,47 @@ fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::While { cond, body }))
 }
 
+fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    if !cursor.consume_ascii("do") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+
+    cursor.skip_ws();
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    let body = parse_block_statements(&body_src)?;
+
+    cursor.skip_ws();
+    if !cursor.consume_ascii("while") {
+        return Err(Error::ScriptParse(format!("unsupported do statement: {stmt}")));
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Err(Error::ScriptParse(format!("unsupported do statement: {stmt}")));
+        }
+    }
+
+    cursor.skip_ws();
+    let cond_src = cursor.read_balanced_block(b'(', b')')?;
+    let cond = parse_expr(cond_src.trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!("unsupported do while statement tail: {stmt}")));
+    }
+
+    Ok(Some(Stmt::DoWhile { cond, body }))
+}
+
 fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -6315,6 +6808,48 @@ fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Return { value: Some(value) }))
 }
 
+fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("break") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!("unsupported break statement: {stmt}")));
+    }
+    Ok(Some(Stmt::Break))
+}
+
+fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("continue") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported continue statement: {stmt}"
+        )));
+    }
+    Ok(Some(Stmt::Continue))
+}
+
 fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -6330,6 +6865,36 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     let header_src = cursor.read_balanced_block(b'(', b')')?;
+    if let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(&header_src)? {
+        let iterable = parse_expr(iterable_src.trim())?;
+        cursor.skip_ws();
+        let body_src = cursor.read_balanced_block(b'{', b'}')?;
+        let body = parse_block_statements(&body_src)?;
+
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported for statement tail: {stmt}"
+            )));
+        }
+
+        let stmt = match kind {
+            ForInOfKind::In => Stmt::ForIn {
+                item_var,
+                iterable,
+                body,
+            },
+            ForInOfKind::Of => Stmt::ForOf {
+                item_var,
+                iterable,
+                body,
+            },
+        };
+        return Ok(Some(stmt));
+    }
+
     let header_parts = split_top_level_by_char(header_src.trim(), b';');
     if header_parts.len() != 3 {
         return Err(Error::ScriptParse(format!("unsupported for statement: {stmt}")));
@@ -6360,6 +6925,143 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
         post,
         body,
     }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForInOfKind {
+    In,
+    Of,
+}
+
+fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &str)>> {
+    let header = header.trim();
+    if header.is_empty() {
+        return Ok(None);
+    }
+
+    let mut found = None;
+    for (kind, keyword) in [(ForInOfKind::In, "in"), (ForInOfKind::Of, "of")] {
+        if let Some(pos) = find_top_level_in_of_keyword(header, keyword)? {
+            found = Some((kind, pos, keyword));
+            break;
+        }
+    }
+
+    let Some((kind, pos, keyword)) = found else {
+        return Ok(None);
+    };
+
+    let left = header[..pos].trim();
+    let right = header[pos + keyword.len()..].trim();
+    if left.is_empty() || right.is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported for statement: {header}"
+        )));
+    }
+
+    let item_var = parse_for_in_of_var(left)?;
+    Ok(Some((kind, item_var, right)))
+}
+
+fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
+    let bytes = src.as_bytes();
+    let mut state = 0u8;
+    let mut i = 0usize;
+    let mut paren = 0isize;
+    let mut bracket = 0isize;
+    let mut brace = 0isize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            0 => match b {
+                b'\'' => state = 1,
+                b'"' => state = 2,
+                b'`' => state = 3,
+                b'(' => paren += 1,
+                b')' => paren -= 1,
+                b'[' => bracket += 1,
+                b']' => bracket -= 1,
+                b'{' => brace += 1,
+                b'}' => brace -= 1,
+                _ => {
+                    if paren == 0 && bracket == 0 && brace == 0 {
+                        if i + keyword.len() <= bytes.len()
+                            && &src[i..i + keyword.len()] == keyword
+                        {
+                            let prev_ok = i == 0
+                                || !is_ident_char(src
+                                    .as_bytes()
+                                    .get(i.wrapping_sub(1))
+                                    .copied()
+                                    .unwrap_or_default());
+                            let next = src.as_bytes().get(i + keyword.len()).copied();
+                            let next_ok = next.is_none() || !is_ident_char(next.unwrap());
+                            if prev_ok && next_ok {
+                                return Ok(Some(i));
+                            }
+                        }
+                    }
+                }
+            },
+            1 => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = 0;
+                }
+            }
+            2 => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = 0;
+                }
+            }
+            3 => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = 0;
+                }
+            }
+            _ => state = 0,
+        }
+        i += 1;
+    }
+
+    Ok(None)
+}
+
+fn parse_for_in_of_var(raw: &str) -> Result<String> {
+    let mut cursor = Cursor::new(raw);
+    cursor.skip_ws();
+    let first = cursor
+        .parse_identifier()
+        .ok_or_else(|| Error::ScriptParse(format!("invalid for statement variable: {raw}")))?;
+
+    let name = if matches!(first.as_str(), "let" | "const" | "var") {
+        cursor.skip_ws();
+        let name = cursor
+            .parse_identifier()
+            .ok_or_else(|| Error::ScriptParse(format!("invalid for statement variable: {raw}")))?;
+        name
+    } else {
+        first
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid for statement declaration: {raw}"
+        )));
+    }
+    if !is_ident(&name) {
+        return Err(Error::ScriptParse(format!(
+            "invalid for statement variable: {raw}"
+        )));
+    }
+    Ok(name)
 }
 
 fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
@@ -6449,6 +7151,7 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
     let mut paren = 0usize;
     let mut bracket = 0usize;
     let mut brace = 0usize;
+    let mut brace_open_stack = Vec::new();
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum StrState {
@@ -6470,12 +7173,16 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
                 b')' => paren = paren.saturating_sub(1),
                 b'[' => bracket += 1,
                 b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
+                b'{' => {
+                    brace += 1;
+                    brace_open_stack.push(i);
+                }
                 b'}' => {
                     brace = brace.saturating_sub(1);
+                    let block_open = brace_open_stack.pop();
                     if paren == 0 && bracket == 0 && brace == 0 {
                         let tail = body.get(i + 1..).unwrap_or_default();
-                        if should_split_after_closing_brace(tail) {
+                        if should_split_after_closing_brace(body, block_open, tail) {
                             if let Some(part) = body.get(start..=i) {
                                 out.push(part.to_string());
                             }
@@ -6527,7 +7234,7 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
     out
 }
 
-fn should_split_after_closing_brace(tail: &str) -> bool {
+fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail: &str) -> bool {
     let tail = tail.trim_start();
     if tail.is_empty() {
         return false;
@@ -6535,7 +7242,34 @@ fn should_split_after_closing_brace(tail: &str) -> bool {
     if is_keyword_prefix(tail, "else") {
         return false;
     }
+    if is_keyword_prefix(tail, "while")
+        && block_open.is_some_and(|open| is_do_block_prefix(body, open))
+    {
+        return false;
+    }
     true
+}
+
+fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
+    let bytes = body.as_bytes();
+    if block_open == 0 || block_open > bytes.len() {
+        return false;
+    }
+
+    let mut j = block_open;
+    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
+        j -= 1;
+    }
+    if j < 2 {
+        return false;
+    }
+    if &bytes[j - 2..j] != b"do" {
+        return false;
+    }
+    match bytes.get(j - 3) {
+        Some(&b) => !is_ident_char(b),
+        None => true,
+    }
 }
 
 fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
@@ -6870,12 +7604,12 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
         let index_var = params.get(1).cloned();
 
         cursor.skip_ws();
-        let body = cursor.read_balanced_block(b'{', b'}')?;
-        cursor.skip_ws();
-        if !cursor.eof() {
-            return Err(Error::ScriptParse(format!(
-                "unsupported forEach callback tail: {src}"
-            )));
+    let body = parse_arrow_or_block_body(&mut cursor)?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported forEach callback tail: {src}"
+        )));
         }
 
         return Ok((item_var, index_var, parse_block_statements(&body)?));
@@ -6906,7 +7640,7 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
     cursor.skip_ws();
     cursor.expect_ascii("=>")?;
     cursor.skip_ws();
-    let body = cursor.read_balanced_block(b'{', b'}')?;
+    let body = parse_arrow_or_block_body(&mut cursor)?;
     cursor.skip_ws();
     if !cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -7276,7 +8010,7 @@ fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
 fn parse_set_timer_call(
     cursor: &mut Cursor<'_>,
     timer_name: &str,
-) -> Result<Option<(ScriptHandler, Expr)>> {
+) -> Result<Option<(TimerInvocation, Expr)>> {
     cursor.skip_ws();
     if !cursor.consume_ascii(timer_name) {
         return Ok(None);
@@ -7292,15 +8026,7 @@ fn parse_set_timer_call(
     }
 
     let callback_arg = strip_js_comments(args[0]);
-    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (event_param, body) = parse_callback(&mut callback_cursor)?;
-    callback_cursor.skip_ws();
-    if !callback_cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported {timer_name} callback: {}",
-            args[0].trim()
-        )));
-    }
+    let callback = parse_timer_callback(timer_name, callback_arg.as_str().trim())?;
 
     let delay_ms = if args.len() >= 2 {
         let delay_src = strip_js_comments(args[1]).trim().to_string();
@@ -7313,20 +8039,23 @@ fn parse_set_timer_call(
         Expr::Number(0)
     };
 
-    Ok(Some((
-        ScriptHandler {
-            event_param,
-            stmts: parse_block_statements(&body)?,
-        },
-        delay_ms,
-    )))
+    let mut extra_args = Vec::new();
+    for arg in args.iter().skip(2) {
+        let arg_src = strip_js_comments(arg);
+        if arg_src.trim().is_empty() {
+            continue;
+        }
+        extra_args.push(parse_expr(arg_src.trim())?);
+    }
+
+    Ok(Some((TimerInvocation { callback, args: extra_args }, delay_ms)))
 }
 
-fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(ScriptHandler, Expr)>> {
+fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setTimeout")
 }
 
-fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(ScriptHandler, Expr)>> {
+fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setInterval")
 }
 
@@ -7578,7 +8307,7 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.skip_ws();
     cursor.expect_byte(b',')?;
     cursor.skip_ws();
-    let (event_param, body) = parse_callback(&mut cursor)?;
+    let (params, body) = parse_callback(&mut cursor, 1, "callback parameters")?;
 
     cursor.skip_ws();
     let capture = if cursor.consume_byte(b',') {
@@ -7608,7 +8337,7 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     let handler = ScriptHandler {
-        event_param,
+        params,
         stmts: parse_block_statements(&body)?,
     };
     Ok(Some(Stmt::ListenerMutation {
@@ -7656,6 +8385,10 @@ fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     if src.is_empty() {
         return Err(Error::ScriptParse("empty expression".into()));
+    }
+
+    if let Some(handler_expr) = parse_function_expr(src)? {
+        return Ok(handler_expr);
     }
 
     parse_ternary_expr(src)
@@ -8339,6 +9072,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::CreateTextNode(text));
     }
 
+    if let Some(handler_expr) = parse_function_expr(src)? {
+        return Ok(handler_expr);
+    }
+
     if let Some((handler, delay_ms)) = parse_set_timeout_expr(src)? {
         return Ok(Expr::SetTimeout {
             handler,
@@ -8631,7 +9368,7 @@ fn parse_math_random_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-fn parse_set_timeout_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
+fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
         return Ok(None);
@@ -8643,7 +9380,7 @@ fn parse_set_timeout_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
     Ok(Some((handler, delay_ms)))
 }
 
-fn parse_set_interval_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
+fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
         return Ok(None);
@@ -8707,7 +9444,7 @@ fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHa
 
     let callback_arg = strip_js_comments(args[0]);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (event_param, body) = parse_callback(&mut callback_cursor)?;
+    let (params, body) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
     callback_cursor.skip_ws();
     if !callback_cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -8717,7 +9454,7 @@ fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHa
     }
 
     Ok(Some(ScriptHandler {
-        event_param,
+        params,
         stmts: parse_block_statements(&body)?,
     }))
 }
@@ -8765,7 +9502,7 @@ fn parse_promise_then_expr(src: &str) -> Result<Option<ScriptHandler>> {
 
     let callback_arg = strip_js_comments(args[0]);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (event_param, body) = parse_callback(&mut callback_cursor)?;
+    let (params, body) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
     callback_cursor.skip_ws();
     if !callback_cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -8775,7 +9512,7 @@ fn parse_promise_then_expr(src: &str) -> Result<Option<ScriptHandler>> {
     }
 
     Ok(Some(ScriptHandler {
-        event_param,
+        params,
         stmts: parse_block_statements(&body)?,
     }))
 }
@@ -9457,6 +10194,8 @@ fn decode_html_character_references(src: &str) -> String {
             "not" => Some('¬'),
             "deg" => Some('°'),
             "plusmn" => Some('±'),
+            "larr" => Some('←'),
+            "rarr" => Some('→'),
             _ => None,
         }
     }
@@ -10681,27 +11420,6 @@ impl<'a> Cursor<'a> {
         self.src.get(start..self.i).map(|s| s.to_string())
     }
 
-    fn parse_usize(&mut self) -> Result<usize> {
-        let bytes = self.bytes();
-        let start = self.i;
-        while let Some(b) = bytes.get(self.i).copied() {
-            if b.is_ascii_digit() {
-                self.i += 1;
-            } else {
-                break;
-            }
-        }
-        if self.i == start {
-            return Err(Error::ScriptParse(format!("expected number at {}", self.i)));
-        }
-        let raw = self
-            .src
-            .get(start..self.i)
-            .ok_or_else(|| Error::ScriptParse("invalid numeric slice".into()))?;
-        raw.parse::<usize>()
-            .map_err(|_| Error::ScriptParse(format!("invalid number: {raw}")))
-    }
-
     fn parse_string_literal(&mut self) -> Result<String> {
         let quote = self
             .peek()
@@ -10906,6 +11624,24 @@ mod tests {
     }
 
     #[test]
+    fn html_entities_known_named_references_are_decoded() -> Result<()> {
+        let html = "<p id='result'>&larr;&rarr;</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "←→")?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_unknown_named_references_are_not_decoded() -> Result<()> {
+        let html = "<p id='result'>&nopenvelope;&copy;</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "&nopenvelope;©")?;
+        Ok(())
+    }
+
+    #[test]
     fn html_entities_without_semicolon_hex_and_decimal_numeric_are_decoded() -> Result<()> {
         let html = "<p id='result'>&#38&#60&#x3C&#x3e</p>";
 
@@ -10983,6 +11719,32 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "Y")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_elements_index_supports_expression() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='a' value='X'>
+          <input id='b' value='Y'>
+          <input id='c' value='Z'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('f');
+            const index = 1;
+            const value = form.elements[index + 1].value;
+            document.getElementById('result').textContent = value;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "Z")?;
         Ok(())
     }
 
@@ -11745,6 +12507,32 @@ mod tests {
     }
 
     #[test]
+    fn query_selector_all_index_supports_expression() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const items = document.querySelectorAll('.item');
+            const index = 1;
+            const next = items[index + 1].textContent;
+            document.getElementById('result').textContent = items[index].textContent + ':' + next;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "B:C")?;
+        Ok(())
+    }
+
+    #[test]
     fn query_selector_all_list_index_after_reuse_works() -> Result<()> {
         let html = r#"
         <ul>
@@ -11950,7 +12738,7 @@ mod tests {
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            document.querySelectorAll('.item').forEach(item => {
+        document.querySelectorAll('.item').forEach(item => {
               item.classList.add('seen');
               document.getElementById('result').textContent =
                 document.getElementById('result').textContent + item.textContent;
@@ -11962,6 +12750,304 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_for_each_callback_accepts_arrow_expression_body() -> Result<()> {
+        let (item_var, index_var, body) = parse_for_each_callback("item => 1")?;
+        assert_eq!(item_var, "item");
+        assert!(index_var.is_none());
+        assert_eq!(body.len(), 1);
+        match body.first().expect("callback body should include one statement") {
+            Stmt::Expr(Expr::Number(value)) => assert_eq!(*value, 1),
+            other => panic!("unexpected callback body stmt: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn listener_arrow_expression_callback_body_executes() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click',
+            () => 1
+          );
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.flush()?;
+        h.assert_text("#result", "")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_of_loop_supports_query_selector_all() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let output = '';
+            for (const item of document.querySelectorAll('.item')) {
+              output = output + item.textContent;
+            }
+            document.getElementById('result').textContent = output;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ABC")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_in_loop_supports_query_selector_all_indexes() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let output = '';
+            for (let index in document.querySelectorAll('.item')) {
+              output = output + index + ',';
+            }
+            document.getElementById('result').textContent = output;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0,1,2,")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_loop_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            for (let i = 0; i < 5; i = i + 1) {
+              if (i === 0) {
+                continue;
+              }
+              if (i === 3) {
+                break;
+              }
+              out = out + i;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "12")?;
+        Ok(())
+    }
+
+    #[test]
+    fn while_loop_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            let i = 0;
+            while (i < 5) {
+              i = i + 1;
+              if (i === 1) {
+                continue;
+              }
+              if (i === 4) {
+                break;
+              }
+              out = out + i;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "23")?;
+        Ok(())
+    }
+
+    #[test]
+    fn do_while_executes_at_least_once() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let count = 0;
+            do {
+              count = count + 1;
+            } while (false);
+            document.getElementById('result').textContent = count;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn do_while_loop_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            let out = '';
+            do {
+              i = i + 1;
+              if (i === 1) {
+                continue;
+              }
+              if (i === 4) {
+                break;
+              }
+              out = out + i;
+            } while (i < 5);
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "23")?;
+        Ok(())
+    }
+
+    #[test]
+    fn foreach_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+          <li class='item'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            document.querySelectorAll('.item').forEach((item, idx) => {
+              if (idx === 0) {
+                continue;
+              }
+              if (idx === 2) {
+                break;
+              }
+              out = out + idx;
+            });
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_in_loop_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+          <li class='item'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            for (let index in document.querySelectorAll('.item')) {
+              if (index === 1) {
+                continue;
+              }
+              if (index === 3) {
+                break;
+              }
+              out = out + index;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "02")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_of_loop_supports_break_and_continue() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li class='item'>A</li>
+          <li class='item'>B</li>
+          <li class='item'>C</li>
+          <li class='item'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            for (const item of document.querySelectorAll('.item')) {
+              if (item.textContent === 'B') {
+                continue;
+              }
+              if (item.textContent === 'D') {
+                break;
+              }
+              out = out + item.textContent;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AC")?;
         Ok(())
     }
 
@@ -12990,9 +14076,9 @@ mod tests {
         <script>
           document.getElementById('btn').addEventListener('click', () => {
             // comment: schedule timer with extra arg and inline delay comment
-            setTimeout(() => {
-              document.getElementById('result').textContent = 'ok';
-            }, 5, 'ignored');
+            setTimeout((message) => {
+              document.getElementById('result').textContent = message;
+            }, 5, 'ok');
           });
         </script>
         "#;
@@ -13004,6 +14090,135 @@ mod tests {
         h.assert_text("#result", "")?;
         h.advance_time(1)?;
         h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_callback_supports_multiple_parameters() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout((first, second, third) => {
+              document.getElementById('result').textContent =
+                first + ':' + second + ':' + third;
+            }, 5, 'A', 'B', 'C');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(5)?;
+        h.assert_text("#result", "A:B:C")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_callback_assigns_undefined_for_missing_arguments() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout((first, second, third) => {
+              document.getElementById('result').textContent =
+                first + ':' + second + ':' + third;
+            }, 5, 'only');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(5)?;
+        h.assert_text("#result", "only:undefined:undefined")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_function_reference_supports_additional_parameters() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const onTimeout = (value) => {
+            document.getElementById('result').textContent = value;
+          };
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(onTimeout, 5, 'ref');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(5)?;
+        h.assert_text("#result", "ref")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_interval_function_reference_supports_additional_parameters() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          let count = 0;
+          const onTick = (value) => {
+            count = count + 1;
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + value;
+            if (count === 2) {
+              clearInterval(intervalId);
+            }
+          };
+          let intervalId = 0;
+          document.getElementById('btn').addEventListener('click', () => {
+            intervalId = setInterval(onTick, 5, 'tick');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(11)?;
+        h.assert_text("#result", "ticktick")?;
+        h.advance_time(10)?;
+        h.assert_text("#result", "ticktick")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_interval_supports_multiple_additional_parameters() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          let id = 0;
+          document.getElementById('btn').addEventListener('click', () => {
+            let tick = 0;
+            id = setInterval((value, suffix) => {
+              tick = tick + 1;
+              document.getElementById('result').textContent =
+                document.getElementById('result').textContent + value + suffix;
+              if (tick > 2) {
+                clearInterval(id);
+              }
+            }, 0, 'I', '!');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.flush()?;
+        h.assert_text("#result", "I!I!I!")?;
         Ok(())
     }
 
@@ -13751,6 +14966,31 @@ mod tests {
         h.click("#btn")?;
         h.assert_text("#result", "")?;
         h.advance_time(10)?;
+        h.assert_text("#result", "ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn timer_arrow_expression_callback_executes() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(
+              () => setTimeout(() => {
+                document.getElementById('result').textContent = 'ok';
+              }, 0),
+              5
+            );
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(5)?;
         h.assert_text("#result", "ok")?;
         Ok(())
     }
