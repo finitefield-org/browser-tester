@@ -1,6 +1,10 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
 use std::fmt;
+use std::rc::Rc;
+
+const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -3125,6 +3129,7 @@ enum Value {
     Bool(bool),
     Number(i64),
     Float(f64),
+    Array(Rc<RefCell<Vec<Value>>>),
     Null,
     Undefined,
     Node(NodeId),
@@ -3140,6 +3145,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
+            Self::Array(_) => true,
             Self::Null => false,
             Self::Undefined => false,
             Self::Node(_) => true,
@@ -3161,6 +3167,20 @@ impl Value {
             }
             Self::Number(v) => v.to_string(),
             Self::Float(v) => format_float(*v),
+            Self::Array(values) => {
+                let values = values.borrow();
+                let mut out = String::new();
+                for (idx, value) in values.iter().enumerate() {
+                    if idx > 0 {
+                        out.push(',');
+                    }
+                    if matches!(value, Value::Null | Value::Undefined) {
+                        continue;
+                    }
+                    out.push_str(&value.as_string());
+                }
+                out
+            }
             Self::Null => "null".into(),
             Self::Undefined => "undefined".into(),
             Self::Node(node) => format!("node-{}", node.0),
@@ -3392,6 +3412,125 @@ enum Expr {
         radix: Option<Box<Expr>>,
     },
     ParseFloat(Box<Expr>),
+    ArrayLiteral(Vec<Expr>),
+    ArrayIsArray(Box<Expr>),
+    ArrayLength(String),
+    ArrayIndex {
+        target: String,
+        index: Box<Expr>,
+    },
+    ArrayPush {
+        target: String,
+        args: Vec<Expr>,
+    },
+    ArrayPop(String),
+    ArrayShift(String),
+    ArrayUnshift {
+        target: String,
+        args: Vec<Expr>,
+    },
+    ArrayMap {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArrayFilter {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArrayReduce {
+        target: String,
+        callback: ScriptHandler,
+        initial: Option<Box<Expr>>,
+    },
+    ArrayForEach {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArrayFind {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArraySome {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArrayEvery {
+        target: String,
+        callback: ScriptHandler,
+    },
+    ArrayIncludes {
+        target: String,
+        search: Box<Expr>,
+        from_index: Option<Box<Expr>>,
+    },
+    ArraySlice {
+        target: String,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
+    ArraySplice {
+        target: String,
+        start: Box<Expr>,
+        delete_count: Option<Box<Expr>>,
+        items: Vec<Expr>,
+    },
+    ArrayJoin {
+        target: String,
+        separator: Option<Box<Expr>>,
+    },
+    StringTrim {
+        value: Box<Expr>,
+        mode: StringTrimMode,
+    },
+    StringToUpperCase(Box<Expr>),
+    StringToLowerCase(Box<Expr>),
+    StringIncludes {
+        value: Box<Expr>,
+        search: Box<Expr>,
+        position: Option<Box<Expr>>,
+    },
+    StringStartsWith {
+        value: Box<Expr>,
+        search: Box<Expr>,
+        position: Option<Box<Expr>>,
+    },
+    StringEndsWith {
+        value: Box<Expr>,
+        search: Box<Expr>,
+        length: Option<Box<Expr>>,
+    },
+    StringSlice {
+        value: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
+    StringSubstring {
+        value: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
+    StringSplit {
+        value: Box<Expr>,
+        separator: Option<Box<Expr>>,
+        limit: Option<Box<Expr>>,
+    },
+    StringReplace {
+        value: Box<Expr>,
+        from: Box<Expr>,
+        to: Box<Expr>,
+    },
+    StringIndexOf {
+        value: Box<Expr>,
+        search: Box<Expr>,
+        position: Option<Box<Expr>>,
+    },
+    Fetch(Box<Expr>),
+    Alert(Box<Expr>),
+    Confirm(Box<Expr>),
+    Prompt {
+        message: Box<Expr>,
+        default: Option<Box<Expr>>,
+    },
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -3491,6 +3630,13 @@ enum EventMethod {
     PreventDefault,
     StopPropagation,
     StopImmediatePropagation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringTrimMode {
+    Both,
+    Start,
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3599,6 +3745,10 @@ enum Stmt {
         item_var: String,
         index_var: Option<String>,
         body: Vec<Stmt>,
+    },
+    ArrayForEach {
+        target: String,
+        callback: ScriptHandler,
     },
     For {
         init: Option<Box<Stmt>>,
@@ -3860,6 +4010,13 @@ pub struct Harness {
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
     rng_state: u64,
+    fetch_mocks: HashMap<String, String>,
+    fetch_calls: Vec<String>,
+    alert_messages: Vec<String>,
+    confirm_responses: VecDeque<bool>,
+    default_confirm_response: bool,
+    prompt_responses: VecDeque<Option<String>>,
+    default_prompt_response: Option<String>,
     trace: bool,
     trace_events: bool,
     trace_timers: bool,
@@ -4047,6 +4204,13 @@ impl Harness {
             running_timer_id: None,
             running_timer_canceled: false,
             rng_state: 0x9E37_79B9_7F4A_7C15,
+            fetch_mocks: HashMap::new(),
+            fetch_calls: Vec::new(),
+            alert_messages: Vec::new(),
+            confirm_responses: VecDeque::new(),
+            default_confirm_response: false,
+            prompt_responses: VecDeque::new(),
+            default_prompt_response: None,
             trace: false,
             trace_events: true,
             trace_timers: true,
@@ -4101,6 +4265,39 @@ impl Harness {
         } else {
             seed
         };
+    }
+
+    pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
+        self.fetch_mocks.insert(url.to_string(), body.to_string());
+    }
+
+    pub fn clear_fetch_mocks(&mut self) {
+        self.fetch_mocks.clear();
+    }
+
+    pub fn take_fetch_calls(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.fetch_calls)
+    }
+
+    pub fn enqueue_confirm_response(&mut self, accepted: bool) {
+        self.confirm_responses.push_back(accepted);
+    }
+
+    pub fn set_default_confirm_response(&mut self, accepted: bool) {
+        self.default_confirm_response = accepted;
+    }
+
+    pub fn enqueue_prompt_response(&mut self, value: Option<&str>) {
+        self.prompt_responses
+            .push_back(value.map(std::string::ToString::to_string));
+    }
+
+    pub fn set_default_prompt_response(&mut self, value: Option<&str>) {
+        self.default_prompt_response = value.map(std::string::ToString::to_string);
+    }
+
+    pub fn take_alert_messages(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.alert_messages)
     }
 
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
@@ -5073,7 +5270,9 @@ impl Harness {
         let event_param = handler
             .first_event_param()
             .map(|event_param| event_param.to_string());
-        match self.execute_stmts(&handler.stmts, &event_param, event, env)? {
+        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
+        env.remove(INTERNAL_RETURN_SLOT);
+        match flow {
             ExecFlow::Continue => Ok(()),
             ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
             ExecFlow::ContinueLoop => {
@@ -5110,7 +5309,9 @@ impl Harness {
         let event_param = handler
             .first_event_param()
             .map(|event_param| event_param.to_string());
-        match self.execute_stmts(&handler.stmts, &event_param, event, env)? {
+        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
+        env.remove(INTERNAL_RETURN_SLOT);
+        match flow {
             ExecFlow::Continue => Ok(()),
             ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
             ExecFlow::ContinueLoop => {
@@ -5525,6 +5726,22 @@ impl Harness {
                         }
                     }
                 }
+                Stmt::ArrayForEach { target, callback } => {
+                    let values = self.resolve_array_from_env(env, target)?;
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        self.execute_array_callback_in_env(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                    }
+                }
                 Stmt::For {
                     init,
                     cond,
@@ -5603,18 +5820,22 @@ impl Harness {
                     body,
                 } => {
                     let iterable = self.eval_expr(iterable, env, event_param, event)?;
-                    let nodes = match iterable {
-                        Value::NodeList(nodes) => nodes,
+                    let items = match iterable {
+                        Value::NodeList(nodes) => (0..nodes.len()).collect::<Vec<_>>(),
+                        Value::Array(values) => {
+                            let values = values.borrow();
+                            (0..values.len()).collect::<Vec<_>>()
+                        }
                         Value::Null | Value::Undefined => Vec::new(),
                         _ => {
                             return Err(Error::ScriptRuntime(
-                                "for...in iterable must be a NodeList".into(),
+                                "for...in iterable must be a NodeList or Array".into(),
                             ));
                         }
                     };
 
                     let prev_item = env.get(item_var).cloned();
-                    for (idx, _node) in nodes.iter().enumerate() {
+                    for idx in items {
                         env.insert(item_var.clone(), Value::Number(idx as i64));
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
@@ -5640,10 +5861,11 @@ impl Harness {
                             .into_iter()
                             .map(Value::Node)
                             .collect::<Vec<_>>(),
+                        Value::Array(values) => values.borrow().clone(),
                         Value::Null | Value::Undefined => Vec::new(),
                         _ => {
                             return Err(Error::ScriptRuntime(
-                                "for...of iterable must be a NodeList".into(),
+                                "for...of iterable must be a NodeList or Array".into(),
                             ));
                         }
                     };
@@ -5705,7 +5927,13 @@ impl Harness {
                         }
                     }
                 }
-                Stmt::Return { value: _ } => {
+                Stmt::Return { value } => {
+                    let return_value = if let Some(value) = value {
+                        self.eval_expr(value, env, event_param, event)?
+                    } else {
+                        Value::Undefined
+                    };
+                    env.insert(INTERNAL_RETURN_SLOT.to_string(), return_value);
                     return Ok(ExecFlow::Return);
                 }
                 Stmt::Break => {
@@ -5876,6 +6104,608 @@ impl Harness {
             Expr::ParseFloat(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::Float(parse_js_parse_float(&value.as_string())))
+            }
+            Expr::ArrayLiteral(values) => {
+                let mut out = Vec::with_capacity(values.len());
+                for value in values {
+                    out.push(self.eval_expr(value, env, event_param, event)?);
+                }
+                Ok(Self::new_array_value(out))
+            }
+            Expr::ArrayIsArray(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::Bool(matches!(value, Value::Array(_))))
+            }
+            Expr::ArrayLength(target) => {
+                match env.get(target) {
+                    Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
+                    Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
+                    Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
+            Expr::ArrayIndex { target, index } => {
+                let index = self.eval_expr(index, env, event_param, event)?;
+                let Some(index) = self.value_as_index(&index) else {
+                    return Ok(Value::Undefined);
+                };
+                match env.get(target) {
+                    Some(Value::Array(values)) => Ok(values
+                        .borrow()
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Value::Undefined)),
+                    Some(Value::NodeList(nodes)) => Ok(nodes
+                        .get(index)
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Undefined)),
+                    Some(Value::String(value)) => Ok(value
+                        .chars()
+                        .nth(index)
+                        .map(|ch| Value::String(ch.to_string()))
+                        .unwrap_or(Value::Undefined)),
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
+            Expr::ArrayPush { target, args } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let mut evaluated = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                let mut values = values.borrow_mut();
+                values.extend(evaluated);
+                Ok(Value::Number(values.len() as i64))
+            }
+            Expr::ArrayPop(target) => {
+                let values = self.resolve_array_from_env(env, target)?;
+                Ok(values.borrow_mut().pop().unwrap_or(Value::Undefined))
+            }
+            Expr::ArrayShift(target) => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let mut values = values.borrow_mut();
+                if values.is_empty() {
+                    Ok(Value::Undefined)
+                } else {
+                    Ok(values.remove(0))
+                }
+            }
+            Expr::ArrayUnshift { target, args } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let mut evaluated = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                let mut values = values.borrow_mut();
+                for value in evaluated.into_iter().rev() {
+                    values.insert(0, value);
+                }
+                Ok(Value::Number(values.len() as i64))
+            }
+            Expr::ArrayMap { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                let mut out = Vec::with_capacity(input.len());
+                for (idx, item) in input.into_iter().enumerate() {
+                    let mapped = self.execute_array_callback(
+                        callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                    out.push(mapped);
+                }
+                Ok(Self::new_array_value(out))
+            }
+            Expr::ArrayFilter { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                let mut out = Vec::new();
+                for (idx, item) in input.into_iter().enumerate() {
+                    let keep = self.execute_array_callback(
+                        callback,
+                        &[
+                            item.clone(),
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                    if keep.truthy() {
+                        out.push(item);
+                    }
+                }
+                Ok(Self::new_array_value(out))
+            }
+            Expr::ArrayReduce {
+                target,
+                callback,
+                initial,
+            } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                let mut start_index = 0usize;
+                let mut acc = if let Some(initial) = initial {
+                    self.eval_expr(initial, env, event_param, event)?
+                } else {
+                    let Some(first) = input.first().cloned() else {
+                        return Err(Error::ScriptRuntime(
+                            "reduce of empty array with no initial value".into(),
+                        ));
+                    };
+                    start_index = 1;
+                    first
+                };
+                for (idx, item) in input.into_iter().enumerate().skip(start_index) {
+                    acc = self.execute_array_callback(
+                        callback,
+                        &[
+                            acc,
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                }
+                Ok(acc)
+            }
+            Expr::ArrayForEach { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                for (idx, item) in input.into_iter().enumerate() {
+                    let _ = self.execute_array_callback(
+                        callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                }
+                Ok(Value::Undefined)
+            }
+            Expr::ArrayFind { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                for (idx, item) in input.into_iter().enumerate() {
+                    let matched = self.execute_array_callback(
+                        callback,
+                        &[
+                            item.clone(),
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(item);
+                    }
+                }
+                Ok(Value::Undefined)
+            }
+            Expr::ArraySome { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                for (idx, item) in input.into_iter().enumerate() {
+                    let matched = self.execute_array_callback(
+                        callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            Expr::ArrayEvery { target, callback } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let input = values.borrow().clone();
+                for (idx, item) in input.into_iter().enumerate() {
+                    let matched = self.execute_array_callback(
+                        callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                    if !matched.truthy() {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            Expr::ArrayIncludes {
+                target,
+                search,
+                from_index,
+            } => {
+                let search = self.eval_expr(search, env, event_param, event)?;
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let values = values.borrow();
+                        let len = values.len() as i64;
+                        let mut start = from_index
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .unwrap_or(0);
+                        if start < 0 {
+                            start = (len + start).max(0);
+                        }
+                        let start = start.min(len) as usize;
+                        for value in values.iter().skip(start) {
+                            if self.strict_equal(value, &search) {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    Some(Value::String(value)) => {
+                        let search = search.as_string();
+                        let len = value.chars().count() as i64;
+                        let mut start = from_index
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .unwrap_or(0);
+                        if start < 0 {
+                            start = (len + start).max(0);
+                        }
+                        let start = start.min(len) as usize;
+                        let start_byte = Self::char_index_to_byte(value, start);
+                        Ok(Value::Bool(value[start_byte..].contains(&search)))
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
+            Expr::ArraySlice { target, start, end } => {
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let values = values.borrow();
+                        let len = values.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Self::new_array_value(values[start..end].to_vec()))
+                    }
+                    Some(Value::String(value)) => {
+                        let len = value.chars().count();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Value::String(Self::substring_chars(value, start, end)))
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
+            Expr::ArraySplice {
+                target,
+                start,
+                delete_count,
+                items,
+            } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let start = self.eval_expr(start, env, event_param, event)?;
+                let start = Self::value_to_i64(&start);
+                let delete_count = delete_count
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value));
+                let mut insert_items = Vec::with_capacity(items.len());
+                for item in items {
+                    insert_items.push(self.eval_expr(item, env, event_param, event)?);
+                }
+
+                let mut values = values.borrow_mut();
+                let len = values.len();
+                let start = Self::normalize_splice_start_index(len, start);
+                let delete_count = delete_count
+                    .unwrap_or((len.saturating_sub(start)) as i64)
+                    .max(0) as usize;
+                let delete_count = delete_count.min(len.saturating_sub(start));
+                let removed = values
+                    .drain(start..start + delete_count)
+                    .collect::<Vec<_>>();
+                for (offset, item) in insert_items.into_iter().enumerate() {
+                    values.insert(start + offset, item);
+                }
+                Ok(Self::new_array_value(removed))
+            }
+            Expr::ArrayJoin { target, separator } => {
+                let values = self.resolve_array_from_env(env, target)?;
+                let separator = separator
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| value.as_string())
+                    .unwrap_or_else(|| ",".to_string());
+                let values = values.borrow();
+                let mut out = String::new();
+                for (idx, value) in values.iter().enumerate() {
+                    if idx > 0 {
+                        out.push_str(&separator);
+                    }
+                    if matches!(value, Value::Null | Value::Undefined) {
+                        continue;
+                    }
+                    out.push_str(&value.as_string());
+                }
+                Ok(Value::String(out))
+            }
+            Expr::StringTrim { value, mode } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let value = match mode {
+                    StringTrimMode::Both => value.trim().to_string(),
+                    StringTrimMode::Start => value.trim_start().to_string(),
+                    StringTrimMode::End => value.trim_end().to_string(),
+                };
+                Ok(Value::String(value))
+            }
+            Expr::StringToUpperCase(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                Ok(Value::String(value.to_uppercase()))
+            }
+            Expr::StringToLowerCase(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                Ok(Value::String(value.to_lowercase()))
+            }
+            Expr::StringIncludes {
+                value,
+                search,
+                position,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let len = value.chars().count() as i64;
+                let mut position = position
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if position < 0 {
+                    position = 0;
+                }
+                let position = position.min(len) as usize;
+                let position_byte = Self::char_index_to_byte(&value, position);
+                Ok(Value::Bool(value[position_byte..].contains(&search)))
+            }
+            Expr::StringStartsWith {
+                value,
+                search,
+                position,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let len = value.chars().count() as i64;
+                let mut position = position
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if position < 0 {
+                    position = 0;
+                }
+                let position = position.min(len) as usize;
+                let position_byte = Self::char_index_to_byte(&value, position);
+                Ok(Value::Bool(value[position_byte..].starts_with(&search)))
+            }
+            Expr::StringEndsWith {
+                value,
+                search,
+                length,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let end = length
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .map(|value| {
+                        if value < 0 {
+                            0
+                        } else {
+                            (value as usize).min(len)
+                        }
+                    })
+                    .unwrap_or(len);
+                let hay = Self::substring_chars(&value, 0, end);
+                Ok(Value::Bool(hay.ends_with(&search)))
+            }
+            Expr::StringSlice { value, start, end } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let start = start
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(0);
+                let end = end
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(len);
+                let end = end.max(start);
+                Ok(Value::String(Self::substring_chars(&value, start, end)))
+            }
+            Expr::StringSubstring { value, start, end } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let start = start
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .map(|value| Self::normalize_substring_index(len, value))
+                    .unwrap_or(0);
+                let end = end
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .map(|value| Self::normalize_substring_index(len, value))
+                    .unwrap_or(len);
+                let (start, end) = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                Ok(Value::String(Self::substring_chars(&value, start, end)))
+            }
+            Expr::StringSplit {
+                value,
+                separator,
+                limit,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let separator = separator
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| value.as_string());
+                let limit = limit
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value));
+                Ok(Self::new_array_value(Self::split_string(&value, separator, limit)))
+            }
+            Expr::StringReplace { value, from, to } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let from = self.eval_expr(from, env, event_param, event)?.as_string();
+                let to = self.eval_expr(to, env, event_param, event)?.as_string();
+                Ok(Value::String(value.replacen(&from, &to, 1)))
+            }
+            Expr::StringIndexOf {
+                value,
+                search,
+                position,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let len = value.chars().count() as i64;
+                let mut position = position
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if position < 0 {
+                    position = 0;
+                }
+                let position = position.min(len) as usize;
+                Ok(Value::Number(
+                    Self::string_index_of(&value, &search, position)
+                        .map(|value| value as i64)
+                        .unwrap_or(-1),
+                ))
+            }
+            Expr::Fetch(request) => {
+                let request = self.eval_expr(request, env, event_param, event)?.as_string();
+                self.fetch_calls.push(request.clone());
+                let response = self.fetch_mocks.get(&request).cloned().ok_or_else(|| {
+                    Error::ScriptRuntime(format!("fetch mock not found for request: {request}"))
+                })?;
+                Ok(Value::String(response))
+            }
+            Expr::Alert(message) => {
+                let message = self.eval_expr(message, env, event_param, event)?.as_string();
+                self.alert_messages.push(message);
+                Ok(Value::Undefined)
+            }
+            Expr::Confirm(message) => {
+                let _ = self.eval_expr(message, env, event_param, event)?;
+                let accepted = self
+                    .confirm_responses
+                    .pop_front()
+                    .unwrap_or(self.default_confirm_response);
+                Ok(Value::Bool(accepted))
+            }
+            Expr::Prompt { message, default } => {
+                let _ = self.eval_expr(message, env, event_param, event)?;
+                let default_value = default
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| value.as_string());
+                let response = self
+                    .prompt_responses
+                    .pop_front()
+                    .unwrap_or_else(|| self.default_prompt_response.clone().or(default_value));
+                match response {
+                    Some(value) => Ok(Value::String(value)),
+                    None => Ok(Value::Null),
+                }
             }
             Expr::Var(name) => env
                 .get(name)
@@ -6122,7 +6952,10 @@ impl Harness {
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
                         Value::Function(_) => "function",
-                        Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
+                        Value::Node(_)
+                        | Value::NodeList(_)
+                        | Value::FormData(_)
+                        | Value::Array(_) => "object",
                     }),
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
@@ -6133,7 +6966,10 @@ impl Harness {
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
                             Value::Function(_) => "function",
-                            Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
+                            Value::Node(_)
+                            | Value::NodeList(_)
+                            | Value::FormData(_)
+                            | Value::Array(_) => "object",
                         }
                     }
                 };
@@ -6234,6 +7070,9 @@ impl Harness {
             Value::NodeList(nodes) => self
                 .value_as_index(left)
                 .is_some_and(|index| index < nodes.len()),
+            Value::Array(values) => self
+                .value_as_index(left)
+                .is_some_and(|index| index < values.borrow().len()),
             Value::FormData(entries) => {
                 let key = left.as_string();
                 entries.iter().any(|(name, _)| name == &key)
@@ -6246,6 +7085,7 @@ impl Harness {
         match (left, right) {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
+            (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
             _ => false,
         }
@@ -6287,6 +7127,7 @@ impl Harness {
             (Value::Float(l), Value::Number(r)) => *l == (*r as f64),
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
+            (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
             (Value::Undefined, Value::Undefined) => true,
@@ -6318,6 +7159,181 @@ impl Harness {
             }
             _ => Value::Float(self.numeric_value(left) + self.numeric_value(right)),
         }
+    }
+
+    fn new_array_value(values: Vec<Value>) -> Value {
+        Value::Array(Rc::new(RefCell::new(values)))
+    }
+
+    fn resolve_array_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<Vec<Value>>>> {
+        match env.get(target) {
+            Some(Value::Array(values)) => Ok(values.clone()),
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not an array",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!(
+                "unknown variable: {}",
+                target
+            ))),
+        }
+    }
+
+    fn execute_array_callback(
+        &mut self,
+        callback: &ScriptHandler,
+        args: &[Value],
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let mut callback_env = env.clone();
+        callback_env.remove(INTERNAL_RETURN_SLOT);
+        callback.bind_event_params(args, &mut callback_env);
+        let mut callback_event = event.clone();
+        let event_param = None;
+        match self.execute_stmts(
+            &callback.stmts,
+            &event_param,
+            &mut callback_event,
+            &mut callback_env,
+        )? {
+            ExecFlow::Continue | ExecFlow::Return => {}
+            ExecFlow::Break => {
+                return Err(Error::ScriptRuntime(
+                    "break statement outside of loop".into(),
+                ));
+            }
+            ExecFlow::ContinueLoop => {
+                return Err(Error::ScriptRuntime(
+                    "continue statement outside of loop".into(),
+                ));
+            }
+        }
+
+        Ok(callback_env
+            .remove(INTERNAL_RETURN_SLOT)
+            .unwrap_or(Value::Undefined))
+    }
+
+    fn execute_array_callback_in_env(
+        &mut self,
+        callback: &ScriptHandler,
+        args: &[Value],
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<()> {
+        let mut previous_values = Vec::with_capacity(callback.params.len());
+        for (idx, param) in callback.params.iter().enumerate() {
+            previous_values.push((param.clone(), env.get(param).cloned()));
+            let value = args.get(idx).cloned().unwrap_or(Value::Undefined);
+            env.insert(param.clone(), value);
+        }
+
+        let mut callback_event = event.clone();
+        let event_param = None;
+        let result = self.execute_stmts(
+            &callback.stmts,
+            &event_param,
+            &mut callback_event,
+            env,
+        );
+        env.remove(INTERNAL_RETURN_SLOT);
+
+        for (name, previous) in previous_values {
+            if let Some(previous) = previous {
+                env.insert(name, previous);
+            } else {
+                env.remove(&name);
+            }
+        }
+
+        match result? {
+            ExecFlow::Continue | ExecFlow::Return => Ok(()),
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
+        }
+    }
+
+    fn normalize_slice_index(len: usize, index: i64) -> usize {
+        if index < 0 {
+            len.saturating_sub(index.unsigned_abs() as usize)
+        } else {
+            (index as usize).min(len)
+        }
+    }
+
+    fn normalize_splice_start_index(len: usize, start: i64) -> usize {
+        if start < 0 {
+            len.saturating_sub(start.unsigned_abs() as usize)
+        } else {
+            (start as usize).min(len)
+        }
+    }
+
+    fn normalize_substring_index(len: usize, index: i64) -> usize {
+        if index < 0 {
+            0
+        } else {
+            (index as usize).min(len)
+        }
+    }
+
+    fn char_index_to_byte(value: &str, char_index: usize) -> usize {
+        value
+            .char_indices()
+            .nth(char_index)
+            .map(|(idx, _)| idx)
+            .unwrap_or(value.len())
+    }
+
+    fn substring_chars(value: &str, start: usize, end: usize) -> String {
+        if start >= end {
+            return String::new();
+        }
+        value.chars().skip(start).take(end - start).collect()
+    }
+
+    fn split_string(value: &str, separator: Option<String>, limit: Option<i64>) -> Vec<Value> {
+        let mut parts = match separator {
+            None => vec![Value::String(value.to_string())],
+            Some(separator) => {
+                if separator.is_empty() {
+                    value
+                        .chars()
+                        .map(|ch| Value::String(ch.to_string()))
+                        .collect::<Vec<_>>()
+                } else {
+                    value
+                        .split(&separator)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect::<Vec<_>>()
+                }
+            }
+        };
+
+        if let Some(limit) = limit {
+            if limit == 0 {
+                parts.clear();
+            } else if limit > 0 {
+                parts.truncate(limit as usize);
+            }
+        }
+
+        parts
+    }
+
+    fn string_index_of(value: &str, search: &str, start_char_idx: usize) -> Option<usize> {
+        let start_byte = Self::char_index_to_byte(value, start_char_idx);
+        let pos = value.get(start_byte..)?.find(search)?;
+        Some(value[..start_byte + pos].chars().count())
     }
 
     fn numeric_value(&self, value: &Value) -> f64 {
@@ -6353,6 +7369,15 @@ impl Harness {
             }
             Value::Node(_) | Value::NodeList(_) | Value::FormData(_) | Value::Function(_) => {
                 f64::NAN
+            }
+            Value::Array(values) => {
+                let rendered = Value::Array(values.clone()).as_string();
+                let trimmed = rendered.trim();
+                if trimmed.is_empty() {
+                    0.0
+                } else {
+                    trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                }
             }
         }
     }
@@ -6674,6 +7699,18 @@ impl Harness {
                 .parse::<i64>()
                 .ok()
                 .or_else(|| v.parse::<f64>().ok().map(|n| n as i64))
+                .unwrap_or(0),
+            Value::Array(values) => Value::Array(values.clone())
+                .as_string()
+                .parse::<i64>()
+                .ok()
+                .or_else(|| {
+                    Value::Array(values.clone())
+                        .as_string()
+                        .parse::<f64>()
+                        .ok()
+                        .map(|n| n as i64)
+                })
                 .unwrap_or(0),
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
@@ -7286,6 +8323,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_query_selector_all_foreach_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_array_for_each_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -8382,9 +9423,7 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
                     (Some(target.as_ref().clone()), selector.clone())
                 }
                 _ => {
-                    return Err(Error::ScriptParse(format!(
-                        "forEach can only be used on querySelectorAll result: {stmt}"
-                    )));
+                    return Ok(None);
                 }
             };
             cursor.skip_ws();
@@ -8439,6 +9478,50 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
         index_var,
         body,
     }))
+}
+
+fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("forEach") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "forEach requires exactly one callback argument".into(),
+        ));
+    }
+    let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported forEach statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::ArrayForEach { target, callback }))
 }
 
 fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
@@ -9989,6 +11072,41 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::ParseFloat(Box::new(value)));
     }
 
+    if let Some(value) = parse_fetch_expr(src)? {
+        return Ok(Expr::Fetch(Box::new(value)));
+    }
+
+    if let Some(value) = parse_alert_expr(src)? {
+        return Ok(Expr::Alert(Box::new(value)));
+    }
+
+    if let Some(value) = parse_confirm_expr(src)? {
+        return Ok(Expr::Confirm(Box::new(value)));
+    }
+
+    if let Some((message, default)) = parse_prompt_expr(src)? {
+        return Ok(Expr::Prompt {
+            message: Box::new(message),
+            default: default.map(Box::new),
+        });
+    }
+
+    if let Some(values) = parse_array_literal_expr(src)? {
+        return Ok(Expr::ArrayLiteral(values));
+    }
+
+    if let Some(value) = parse_array_is_array_expr(src)? {
+        return Ok(Expr::ArrayIsArray(Box::new(value)));
+    }
+
+    if let Some(expr) = parse_array_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_string_method_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(tag_name) = parse_document_create_element_expr(src)? {
         return Ok(Expr::CreateElement(tag_name));
     }
@@ -10470,6 +11588,804 @@ fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(value))
+}
+
+fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "fetch", "fetch requires exactly one argument")
+}
+
+fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "alert", "alert requires exactly one argument")
+}
+
+fn parse_confirm_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "confirm", "confirm requires exactly one argument")
+}
+
+fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("prompt") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "prompt requires one or two arguments".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "prompt default argument cannot be empty".into(),
+        ));
+    }
+
+    let message = parse_expr(args[0].trim())?;
+    let default = if args.len() == 2 {
+        Some(parse_expr(args[1].trim())?)
+    } else {
+        None
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((message, default)))
+}
+
+fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'[') {
+        return Ok(None);
+    }
+
+    let items_src = cursor.read_balanced_block(b'[', b']')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let items = split_top_level_by_char(&items_src, b',');
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err(Error::ScriptParse(
+                "array literal does not support empty elements".into(),
+            ));
+        }
+        out.push(parse_expr(item)?);
+    }
+    Ok(Some(out))
+}
+
+fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Array") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("isArray") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Array.isArray requires exactly one argument".into(),
+        ));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(value))
+}
+
+fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    if cursor.consume_byte(b'[') {
+        cursor.skip_ws();
+        let index_src = cursor.read_until_byte(b']')?;
+        cursor.skip_ws();
+        cursor.expect_byte(b']')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        if index_src.trim().is_empty() {
+            return Err(Error::ScriptParse("array index cannot be empty".into()));
+        }
+        let index = parse_expr(index_src.trim())?;
+        return Ok(Some(Expr::ArrayIndex {
+            target,
+            index: Box::new(index),
+        }));
+    }
+
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    if method == "length" {
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ArrayLength(target)));
+    }
+
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let expr = match method.as_str() {
+        "push" => {
+            let mut parsed = Vec::with_capacity(args.len());
+            for arg in args {
+                if arg.trim().is_empty() {
+                    return Err(Error::ScriptParse("push argument cannot be empty".into()));
+                }
+                parsed.push(parse_expr(arg.trim())?);
+            }
+            Expr::ArrayPush {
+                target,
+                args: parsed,
+            }
+        }
+        "pop" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("pop does not take arguments".into()));
+            }
+            Expr::ArrayPop(target)
+        }
+        "shift" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("shift does not take arguments".into()));
+            }
+            Expr::ArrayShift(target)
+        }
+        "unshift" => {
+            let mut parsed = Vec::with_capacity(args.len());
+            for arg in args {
+                if arg.trim().is_empty() {
+                    return Err(Error::ScriptParse("unshift argument cannot be empty".into()));
+                }
+                parsed.push(parse_expr(arg.trim())?);
+            }
+            Expr::ArrayUnshift {
+                target,
+                args: parsed,
+            }
+        }
+        "map" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "map requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArrayMap { target, callback }
+        }
+        "filter" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "filter requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArrayFilter { target, callback }
+        }
+        "reduce" => {
+            if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "reduce requires callback and optional initial value".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 4, "array callback parameters")?;
+            let initial = if args.len() == 2 {
+                if args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "reduce initial value cannot be empty".into(),
+                    ));
+                }
+                Some(Box::new(parse_expr(args[1].trim())?))
+            } else {
+                None
+            };
+            Expr::ArrayReduce {
+                target,
+                callback,
+                initial,
+            }
+        }
+        "forEach" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "forEach requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArrayForEach { target, callback }
+        }
+        "find" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "find requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArrayFind { target, callback }
+        }
+        "some" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "some requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArraySome { target, callback }
+        }
+        "every" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "every requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            Expr::ArrayEvery { target, callback }
+        }
+        "includes" => {
+            if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "includes requires one or two arguments".into(),
+                ));
+            }
+            if args.len() == 2 && args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "includes fromIndex cannot be empty".into(),
+                ));
+            }
+            Expr::ArrayIncludes {
+                target,
+                search: Box::new(parse_expr(args[0].trim())?),
+                from_index: if args.len() == 2 {
+                    Some(Box::new(parse_expr(args[1].trim())?))
+                } else {
+                    None
+                },
+            }
+        }
+        "slice" => {
+            if args.len() > 2 {
+                return Err(Error::ScriptParse(
+                    "slice supports up to two arguments".into(),
+                ));
+            }
+            let start = if !args.is_empty() {
+                if args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse("slice start cannot be empty".into()));
+                }
+                Some(Box::new(parse_expr(args[0].trim())?))
+            } else {
+                None
+            };
+            let end = if args.len() == 2 {
+                if args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse("slice end cannot be empty".into()));
+                }
+                Some(Box::new(parse_expr(args[1].trim())?))
+            } else {
+                None
+            };
+            Expr::ArraySlice { target, start, end }
+        }
+        "splice" => {
+            if args.is_empty() || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "splice requires at least start index".into(),
+                ));
+            }
+            let start = Box::new(parse_expr(args[0].trim())?);
+            let delete_count = if args.len() >= 2 {
+                if args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "splice deleteCount cannot be empty".into(),
+                    ));
+                }
+                Some(Box::new(parse_expr(args[1].trim())?))
+            } else {
+                None
+            };
+            let mut items = Vec::new();
+            for arg in args.iter().skip(2) {
+                if arg.trim().is_empty() {
+                    return Err(Error::ScriptParse("splice item cannot be empty".into()));
+                }
+                items.push(parse_expr(arg.trim())?);
+            }
+            Expr::ArraySplice {
+                target,
+                start,
+                delete_count,
+                items,
+            }
+        }
+        "join" => {
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "join supports at most one argument".into(),
+                ));
+            }
+            let separator = if args.len() == 1 {
+                if args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse("join separator cannot be empty".into()));
+                }
+                Some(Box::new(parse_expr(args[0].trim())?))
+            } else {
+                None
+            };
+            Expr::ArrayJoin { target, separator }
+        }
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(expr))
+}
+
+fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+    let callback_arg = strip_js_comments(arg);
+    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
+    let (params, body) = parse_callback(&mut callback_cursor, max_params, label)?;
+    callback_cursor.skip_ws();
+    if !callback_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported array callback: {}",
+            arg.trim()
+        )));
+    }
+
+    let stmts = if let Ok(expr) = parse_expr(body.trim()) {
+        vec![Stmt::Return { value: Some(expr) }]
+    } else {
+        parse_block_statements(&body)?
+    };
+
+    Ok(ScriptHandler { params, stmts })
+}
+
+fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = src.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+
+        let mut cursor = Cursor::new(tail_src);
+        let Some(method) = cursor.parse_identifier() else {
+            continue;
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            continue;
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        if !matches!(
+            method.as_str(),
+            "trim"
+                | "trimStart"
+                | "trimEnd"
+                | "toUpperCase"
+                | "toLowerCase"
+                | "includes"
+                | "startsWith"
+                | "endsWith"
+                | "slice"
+                | "substring"
+                | "split"
+                | "replace"
+                | "indexOf"
+        ) {
+            continue;
+        }
+
+        let base = Box::new(parse_expr(base_src)?);
+        let expr = match method.as_str() {
+            "trim" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse("trim does not take arguments".into()));
+                }
+                Expr::StringTrim {
+                    value: base,
+                    mode: StringTrimMode::Both,
+                }
+            }
+            "trimStart" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse("trimStart does not take arguments".into()));
+                }
+                Expr::StringTrim {
+                    value: base,
+                    mode: StringTrimMode::Start,
+                }
+            }
+            "trimEnd" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse("trimEnd does not take arguments".into()));
+                }
+                Expr::StringTrim {
+                    value: base,
+                    mode: StringTrimMode::End,
+                }
+            }
+            "toUpperCase" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "toUpperCase does not take arguments".into(),
+                    ));
+                }
+                Expr::StringToUpperCase(base)
+            }
+            "toLowerCase" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "toLowerCase does not take arguments".into(),
+                    ));
+                }
+                Expr::StringToLowerCase(base)
+            }
+            "includes" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "String.includes requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "String.includes position cannot be empty".into(),
+                    ));
+                }
+                Expr::StringIncludes {
+                    value: base,
+                    search: Box::new(parse_expr(args[0].trim())?),
+                    position: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "startsWith" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "startsWith requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "startsWith position cannot be empty".into(),
+                    ));
+                }
+                Expr::StringStartsWith {
+                    value: base,
+                    search: Box::new(parse_expr(args[0].trim())?),
+                    position: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "endsWith" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "endsWith requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "endsWith length argument cannot be empty".into(),
+                    ));
+                }
+                Expr::StringEndsWith {
+                    value: base,
+                    search: Box::new(parse_expr(args[0].trim())?),
+                    length: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "slice" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "String.slice supports up to two arguments".into(),
+                    ));
+                }
+                let start = if !args.is_empty() {
+                    if args[0].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "String.slice start cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[0].trim())?))
+                } else {
+                    None
+                };
+                let end = if args.len() == 2 {
+                    if args[1].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "String.slice end cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[1].trim())?))
+                } else {
+                    None
+                };
+                Expr::StringSlice {
+                    value: base,
+                    start,
+                    end,
+                }
+            }
+            "substring" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "substring supports up to two arguments".into(),
+                    ));
+                }
+                let start = if !args.is_empty() {
+                    if args[0].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "substring start cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[0].trim())?))
+                } else {
+                    None
+                };
+                let end = if args.len() == 2 {
+                    if args[1].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "substring end cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[1].trim())?))
+                } else {
+                    None
+                };
+                Expr::StringSubstring {
+                    value: base,
+                    start,
+                    end,
+                }
+            }
+            "split" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "split supports up to two arguments".into(),
+                    ));
+                }
+                let separator = if !args.is_empty() {
+                    if args[0].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "split separator cannot be empty expression".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[0].trim())?))
+                } else {
+                    None
+                };
+                let limit = if args.len() == 2 {
+                    if args[1].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "split limit cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(args[1].trim())?))
+                } else {
+                    None
+                };
+                Expr::StringSplit {
+                    value: base,
+                    separator,
+                    limit,
+                }
+            }
+            "replace" => {
+                if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "replace requires exactly two arguments".into(),
+                    ));
+                }
+                Expr::StringReplace {
+                    value: base,
+                    from: Box::new(parse_expr(args[0].trim())?),
+                    to: Box::new(parse_expr(args[1].trim())?),
+                }
+            }
+            "indexOf" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "indexOf requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "indexOf position cannot be empty".into(),
+                    ));
+                }
+                Expr::StringIndexOf {
+                    value: base,
+                    search: Box::new(parse_expr(args[0].trim())?),
+                    position: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        return Ok(Some(expr));
+    }
+
+    Ok(None)
+}
+
+fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                _ => {
+                    if b == target && paren == 0 && bracket == 0 && brace == 0 {
+                        out.push(i);
+                    }
+                }
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    out
 }
 
 fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
@@ -19320,6 +21236,96 @@ mod tests {
     }
 
     #[test]
+    fn fetch_uses_registered_mock_response_and_records_calls() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = fetch('/api/message');
+            const second = window.fetch('/api/message');
+            document.getElementById('result').textContent = first + ':' + second;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_fetch_mock("/api/message", "ok");
+        h.click("#btn")?;
+        h.assert_text("#result", "ok:ok")?;
+        assert_eq!(
+            h.take_fetch_calls(),
+            vec!["/api/message".to_string(), "/api/message".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_without_mock_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            fetch('/api/missing');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("fetch without mock should fail with runtime error");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("fetch mock not found")),
+            other => panic!("unexpected fetch error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn alert_confirm_prompt_support_mocked_responses() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const accepted = confirm('continue?');
+            const name = prompt('name?', 'guest');
+            window.alert('hello ' + name);
+            document.getElementById('result').textContent = accepted + ':' + name;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.enqueue_confirm_response(true);
+        h.enqueue_prompt_response(Some("kazu"));
+        h.click("#btn")?;
+        h.assert_text("#result", "true:kazu")?;
+        assert_eq!(h.take_alert_messages(), vec!["hello kazu".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn prompt_uses_default_argument_when_no_mock_response() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const name = prompt('name?', 'guest');
+            document.getElementById('result').textContent = name;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "guest")?;
+        Ok(())
+    }
+
+    #[test]
     fn global_function_arity_errors_have_stable_messages() {
         let cases = [
             (
@@ -19369,6 +21375,30 @@ mod tests {
             (
                 "<script>window.parseInt('1', 10, 10);</script>",
                 "parseInt requires one or two arguments",
+            ),
+            (
+                "<script>fetch();</script>",
+                "fetch requires exactly one argument",
+            ),
+            (
+                "<script>alert();</script>",
+                "alert requires exactly one argument",
+            ),
+            (
+                "<script>window.confirm('ok', 'ng');</script>",
+                "confirm requires exactly one argument",
+            ),
+            (
+                "<script>prompt();</script>",
+                "prompt requires one or two arguments",
+            ),
+            (
+                "<script>window.prompt('x', );</script>",
+                "prompt default argument cannot be empty",
+            ),
+            (
+                "<script>Array.isArray();</script>",
+                "Array.isArray requires exactly one argument",
             ),
         ];
 
@@ -19572,5 +21602,288 @@ mod tests {
         h.click("#btn")?;
         h.assert_text("#result", "3.5:-250:false:42")?;
         Ok(())
+    }
+
+    #[test]
+    fn array_literal_and_basic_mutation_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [1, 2];
+            const isArray1 = Array.isArray(arr);
+            const isArray2 = window.Array.isArray('x');
+            const lenBefore = arr.length;
+            const first = arr[0];
+            const pushed = arr.push(3, 4);
+            const popped = arr.pop();
+            const shifted = arr.shift();
+            const unshifted = arr.unshift(9);
+            document.getElementById('result').textContent =
+              isArray1 + ':' + isArray2 + ':' + lenBefore + ':' + first + ':' +
+              pushed + ':' + popped + ':' + shifted + ':' + unshifted + ':' + arr.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:false:2:1:4:4:1:3:9,2,3")?;
+        Ok(())
+    }
+
+    #[test]
+    fn array_map_filter_and_reduce_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [1, 2, 3, 4];
+            const mapped = arr.map((value, index) => value * 2 + index);
+            const filtered = mapped.filter(value => value > 5);
+            const sum = filtered.reduce((acc, value) => acc + value, 0);
+            const sumNoInitial = filtered.reduce((acc, value) => acc + value);
+            document.getElementById('result').textContent =
+              mapped.join(',') + '|' + filtered.join(',') + '|' + sum + '|' + sumNoInitial;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2,5,8,11|8,11|19|19")?;
+        Ok(())
+    }
+
+    #[test]
+    fn array_foreach_find_some_every_and_includes_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [2, 4, 6];
+            let total = 0;
+            arr.forEach((value, idx) => {
+              total += value + idx;
+            });
+            const found = arr.find(value => value > 3);
+            const some = arr.some(value => value === 4);
+            const every = arr.every(value => value % 2 === 0);
+            const includesDirect = arr.includes(4);
+            const includesFrom = arr.includes(2, 1);
+            document.getElementById('result').textContent =
+              total + ':' + found + ':' + some + ':' + every + ':' +
+              includesDirect + ':' + includesFrom;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "15:4:true:true:true:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn array_slice_splice_and_join_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [1, 2, 3, 4];
+            const firstSlice = arr.slice(1, 3);
+            const secondSlice = arr.slice(-2);
+            const removed = arr.splice(1, 2, 9, 8);
+            document.getElementById('result').textContent =
+              firstSlice.join(',') + '|' + secondSlice.join(',') + '|' +
+              removed.join(',') + '|' + arr.join('-');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2,3|3,4|2,3|1-9-8-4")?;
+        Ok(())
+    }
+
+    #[test]
+    fn reduce_empty_array_without_initial_value_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [];
+            arr.reduce((acc, value) => acc + value);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("reduce without initial on empty array should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("reduce of empty array with no initial value"))
+            }
+            other => panic!("unexpected reduce error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn string_trim_and_case_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const raw = '  AbC ';
+            const trimmed = raw.trim();
+            const trimmedStart = raw.trimStart();
+            const trimmedEnd = raw.trimEnd();
+            const upper = raw.toUpperCase();
+            const lower = raw.toLowerCase();
+            const literal = ' z '.trim();
+            document.getElementById('result').textContent =
+              '[' + trimmed + ']|[' + trimmedStart + ']|[' + trimmedEnd + ']|[' +
+              upper + ']|[' + lower + ']|[' + literal + ']';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "[AbC]|[AbC ]|[  AbC]|[  ABC ]|[  abc ]|[z]")?;
+        Ok(())
+    }
+
+    #[test]
+    fn string_includes_prefix_suffix_and_index_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const text = 'hello world';
+            const includes1 = text.includes('lo');
+            const includes2 = text.includes('lo', 4);
+            const includes3 = 'abc'.includes('a', -2);
+            const starts1 = text.startsWith('hello');
+            const starts2 = text.startsWith('world', 6);
+            const starts3 = 'abc'.startsWith('a');
+            const ends1 = text.endsWith('world');
+            const ends2 = text.endsWith('hello', 5);
+            const index1 = text.indexOf('o');
+            const index2 = text.indexOf('o', 5);
+            const index3 = text.indexOf('x');
+            const index4 = text.indexOf('', 2);
+            document.getElementById('result').textContent =
+              includes1 + ':' + includes2 + ':' + includes3 + ':' +
+              starts1 + ':' + starts2 + ':' + starts3 + ':' +
+              ends1 + ':' + ends2 + ':' +
+              index1 + ':' + index2 + ':' + index3 + ':' + index4;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:false:true:true:true:true:true:true:4:7:-1:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn string_slice_substring_split_and_replace_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const text = '012345';
+            const s1 = text.slice(1, 4);
+            const s2 = text.slice(-2);
+            const s3 = text.slice(4, 1);
+            const sub1 = text.substring(1, 4);
+            const sub2 = text.substring(4, 1);
+            const sub3 = text.substring(-2, 2);
+            const split1 = 'a,b,c'.split(',');
+            const split2 = 'abc'.split('');
+            const split3 = 'a,b,c'.split(',', 2);
+            const split4 = 'abc'.split();
+            const rep1 = 'foo foo'.replace('foo', 'bar');
+            const rep2 = 'abc'.replace('', '-');
+            document.getElementById('result').textContent =
+              s1 + ':' + s2 + ':' + s3.length + ':' +
+              sub1 + ':' + sub2 + ':' + sub3 + ':' +
+              split1.join('-') + ':' + split2.join('|') + ':' + split3.join(':') + ':' +
+              split4.length + ':' + rep1 + ':' + rep2;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "123:45:0:123:123:01:a-b-c:a|b|c:a:b:1:bar foo:-abc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn string_method_arity_errors_have_stable_messages() {
+        let cases = [
+            ("<script>'x'.trim(1);</script>", "trim does not take arguments"),
+            (
+                "<script>'x'.toUpperCase(1);</script>",
+                "toUpperCase does not take arguments",
+            ),
+            (
+                "<script>'x'.includes();</script>",
+                "String.includes requires one or two arguments",
+            ),
+            (
+                "<script>'x'.startsWith();</script>",
+                "startsWith requires one or two arguments",
+            ),
+            (
+                "<script>'x'.endsWith();</script>",
+                "endsWith requires one or two arguments",
+            ),
+            (
+                "<script>'x'.slice(, 1);</script>",
+                "String.slice start cannot be empty",
+            ),
+            (
+                "<script>'x'.substring(, 1);</script>",
+                "substring start cannot be empty",
+            ),
+            (
+                "<script>'x'.split(, 1);</script>",
+                "split separator cannot be empty expression",
+            ),
+            (
+                "<script>'x'.replace('a');</script>",
+                "replace requires exactly two arguments",
+            ),
+            (
+                "<script>'x'.indexOf();</script>",
+                "indexOf requires one or two arguments",
+            ),
+        ];
+
+        for (html, expected) in cases {
+            let err = Harness::from_html(html).expect_err("script should fail to parse");
+            match err {
+                Error::ScriptParse(msg) => assert!(
+                    msg.contains(expected),
+                    "expected '{expected}' in '{msg}'"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 }

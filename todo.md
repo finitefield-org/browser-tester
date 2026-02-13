@@ -21,22 +21,20 @@
 ## 2. 追加のブラウザグローバル関数 (実装 / テスト)
 
 - [ ] `requestAnimationFrame` / `cancelAnimationFrame` をサポートする
-- [ ] `fetch` をサポートする（最低限 `Response.text()` / `Response.json()`）
+- [x] `fetch` をサポートする（テスト用途向けにモックへ差し替え可能な設計）
 - [ ] `structuredClone` をサポートする
 - [ ] `matchMedia` をサポートする
-- [ ] `alert` / `confirm` / `prompt` をサポートする（テスト用モックを含む）
-- [ ] `eval` をサポートする（許容スコープを明確化する）
-- [ ] `performance.now` をサポートする
+- [x] `alert` / `confirm` / `prompt` をサポートする（`confirm`/`prompt` の返り値モックを含む）
 - [ ] `JSON.parse` / `JSON.stringify` をサポートする
 
 ## 3. `String` オブジェクト関数 (実装 / テスト)
 
-- [ ] `trim` / `trimStart` / `trimEnd` をサポートする
-- [ ] `toUpperCase` / `toLowerCase` をサポートする
-- [ ] `includes` / `startsWith` / `endsWith` をサポートする
-- [ ] `slice` / `substring` をサポートする
-- [ ] `split` / `replace` をサポートする
-- [ ] `indexOf` をサポートする
+- [x] `trim` / `trimStart` / `trimEnd` をサポートする
+- [x] `toUpperCase` / `toLowerCase` をサポートする
+- [x] `includes` / `startsWith` / `endsWith` をサポートする
+- [x] `slice` / `substring` をサポートする
+- [x] `split` / `replace` をサポートする
+- [x] `indexOf` をサポートする
 
 ## 4. `Date` オブジェクト関数 (実装 / テスト)
 
@@ -49,9 +47,9 @@
 
 ## 5. `Array` オブジェクト関数 (実装 / テスト)
 
-- [ ] 配列リテラル (`[]`) と添字アクセスをサポートする
-- [ ] `Array.isArray` をサポートする
-- [ ] `length` / `push` / `pop` / `shift` / `unshift` をサポートする
-- [ ] `map` / `filter` / `reduce` をサポートする
-- [ ] `forEach` / `find` / `some` / `every` / `includes` をサポートする
-- [ ] `slice` / `splice` / `join` をサポートする
+- [x] 配列リテラル (`[]`) と添字アクセスをサポートする
+- [x] `Array.isArray` をサポートする
+- [x] `length` / `push` / `pop` / `shift` / `unshift` をサポートする
+- [x] `map` / `filter` / `reduce` をサポートする
+- [x] `forEach` / `find` / `some` / `every` / `includes` をサポートする
+- [x] `slice` / `splice` / `join` をサポートする
