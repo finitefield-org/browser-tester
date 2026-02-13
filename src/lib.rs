@@ -2930,6 +2930,10 @@ enum EventExprProp {
     Type,
     Target,
     CurrentTarget,
+    TargetName,
+    CurrentTargetName,
+    DefaultPrevented,
+    IsTrusted,
     TargetId,
     CurrentTargetId,
     EventPhase,
@@ -3223,6 +3227,7 @@ enum DomMethod {
     Focus,
     Blur,
     Click,
+    ScrollIntoView,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3331,6 +3336,7 @@ struct EventState {
     event_phase: i32,
     time_stamp_ms: i64,
     default_prevented: bool,
+    is_trusted: bool,
     propagation_stopped: bool,
     immediate_propagation_stopped: bool,
 }
@@ -3344,6 +3350,7 @@ impl EventState {
             event_phase: 2,
             time_stamp_ms,
             default_prevented: false,
+            is_trusted: true,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
@@ -4237,6 +4244,14 @@ impl Harness {
         Ok(())
     }
 
+    fn scroll_into_view_node_with_env(
+        &mut self,
+        _node: NodeId,
+        _env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn invoke_listeners(
         &mut self,
         node_id: NodeId,
@@ -5060,6 +5075,7 @@ impl Harness {
                         DomMethod::Focus => self.focus_node_with_env(node, env)?,
                         DomMethod::Blur => self.blur_node_with_env(node, env)?,
                         DomMethod::Click => self.click_node_with_env(node, env)?,
+                        DomMethod::ScrollIntoView => self.scroll_into_view_node_with_env(node, env)?,
                     }
                 }
                 Stmt::DispatchEvent { target, event_type } => {
@@ -5295,6 +5311,16 @@ impl Harness {
                     EventExprProp::CurrentTarget => {
                         Value::String(self.event_node_label(event.current_target))
                     }
+                    EventExprProp::TargetName => {
+                        Value::String(self.dom.attr(event.target, "name").unwrap_or_default())
+                    }
+                    EventExprProp::CurrentTargetName => Value::String(
+                        self.dom
+                            .attr(event.current_target, "name")
+                            .unwrap_or_default(),
+                    ),
+                    EventExprProp::DefaultPrevented => Value::Bool(event.default_prevented),
+                    EventExprProp::IsTrusted => Value::Bool(event.is_trusted),
                     EventExprProp::TargetId => {
                         Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
                     }
@@ -6174,11 +6200,65 @@ fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         "getElementById" => Ok(DomQuery::ById(arg)),
         "querySelector" => Ok(DomQuery::BySelector(arg)),
         "querySelectorAll" => Ok(DomQuery::BySelectorAll { selector: arg }),
+        "getElementsByTagName" => Ok(DomQuery::BySelectorAll {
+            selector: normalize_get_elements_by_tag_name(&arg)?,
+        }),
+        "getElementsByClassName" => Ok(DomQuery::BySelectorAll {
+            selector: normalize_get_elements_by_class_name(&arg)?,
+        }),
+        "getElementsByName" => Ok(DomQuery::BySelectorAll {
+            selector: normalize_get_elements_by_name(&arg)?,
+        }),
         _ => Err(Error::ScriptParse(format!(
             "unsupported document method: {}",
             method
         ))),
     }
+}
+
+fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
+    let tag_name = tag_name.trim();
+    if tag_name.is_empty() {
+        return Err(Error::ScriptParse(
+            "getElementsByTagName requires a tag name".into(),
+        ));
+    }
+    if tag_name == "*" {
+        return Ok("*".into());
+    }
+    Ok(tag_name.to_ascii_lowercase())
+}
+
+fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
+    let mut selector = String::new();
+    let classes: Vec<&str> = class_names
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|class_name| !class_name.is_empty())
+        .collect();
+
+    if classes.is_empty() {
+        return Err(Error::ScriptParse(
+            "getElementsByClassName requires at least one class name".into(),
+        ));
+    }
+
+    for class_name in classes {
+        selector.push('.');
+        selector.push_str(class_name);
+    }
+    Ok(selector)
+}
+
+fn normalize_get_elements_by_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::ScriptParse(
+            "getElementsByName requires a name value".into(),
+        ));
+    }
+    let escaped = name.replace('\\', "\\\\").replace('\'', "\\'");
+    Ok(format!("[name='{}']", escaped))
 }
 
 fn parse_callback_parameter_list(
@@ -7433,6 +7513,7 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "focus" => DomMethod::Focus,
         "blur" => DomMethod::Blur,
         "click" => DomMethod::Click,
+        "scrollIntoView" => DomMethod::ScrollIntoView,
         _ => return Ok(None),
     };
 
@@ -9825,6 +9906,10 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
         ("type", None) => EventExprProp::Type,
         ("target", None) => EventExprProp::Target,
         ("currentTarget", None) => EventExprProp::CurrentTarget,
+        ("target", Some("name")) => EventExprProp::TargetName,
+        ("currentTarget", Some("name")) => EventExprProp::CurrentTargetName,
+        ("defaultPrevented", None) => EventExprProp::DefaultPrevented,
+        ("isTrusted", None) => EventExprProp::IsTrusted,
         ("target", Some("id")) => EventExprProp::TargetId,
         ("currentTarget", Some("id")) => EventExprProp::CurrentTargetId,
         ("eventPhase", None) => EventExprProp::EventPhase,
@@ -12558,6 +12643,79 @@ mod tests {
     }
 
     #[test]
+    fn get_elements_by_class_name_works() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='x' class='item target'>A</li>
+          <li id='y' class='item'>B</li>
+          <li id='z' class='target'>C</li>
+          <li id='w' class='item target'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const items = document.getElementsByClassName('item target');
+            document.getElementById('result').textContent = items.length + ':' + items[0].id + ':' + items[1].id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2:x:w")?;
+        Ok(())
+    }
+
+    #[test]
+    fn get_elements_by_tag_name_works() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='a'>A</li>
+          <li id='b'>B</li>
+        </ul>
+        <section id='s'>
+          <li id='c'>C</li>
+        </section>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const items = document.getElementsByTagName('li');
+            document.getElementById('result').textContent = items.length + ':' + items[2].id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:c")?;
+        Ok(())
+    }
+
+    #[test]
+    fn get_elements_by_name_works() -> Result<()> {
+        let html = r#"
+        <input id='a' name='target' value='one'>
+        <input id='b' name='other' value='other'>
+        <input id='c' name='target' value='two'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fields = document.getElementsByName('target');
+            document.getElementById('result').textContent = fields.length + ':' + fields[1].value;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2:two")?;
+        Ok(())
+    }
+
+    #[test]
     fn class_list_add_remove_multiple_arguments_work() -> Result<()> {
         let html = r#"
         <div id='box' class='base'></div>
@@ -12625,6 +12783,51 @@ mod tests {
         h.click("#trigger")?;
         h.assert_text("#result", "unchecked")?;
         Ok(())
+    }
+
+    #[test]
+    fn element_scroll_into_view_method_from_script_works() -> Result<()> {
+        let html = r#"
+        <button id='trigger'>scroll target</button>
+        <section id='target'></section>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('target').scrollIntoView();
+            document.getElementById('result').textContent = 'done';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#trigger")?;
+        h.assert_text("#result", "done")?;
+        Ok(())
+    }
+
+    #[test]
+    fn element_scroll_into_view_rejects_arguments() {
+        let html = r#"
+        <button id='trigger'>target</button>
+        <script>
+          document.getElementById('trigger').scrollIntoView('smooth');
+        </script>
+        "#;
+
+        let err = match Harness::from_html(html) {
+            Ok(_) => panic!("scrollIntoView should reject arguments"),
+            Err(err) => err,
+        };
+
+        match err {
+            Error::ScriptParse(msg) => {
+                assert_eq!(
+                    msg,
+                    "scrollIntoView takes no arguments: document.getElementById('trigger').scrollIntoView('smooth')"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -13910,6 +14113,52 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "click:btn:btn")?;
+        Ok(())
+    }
+
+    #[test]
+    fn event_trusted_and_target_subproperties_are_accessible() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <button id='btn' name='target-name'>run</button>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent =
+              event.isTrusted + ':' +
+              event.target.name + ':' +
+              event.currentTarget.name;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:target-name:target-name")?;
+        Ok(())
+    }
+
+    #[test]
+    fn event_default_prevented_property_reflects_prevent_default() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            document.getElementById('result').textContent =
+              event.defaultPrevented + ',';
+            event.preventDefault();
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + event.defaultPrevented;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "false,true")?;
         Ok(())
     }
 
