@@ -7,10 +7,10 @@
 - [x] [S1] 最優先: `querySelectorAll` の実体化・再利用（NodeList化、変数格納、forEach 以外でも利用）
 - [x] [S1] 最優先: 要素イベントとクラス操作系の実体拡張（`click`, `classList` 強化）
 - [x] [S2] タイマーとスクリプト実行基盤の補強（タイマー引数/コメント/script抽出）
-- [ ] [S2] セレクタ機能の実用強化（追加の疑似クラス）
-- [ ] [S3] DOM/HTML 表現の仕様準拠補強（id 重複、イベント情報、style、エンティティ）
-- [ ] [S4] JS 実行モデルの高機能化（for/while 等、microtask）
-- [ ] [S5] 高度機能（`insertAdjacentHTML`）
+- [x] [S2] セレクタ機能の実用強化（追加の疑似クラス）
+- [x] [S3] DOM/HTML 表現の仕様準拠補強（id 重複、イベント情報、style、エンティティ）
+- [x] [S4] JS 実行モデルの高機能化（for/while 等、microtask）
+- [x] [S5] 高度機能（`insertAdjacentHTML`）
 
 - [x] [P0] `querySelectorAll` の結果を NodeList として汎用的に扱えるようにする（現在は `document.querySelectorAll(...).forEach(...)` 形式を想定した固定パスのみ）。`src/lib.rs:5570` (`Stmt::ForEach` / `parse_query_selector_all_foreach_stmt`) では直接呼び出し経路のみ対応。
 - [x] [P0] 要素メソッド `element.click()` を JS から実行可能にする（`focus`/`blur` のみ実装）。`src/lib.rs:2796`, `src/lib.rs:5483`.
@@ -26,6 +26,6 @@
 - [x] [P2] CSS セレクタへ `:where`, `:is`, `:has` を追加する。`src/lib.rs:1971`.
 - [x] [P2] selector 属性値のエッジケース（空文字、エスケープ、ハイフン含みキー、ケース・ホワイトスペース扱い）を拡張する。`src/lib.rs:2349`.
 - [x] [P2] `HTML エンティティ` と一部の文字参照（`&nbsp;` 等）を簡易デコードする。`src/lib.rs:8010`.
-- [ ] [P2] `for`/`while` 等の一般ループと `return`/`function` など、DOMイベント用途で増える可能性のある JS 構文を段階追加する。`src/lib.rs:6310` 付近の式/文パーサ。
-- [ ] [P2] microtask キュー/`Promise` 系の基本を導入し、`setTimeout` 系以外の非同期フローを模倣する。`src/lib.rs:4284` を含む実行エンジン全体。
-- [ ] [P3] `insertAdjacentHTML` を追加し、`innerHTML` の文字列差し替えだけでなく増分挿入をサポートする。`src/lib.rs:5850`（既存 `insertAdjacent*` と `set_inner_html`）。
+- [x] [P2] `for`/`while` 等の一般ループと `return`/`function` など、DOMイベント用途で増える可能性のある JS 構文を段階追加する。`src/lib.rs:6310` 付近の式/文パーサ。
+- [x] [P2] microtask キュー/`Promise` 系の基本を導入し、`setTimeout` 系以外の非同期フローを模倣する。`src/lib.rs:4284` を含む実行エンジン全体。
+- [x] [P3] `insertAdjacentHTML` を追加し、`innerHTML` の文字列差し替えだけでなく増分挿入をサポートする。`src/lib.rs:5850`（既存 `insertAdjacent*` と `set_inner_html`）。

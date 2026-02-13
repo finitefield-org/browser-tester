@@ -311,6 +311,26 @@ impl Dom {
         Ok(())
     }
 
+    fn insert_adjacent_html(
+        &mut self,
+        target: NodeId,
+        position: InsertAdjacentPosition,
+        html: &str,
+    ) -> Result<()> {
+        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+
+        let mut children = fragment.nodes[fragment.root.0].children.clone();
+        if matches!(position, InsertAdjacentPosition::AfterBegin) {
+            children.reverse();
+        }
+
+        for child in children {
+            let node = self.clone_subtree_from_dom(&fragment, child, None)?;
+            self.insert_adjacent_node(target, position, node)?;
+        }
+        Ok(())
+    }
+
     fn clone_subtree_from_dom(
         &mut self,
         source: &Dom,
@@ -1269,6 +1289,7 @@ impl Dom {
                 SelectorPseudoClass::Readwrite => {
                     self.element(node_id).is_none_or(|node| !node.readonly)
                 }
+                SelectorPseudoClass::Empty => self.nodes[node_id.0].children.is_empty(),
                 SelectorPseudoClass::Focus => self
                     .element(node_id)
                     .is_some_and(|_| self.active_element == Some(node_id)),
@@ -1799,6 +1820,7 @@ enum SelectorPseudoClass {
     Optional,
     Readonly,
     Readwrite,
+    Empty,
     Focus,
     FocusWithin,
     Active,
@@ -2203,6 +2225,13 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
         if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
             let consumed = start + "read-write".len();
             return Some((SelectorPseudoClass::Readwrite, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("empty") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "empty".len();
+            return Some((SelectorPseudoClass::Empty, consumed));
         }
     }
 
@@ -2835,12 +2864,17 @@ enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VarAssignOp {
     Assign,
     Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3033,6 +3067,11 @@ enum Stmt {
         target: DomQuery,
         position: InsertAdjacentPosition,
         text: Expr,
+    },
+    InsertAdjacentHTML {
+        target: DomQuery,
+        position: Expr,
+        html: Expr,
     },
     SetTimeout {
         handler: ScriptHandler,
@@ -4258,6 +4297,22 @@ impl Harness {
                     let next = match op {
                         VarAssignOp::Assign => value,
                         VarAssignOp::Add => self.add_values(&previous, &value),
+                        VarAssignOp::Sub => Value::Float(self.numeric_value(&previous) - self.numeric_value(&value)),
+                        VarAssignOp::Mul => Value::Float(self.numeric_value(&previous) * self.numeric_value(&value)),
+                        VarAssignOp::Div => {
+                            let rhs = self.numeric_value(&value);
+                            if rhs == 0.0 {
+                                return Err(Error::ScriptRuntime("division by zero".into()));
+                            }
+                            Value::Float(self.numeric_value(&previous) / rhs)
+                        }
+                        VarAssignOp::Mod => {
+                            let rhs = self.numeric_value(&value);
+                            if rhs == 0.0 {
+                                return Err(Error::ScriptRuntime("modulo by zero".into()));
+                            }
+                            Value::Float(self.numeric_value(&previous) % rhs)
+                        }
                     };
                     env.insert(name.clone(), next.clone());
                     self.bind_timer_id_to_task_env(name, expr, &next);
@@ -4498,6 +4553,18 @@ impl Harness {
                     let text_node = self.dom.create_detached_text(text.as_string());
                     self.dom
                         .insert_adjacent_node(target_node, *position, text_node)?;
+                }
+                Stmt::InsertAdjacentHTML {
+                    target,
+                    position,
+                    html,
+                } => {
+                    let target_node = self.resolve_dom_query_required_runtime(target, env)?;
+                    let position = self.eval_expr(position, env, event_param, event)?;
+                    let position = resolve_insert_adjacent_position(&position.as_string())?;
+                    let html = self.eval_expr(html, env, event_param, event)?;
+                    self.dom
+                        .insert_adjacent_html(target_node, position, &html.as_string())?;
                 }
                 Stmt::SetTimeout { handler, delay_ms } => {
                     let delay = self.eval_expr(delay_ms, env, event_param, event)?;
@@ -4977,6 +5044,13 @@ impl Harness {
             BinaryOp::Ge => Value::Bool(self.compare(left, right, |l, r| l >= r)),
             BinaryOp::Sub => Value::Float(self.numeric_value(left) - self.numeric_value(right)),
             BinaryOp::Mul => Value::Float(self.numeric_value(left) * self.numeric_value(right)),
+            BinaryOp::Mod => {
+                let rhs = self.numeric_value(right);
+                if rhs == 0.0 {
+                    return Err(Error::ScriptRuntime("modulo by zero".into()));
+                }
+                Value::Float(self.numeric_value(left) % rhs)
+            }
             BinaryOp::Div => {
                 let rhs = self.numeric_value(right);
                 if rhs == 0.0 {
@@ -5745,6 +5819,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_insert_adjacent_html_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_set_timeout_stmt(stmt)? {
         return Ok(parsed);
     }
@@ -6107,10 +6185,42 @@ fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
         return Ok(Some(Box::new(parsed)));
     }
 
+    if let Some(parsed) = parse_for_update_stmt(src) {
+        return Ok(Some(Box::new(parsed)));
+    }
+
     let expr = parse_expr(src).map_err(|_| {
         Error::ScriptParse(format!("unsupported for-loop clause: {src}"))
     })?;
     Ok(Some(Box::new(Stmt::Expr(expr))))
+}
+
+fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
+    let src = src.trim();
+
+    if let Some(name) = src.strip_suffix("++") {
+        let name = name.trim();
+        if is_ident(name) {
+            return Some(Stmt::VarAssign {
+                name: name.to_string(),
+                op: VarAssignOp::Add,
+                expr: Expr::Number(1),
+            });
+        }
+    }
+
+    if let Some(name) = src.strip_suffix("--") {
+        let name = name.trim();
+        if is_ident(name) {
+            return Some(Stmt::VarAssign {
+                name: name.to_string(),
+                op: VarAssignOp::Add,
+                expr: Expr::Number(-1),
+            });
+        }
+    }
+
+    None
 }
 
 fn split_top_level_statements(body: &str) -> Vec<String> {
@@ -6147,11 +6257,8 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
                 b'}' => {
                     brace = brace.saturating_sub(1);
                     if paren == 0 && bracket == 0 && brace == 0 {
-                        let tail = body.get(i + 1..).unwrap_or_default().trim_start();
-                        let is_else_tail = tail.starts_with("else")
-                            && (tail.as_bytes().len() == 4
-                                || !is_ident_char(*tail.as_bytes().get(4).unwrap_or(&b'\0')));
-                        if !tail.is_empty() && !is_else_tail {
+                        let tail = body.get(i + 1..).unwrap_or_default();
+                        if should_split_after_closing_brace(tail) {
                             if let Some(part) = body.get(start..=i) {
                                 out.push(part.to_string());
                             }
@@ -6203,6 +6310,24 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
     out
 }
 
+fn should_split_after_closing_brace(tail: &str) -> bool {
+    let tail = tail.trim_start();
+    if tail.is_empty() {
+        return false;
+    }
+    if is_keyword_prefix(tail, "else") {
+        return false;
+    }
+    true
+}
+
+fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
+    let Some(rest) = src.strip_prefix(keyword) else {
+        return false;
+    };
+    rest.is_empty() || !is_ident_char(*rest.as_bytes().first().unwrap_or(&b'\0'))
+}
+
 fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let mut rest = None;
     for kw in ["const", "let", "var"] {
@@ -6244,10 +6369,19 @@ fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
 
-    let op = if op_len == 2 {
-        VarAssignOp::Add
-    } else {
-        VarAssignOp::Assign
+    let split_pos = stmt.len() - value_src.len();
+    let op = match &stmt[split_pos - op_len..split_pos] {
+        "=" => VarAssignOp::Assign,
+        "+=" => VarAssignOp::Add,
+        "-=" => VarAssignOp::Sub,
+        "*=" => VarAssignOp::Mul,
+        "/=" => VarAssignOp::Div,
+        "%=" => VarAssignOp::Mod,
+        _ => {
+            return Err(Error::ScriptParse(format!(
+                "unsupported assignment operator: {stmt}"
+            )))
+        }
     };
 
     let expr = parse_expr(value_src)?;
@@ -6767,6 +6901,19 @@ fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
     }
 }
 
+fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+    let lowered = src.to_ascii_lowercase();
+    match lowered.as_str() {
+        "beforebegin" => Ok(InsertAdjacentPosition::BeforeBegin),
+        "afterbegin" => Ok(InsertAdjacentPosition::AfterBegin),
+        "beforeend" => Ok(InsertAdjacentPosition::BeforeEnd),
+        "afterend" => Ok(InsertAdjacentPosition::AfterEnd),
+        _ => Err(Error::ScriptRuntime(format!(
+            "unsupported insertAdjacentHTML position: {src}"
+        ))),
+    }
+}
+
 fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -6854,6 +7001,51 @@ fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
         target,
         position,
         text,
+    }))
+}
+
+fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let target = match parse_element_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("insertAdjacentHTML") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 2 {
+        return Err(Error::ScriptParse(format!(
+            "insertAdjacentHTML requires 2 arguments: {stmt}"
+        )));
+    }
+
+    let position = parse_expr(args[0].trim())?;
+    let html = parse_expr(args[1].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported insertAdjacentHTML statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::InsertAdjacentHTML {
+        target,
+        position,
+        html,
     }))
 }
 
@@ -7412,13 +7604,15 @@ fn parse_logical_and_expr(src: &str) -> Result<Expr> {
 
 fn parse_equality_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
-    let (parts, ops) = split_top_level_by_ops(src, &["!==", "==="]);
+    let (parts, ops) = split_top_level_by_ops(src, &["!==", "===", "!=", "=="]);
     if ops.is_empty() {
         return parse_relational_expr(src);
     }
     fold_binary(parts, ops, parse_relational_expr, |op| match op {
         "===" => BinaryOp::StrictEq,
         "!==" => BinaryOp::StrictNe,
+        "==" => BinaryOp::StrictEq,
+        "!=" => BinaryOp::StrictNe,
         _ => unreachable!(),
     })
 }
@@ -7583,18 +7777,20 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
             | b'-'
             | b'*'
             | b'/'
+            | b'%'
     )
 }
 
 fn parse_mul_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
-    let (parts, ops) = split_top_level_by_ops(src, &["*", "/"]);
+    let (parts, ops) = split_top_level_by_ops(src, &["*", "/", "%"]);
     if ops.is_empty() {
         return parse_unary_expr(src);
     }
     fold_binary(parts, ops, parse_unary_expr, |op| match op {
         "*" => BinaryOp::Mul,
         "/" => BinaryOp::Div,
+        "%" => BinaryOp::Mod,
         _ => unreachable!(),
     })
 }
@@ -8989,7 +9185,12 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
                             } else {
                                 i += 1;
                             }
-                        } else if i > 0 && bytes[i - 1] == b'+' {
+                        } else if i > 0
+                            && matches!(
+                                bytes[i - 1],
+                                b'+' | b'-' | b'*' | b'/' | b'%'
+                            )
+                        {
                             return Some((i - 1, 2));
                         } else {
                             return Some((i, 1));
@@ -11343,6 +11544,79 @@ mod tests {
     }
 
     #[test]
+    fn if_block_and_following_statement_without_space_are_split() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let text = '';
+            if (true) {
+              text = 'A';
+            } if (true) {
+              text = text + 'B';
+            }
+            document.getElementById('result').textContent = text;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_loop_post_increment_with_function_callback_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', function() {
+            let sum = 0;
+            for (let i = 0; i < 3; i++) {
+              sum = sum + i;
+            }
+            document.getElementById('result').textContent = sum;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_then_function_callback_runs_as_microtask() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', function() {
+            const result = document.getElementById('result');
+            result.textContent = 'A';
+            Promise.resolve().then(function() {
+              result.textContent = result.textContent + 'P';
+            });
+            setTimeout(function() {
+              result.textContent = result.textContent + 'T';
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AP")?;
+        h.flush()?;
+        h.assert_text("#result", "APT")?;
+        Ok(())
+    }
+
+    #[test]
     fn class_list_toggle_force_argument_works() -> Result<()> {
         let html = r#"
         <input id='force' type='checkbox'>
@@ -13512,6 +13786,92 @@ mod tests {
     }
 
     #[test]
+    fn insert_adjacent_html_positions_and_order_work() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const b = document.getElementById('b');
+            b.insertAdjacentHTML('beforebegin', '<i id="y1">Y</i><i id="y2">Z</i>');
+            b.insertAdjacentHTML('afterbegin', 'X<span id="x1">X</span>');
+            b.insertAdjacentHTML('beforeend', '<span id="x2">W</span><span id="x3">Q</span>');
+            b.insertAdjacentHTML('afterend', 'T<em id="t">T</em>');
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' +
+              document.querySelectorAll('#y1').length + ':' +
+              document.querySelectorAll('#y2').length + ':' +
+              document.querySelectorAll('#x1').length + ':' +
+              document.querySelectorAll('#x2').length + ':' +
+              document.querySelectorAll('#x3').length + ':' +
+              document.querySelectorAll('#t').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "YZXXBWQTT:1:1:1:1:1:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_adjacent_html_position_expression_works() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const b = document.getElementById('b');
+            let head = 'beforebegin';
+            let inner = 'afterbegin';
+            let tail = 'AFTEREND';
+            b.insertAdjacentHTML(head, '<i id="head">H</i>');
+            b.insertAdjacentHTML(inner, '<i id="mid">M</i>');
+            b.insertAdjacentHTML(tail, '<i id="tail">T</i>');
+            document.getElementById('result').textContent =
+              document.getElementById('root').textContent + ':' +
+              document.querySelectorAll('#head').length + ':' +
+              document.querySelectorAll('#mid').length + ':' +
+              document.querySelectorAll('#tail').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "HMBT:1:1:1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_adjacent_html_invalid_position_expression_fails() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='b'>B</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const pos = 'outer';
+            const b = document.getElementById('b');
+            b.insertAdjacentHTML(pos, '<i>T</i>');
+            document.getElementById('result').textContent = 'ok';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("invalid position should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("unsupported insertAdjacentHTML position")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn inner_html_set_replaces_children_and_updates_id_index() -> Result<()> {
         let html = r#"
         <div id='box'><span id='old'>O</span></div>
@@ -13920,6 +14280,28 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "first:third:second")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_empty_works() -> Result<()> {
+        let html = r#"
+        <div id='root'><span id='empty'></span><span id='filled'>A</span><span id='nested'><em></em></span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('#root span:empty').id;
+            const total = document.querySelectorAll('#root span:empty').length;
+            document.getElementById('result').textContent =
+              first + ':' + total;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "empty:1")?;
         Ok(())
     }
 
@@ -14687,6 +15069,12 @@ mod tests {
     }
 
     #[test]
+    fn selector_parse_supports_empty() {
+        let parsed = parse_selector_step("span:empty").expect("parse should succeed");
+        assert_eq!(parsed.pseudo_classes, vec![SelectorPseudoClass::Empty]);
+    }
+
+    #[test]
     fn selector_parse_supports_only_child_and_only_of_type() {
         let only_child = parse_selector_step("li:only-child").expect("parse should succeed");
         let only_of_type = parse_selector_step("li:only-of-type").expect("parse should succeed");
@@ -15287,6 +15675,33 @@ mod tests {
         h.set_checked("#agree", false)?;
         h.assert_value("#name", "next")?;
         h.assert_checked("#agree", false)?;
+        Ok(())
+    }
+
+    #[test]
+    fn assignment_and_remainder_expressions_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 20;
+            n += 5;
+            n -= 3;
+            n *= 2;
+            n /= 4;
+            n %= 6;
+            const eq = (10 % 3) == 1;
+            const neq = (10 % 3) != 2;
+            document.getElementById('result').textContent =
+              n + ':' + (eq ? 'eq' : 'neq') + ':' + (neq ? 'neq' : 'eq');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "5:eq:neq")?;
         Ok(())
     }
 }
