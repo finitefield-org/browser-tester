@@ -3130,6 +3130,7 @@ enum Value {
     Number(i64),
     Float(f64),
     Array(Rc<RefCell<Vec<Value>>>),
+    Date(Rc<RefCell<i64>>),
     Null,
     Undefined,
     Node(NodeId),
@@ -3146,6 +3147,7 @@ impl Value {
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
             Self::Array(_) => true,
+            Self::Date(_) => true,
             Self::Null => false,
             Self::Undefined => false,
             Self::Node(_) => true,
@@ -3181,6 +3183,7 @@ impl Value {
                 }
                 out
             }
+            Self::Date(_) => "[object Date]".into(),
             Self::Null => "null".into(),
             Self::Undefined => "undefined".into(),
             Self::Node(node) => format!("node-{}", node.0),
@@ -3396,6 +3399,25 @@ enum Expr {
     Number(i64),
     Float(f64),
     DateNow,
+    DateNew {
+        value: Option<Box<Expr>>,
+    },
+    DateParse(Box<Expr>),
+    DateUtc {
+        args: Vec<Expr>,
+    },
+    DateGetTime(String),
+    DateSetTime {
+        target: String,
+        value: Box<Expr>,
+    },
+    DateToIsoString(String),
+    DateGetFullYear(String),
+    DateGetMonth(String),
+    DateGetDate(String),
+    DateGetHours(String),
+    DateGetMinutes(String),
+    DateGetSeconds(String),
     MathRandom,
     EncodeUri(Box<Expr>),
     EncodeUriComponent(Box<Expr>),
@@ -6047,6 +6069,89 @@ impl Harness {
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
+            Expr::DateNew { value } => {
+                let timestamp_ms = if let Some(value) = value {
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    self.coerce_date_timestamp_ms(&value)
+                } else {
+                    self.now_ms
+                };
+                Ok(Self::new_date_value(timestamp_ms))
+            }
+            Expr::DateParse(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                if let Some(timestamp_ms) = Self::parse_date_string_to_epoch_ms(&value) {
+                    Ok(Value::Number(timestamp_ms))
+                } else {
+                    Ok(Value::Float(f64::NAN))
+                }
+            }
+            Expr::DateUtc { args } => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    values.push(Self::value_to_i64(&value));
+                }
+
+                let mut year = values.first().copied().unwrap_or(0);
+                if (0..=99).contains(&year) {
+                    year += 1900;
+                }
+                let month = values.get(1).copied().unwrap_or(0);
+                let day = values.get(2).copied().unwrap_or(1);
+                let hour = values.get(3).copied().unwrap_or(0);
+                let minute = values.get(4).copied().unwrap_or(0);
+                let second = values.get(5).copied().unwrap_or(0);
+
+                Ok(Value::Number(Self::utc_timestamp_ms_from_components(
+                    year, month, day, hour, minute, second, 0,
+                )))
+            }
+            Expr::DateGetTime(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                Ok(Value::Number(*date.borrow()))
+            }
+            Expr::DateSetTime { target, value } => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let value = self.eval_expr(value, env, event_param, event)?;
+                let timestamp_ms = Self::value_to_i64(&value);
+                *date.borrow_mut() = timestamp_ms;
+                Ok(Value::Number(timestamp_ms))
+            }
+            Expr::DateToIsoString(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                Ok(Value::String(Self::format_iso_8601_utc(*date.borrow())))
+            }
+            Expr::DateGetFullYear(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (year, ..) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number(year))
+            }
+            Expr::DateGetMonth(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (_, month, ..) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number((month as i64) - 1))
+            }
+            Expr::DateGetDate(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (_, _, day, ..) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number(day as i64))
+            }
+            Expr::DateGetHours(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (_, _, _, hour, ..) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number(hour as i64))
+            }
+            Expr::DateGetMinutes(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (_, _, _, _, minute, ..) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number(minute as i64))
+            }
+            Expr::DateGetSeconds(target) => {
+                let date = self.resolve_date_from_env(env, target)?;
+                let (_, _, _, _, _, second, _) = Self::date_components_utc(*date.borrow());
+                Ok(Value::Number(second as i64))
+            }
             Expr::MathRandom => Ok(Value::Float(self.next_random_f64())),
             Expr::EncodeUri(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
@@ -6955,7 +7060,8 @@ impl Harness {
                         Value::Node(_)
                         | Value::NodeList(_)
                         | Value::FormData(_)
-                        | Value::Array(_) => "object",
+                        | Value::Array(_)
+                        | Value::Date(_) => "object",
                     }),
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
@@ -6969,7 +7075,8 @@ impl Harness {
                             Value::Node(_)
                             | Value::NodeList(_)
                             | Value::FormData(_)
-                            | Value::Array(_) => "object",
+                            | Value::Array(_)
+                            | Value::Date(_) => "object",
                         }
                     }
                 };
@@ -7086,6 +7193,7 @@ impl Harness {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
+            (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
             _ => false,
         }
@@ -7128,6 +7236,7 @@ impl Harness {
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
+            (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
             (Value::Undefined, Value::Undefined) => true,
@@ -7163,6 +7272,36 @@ impl Harness {
 
     fn new_array_value(values: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(values)))
+    }
+
+    fn new_date_value(timestamp_ms: i64) -> Value {
+        Value::Date(Rc::new(RefCell::new(timestamp_ms)))
+    }
+
+    fn resolve_date_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<i64>>> {
+        match env.get(target) {
+            Some(Value::Date(value)) => Ok(value.clone()),
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a Date",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!(
+                "unknown variable: {}",
+                target
+            ))),
+        }
+    }
+
+    fn coerce_date_timestamp_ms(&self, value: &Value) -> i64 {
+        match value {
+            Value::Date(value) => *value.borrow(),
+            Value::String(value) => Self::parse_date_string_to_epoch_ms(value).unwrap_or(0),
+            _ => Self::value_to_i64(value),
+        }
     }
 
     fn resolve_array_from_env(
@@ -7336,10 +7475,257 @@ impl Harness {
         Some(value[..start_byte + pos].chars().count())
     }
 
+    fn parse_date_string_to_epoch_ms(src: &str) -> Option<i64> {
+        let src = src.trim();
+        if src.is_empty() {
+            return None;
+        }
+
+        let bytes = src.as_bytes();
+        let mut i = 0usize;
+
+        let mut sign = 1i64;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+            if bytes[i] == b'-' {
+                sign = -1;
+            }
+            i += 1;
+        }
+
+        let year_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i <= year_start || (i - year_start) < 4 {
+            return None;
+        }
+        let year = sign * src.get(year_start..i)?.parse::<i64>().ok()?;
+
+        if i >= bytes.len() || bytes[i] != b'-' {
+            return None;
+        }
+        i += 1;
+        let month = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+        if i >= bytes.len() || bytes[i] != b'-' {
+            return None;
+        }
+        i += 1;
+        let day = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+
+        let month = u32::try_from(month).ok()?;
+        if !(1..=12).contains(&month) {
+            return None;
+        }
+        let day = u32::try_from(day).ok()?;
+        if day == 0 || day > Self::days_in_month(year, month) {
+            return None;
+        }
+
+        let mut hour = 0i64;
+        let mut minute = 0i64;
+        let mut second = 0i64;
+        let mut millisecond = 0i64;
+        let mut offset_minutes = 0i64;
+
+        if i < bytes.len() {
+            if bytes[i] != b'T' && bytes[i] != b' ' {
+                return None;
+            }
+            i += 1;
+
+            hour = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+            if i >= bytes.len() || bytes[i] != b':' {
+                return None;
+            }
+            i += 1;
+            minute = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+
+            if i < bytes.len() && bytes[i] == b':' {
+                i += 1;
+                second = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+            }
+
+            if i < bytes.len() && bytes[i] == b'.' {
+                i += 1;
+                let frac_start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == frac_start {
+                    return None;
+                }
+
+                let frac = src.get(frac_start..i)?;
+                let mut parsed = 0i64;
+                let mut digits = 0usize;
+                for ch in frac.chars().take(3) {
+                    parsed = parsed * 10 + i64::from(ch.to_digit(10)?);
+                    digits += 1;
+                }
+                while digits < 3 {
+                    parsed *= 10;
+                    digits += 1;
+                }
+                millisecond = parsed;
+            }
+
+            if i < bytes.len() {
+                match bytes[i] {
+                    b'Z' | b'z' => {
+                        i += 1;
+                    }
+                    b'+' | b'-' => {
+                        let tz_sign = if bytes[i] == b'+' { 1 } else { -1 };
+                        i += 1;
+                        let tz_hour = Self::parse_fixed_digits_i64(src, &mut i, 2)?;
+                        let tz_minute = if i < bytes.len() && bytes[i] == b':' {
+                            i += 1;
+                            Self::parse_fixed_digits_i64(src, &mut i, 2)?
+                        } else {
+                            Self::parse_fixed_digits_i64(src, &mut i, 2)?
+                        };
+                        if tz_hour > 23 || tz_minute > 59 {
+                            return None;
+                        }
+                        offset_minutes = tz_sign * (tz_hour * 60 + tz_minute);
+                    }
+                    _ => return None,
+                }
+            }
+        }
+
+        if i != bytes.len() {
+            return None;
+        }
+        if hour > 23 || minute > 59 || second > 59 {
+            return None;
+        }
+
+        let timestamp_ms = Self::utc_timestamp_ms_from_components(
+            year,
+            i64::from(month) - 1,
+            i64::from(day),
+            hour,
+            minute,
+            second,
+            millisecond,
+        );
+        Some(timestamp_ms - offset_minutes * 60_000)
+    }
+
+    fn parse_fixed_digits_i64(src: &str, i: &mut usize, width: usize) -> Option<i64> {
+        let end = i.checked_add(width)?;
+        let segment = src.get(*i..end)?;
+        if !segment.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        *i = end;
+        segment.parse::<i64>().ok()
+    }
+
+    fn format_iso_8601_utc(timestamp_ms: i64) -> String {
+        let (year, month, day, hour, minute, second, millisecond) =
+            Self::date_components_utc(timestamp_ms);
+        let year_str = if (0..=9999).contains(&year) {
+            format!("{year:04}")
+        } else if year < 0 {
+            format!("-{:06}", -(year as i128))
+        } else {
+            format!("+{:06}", year)
+        };
+        format!(
+            "{year_str}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millisecond:03}Z"
+        )
+    }
+
+    fn date_components_utc(timestamp_ms: i64) -> (i64, u32, u32, u32, u32, u32, u32) {
+        let days = timestamp_ms.div_euclid(86_400_000);
+        let rem = timestamp_ms.rem_euclid(86_400_000);
+        let hour = (rem / 3_600_000) as u32;
+        let minute = ((rem % 3_600_000) / 60_000) as u32;
+        let second = ((rem % 60_000) / 1_000) as u32;
+        let millisecond = (rem % 1_000) as u32;
+        let (year, month, day) = Self::civil_from_days(days);
+        (year, month, day, hour, minute, second, millisecond)
+    }
+
+    fn utc_timestamp_ms_from_components(
+        year: i64,
+        month_zero_based: i64,
+        day: i64,
+        hour: i64,
+        minute: i64,
+        second: i64,
+        millisecond: i64,
+    ) -> i64 {
+        let (norm_year, norm_month) = Self::normalize_year_month(year, month_zero_based);
+        let mut days = Self::days_from_civil(norm_year, norm_month, 1) + (day - 1);
+        let mut time_ms = ((hour * 60 + minute) * 60 + second) * 1_000 + millisecond;
+        days += time_ms.div_euclid(86_400_000);
+        time_ms = time_ms.rem_euclid(86_400_000);
+
+        let out = (days as i128) * 86_400_000i128 + (time_ms as i128);
+        out.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+    }
+
+    fn normalize_year_month(year: i64, month_zero_based: i64) -> (i64, u32) {
+        let total_month = year.saturating_mul(12).saturating_add(month_zero_based);
+        let norm_year = total_month.div_euclid(12);
+        let norm_month = total_month.rem_euclid(12) as u32 + 1;
+        (norm_year, norm_month)
+    }
+
+    fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+        let adjusted_year = year - if month <= 2 { 1 } else { 0 };
+        let era = adjusted_year.div_euclid(400);
+        let yoe = adjusted_year - era * 400;
+        let month = i64::from(month);
+        let day = i64::from(day);
+        let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
+    fn civil_from_days(days: i64) -> (i64, u32, u32) {
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+        let mut year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2).div_euclid(153);
+        let day = (doy - (153 * mp + 2).div_euclid(5) + 1) as u32;
+        let month = (mp + if mp < 10 { 3 } else { -9 }) as u32;
+        if month <= 2 {
+            year += 1;
+        }
+        (year, month, day)
+    }
+
+    fn days_in_month(year: i64, month: u32) -> u32 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                if Self::is_leap_year(year) {
+                    29
+                } else {
+                    28
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    fn is_leap_year(year: i64) -> bool {
+        (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    }
+
     fn numeric_value(&self, value: &Value) -> f64 {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
+            Value::Date(v) => *v.borrow() as f64,
             Value::Null => 0.0,
             Value::Undefined => f64::NAN,
             _ => value.as_string().parse::<f64>().unwrap_or(0.0),
@@ -7367,6 +7753,7 @@ impl Harness {
                     trimmed.parse::<f64>().unwrap_or(f64::NAN)
                 }
             }
+            Value::Date(v) => *v.borrow() as f64,
             Value::Node(_) | Value::NodeList(_) | Value::FormData(_) | Value::Function(_) => {
                 f64::NAN
             }
@@ -7712,6 +8099,7 @@ impl Harness {
                         .map(|n| n as i64)
                 })
                 .unwrap_or(0),
+            Value::Date(value) => *value.borrow(),
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
             Value::FormData(_) => 0,
@@ -11013,8 +11401,20 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::String(value));
     }
 
+    if let Some(expr) = parse_new_date_expr(src)? {
+        return Ok(expr);
+    }
+
     if parse_date_now_expr(src)? {
         return Ok(Expr::DateNow);
+    }
+
+    if let Some(value) = parse_date_parse_expr(src)? {
+        return Ok(Expr::DateParse(Box::new(value)));
+    }
+
+    if let Some(args) = parse_date_utc_expr(src)? {
+        return Ok(Expr::DateUtc { args });
     }
 
     if parse_math_random_expr(src)? {
@@ -11104,6 +11504,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_string_method_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_date_method_expr(src)? {
         return Ok(expr);
     }
 
@@ -11367,11 +11771,93 @@ fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
     Ok(Some(text))
 }
 
+fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Date") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args: Vec<String> = if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args.into_iter().map(|arg| arg.to_string()).collect()
+        }
+    } else {
+        Vec::new()
+    };
+
+    if args.len() > 1 {
+        return Err(Error::ScriptParse(
+            "new Date supports zero or one argument".into(),
+        ));
+    }
+
+    let value = if args.len() == 1 {
+        if args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "new Date argument cannot be empty".into(),
+            ));
+        }
+        Some(Box::new(parse_expr(args[0].trim())?))
+    } else {
+        None
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::DateNew { value }))
+}
+
 fn parse_date_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(false);
+        }
+        cursor.skip_ws();
+    }
+
     if !cursor.consume_ascii("Date") {
         return Ok(false);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(false);
+        }
     }
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
@@ -11387,6 +11873,88 @@ fn parse_date_now_expr(src: &str) -> Result<bool> {
     cursor.expect_byte(b')')?;
     cursor.skip_ws();
     Ok(cursor.eof())
+}
+
+fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<String>>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Date") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii(method) {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',')
+        .into_iter()
+        .map(|arg| arg.to_string())
+        .collect::<Vec<_>>();
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(args))
+}
+
+fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
+    let Some(args) = parse_date_static_args_expr(src, "parse")? else {
+        return Ok(None);
+    };
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Date.parse requires exactly one argument".into(),
+        ));
+    }
+    Ok(Some(parse_expr(args[0].trim())?))
+}
+
+fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+    let Some(args) = parse_date_static_args_expr(src, "UTC")? else {
+        return Ok(None);
+    };
+
+    if args.len() < 2 || args.len() > 6 {
+        return Err(Error::ScriptParse(
+            "Date.UTC requires between 2 and 6 arguments".into(),
+        ));
+    }
+
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        if arg.trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "Date.UTC argument cannot be empty".into(),
+            ));
+        }
+        out.push(parse_expr(arg.trim())?);
+    }
+    Ok(Some(out))
 }
 
 fn parse_math_random_expr(src: &str) -> Result<bool> {
@@ -12321,6 +12889,111 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     Ok(None)
+}
+
+fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let expr = match method.as_str() {
+        "getTime" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("getTime does not take arguments".into()));
+            }
+            Expr::DateGetTime(target)
+        }
+        "setTime" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "setTime requires exactly one argument".into(),
+                ));
+            }
+            Expr::DateSetTime {
+                target,
+                value: Box::new(parse_expr(args[0].trim())?),
+            }
+        }
+        "toISOString" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "toISOString does not take arguments".into(),
+                ));
+            }
+            Expr::DateToIsoString(target)
+        }
+        "getFullYear" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "getFullYear does not take arguments".into(),
+                ));
+            }
+            Expr::DateGetFullYear(target)
+        }
+        "getMonth" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("getMonth does not take arguments".into()));
+            }
+            Expr::DateGetMonth(target)
+        }
+        "getDate" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("getDate does not take arguments".into()));
+            }
+            Expr::DateGetDate(target)
+        }
+        "getHours" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("getHours does not take arguments".into()));
+            }
+            Expr::DateGetHours(target)
+        }
+        "getMinutes" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "getMinutes does not take arguments".into(),
+                ));
+            }
+            Expr::DateGetMinutes(target)
+        }
+        "getSeconds" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "getSeconds does not take arguments".into(),
+                ));
+            }
+            Expr::DateGetSeconds(target)
+        }
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(expr))
 }
 
 fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
@@ -18155,6 +18828,134 @@ mod tests {
         h.assert_text("#result", "0:25")?;
         assert_eq!(h.now_ms(), 25);
         Ok(())
+    }
+
+    #[test]
+    fn date_constructor_and_static_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nowDate = new Date();
+            const fromNumber = new Date(1000);
+            const parsed = Date.parse('1970-01-01T00:00:02Z');
+            const utc = Date.UTC(1970, 0, 1, 0, 0, 3);
+            const parsedViaWindow = window.Date.parse('1970-01-01');
+            document.getElementById('result').textContent =
+              nowDate.getTime() + ':' + fromNumber.getTime() + ':' +
+              parsed + ':' + utc + ':' + parsedViaWindow;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.advance_time(42)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "42:1000:2000:3000:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_instance_methods_and_set_time_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const d = new Date('2024-03-05T01:02:03Z');
+            const y = d.getFullYear();
+            const m = d.getMonth();
+            const day = d.getDate();
+            const h = d.getHours();
+            const min = d.getMinutes();
+            const s = d.getSeconds();
+            const iso = d.toISOString();
+            const updated = d.setTime(Date.UTC(1970, 0, 2, 3, 4, 5));
+            const iso2 = d.toISOString();
+            document.getElementById('result').textContent =
+              y + ':' + m + ':' + day + ':' + h + ':' + min + ':' + s +
+              '|' + iso + '|' + updated + '|' + iso2;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "2024:2:5:1:2:3|2024-03-05T01:02:03.000Z|97445000|1970-01-02T03:04:05.000Z",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_parse_invalid_input_returns_nan_and_utc_normalizes_overflow() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parsedValue = Date.parse('invalid-date');
+            const isInvalid = isNaN(parsedValue);
+            const ts = Date.UTC(2020, 12, 1, 25, 61, 61);
+            const normalizedDate = new Date(ts);
+            const normalized = normalizedDate.toISOString();
+            document.getElementById('result').textContent =
+              isInvalid + ':' + normalized;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:2021-01-02T02:02:01.000Z")?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_method_arity_errors_have_stable_messages() {
+        let cases = [
+            (
+                "<script>new Date(1, 2);</script>",
+                "new Date supports zero or one argument",
+            ),
+            (
+                "<script>Date.parse();</script>",
+                "Date.parse requires exactly one argument",
+            ),
+            (
+                "<script>Date.UTC(1970);</script>",
+                "Date.UTC requires between 2 and 6 arguments",
+            ),
+            (
+                "<script>Date.UTC(1970, , 1);</script>",
+                "Date.UTC argument cannot be empty",
+            ),
+            (
+                "<script>const d = new Date(); d.getTime(1);</script>",
+                "getTime does not take arguments",
+            ),
+            (
+                "<script>const d = new Date(); d.setTime();</script>",
+                "setTime requires exactly one argument",
+            ),
+            (
+                "<script>const d = new Date(); d.toISOString(1);</script>",
+                "toISOString does not take arguments",
+            ),
+        ];
+
+        for (html, expected) in cases {
+            let err = Harness::from_html(html).expect_err("script should fail to parse");
+            match err {
+                Error::ScriptParse(msg) => assert!(
+                    msg.contains(expected),
+                    "expected '{expected}' in '{msg}'"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 
     #[test]

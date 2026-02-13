@@ -38,12 +38,12 @@
 
 ## 4. `Date` オブジェクト関数 (実装 / テスト)
 
-- [ ] `new Date()` / `new Date(value)` をサポートする
-- [ ] `Date.parse` / `Date.UTC` をサポートする
-- [ ] `getTime` / `setTime` をサポートする
-- [ ] `toISOString` をサポートする
-- [ ] `getFullYear` / `getMonth` / `getDate` をサポートする
-- [ ] `getHours` / `getMinutes` / `getSeconds` をサポートする
+- [x] `new Date()` / `new Date(value)` をサポートする
+- [x] `Date.parse` / `Date.UTC` をサポートする
+- [x] `getTime` / `setTime` をサポートする
+- [x] `toISOString` をサポートする
+- [x] `getFullYear` / `getMonth` / `getDate` をサポートする
+- [x] `getHours` / `getMinutes` / `getSeconds` をサポートする
 
 ## 5. `Array` オブジェクト関数 (実装 / テスト)
 
