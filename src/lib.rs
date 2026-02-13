@@ -2934,6 +2934,8 @@ enum EventExprProp {
     CurrentTargetName,
     DefaultPrevented,
     IsTrusted,
+    Bubbles,
+    Cancelable,
     TargetId,
     CurrentTargetId,
     EventPhase,
@@ -3228,6 +3230,8 @@ enum DomMethod {
     Blur,
     Click,
     ScrollIntoView,
+    Submit,
+    Reset,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3337,6 +3341,8 @@ struct EventState {
     time_stamp_ms: i64,
     default_prevented: bool,
     is_trusted: bool,
+    bubbles: bool,
+    cancelable: bool,
     propagation_stopped: bool,
     immediate_propagation_stopped: bool,
 }
@@ -3351,9 +3357,19 @@ impl EventState {
             time_stamp_ms,
             default_prevented: false,
             is_trusted: true,
+            bubbles: true,
+            cancelable: true,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
+    }
+
+    fn new_untrusted(event_type: &str, target: NodeId, time_stamp_ms: i64) -> Self {
+        let mut event = Self::new(event_type, target, time_stamp_ms);
+        event.is_trusted = false;
+        event.bubbles = false;
+        event.cancelable = false;
+        event
     }
 }
 
@@ -3587,7 +3603,7 @@ impl Harness {
 
         self.dom.set_active_pseudo_element(Some(target));
         let result: Result<()> = (|| {
-            let click_outcome = self.dispatch_event_with_env(target, "click", env)?;
+            let click_outcome = self.dispatch_event_with_env(target, "click", env, true)?;
             if click_outcome.default_prevented {
                 return Ok(());
             }
@@ -3611,7 +3627,7 @@ impl Harness {
 
             if is_submit_control(&self.dom, target) {
                 if let Some(form_id) = self.resolve_form_for_submit(target) {
-                    self.dispatch_event_with_env(form_id, "submit", env)?;
+                    self.dispatch_event_with_env(form_id, "submit", env, true)?;
                 }
             }
 
@@ -3657,9 +3673,73 @@ impl Harness {
         Ok(())
     }
 
+    fn submit_form_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let form = if self
+            .dom
+            .tag_name(target)
+            .map(|t| t.eq_ignore_ascii_case("form"))
+            .unwrap_or(false)
+        {
+            Some(target)
+        } else {
+            self.resolve_form_for_submit(target)
+        };
+
+        if let Some(form_id) = form {
+            self.dispatch_event_with_env(form_id, "submit", env, true)?;
+        }
+
+        Ok(())
+    }
+
+    fn reset_form_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let Some(form_id) = self.resolve_form_for_submit(target) else {
+            return Ok(());
+        };
+
+        let outcome = self.dispatch_event_with_env(form_id, "reset", env, true)?;
+        if outcome.default_prevented {
+            return Ok(());
+        }
+
+        let controls = self.form_elements(form_id)?;
+        for control in controls {
+            if is_checkbox_input(&self.dom, control) || is_radio_input(&self.dom, control) {
+                let default_checked = self.dom.attr(control, "checked").is_some();
+                self.dom.set_checked(control, default_checked)?;
+                continue;
+            }
+
+            if self
+                .dom
+                .tag_name(control)
+                .map(|tag| tag.eq_ignore_ascii_case("select"))
+                .unwrap_or(false)
+            {
+                self.dom.sync_select_value(control)?;
+                continue;
+            }
+
+            let default_value = self.dom.attr(control, "value").unwrap_or_default();
+            self.dom.set_value(control, &default_value)?;
+        }
+
+        Ok(())
+    }
+
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        self.dispatch_event(target, event)?;
+        let mut env = self.script_env.clone();
+        let _ = self.dispatch_event_with_env(target, event, &mut env, false)?;
+        self.script_env = env;
         Ok(())
     }
 
@@ -4119,7 +4199,7 @@ impl Harness {
 
     fn dispatch_event(&mut self, target: NodeId, event_type: &str) -> Result<EventState> {
         let mut env = self.script_env.clone();
-        let event = self.dispatch_event_with_env(target, event_type, &mut env)?;
+        let event = self.dispatch_event_with_env(target, event_type, &mut env, true)?;
         self.script_env = env;
         Ok(event)
     }
@@ -4129,8 +4209,13 @@ impl Harness {
         target: NodeId,
         event_type: &str,
         env: &mut HashMap<String, Value>,
+        trusted: bool,
     ) -> Result<EventState> {
-        let mut event = EventState::new(event_type, target, self.now_ms);
+        let mut event = if trusted {
+            EventState::new(event_type, target, self.now_ms)
+        } else {
+            EventState::new_untrusted(event_type, target, self.now_ms)
+        };
         self.run_in_task_context(|this| {
             let mut path = Vec::new();
             let mut cursor = Some(target);
@@ -4220,8 +4305,8 @@ impl Harness {
 
         self.active_element = Some(node);
         self.dom.set_active_element(Some(node));
-        self.dispatch_event_with_env(node, "focusin", env)?;
-        self.dispatch_event_with_env(node, "focus", env)?;
+        self.dispatch_event_with_env(node, "focusin", env, true)?;
+        self.dispatch_event_with_env(node, "focus", env, true)?;
         Ok(())
     }
 
@@ -4237,8 +4322,8 @@ impl Harness {
             return Ok(());
         }
 
-        self.dispatch_event_with_env(node, "focusout", env)?;
-        self.dispatch_event_with_env(node, "blur", env)?;
+        self.dispatch_event_with_env(node, "focusout", env, true)?;
+        self.dispatch_event_with_env(node, "blur", env, true)?;
         self.active_element = None;
         self.dom.set_active_element(None);
         Ok(())
@@ -5075,6 +5160,8 @@ impl Harness {
                         DomMethod::Focus => self.focus_node_with_env(node, env)?,
                         DomMethod::Blur => self.blur_node_with_env(node, env)?,
                         DomMethod::Click => self.click_node_with_env(node, env)?,
+                        DomMethod::Submit => self.submit_form_with_env(node, env)?,
+                        DomMethod::Reset => self.reset_form_with_env(node, env)?,
                         DomMethod::ScrollIntoView => self.scroll_into_view_node_with_env(node, env)?,
                     }
                 }
@@ -5088,7 +5175,7 @@ impl Harness {
                             "dispatchEvent requires non-empty event type".into(),
                         ));
                     }
-                    let _ = self.dispatch_event_with_env(node, &event_name, env)?;
+                    let _ = self.dispatch_event_with_env(node, &event_name, env, false)?;
                 }
                 Stmt::Expr(expr) => {
                     let _ = self.eval_expr(expr, env, event_param, event)?;
@@ -5321,6 +5408,8 @@ impl Harness {
                     ),
                     EventExprProp::DefaultPrevented => Value::Bool(event.default_prevented),
                     EventExprProp::IsTrusted => Value::Bool(event.is_trusted),
+                    EventExprProp::Bubbles => Value::Bool(event.bubbles),
+                    EventExprProp::Cancelable => Value::Bool(event.cancelable),
                     EventExprProp::TargetId => {
                         Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
                     }
@@ -7514,6 +7603,8 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "blur" => DomMethod::Blur,
         "click" => DomMethod::Click,
         "scrollIntoView" => DomMethod::ScrollIntoView,
+        "submit" => DomMethod::Submit,
+        "reset" => DomMethod::Reset,
         _ => return Ok(None),
     };
 
@@ -9910,6 +10001,8 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
         ("currentTarget", Some("name")) => EventExprProp::CurrentTargetName,
         ("defaultPrevented", None) => EventExprProp::DefaultPrevented,
         ("isTrusted", None) => EventExprProp::IsTrusted,
+        ("bubbles", None) => EventExprProp::Bubbles,
+        ("cancelable", None) => EventExprProp::Cancelable,
         ("target", Some("id")) => EventExprProp::TargetId,
         ("currentTarget", Some("id")) => EventExprProp::CurrentTargetId,
         ("eventPhase", None) => EventExprProp::EventPhase,
@@ -10276,6 +10369,17 @@ fn decode_html_character_references(src: &str) -> String {
             "frac14" => Some('¼'),
             "frac12" => Some('½'),
             "frac34" => Some('¾'),
+            "frac13" => Some('\u{2153}'),
+            "frac15" => Some('\u{2155}'),
+            "frac16" => Some('\u{2159}'),
+            "frac18" => Some('\u{215B}'),
+            "frac23" => Some('\u{2154}'),
+            "frac25" => Some('\u{2156}'),
+            "frac35" => Some('\u{2157}'),
+            "frac38" => Some('\u{215C}'),
+            "frac45" => Some('\u{2158}'),
+            "frac56" => Some('\u{215A}'),
+            "frac58" => Some('\u{215E}'),
             "not" => Some('¬'),
             "deg" => Some('°'),
             "plusmn" => Some('±'),
@@ -11718,6 +11822,27 @@ mod tests {
     }
 
     #[test]
+    fn html_entities_more_named_references_are_decoded() -> Result<()> {
+        let html = "<p id='result'>&pound;&times;&divide;&laquo;&raquo;&frac13;&frac15;&frac16;&frac18;&frac23;&frac25;&frac34;&frac35;&frac38;&frac45;&frac56;&frac58;</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text(
+            "#result",
+            "\u{00A3}\u{00D7}\u{00F7}\u{00AB}\u{00BB}\u{2153}\u{2155}\u{2159}\u{215B}\u{2154}\u{2156}\u{00BE}\u{2157}\u{215C}\u{2158}\u{215A}\u{215E}",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_unknown_reference_boundary_cases_are_preserved() -> Result<()> {
+        let html = "<p id='result'>&frac12x;&frac34;&poundfoo;&pound;&frac12abc;</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "&frac12x;¾&poundfoo;£&frac12abc;")?;
+        Ok(())
+    }
+
+    #[test]
     fn html_entities_unknown_named_references_are_not_decoded() -> Result<()> {
         let html = "<p id='result'>&nopenvelope;&copy;</p>";
 
@@ -12828,6 +12953,64 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn form_submit_method_dispatches_submit_event() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' value='default'>
+        </form>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent =
+              event.type + ':' + event.isTrusted + ':' + event.currentTarget.id;
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('f').submit();
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#trigger")?;
+        h.assert_text("#result", "submit:true:f")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_reset_method_dispatches_reset_and_restores_defaults() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' value='default'>
+          <input id='agree' type='checkbox' checked>
+        </form>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          let marker = '';
+          document.getElementById('f').addEventListener('reset', () => {
+            marker = marker + 'reset';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('name').value = 'changed';
+            document.getElementById('agree').checked = false;
+            document.getElementById('f').reset();
+            document.getElementById('result').textContent =
+              marker + ':' +
+              document.getElementById('name').value + ':' +
+              (document.getElementById('agree').checked ? 'on' : 'off');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#trigger")?;
+        h.assert_text("#result", "reset:default:on")?;
+        Ok(())
     }
 
     #[test]
@@ -14137,6 +14320,57 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "true:target-name:target-name")?;
+        Ok(())
+    }
+
+    #[test]
+    fn event_bubbles_and_cancelable_properties_are_available() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <button id='btn' name='target-name'>run</button>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', (event) => {
+            document.getElementById('result').textContent =
+              event.bubbles + ':' + event.cancelable + ':' + event.isTrusted;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_event_origin_is_untrusted_and_supports_event_methods() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='box'></div>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('root').addEventListener('custom', (event) => {
+            document.getElementById('result').textContent = 'root:' + event.target.id;
+          });
+          document.getElementById('box').addEventListener('custom', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            document.getElementById('result').textContent =
+              event.isTrusted + ':' + event.defaultPrevented;
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('box').dispatchEvent('custom');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "false:true")?;
         Ok(())
     }
 
