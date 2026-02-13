@@ -3068,6 +3068,9 @@ enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    Return {
+        value: Option<Expr>,
+    },
     If {
         cond: Expr,
         then_stmts: Vec<Stmt>,
@@ -3093,6 +3096,12 @@ enum Stmt {
         method: DomMethod,
     },
     Expr(Expr),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecFlow {
+    Continue,
+    Return,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3709,6 +3718,7 @@ impl Harness {
                 &mut event,
                 &mut task.env,
             )
+            .map(|_| ())
         })?;
         let canceled = self.running_timer_canceled;
         self.running_timer_id = None;
@@ -4186,6 +4196,7 @@ impl Harness {
                 &mut event,
                 &mut task.env,
             );
+            let run = run.map(|_| ());
             if let Err(err) = run {
                 break Err(err);
             }
@@ -4217,7 +4228,10 @@ impl Harness {
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        self.execute_stmts(&handler.stmts, &handler.event_param, event, env)
+        match self.execute_stmts(&handler.stmts, &handler.event_param, event, env)? {
+            ExecFlow::Continue => Ok(()),
+            ExecFlow::Return => Ok(()),
+        }
     }
 
     fn execute_stmts(
@@ -4226,7 +4240,7 @@ impl Harness {
         event_param: &Option<String>,
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
-    ) -> Result<()> {
+    ) -> Result<ExecFlow> {
         for stmt in stmts {
             match stmt {
                 Stmt::VarDecl { name, expr } => {
@@ -4375,7 +4389,10 @@ impl Harness {
                         if let Some(index_var) = index_var {
                             env.insert(index_var.clone(), Value::Number(idx as i64));
                         }
-                        self.execute_stmts(body, event_param, event, env)?;
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::Return => {}
+                        }
                     }
 
                     if let Some(prev) = prev_item {
@@ -4540,7 +4557,10 @@ impl Harness {
                         if let Some(index_var) = index_var {
                             env.insert(index_var.clone(), Value::Number(idx as i64));
                         }
-                        self.execute_stmts(body, event_param, event, env)?;
+                        match self.execute_stmts(body, event_param, event, env)? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::Return => {}
+                        }
                     }
 
                     if let Some(prev) = prev_item {
@@ -4563,7 +4583,11 @@ impl Harness {
                     body,
                 } => {
                     if let Some(init) = init.as_deref() {
-                        self.execute_stmts(std::slice::from_ref(init), event_param, event, env)?;
+                        if let ExecFlow::Return = self
+                            .execute_stmts(std::slice::from_ref(init), event_param, event, env)?
+                        {
+                            return Ok(ExecFlow::Return);
+                        }
                     }
 
                     loop {
@@ -4575,15 +4599,23 @@ impl Harness {
                         if !should_run {
                             break;
                         }
-                        self.execute_stmts(body, event_param, event, env)?;
+                        if let ExecFlow::Return = self.execute_stmts(body, event_param, event, env)? {
+                            return Ok(ExecFlow::Return);
+                        }
                         if let Some(post) = post.as_deref() {
-                            self.execute_stmts(std::slice::from_ref(post), event_param, event, env)?;
+                            if let ExecFlow::Return = self
+                                .execute_stmts(std::slice::from_ref(post), event_param, event, env)?
+                            {
+                                return Ok(ExecFlow::Return);
+                            }
                         }
                     }
                 }
                 Stmt::While { cond, body } => {
                     while self.eval_expr(cond, env, event_param, event)?.truthy() {
-                        self.execute_stmts(body, event_param, event, env)?;
+                        if let ExecFlow::Return = self.execute_stmts(body, event_param, event, env)? {
+                            return Ok(ExecFlow::Return);
+                        }
                     }
                 }
                 Stmt::If {
@@ -4593,10 +4625,19 @@ impl Harness {
                 } => {
                     let cond = self.eval_expr(cond, env, event_param, event)?;
                     if cond.truthy() {
-                        self.execute_stmts(then_stmts, event_param, event, env)?;
+                        if let ExecFlow::Return = self.execute_stmts(then_stmts, event_param, event, env)?
+                        {
+                            return Ok(ExecFlow::Return);
+                        }
                     } else {
-                        self.execute_stmts(else_stmts, event_param, event, env)?;
+                        if let ExecFlow::Return = self.execute_stmts(else_stmts, event_param, event, env)?
+                        {
+                            return Ok(ExecFlow::Return);
+                        }
                     }
+                }
+                Stmt::Return { value: _ } => {
+                    return Ok(ExecFlow::Return);
                 }
                 Stmt::EventCall { event_var, method } => {
                     if let Some(param) = event_param {
@@ -4666,7 +4707,7 @@ impl Harness {
             }
         }
 
-        Ok(())
+        Ok(ExecFlow::Continue)
     }
 
     fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
@@ -5347,7 +5388,10 @@ impl Harness {
         let stmts = parse_block_statements(script)?;
         let mut event = EventState::new("script", self.dom.root, self.now_ms);
         let mut env = self.script_env.clone();
-        self.run_in_task_context(|this| this.execute_stmts(&stmts, &None, &mut event, &mut env))?;
+        self.run_in_task_context(|this| {
+            this.execute_stmts(&stmts, &None, &mut event, &mut env)
+                .map(|_| ())
+        })?;
         self.script_env = env;
 
         Ok(())
@@ -5526,23 +5570,70 @@ fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     }
 }
 
+fn parse_callback_parameter_list(
+    src: &str,
+    max_params: usize,
+    label: &str,
+) -> Result<Vec<String>> {
+    let parts = split_top_level_by_char(src.trim(), b',');
+    if parts.len() == 1 && parts[0].trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if parts.len() > max_params {
+        return Err(Error::ScriptParse(format!(
+            "unsupported {label}: {src}"
+        )));
+    }
+
+    let mut params = Vec::new();
+    for raw in parts {
+        let param = raw.trim();
+        if !is_ident(param) {
+            return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+        }
+        params.push(param.to_string());
+    }
+
+    Ok(params)
+}
+
 fn parse_callback(cursor: &mut Cursor<'_>) -> Result<(Option<String>, String)> {
     cursor.skip_ws();
 
-    let event_param = if cursor.consume_byte(b'(') {
+    let event_param = if cursor
+        .src
+        .get(cursor.i..)
+        .is_some_and(|src| src.starts_with("function"))
+        && !cursor
+            .bytes()
+            .get(cursor.i + "function".len())
+            .is_some_and(|&b| is_ident_char(b))
+    {
+        cursor.consume_ascii("function");
+        cursor.skip_ws();
+
+        if !cursor.consume_byte(b'(') {
+            let _ = cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+            cursor.skip_ws();
+            cursor.expect_byte(b'(')?;
+        }
+
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let trimmed = params.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            if !is_ident(trimmed) {
-                return Err(Error::ScriptParse(format!(
-                    "unsupported callback parameters: {trimmed}"
-                )));
-            }
-            Some(trimmed.to_string())
-        }
+        let params = parse_callback_parameter_list(&params, 1, "callback parameters")?;
+        let event_param = params.into_iter().next();
+
+        cursor.skip_ws();
+        let body = cursor.read_balanced_block(b'{', b'}')?;
+        return Ok((event_param, body));
+    } else if cursor.consume_byte(b'(') {
+        let params = cursor.read_until_byte(b')')?;
+        cursor.expect_byte(b')')?;
+        let params = parse_callback_parameter_list(&params, 1, "callback parameters")?;
+        params.into_iter().next()
     } else {
         let ident = cursor
             .parse_identifier()
@@ -5603,6 +5694,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_for_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_return_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -5923,6 +6018,32 @@ fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     Ok(Some(Stmt::While { cond, body }))
+}
+
+fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("return") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+
+    cursor.skip_ws();
+    if cursor.eof() {
+        return Ok(Some(Stmt::Return { value: None }));
+    }
+
+    let expr_src = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+    let expr_src = expr_src.strip_suffix(';').unwrap_or(expr_src).trim();
+    if expr_src.is_empty() {
+        return Ok(Some(Stmt::Return { value: None }));
+    }
+    let value = parse_expr(expr_src)?;
+    Ok(Some(Stmt::Return { value: Some(value) }))
 }
 
 fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -6358,36 +6479,63 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
     let mut cursor = Cursor::new(src.trim());
     cursor.skip_ws();
 
-    let (item_var, index_var) = if cursor.consume_byte(b'(') {
+    let (item_var, index_var) = if cursor
+        .src
+        .get(cursor.i..)
+        .is_some_and(|src| src.starts_with("function"))
+        && !cursor
+            .bytes()
+            .get(cursor.i + "function".len())
+            .is_some_and(|&b| is_ident_char(b))
+    {
+        cursor.consume_ascii("function");
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'(') {
+            let _ = cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+            cursor.skip_ws();
+            cursor.expect_byte(b'(')?;
+        }
         let params_src = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = split_top_level_by_char(params_src.trim(), b',');
-        if params.is_empty() || params.len() > 2 {
-            return Err(Error::ScriptParse(format!(
+        let params = parse_callback_parameter_list(
+            &params_src,
+            2,
+            "forEach callback must have one or two parameters",
+        )?;
+        let item_var = params.first().cloned().ok_or_else(|| {
+            Error::ScriptParse(format!(
                 "forEach callback must have one or two parameters: {src}"
-            )));
-        }
+            ))
+        })?;
+        let index_var = params.get(1).cloned();
 
-        let item = params[0].trim();
-        if !is_ident(item) {
+        cursor.skip_ws();
+        let body = cursor.read_balanced_block(b'{', b'}')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
             return Err(Error::ScriptParse(format!(
-                "invalid forEach item parameter '{item}'"
+                "unsupported forEach callback tail: {src}"
             )));
         }
 
-        let index = if params.len() == 2 {
-            let idx = params[1].trim();
-            if !is_ident(idx) {
-                return Err(Error::ScriptParse(format!(
-                    "invalid forEach index parameter '{idx}'"
-                )));
-            }
-            Some(idx.to_string())
-        } else {
-            None
-        };
-
-        (item.to_string(), index)
+        return Ok((item_var, index_var, parse_block_statements(&body)?));
+    } else if cursor.consume_byte(b'(') {
+        let params_src = cursor.read_until_byte(b')')?;
+        cursor.expect_byte(b')')?;
+        let params = parse_callback_parameter_list(
+            &params_src,
+            2,
+            "forEach callback must have one or two parameters",
+        )?;
+        let item_var = params.first().cloned().ok_or_else(|| {
+            Error::ScriptParse(format!(
+                "forEach callback must have one or two parameters: {src}"
+            ))
+        })?;
+        let index_var = params.get(1).cloned();
+        (item_var, index_var)
     } else {
         let Some(item) = cursor.parse_identifier() else {
             return Err(Error::ScriptParse(format!(
@@ -8547,6 +8695,10 @@ fn decode_html_character_references(src: &str) -> String {
         return src.to_string();
     }
 
+    fn is_entity_token_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || ch == '#' || ch == 'x' || ch == 'X'
+    }
+
     fn decode_numeric(value: &str) -> Option<char> {
         let codepoint = if let Some(hex) = value.strip_prefix("x").or_else(|| value.strip_prefix("X")) {
             u32::from_str_radix(hex, 16).ok()?
@@ -8564,14 +8716,31 @@ fn decode_html_character_references(src: &str) -> String {
             "quot" => Some('"'),
             "apos" => Some('\''),
             "nbsp" => Some('\u{00A0}'),
+            "divide" => Some('÷'),
+            "times" => Some('×'),
+            "ensp" => Some('\u{2002}'),
+            "emsp" => Some('\u{2003}'),
+            "thinsp" => Some('\u{2009}'),
             "copy" => Some('©'),
             "reg" => Some('®'),
             "trade" => Some('™'),
-            "divide" => Some('÷'),
-            "times" => Some('×'),
             "euro" => Some('€'),
             "pound" => Some('£'),
             "yen" => Some('¥'),
+            "laquo" => Some('«'),
+            "raquo" => Some('»'),
+            "ldquo" => Some('“'),
+            "rdquo" => Some('”'),
+            "lsquo" => Some('‘'),
+            "rsquo" => Some('’'),
+            "hellip" => Some('…'),
+            "middot" => Some('·'),
+            "frac14" => Some('¼'),
+            "frac12" => Some('½'),
+            "frac34" => Some('¾'),
+            "not" => Some('¬'),
+            "deg" => Some('°'),
+            "plusmn" => Some('±'),
             _ => None,
         }
     }
@@ -8588,9 +8757,40 @@ fn decode_html_character_references(src: &str) -> String {
         }
 
         let tail = &src[i + 1..];
-        let Some(end_offset) = tail.find(';') else {
-            out.push('&');
-            i += 1;
+        let mut semicolon_end = None;
+        if let Some(semicolon_pos) = tail.find(';') {
+            match tail.find('&') {
+                Some(next_amp_pos) if next_amp_pos < semicolon_pos => {}
+                _ => semicolon_end = Some(semicolon_pos),
+            }
+        }
+
+        let Some(end_offset) = semicolon_end else {
+            let entity_end = tail
+                .char_indices()
+                .find_map(|(idx, ch)| if is_entity_token_char(ch) { None } else { Some(idx) })
+                .unwrap_or(tail.len());
+
+            if entity_end == 0 {
+                out.push('&');
+                i += 1;
+                continue;
+            }
+
+            let raw = &tail[..entity_end];
+            let decoded = if let Some(rest) = raw.strip_prefix('#') {
+                decode_numeric(rest)
+            } else {
+                decode_named(raw)
+            };
+
+            if let Some(value) = decoded {
+                out.push(value);
+                i += entity_end + 1;
+            } else {
+                out.push('&');
+                i += 1;
+            }
             continue;
         };
 
@@ -9943,6 +10143,25 @@ mod tests {
     }
 
     #[test]
+    fn html_entities_without_trailing_semicolon_are_decoded() -> Result<()> {
+        let html =
+            "<p id='result'>&lt;A &amp B &gt C&copy D&thinsp;E&ensp;F&emsp;G&frac12;H</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "<A & B > C© D\u{2009}E\u{2002}F\u{2003}G½H")?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_without_semicolon_hex_and_decimal_numeric_are_decoded() -> Result<()> {
+        let html = "<p id='result'>&#38&#60&#x3C&#x3e</p>";
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "&<<>")?;
+        Ok(())
+    }
+
+    #[test]
     fn prevent_default_works_on_submit() -> Result<()> {
         let html = r#"
         <form id='f'>
@@ -11073,6 +11292,53 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn while_block_and_following_statement_without_semicolon_are_split() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let count = 0;
+            let n = 0;
+            while (n < 2) {
+              count = count + 1;
+              n = n + 1;
+            }
+            count = count + 10;
+            document.getElementById('result').textContent = count;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "12")?;
+        Ok(())
+    }
+
+    #[test]
+    fn for_block_and_following_statement_without_semicolon_are_split() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let sum = 0;
+            for (let i = 0; i < 3; i = i + 1) {
+              sum = sum + i;
+            } sum = sum + 10;
+            document.getElementById('result').textContent = sum;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "13")?;
         Ok(())
     }
 

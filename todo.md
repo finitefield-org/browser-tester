@@ -25,7 +25,7 @@
 - [x] [P1] `style` 値パースを改善する（現在は `;` と `:` の単純分割）。`src/lib.rs:1574`.
 - [x] [P2] CSS セレクタへ `:where`, `:is`, `:has` を追加する。`src/lib.rs:1971`.
 - [x] [P2] selector 属性値のエッジケース（空文字、エスケープ、ハイフン含みキー、ケース・ホワイトスペース扱い）を拡張する。`src/lib.rs:2349`.
-- [ ] [P2] `HTML エンティティ` と一部の文字参照（`&nbsp;` 等）を簡易デコードする。`src/lib.rs:8010`.
+- [x] [P2] `HTML エンティティ` と一部の文字参照（`&nbsp;` 等）を簡易デコードする。`src/lib.rs:8010`.
 - [ ] [P2] `for`/`while` 等の一般ループと `return`/`function` など、DOMイベント用途で増える可能性のある JS 構文を段階追加する。`src/lib.rs:6310` 付近の式/文パーサ。
 - [ ] [P2] microtask キュー/`Promise` 系の基本を導入し、`setTimeout` 系以外の非同期フローを模倣する。`src/lib.rs:4284` を含む実行エンジン全体。
 - [ ] [P3] `insertAdjacentHTML` を追加し、`innerHTML` の文字列差し替えだけでなく増分挿入をサポートする。`src/lib.rs:5850`（既存 `insertAdjacent*` と `set_inner_html`）。
