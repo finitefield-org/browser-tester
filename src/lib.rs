@@ -88,6 +88,8 @@ struct Dom {
     nodes: Vec<Node>,
     root: NodeId,
     id_index: HashMap<String, NodeId>,
+    active_element: Option<NodeId>,
+    active_pseudo_element: Option<NodeId>,
 }
 
 impl Dom {
@@ -101,6 +103,8 @@ impl Dom {
             nodes: vec![root],
             root: NodeId(0),
             id_index: HashMap::new(),
+            active_element: None,
+            active_pseudo_element: None,
         }
     }
 
@@ -199,6 +203,22 @@ impl Dom {
             cursor = self.parent(current);
         }
         false
+    }
+
+    fn active_element(&self) -> Option<NodeId> {
+        self.active_element
+    }
+
+    fn set_active_element(&mut self, node: Option<NodeId>) {
+        self.active_element = node;
+    }
+
+    fn active_pseudo_element(&self) -> Option<NodeId> {
+        self.active_pseudo_element
+    }
+
+    fn set_active_pseudo_element(&mut self, node: Option<NodeId>) {
+        self.active_pseudo_element = node;
     }
 
     fn by_id(&self, id: &str) -> Option<NodeId> {
@@ -1200,6 +1220,20 @@ impl Dom {
                 SelectorPseudoClass::Readwrite => {
                     self.element(node_id).is_none_or(|node| !node.readonly)
                 }
+                SelectorPseudoClass::Focus => self
+                    .element(node_id)
+                    .is_some_and(|_| self.active_element == Some(node_id)),
+                SelectorPseudoClass::FocusWithin => {
+                    if self.active_element == Some(node_id) {
+                        true
+                    } else {
+                        self.active_element
+                            .is_some_and(|active| self.is_descendant_of(active, node_id))
+                    }
+                }
+                SelectorPseudoClass::Active => self
+                    .element(node_id)
+                    .is_some_and(|_| self.active_pseudo_element == Some(node_id)),
                 SelectorPseudoClass::NthOfType(selector) => {
                     self.is_nth_element_of_type(node_id, selector)
                 }
@@ -1627,6 +1661,9 @@ enum SelectorPseudoClass {
     Optional,
     Readonly,
     Readwrite,
+    Focus,
+    FocusWithin,
+    Active,
     NthOfType(NthChildSelector),
     NthLastOfType(NthChildSelector),
     Not(Vec<Vec<SelectorPart>>),
@@ -2014,10 +2051,38 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
         }
     }
 
+    if let Some(rest) = tail.strip_prefix("readonly") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "readonly".len();
+            return Some((SelectorPseudoClass::Readonly, consumed));
+        }
+    }
+
     if let Some(rest) = tail.strip_prefix("read-write") {
         if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
             let consumed = start + "read-write".len();
             return Some((SelectorPseudoClass::Readwrite, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("focus-within") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "focus-within".len();
+            return Some((SelectorPseudoClass::FocusWithin, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("focus") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "focus".len();
+            return Some((SelectorPseudoClass::Focus, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("active") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "active".len();
+            return Some((SelectorPseudoClass::Active, consumed));
         }
     }
 
@@ -3038,35 +3103,40 @@ impl Harness {
             return Ok(());
         }
 
-        let click_outcome = self.dispatch_event(target, "click")?;
-        if click_outcome.default_prevented {
-            return Ok(());
-        }
+        self.dom.set_active_pseudo_element(Some(target));
+        let result: Result<()> = (|| {
+            let click_outcome = self.dispatch_event(target, "click")?;
+            if click_outcome.default_prevented {
+                return Ok(());
+            }
 
-        if is_checkbox_input(&self.dom, target) {
-            let current = self.dom.checked(target)?;
-            self.dom.set_checked(target, !current)?;
-            self.dispatch_event(target, "input")?;
-            self.dispatch_event(target, "change")?;
-        }
-
-        if is_radio_input(&self.dom, target) {
-            let current = self.dom.checked(target)?;
-            if !current {
-                self.uncheck_other_radios_in_group(target)?;
-                self.dom.set_checked(target, true)?;
+            if is_checkbox_input(&self.dom, target) {
+                let current = self.dom.checked(target)?;
+                self.dom.set_checked(target, !current)?;
                 self.dispatch_event(target, "input")?;
                 self.dispatch_event(target, "change")?;
             }
-        }
 
-        if is_submit_control(&self.dom, target) {
-            if let Some(form_id) = self.resolve_form_for_submit(target) {
-                self.dispatch_event(form_id, "submit")?;
+            if is_radio_input(&self.dom, target) {
+                let current = self.dom.checked(target)?;
+                if !current {
+                    self.uncheck_other_radios_in_group(target)?;
+                    self.dom.set_checked(target, true)?;
+                    self.dispatch_event(target, "input")?;
+                    self.dispatch_event(target, "change")?;
+                }
             }
-        }
 
-        Ok(())
+            if is_submit_control(&self.dom, target) {
+                if let Some(form_id) = self.resolve_form_for_submit(target) {
+                    self.dispatch_event(form_id, "submit")?;
+                }
+            }
+
+            Ok(())
+        })();
+        self.dom.set_active_pseudo_element(None);
+        result
     }
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
@@ -3657,6 +3727,7 @@ impl Harness {
         }
 
         self.active_element = Some(node);
+        self.dom.set_active_element(Some(node));
         self.dispatch_event_with_env(node, "focusin", env)?;
         self.dispatch_event_with_env(node, "focus", env)?;
         Ok(())
@@ -3677,6 +3748,7 @@ impl Harness {
         self.dispatch_event_with_env(node, "focusout", env)?;
         self.dispatch_event_with_env(node, "blur", env)?;
         self.active_element = None;
+        self.dom.set_active_element(None);
         Ok(())
     }
 
@@ -3693,10 +3765,10 @@ impl Harness {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
                 let current_label = self.trace_node_label(event.current_target);
-            self.trace_event_line(format!(
-                "[event] {} target={} current={} phase={} default_prevented={}",
-                event.event_type, target_label, current_label, phase, event.default_prevented
-            ));
+                self.trace_event_line(format!(
+                    "[event] {} target={} current={} phase={} default_prevented={}",
+                    event.event_type, target_label, current_label, phase, event.default_prevented
+                ));
             }
             self.execute_handler(&listener.handler, event, env)?;
             if event.immediate_propagation_stopped {
@@ -3993,6 +4065,12 @@ impl Harness {
                     if let Some(active) = self.active_element {
                         if active == node || self.dom.is_descendant_of(active, node) {
                             self.active_element = None;
+                            self.dom.set_active_element(None);
+                        }
+                    }
+                    if let Some(active_pseudo) = self.dom.active_pseudo_element() {
+                        if active_pseudo == node || self.dom.is_descendant_of(active_pseudo, node) {
+                            self.dom.set_active_pseudo_element(None);
                         }
                     }
                     self.dom.remove_node(node)?;
@@ -4120,19 +4198,18 @@ impl Harness {
         Ok(())
     }
 
-    fn bind_timer_id_to_task_env(
-        &mut self,
-        name: &str,
-        expr: &Expr,
-        value: &Value,
-    ) {
+    fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
         if !matches!(expr, Expr::SetTimeout { .. } | Expr::SetInterval { .. }) {
             return;
         }
         let Value::Number(timer_id) = value else {
             return;
         };
-        for task in self.task_queue.iter_mut().filter(|task| task.id == *timer_id) {
+        for task in self
+            .task_queue
+            .iter_mut()
+            .filter(|task| task.id == *timer_id)
+        {
             task.env.insert(name.to_string(), value.clone());
         }
     }
@@ -4213,7 +4290,8 @@ impl Harness {
                     DomProp::ScrollLeft => Ok(Value::Number(self.dom.scroll_left(node)?)),
                     DomProp::ScrollTop => Ok(Value::Number(self.dom.scroll_top(node)?)),
                     DomProp::ActiveElement => Ok(self
-                        .active_element
+                        .dom
+                        .active_element()
                         .map(Value::Node)
                         .unwrap_or(Value::Null)),
                 }
@@ -5347,7 +5425,11 @@ fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
         return None;
     }
 
-    Some((lhs.to_string(), op_len, stmt.get(eq_pos + op_len..).unwrap_or_default()))
+    Some((
+        lhs.to_string(),
+        op_len,
+        stmt.get(eq_pos + op_len..).unwrap_or_default(),
+    ))
 }
 
 fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -6881,7 +6963,9 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("scrollHeight", None) => DomProp::ScrollHeight,
         ("scrollLeft", None) => DomProp::ScrollLeft,
         ("scrollTop", None) => DomProp::ScrollTop,
-        ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::ActiveElement,
+        ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::ActiveElement
+        }
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
@@ -9734,6 +9818,64 @@ mod tests {
     }
 
     #[test]
+    fn readonly_property_read_write_and_type_text_is_ignored() -> Result<()> {
+        let html = r#"
+        <input id='name' value='init' readonly>
+        <button id='make-editable'>editable</button>
+        <button id='confirm'>confirm</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('make-editable').addEventListener('click', () => {
+            document.getElementById('name').readonly = false;
+            document.getElementById('result').textContent = document.getElementById('name').readonly;
+          });
+          document.getElementById('confirm').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('name').readonly + ':' +
+              document.getElementById('name').value;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.type_text("#name", "changed")?;
+        h.assert_value("#name", "init")?;
+        h.click("#make-editable")?;
+        h.type_text("#name", "changed")?;
+        h.assert_value("#name", "changed")?;
+        h.click("#confirm")?;
+        h.assert_text("#result", "false:changed")?;
+        Ok(())
+    }
+
+    #[test]
+    fn required_property_read_write_works() -> Result<()> {
+        let html = r#"
+        <input id='name' required>
+        <button id='unset'>unset</button>
+        <button id='set'>set</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('set').addEventListener('click', () => {
+            document.getElementById('name').required = true;
+            document.getElementById('result').textContent = document.getElementById('name').required;
+          });
+          document.getElementById('unset').addEventListener('click', () => {
+            document.getElementById('name').required = false;
+            document.getElementById('result').textContent = document.getElementById('name').required;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#unset")?;
+        h.assert_text("#result", "false")?;
+        h.click("#set")?;
+        h.assert_text("#result", "true")?;
+        Ok(())
+    }
+
+    #[test]
     fn style_property_read_write_works() -> Result<()> {
         let html = r#"
         <div id='box' style='color: blue;'></div>
@@ -9939,6 +10081,59 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "none")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_focus_and_focus_within_runtime() -> Result<()> {
+        let html = r#"
+        <div id='scope'>
+          <input id='child'>
+        </div>
+        <input id='outside'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const child = document.getElementById('child');
+            const outside = document.getElementById('outside');
+            child.focus();
+            const before = document.querySelector('input:focus').id + ':' +
+              (document.querySelectorAll('#scope:focus-within').length ? 'yes' : 'no');
+            outside.focus();
+            const after = document.querySelector('input:focus').id + ':' +
+              (document.querySelectorAll('#scope:focus-within').length ? 'yes' : 'no');
+            document.getElementById('result').textContent = before + ':' + after;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "child:yes:outside:no")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_active_is_set_during_click_and_cleared_after() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const during = document.querySelectorAll('#btn:active').length ? 'yes' : 'no';
+            setTimeout(() => {
+              const after = document.querySelectorAll('#btn:active').length ? 'yes' : 'no';
+              document.getElementById('result').textContent = during + ':' + after;
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.advance_time(0)?;
+        h.assert_text("#result", "yes:no")?;
         Ok(())
     }
 
@@ -12371,6 +12566,40 @@ mod tests {
     }
 
     #[test]
+    fn selector_required_optional_readonly_readwrite_works() -> Result<()> {
+        let html = r#"
+        <input id='r' required value='r'>
+        <input id='o'>
+        <input id='ro' readonly>
+        <input id='rw'>
+        <input id='r2'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const required = document.querySelector('input:required').id;
+            const optional = document.querySelector('input:optional').id;
+            const readOnly = document.querySelector('input:readonly').id;
+            const readWrite = document.querySelector('input:read-write').id;
+            const summary =
+              required + ':' + optional + ':' + readOnly + ':' + readWrite;
+            document.getElementById('r').required = false;
+            document.getElementById('r2').required = true;
+            const afterRequired = document.querySelector('input:required').id;
+            const afterOptional = document.querySelector('input:optional').id;
+            document.getElementById('result').textContent =
+              summary + ':' + afterRequired + ':' + afterOptional;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "r:o:ro:r:r2:r")?;
+        Ok(())
+    }
+
+    #[test]
     fn selector_trailing_group_separator_is_rejected() -> Result<()> {
         let html = r#"<div id='x'></div>"#;
         let h = Harness::from_html(html)?;
@@ -12413,7 +12642,9 @@ mod tests {
         let n = parse_selector_step("li:nth-child(n)").expect("parse should succeed");
         assert_eq!(
             n.pseudo_classes,
-            vec![SelectorPseudoClass::NthChild(NthChildSelector::AnPlusB(1, 0))]
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::AnPlusB(
+                1, 0
+            ))]
         );
     }
 
@@ -12500,6 +12731,46 @@ mod tests {
     }
 
     #[test]
+    fn selector_parse_supports_required_optional_readonly_readwrite() {
+        let required = parse_selector_step("input:required").expect("parse should succeed");
+        let optional = parse_selector_step("input:optional").expect("parse should succeed");
+        let read_only = parse_selector_step("input:read-only").expect("parse should succeed");
+        let read_only_alias = parse_selector_step("input:readonly").expect("parse should succeed");
+        let read_write = parse_selector_step("input:read-write").expect("parse should succeed");
+        assert_eq!(required.pseudo_classes, vec![SelectorPseudoClass::Required]);
+        assert_eq!(optional.pseudo_classes, vec![SelectorPseudoClass::Optional]);
+        assert_eq!(
+            read_only.pseudo_classes,
+            vec![SelectorPseudoClass::Readonly]
+        );
+        assert_eq!(
+            read_only_alias.pseudo_classes,
+            vec![SelectorPseudoClass::Readonly]
+        );
+        assert_eq!(
+            read_write.pseudo_classes,
+            vec![SelectorPseudoClass::Readwrite]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_focus_and_focus_within() {
+        let focus = parse_selector_step("input:focus").expect("parse should succeed");
+        let focus_within = parse_selector_step("div:focus-within").expect("parse should succeed");
+        assert_eq!(focus.pseudo_classes, vec![SelectorPseudoClass::Focus]);
+        assert_eq!(
+            focus_within.pseudo_classes,
+            vec![SelectorPseudoClass::FocusWithin]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_active() {
+        let active = parse_selector_step("button:active").expect("parse should succeed");
+        assert_eq!(active.pseudo_classes, vec![SelectorPseudoClass::Active]);
+    }
+
+    #[test]
     fn selector_parse_supports_not() {
         let by_id = parse_selector_step("span:not(#x)").expect("parse should succeed");
         let by_class = parse_selector_step("span:not(.x)").expect("parse should succeed");
@@ -12577,8 +12848,8 @@ mod tests {
 
     #[test]
     fn selector_parse_supports_not_with_multiple_not_pseudos() {
-        let parsed = parse_selector_step("li:not(:not(.foo), :not(.bar))")
-            .expect("parse should succeed");
+        let parsed =
+            parse_selector_step("li:not(:not(.foo), :not(.bar))").expect("parse should succeed");
         let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
             panic!("expected not pseudo");
         };
@@ -12667,9 +12938,8 @@ mod tests {
 
     #[test]
     fn selector_parse_supports_not_with_selector_list_general_sibling_selector() {
-        let parsed =
-            parse_selector_step("span:not(.scope ~ span, #excluded-id)")
-                .expect("parse should succeed");
+        let parsed = parse_selector_step("span:not(.scope ~ span, #excluded-id)")
+            .expect("parse should succeed");
         let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
             panic!("expected not pseudo");
         };
@@ -12690,8 +12960,7 @@ mod tests {
 
     #[test]
     fn selector_parse_supports_not_with_general_sibling_selector() {
-        let parsed =
-            parse_selector_step("span:not(.scope ~ span)").expect("parse should succeed");
+        let parsed = parse_selector_step("span:not(.scope ~ span)").expect("parse should succeed");
         let SelectorPseudoClass::Not(inners) = &parsed.pseudo_classes[0] else {
             panic!("expected not pseudo");
         };
@@ -12803,9 +13072,9 @@ mod tests {
         );
         assert_eq!(
             n.pseudo_classes,
-            vec![SelectorPseudoClass::NthLastOfType(NthChildSelector::AnPlusB(
-                1, 0
-            ))]
+            vec![SelectorPseudoClass::NthLastOfType(
+                NthChildSelector::AnPlusB(1, 0)
+            )]
         );
         assert_eq!(
             exact.pseudo_classes,

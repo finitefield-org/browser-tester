@@ -115,7 +115,7 @@ MVP対応:
   `form.elements.length`, `form.elements[index]`,
   `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
   `formData.getAll(name).length`
-- DOM更新: `textContent`, `value`, `checked`, `disabled`, `className`, `id`, `name`, `classList.*`,
+- DOM更新: `textContent`, `value`, `checked`, `disabled`, `readonly`, `required`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `matches(selector)`, `closest(selector)`（未一致時は `null`）,
   `getComputedStyle(element).getPropertyValue(property)`
@@ -130,7 +130,7 @@ MVP対応:
 - `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft`（最小実装として数値返却）
 
 #### 7.2.1 非対応DOM APIの優先順位
-- 第一優先: テストに必須なDOM参照・更新（`getElementById`, `querySelector*`, `textContent`, `value`, `checked`, `disabled`, `classList`, `dataset`, `style`, `append*`/`remove*`系）
+- 第一優先: テストに必須なDOM参照・更新（`getElementById`, `querySelector*`, `textContent`, `value`, `checked`, `disabled`, `readonly`, `required`, `classList`, `dataset`, `style`, `append*`/`remove*`系）
 - 第二優先: タイマー/イベント/フォーム関連（`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `preventDefault`, `FormData`, `submit`）
 - 第三優先: `focus` などの表示・計測系API
 - 非対応は `ScriptParse`/`Runtime` レイヤで明示エラーとして失敗させる（静かな無視はしない）
@@ -560,7 +560,9 @@ MVP実装案:
   `:nth-child(n)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`,
   `:nth-last-child(n|odd|even|an+b)`,
   `:nth-of-type(n|odd|even|an+b)`, `:nth-last-of-type(n|odd|even|an+b)`,
-  `:checked`, `:disabled`, `:enabled`,
+  `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`,
+  `:read-only`（非標準別名 `:readonly` 対応）,
+  `:read-write`, `:focus`, `:focus-within`, `:active`,
   `:not(selector)`（selector-list 対応）など, 子孫/子/隣接/一般兄弟結合子
 - `:nth-child(an+b)` は `2n+1`, `-n+3`, `n+1` などをサポート。`n` は1ベース要素インデックス。
 - `:nth-last-child(an+b|odd|even|n)` も同様に1ベース要素インデックスの末尾基準でサポート。
@@ -574,6 +576,9 @@ enum SelectorPseudoClass {
     LastOfType,
     OnlyChild,
     OnlyOfType,
+    Focus,
+    FocusWithin,
+    Active,
     NthOfType(NthChildSelector),
     NthLastOfType(NthChildSelector),
     Not(Vec<Vec<SelectorPart>>),
