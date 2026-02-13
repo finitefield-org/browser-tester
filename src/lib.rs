@@ -2701,6 +2701,7 @@ enum Value {
     Number(i64),
     Float(f64),
     Null,
+    Undefined,
     Node(NodeId),
     NodeList(Vec<NodeId>),
     FormData(Vec<(String, String)>),
@@ -2714,6 +2715,7 @@ impl Value {
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
             Self::Null => false,
+            Self::Undefined => false,
             Self::Node(_) => true,
             Self::NodeList(nodes) => !nodes.is_empty(),
             Self::FormData(_) => true,
@@ -2733,6 +2735,7 @@ impl Value {
             Self::Number(v) => v.to_string(),
             Self::Float(v) => format_float(*v),
             Self::Null => "null".into(),
+            Self::Undefined => "undefined".into(),
             Self::Node(node) => format!("node-{}", node.0),
             Self::NodeList(_) => "[object NodeList]".into(),
             Self::FormData(_) => "[object FormData]".into(),
@@ -2857,10 +2860,19 @@ enum BinaryOp {
     And,
     StrictEq,
     StrictNe,
+    BitOr,
+    BitXor,
+    BitAnd,
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
+    Pow,
     Lt,
     Gt,
     Le,
     Ge,
+    In,
+    InstanceOf,
     Sub,
     Mul,
     Div,
@@ -2874,7 +2886,14 @@ enum VarAssignOp {
     Sub,
     Mul,
     Div,
+    Pow,
     Mod,
+    BitOr,
+    BitXor,
+    BitAnd,
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2893,6 +2912,7 @@ enum Expr {
     String(String),
     Bool(bool),
     Null,
+    Undefined,
     Number(i64),
     Float(f64),
     DateNow,
@@ -2974,7 +2994,12 @@ enum Expr {
         prop: EventExprProp,
     },
     Neg(Box<Expr>),
+    Pos(Box<Expr>),
+    BitNot(Box<Expr>),
     Not(Box<Expr>),
+    Void(Box<Expr>),
+    Delete(Box<Expr>),
+    TypeOf(Box<Expr>),
     Add(Vec<Expr>),
     Ternary {
         cond: Box<Expr>,
@@ -4299,6 +4324,21 @@ impl Harness {
                         VarAssignOp::Add => self.add_values(&previous, &value),
                         VarAssignOp::Sub => Value::Float(self.numeric_value(&previous) - self.numeric_value(&value)),
                         VarAssignOp::Mul => Value::Float(self.numeric_value(&previous) * self.numeric_value(&value)),
+                        VarAssignOp::Pow => Value::Float(
+                            self.numeric_value(&previous).powf(self.numeric_value(&value)),
+                        ),
+                        VarAssignOp::BitOr => self.eval_binary(&BinaryOp::BitOr, &previous, &value)?,
+                        VarAssignOp::BitXor => self.eval_binary(&BinaryOp::BitXor, &previous, &value)?,
+                        VarAssignOp::BitAnd => self.eval_binary(&BinaryOp::BitAnd, &previous, &value)?,
+                        VarAssignOp::ShiftLeft => {
+                            self.eval_binary(&BinaryOp::ShiftLeft, &previous, &value)?
+                        }
+                        VarAssignOp::ShiftRight => {
+                            self.eval_binary(&BinaryOp::ShiftRight, &previous, &value)?
+                        }
+                        VarAssignOp::UnsignedShiftRight => {
+                            self.eval_binary(&BinaryOp::UnsignedShiftRight, &previous, &value)?
+                        }
                         VarAssignOp::Div => {
                             let rhs = self.numeric_value(&value);
                             if rhs == 0.0 {
@@ -4804,6 +4844,7 @@ impl Harness {
             Expr::String(value) => Ok(Value::String(value.clone())),
             Expr::Bool(value) => Ok(Value::Bool(*value)),
             Expr::Null => Ok(Value::Null),
+            Expr::Undefined => Ok(Value::Undefined),
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
@@ -4998,9 +5039,52 @@ impl Harness {
                     other => Ok(Value::Float(-self.numeric_value(&other))),
                 }
             }
+            Expr::Pos(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                Ok(Value::Float(self.numeric_value(&value)))
+            }
+            Expr::BitNot(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                Ok(Value::Number((!self.to_i32_for_bitwise(&value)) as i64))
+            }
             Expr::Not(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
                 Ok(Value::Bool(!value.truthy()))
+            }
+            Expr::Void(inner) => {
+                self.eval_expr(inner, env, event_param, event)?;
+                Ok(Value::Undefined)
+            }
+            Expr::Delete(inner) => match inner.as_ref() {
+                Expr::Var(name) => Ok(Value::Bool(!env.contains_key(name))),
+                _ => {
+                    self.eval_expr(inner, env, event_param, event)?;
+                    Ok(Value::Bool(true))
+                }
+            },
+            Expr::TypeOf(inner) => {
+                let js_type = match inner.as_ref() {
+                    Expr::Var(name) => env.get(name).map_or("undefined", |value| match value {
+                        Value::Null => "object",
+                        Value::Bool(_) => "boolean",
+                        Value::Number(_) | Value::Float(_) => "number",
+                        Value::Undefined => "undefined",
+                        Value::String(_) => "string",
+                        Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
+                    }),
+                    _ => {
+                        let value = self.eval_expr(inner, env, event_param, event)?;
+                        match value {
+                            Value::Null => "object",
+                            Value::Bool(_) => "boolean",
+                            Value::Number(_) | Value::Float(_) => "number",
+                            Value::Undefined => "undefined",
+                            Value::String(_) => "string",
+                            Value::Node(_) | Value::NodeList(_) | Value::FormData(_) => "object",
+                        }
+                    }
+                };
+                Ok(Value::String(js_type.to_string()))
             }
             Expr::Add(parts) => {
                 if parts.is_empty() {
@@ -5038,6 +5122,36 @@ impl Harness {
             BinaryOp::And => Value::Bool(left.truthy() && right.truthy()),
             BinaryOp::StrictEq => Value::Bool(self.strict_equal(left, right)),
             BinaryOp::StrictNe => Value::Bool(!self.strict_equal(left, right)),
+            BinaryOp::In => Value::Bool(self.value_in(left, right)),
+            BinaryOp::InstanceOf => Value::Bool(self.value_instance_of(left, right)),
+            BinaryOp::BitOr => {
+                Value::Number(i64::from(self.to_i32_for_bitwise(left) | self.to_i32_for_bitwise(right)))
+            }
+            BinaryOp::BitXor => {
+                Value::Number(i64::from(
+                    self.to_i32_for_bitwise(left) ^ self.to_i32_for_bitwise(right),
+                ))
+            }
+            BinaryOp::BitAnd => {
+                Value::Number(i64::from(
+                    self.to_i32_for_bitwise(left) & self.to_i32_for_bitwise(right),
+                ))
+            }
+            BinaryOp::ShiftLeft => {
+                let shift = self.to_u32_for_bitwise(right) & 0x1f;
+                Value::Number(i64::from(self.to_i32_for_bitwise(left) << shift))
+            }
+            BinaryOp::ShiftRight => {
+                let shift = self.to_u32_for_bitwise(right) & 0x1f;
+                Value::Number(i64::from(self.to_i32_for_bitwise(left) >> shift))
+            }
+            BinaryOp::UnsignedShiftRight => {
+                let shift = self.to_u32_for_bitwise(right) & 0x1f;
+                Value::Number(i64::from(self.to_u32_for_bitwise(left) >> shift))
+            }
+            BinaryOp::Pow => {
+                Value::Float(self.numeric_value(left).powf(self.numeric_value(right)))
+            }
             BinaryOp::Lt => Value::Bool(self.compare(left, right, |l, r| l < r)),
             BinaryOp::Gt => Value::Bool(self.compare(left, right, |l, r| l > r)),
             BinaryOp::Le => Value::Bool(self.compare(left, right, |l, r| l <= r)),
@@ -5062,6 +5176,55 @@ impl Harness {
         Ok(out)
     }
 
+    fn value_in(&self, left: &Value, right: &Value) -> bool {
+        match right {
+            Value::NodeList(nodes) => self
+                .value_as_index(left)
+                .is_some_and(|index| index < nodes.len()),
+            Value::FormData(entries) => {
+                let key = left.as_string();
+                entries.iter().any(|(name, _)| name == &key)
+            }
+            _ => false,
+        }
+    }
+
+    fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::Node(left), Value::Node(right)) => left == right,
+            (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
+            (Value::FormData(left), Value::FormData(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    fn value_as_index(&self, value: &Value) -> Option<usize> {
+        match value {
+            Value::Number(v) => usize::try_from(*v).ok(),
+            Value::Float(v) => {
+                if !v.is_finite() || v.fract() != 0.0 || *v < 0.0 {
+                    None
+                } else {
+                    usize::try_from(*v as i64).ok()
+                }
+            }
+            Value::String(s) => {
+                if let Ok(int) = s.parse::<i64>() {
+                    usize::try_from(int).ok()
+                } else if let Ok(float) = s.parse::<f64>() {
+                    if float.fract() == 0.0 && float >= 0.0 {
+                        usize::try_from(float as i64).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn strict_equal(&self, left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::Bool(l), Value::Bool(r)) => l == r,
@@ -5073,6 +5236,7 @@ impl Harness {
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
+            (Value::Undefined, Value::Undefined) => true,
             _ => false,
         }
     }
@@ -5108,8 +5272,30 @@ impl Harness {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
             Value::Null => 0.0,
+            Value::Undefined => f64::NAN,
             _ => value.as_string().parse::<f64>().unwrap_or(0.0),
         }
+    }
+
+    fn to_i32_for_bitwise(&self, value: &Value) -> i32 {
+        let numeric = self.numeric_value(value);
+        if !numeric.is_finite() {
+            return 0;
+        }
+        let unsigned = numeric.trunc().rem_euclid(4_294_967_296.0);
+        if unsigned >= 2_147_483_648.0 {
+            (unsigned - 4_294_967_296.0) as i32
+        } else {
+            unsigned as i32
+        }
+    }
+
+    fn to_u32_for_bitwise(&self, value: &Value) -> u32 {
+        let numeric = self.numeric_value(value);
+        if !numeric.is_finite() {
+            return 0;
+        }
+        numeric.trunc().rem_euclid(4_294_967_296.0) as u32
     }
 
     fn resolve_dom_query_list_static(&self, target: &DomQuery) -> Result<Option<Vec<NodeId>>> {
@@ -5373,6 +5559,7 @@ impl Harness {
             Value::NodeList(_) => 0,
             Value::FormData(_) => 0,
             Value::Null => 0,
+            Value::Undefined => 0,
         }
     }
 
@@ -5787,6 +5974,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_update_stmt(stmt) {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_form_data_append_stmt(stmt)? {
         return Ok(parsed);
     }
@@ -6196,7 +6387,33 @@ fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
 }
 
 fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
-    let src = src.trim();
+    parse_update_stmt(src)
+}
+
+fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
+    let src = stmt.trim();
+
+    if let Some(name) = src.strip_prefix("++") {
+        let name = name.trim();
+        if is_ident(name) {
+            return Some(Stmt::VarAssign {
+                name: name.to_string(),
+                op: VarAssignOp::Add,
+                expr: Expr::Number(1),
+            });
+        }
+    }
+
+    if let Some(name) = src.strip_prefix("--") {
+        let name = name.trim();
+        if is_ident(name) {
+            return Some(Stmt::VarAssign {
+                name: name.to_string(),
+                op: VarAssignOp::Add,
+                expr: Expr::Number(-1),
+            });
+        }
+    }
 
     if let Some(name) = src.strip_suffix("++") {
         let name = name.trim();
@@ -6376,7 +6593,14 @@ fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
         "-=" => VarAssignOp::Sub,
         "*=" => VarAssignOp::Mul,
         "/=" => VarAssignOp::Div,
+        "**=" => VarAssignOp::Pow,
         "%=" => VarAssignOp::Mod,
+        "|=" => VarAssignOp::BitOr,
+        "^=" => VarAssignOp::BitXor,
+        "&=" => VarAssignOp::BitAnd,
+        "<<=" => VarAssignOp::ShiftLeft,
+        ">>=" => VarAssignOp::ShiftRight,
+        ">>>=" => VarAssignOp::UnsignedShiftRight,
         _ => {
             return Err(Error::ScriptParse(format!(
                 "unsupported assignment operator: {stmt}"
@@ -7594,10 +7818,46 @@ fn parse_logical_and_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let (parts, ops) = split_top_level_by_ops(src, &["&&"]);
     if ops.is_empty() {
+        return parse_bitwise_or_expr(src);
+    }
+    fold_binary(parts, ops, parse_bitwise_or_expr, |op| match op {
+        "&&" => BinaryOp::And,
+        _ => unreachable!(),
+    })
+}
+
+fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &["|"]);
+    if ops.is_empty() {
+        return parse_bitwise_xor_expr(src);
+    }
+    fold_binary(parts, ops, parse_bitwise_xor_expr, |op| match op {
+        "|" => BinaryOp::BitOr,
+        _ => unreachable!(),
+    })
+}
+
+fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &["^"]);
+    if ops.is_empty() {
+        return parse_bitwise_and_expr(src);
+    }
+    fold_binary(parts, ops, parse_bitwise_and_expr, |op| match op {
+        "^" => BinaryOp::BitXor,
+        _ => unreachable!(),
+    })
+}
+
+fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &["&"]);
+    if ops.is_empty() {
         return parse_equality_expr(src);
     }
     fold_binary(parts, ops, parse_equality_expr, |op| match op {
-        "&&" => BinaryOp::And,
+        "&" => BinaryOp::BitAnd,
         _ => unreachable!(),
     })
 }
@@ -7619,15 +7879,31 @@ fn parse_equality_expr(src: &str) -> Result<Expr> {
 
 fn parse_relational_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
-    let (parts, ops) = split_top_level_by_ops(src, &["<=", ">=", "<", ">"]);
+    let (parts, ops) = split_top_level_by_ops(src, &["<=", ">=", "<", ">", "instanceof", "in"]);
     if ops.is_empty() {
-        return parse_add_expr(src);
+        return parse_shift_expr(src);
     }
-    fold_binary(parts, ops, parse_add_expr, |op| match op {
+    fold_binary(parts, ops, parse_shift_expr, |op| match op {
         "<" => BinaryOp::Lt,
         ">" => BinaryOp::Gt,
         "<=" => BinaryOp::Le,
         ">=" => BinaryOp::Ge,
+        "instanceof" => BinaryOp::InstanceOf,
+        "in" => BinaryOp::In,
+        _ => unreachable!(),
+    })
+}
+
+fn parse_shift_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &[">>>", "<<", ">>"]);
+    if ops.is_empty() {
+        return parse_add_expr(src);
+    }
+    fold_binary(parts, ops, parse_add_expr, |op| match op {
+        ">>>" => BinaryOp::UnsignedShiftRight,
+        "<<" => BinaryOp::ShiftLeft,
+        ">>" => BinaryOp::ShiftRight,
         _ => unreachable!(),
     })
 }
@@ -7783,20 +8059,199 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
 
 fn parse_mul_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
-    let (parts, ops) = split_top_level_by_ops(src, &["*", "/", "%"]);
-    if ops.is_empty() {
-        return parse_unary_expr(src);
+    let bytes = src.as_bytes();
+    let mut parts = Vec::new();
+    let mut ops: Vec<u8> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
     }
-    fold_binary(parts, ops, parse_unary_expr, |op| match op {
-        "*" => BinaryOp::Mul,
-        "/" => BinaryOp::Div,
-        "%" => BinaryOp::Mod,
-        _ => unreachable!(),
-    })
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b'/' | b'%' => {
+                    if paren == 0 && bracket == 0 && brace == 0 {
+                        if let Some(part) = src.get(start..i) {
+                            parts.push(part);
+                            ops.push(b);
+                            start = i + 1;
+                        }
+                    }
+                }
+                b'*' if paren == 0 && bracket == 0 && brace == 0 => {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        i += 1;
+                    } else if let Some(part) = src.get(start..i) {
+                        parts.push(part);
+                        ops.push(b);
+                        start = i + 1;
+                    }
+                }
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Some(last) = src.get(start..) {
+        parts.push(last);
+    }
+
+    if ops.is_empty() {
+        return parse_pow_expr(src);
+    }
+
+    let mut expr = parse_pow_expr(parts[0].trim())?;
+    for (idx, op) in ops.iter().enumerate() {
+        let rhs = parse_pow_expr(parts[idx + 1].trim())?;
+        let op = match op {
+            b'/' => BinaryOp::Div,
+            b'%' => BinaryOp::Mod,
+            _ => BinaryOp::Mul,
+        };
+        expr = Expr::Binary {
+            left: Box::new(expr),
+            op,
+            right: Box::new(rhs),
+        };
+    }
+    Ok(expr)
+}
+
+fn parse_pow_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b'*' if paren == 0 && bracket == 0 && brace == 0 => {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        let left = parse_expr(src[..i].trim())?;
+                        let right = parse_pow_expr(src[i + 2..].trim())?;
+                        return Ok(Expr::Binary {
+                            left: Box::new(left),
+                            op: BinaryOp::Pow,
+                            right: Box::new(right),
+                        });
+                    }
+                }
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    parse_unary_expr(src)
 }
 
 fn parse_unary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
+    if let Some(rest) = strip_keyword_operator(src, "typeof") {
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::TypeOf(Box::new(inner)));
+    }
+    if let Some(rest) = strip_keyword_operator(src, "void") {
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::Void(Box::new(inner)));
+    }
+    if let Some(rest) = strip_keyword_operator(src, "delete") {
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::Delete(Box::new(inner)));
+    }
+    if let Some(rest) = src.strip_prefix('+') {
+        let inner = parse_unary_expr(rest.trim())?;
+        return Ok(Expr::Pos(Box::new(inner)));
+    }
     if let Some(rest) = src.strip_prefix('-') {
         let inner = parse_unary_expr(rest.trim())?;
         return Ok(Expr::Neg(Box::new(inner)));
@@ -7804,6 +8259,10 @@ fn parse_unary_expr(src: &str) -> Result<Expr> {
     if let Some(rest) = src.strip_prefix('!') {
         let inner = parse_unary_expr(rest.trim())?;
         return Ok(Expr::Not(Box::new(inner)));
+    }
+    if let Some(rest) = src.strip_prefix('~') {
+        let inner = parse_unary_expr(rest.trim())?;
+        return Ok(Expr::BitNot(Box::new(inner)));
     }
     parse_primary(src)
 }
@@ -7839,6 +8298,15 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
     if src == "null" {
         return Ok(Expr::Null);
+    }
+    if src == "undefined" {
+        return Ok(Expr::Undefined);
+    }
+    if src == "NaN" {
+        return Ok(Expr::Float(f64::NAN));
+    }
+    if src == "Infinity" {
+        return Ok(Expr::Float(f64::INFINITY));
     }
     if let Some(numeric) = parse_numeric_literal(src)? {
         return Ok(numeric);
@@ -7965,6 +8433,29 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
+    if let Some(value) = parse_prefixed_integer_literal(src, "0x", 16)? {
+        return Ok(Some(value));
+    }
+    if let Some(value) = parse_prefixed_integer_literal(src, "0o", 8)? {
+        return Ok(Some(value));
+    }
+    if let Some(value) = parse_prefixed_integer_literal(src, "0b", 2)? {
+        return Ok(Some(value));
+    }
+
+    if src.as_bytes().iter().any(|b| matches!(b, b'e' | b'E')) {
+        if !matches!(src.as_bytes().first(), Some(b) if b.is_ascii_digit() || *b == b'.') {
+            return Ok(None);
+        }
+        let n: f64 = src
+            .parse()
+            .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+        if !n.is_finite() {
+            return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+        }
+        return Ok(Some(Expr::Float(n)));
+    }
+
     if src.as_bytes().iter().all(|b| b.is_ascii_digit()) {
         let n: i64 = src
             .parse()
@@ -7997,6 +8488,35 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
         )));
     }
     Ok(Some(Expr::Float(n)))
+}
+
+fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result<Option<Expr>> {
+    let src = src.to_ascii_lowercase();
+    if !src.starts_with(prefix) {
+        return Ok(None);
+    }
+
+    let digits = &src[prefix.len()..];
+    if digits.is_empty() {
+        return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+        }
+
+    let n = i64::from_str_radix(digits, radix)
+        .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+    Ok(Some(Expr::Number(n)))
+}
+
+fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
+    if !src.starts_with(keyword) {
+        return None;
+    }
+
+    let after = &src[keyword.len()..];
+    if after.is_empty() || !is_ident_char(after.as_bytes()[0]) {
+        return Some(after.trim_start());
+    }
+
+    None
 }
 
 fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
@@ -9185,10 +9705,18 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
                             } else {
                                 i += 1;
                             }
+                            } else if i >= 2 && &bytes[i - 2..=i] == b"**=" {
+                                return Some((i - 2, 3));
+                            } else if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
+                                return Some((i - 3, 4));
+                            } else if i >= 2 && &bytes[i - 2..=i] == b"<<=" {
+                                return Some((i - 2, 3));
+                            } else if i >= 2 && &bytes[i - 2..=i] == b">>=" {
+                                return Some((i - 2, 3));
                         } else if i > 0
                             && matches!(
                                 bytes[i - 1],
-                                b'+' | b'-' | b'*' | b'/' | b'%'
+                                b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
                             )
                         {
                             return Some((i - 1, 2));
@@ -9413,6 +9941,30 @@ fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, V
                             if i + op_bytes.len() <= bytes.len()
                                 && &bytes[i..i + op_bytes.len()] == op_bytes
                             {
+                                if op_bytes.iter().all(|b| b.is_ascii_alphabetic()) {
+                                    if i > 0 && is_ident_char(bytes[i - 1]) {
+                                        continue;
+                                    }
+                                    if i + op_bytes.len() < bytes.len()
+                                        && is_ident_char(bytes[i + op_bytes.len()])
+                                    {
+                                        continue;
+                                    }
+                                } else if op.len() == 1 && (op == &"<" || op == &">") {
+                                    let prev = if i == 0 {
+                                        None
+                                    } else {
+                                        Some(bytes[i - 1])
+                                    };
+                                    let next = bytes.get(i + 1).copied();
+                                    if prev == Some(b'<')
+                                        || prev == Some(b'>')
+                                        || next == Some(b'<')
+                                        || next == Some(b'>')
+                                    {
+                                        continue;
+                                    }
+                                }
                                 matched = Some(*op);
                                 break;
                             }
@@ -15702,6 +16254,255 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "5:eq:neq")?;
+        Ok(())
+    }
+
+    #[test]
+    fn unary_plus_works_as_numeric_expression() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const text = '12';
+            const value = +text;
+            const direct = +'-3.5';
+            const paren = +('+7');
+            document.getElementById('result').textContent =
+              value + ':' + direct + ':' + paren;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "12:-3.5:7")?;
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_expression_supports_binary_operations() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const bit_and = 5 & 3;
+            const bit_or = 5 | 2;
+            const bit_xor = 5 ^ 1;
+            const left = 1 + 2 << 2;
+            const masked = 5 + 2 & 4;
+            const shift = 8 >>> 1;
+            const signed_shift = -8 >> 1;
+            const unsigned_shift = (-1) >>> 1;
+            const inv = ~1;
+            document.getElementById('result').textContent =
+              bit_and + ':' + bit_or + ':' + bit_xor + ':' + left + ':' + masked + ':' +
+              shift + ':' + signed_shift + ':' + unsigned_shift + ':' + inv;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:7:4:12:4:4:-4:2147483647:-2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_compound_assignment_operators_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 6;
+            n &= 3;
+            n |= 4;
+            n ^= 1;
+            n <<= 1;
+            n >>= 1;
+            n >>>= 1;
+            document.getElementById('result').textContent = n;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3")?;
+        Ok(())
+    }
+
+    #[test]
+    fn exponentiation_expression_and_compound_assignment_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const value = 2 ** 3 ** 2;
+            const with_mul = 2 * 3 ** 2;
+            const grouped = (2 + 2) ** 3;
+            let n = 2;
+            n **= 3;
+            document.getElementById('result').textContent =
+              value + ':' + with_mul + ':' + grouped + ':' + n;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "512:18:64:8")?;
+        Ok(())
+    }
+
+    #[test]
+    fn update_statements_change_identifier_values() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 1;
+            ++n;
+            n++;
+            --n;
+            n--;
+            document.getElementById('result').textContent = n;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn typeof_operator_works_for_known_and_undefined_identifiers() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const known = 1;
+            const a = typeof known;
+            const b = typeof unknownName;
+            const c = typeof false;
+            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "number:undefined:boolean")?;
+        Ok(())
+    }
+
+    #[test]
+    fn undefined_void_delete_and_special_literals_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const known = 1;
+            const is_void = void known;
+            const a = typeof undefined;
+            const b = typeof is_void;
+            const c = typeof NaN;
+            const d = typeof Infinity;
+            const e = is_void === undefined;
+            const f = delete known;
+            const g = delete missing;
+            const h = NaN === NaN;
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g + ':' + h;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "undefined:undefined:number:number:true:false:true:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn in_operator_works_with_query_selector_all_indexes() -> Result<()> {
+        let html = r#"
+        <div id='a'>A</div>
+        <div id='b'>B</div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nodes = document.querySelectorAll('#a, #b');
+            const a = 0 in nodes;
+            const b = 1 in nodes;
+            const c = 2 in nodes;
+            const d = '1' in nodes;
+            document.getElementById('result').textContent = a + ':' + b + ':' + c + ':' + d;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:false:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn instanceof_operator_works_with_node_membership_and_identity() -> Result<()> {
+        let html = r#"
+        <div id='a'>A</div>
+        <div id='b'>B</div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a_node = document.getElementById('a');
+            const b_node = document.getElementById('b');
+            const a_only = document.querySelectorAll('#a');
+            const same = a_node instanceof a_node;
+            const member = a_node instanceof a_only;
+            const other = b_node instanceof a_only;
+            document.getElementById('result').textContent = same + ':' + member + ':' + other;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn numeric_literals_support_hex_octal_binary_and_scientific_notation() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hex = 0x10;
+            const oct = 0o10;
+            const bin = 0b10;
+            const exp = 1e3;
+            document.getElementById('result').textContent =
+              hex + ':' + oct + ':' + bin + ':' + exp;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "16:8:2:1000")?;
         Ok(())
     }
 }
