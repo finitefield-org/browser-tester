@@ -1779,6 +1779,431 @@ fn format_float(value: f64) -> String {
     out
 }
 
+fn parse_js_parse_float(src: &str) -> f64 {
+    let src = src.trim_start();
+    if src.is_empty() {
+        return f64::NAN;
+    }
+
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    if matches!(bytes.get(i), Some(b'+') | Some(b'-')) {
+        i += 1;
+    }
+
+    if src[i..].starts_with("Infinity") {
+        return if matches!(bytes.first(), Some(b'-')) {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+
+    let mut int_digits = 0usize;
+    while matches!(bytes.get(i), Some(b) if b.is_ascii_digit()) {
+        int_digits += 1;
+        i += 1;
+    }
+
+    let mut frac_digits = 0usize;
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        while matches!(bytes.get(i), Some(b) if b.is_ascii_digit()) {
+            frac_digits += 1;
+            i += 1;
+        }
+    }
+
+    if int_digits + frac_digits == 0 {
+        return f64::NAN;
+    }
+
+    if matches!(bytes.get(i), Some(b'e') | Some(b'E')) {
+        let exp_start = i;
+        i += 1;
+        if matches!(bytes.get(i), Some(b'+') | Some(b'-')) {
+            i += 1;
+        }
+
+        let mut exp_digits = 0usize;
+        while matches!(bytes.get(i), Some(b) if b.is_ascii_digit()) {
+            exp_digits += 1;
+            i += 1;
+        }
+
+        if exp_digits == 0 {
+            i = exp_start;
+        }
+    }
+
+    src[..i].parse::<f64>().unwrap_or(f64::NAN)
+}
+
+fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
+    let src = src.trim_start();
+    if src.is_empty() {
+        return f64::NAN;
+    }
+
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let negative = if matches!(bytes.get(i), Some(b'+') | Some(b'-')) {
+        let is_negative = bytes[i] == b'-';
+        i += 1;
+        is_negative
+    } else {
+        false
+    };
+
+    let mut radix = radix.unwrap_or(0);
+    if radix != 0 {
+        if !(2..=36).contains(&radix) {
+            return f64::NAN;
+        }
+    } else {
+        radix = 10;
+        if src[i..].starts_with("0x") || src[i..].starts_with("0X") {
+            radix = 16;
+            i += 2;
+        }
+    }
+
+    if radix == 16 && (src[i..].starts_with("0x") || src[i..].starts_with("0X")) {
+        i += 2;
+    }
+
+    let mut parsed_any = false;
+    let mut value = 0.0f64;
+    for ch in src[i..].chars() {
+        let Some(digit) = ch.to_digit(36) else {
+            break;
+        };
+        if i64::from(digit) >= radix {
+            break;
+        }
+        parsed_any = true;
+        value = (value * (radix as f64)) + (digit as f64);
+    }
+
+    if !parsed_any {
+        return f64::NAN;
+    }
+
+    if negative { -value } else { value }
+}
+
+fn encode_binary_string_to_base64(src: &str) -> Result<String> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut bytes = Vec::with_capacity(src.len());
+    for ch in src.chars() {
+        let code = ch as u32;
+        if code > 0xFF {
+            return Err(Error::ScriptRuntime(
+                "btoa input contains non-Latin1 character".into(),
+            ));
+        }
+        bytes.push(code as u8);
+    }
+
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        let b2 = bytes[i + 2];
+
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(TABLE[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+        out.push(TABLE[(b2 & 0x3F) as usize] as char);
+        i += 3;
+    }
+
+    let rem = bytes.len().saturating_sub(i);
+    if rem == 1 {
+        let b0 = bytes[i];
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[((b0 & 0x03) << 4) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(TABLE[((b1 & 0x0F) << 2) as usize] as char);
+        out.push('=');
+    }
+
+    Ok(out)
+}
+
+fn decode_base64_to_binary_string(src: &str) -> Result<String> {
+    let mut bytes: Vec<u8> = src
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+
+    match bytes.len() % 4 {
+        0 => {}
+        2 => bytes.extend_from_slice(b"=="),
+        3 => bytes.push(b'='),
+        _ => {
+            return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        let b2 = bytes[i + 2];
+        let b3 = bytes[i + 3];
+
+        let v0 = decode_base64_char(b0)?;
+        let v1 = decode_base64_char(b1)?;
+        out.push((v0 << 2) | (v1 >> 4));
+
+        if b2 == b'=' {
+            if b3 != b'=' {
+                return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+            }
+            i += 4;
+            continue;
+        }
+
+        let v2 = decode_base64_char(b2)?;
+        out.push(((v1 & 0x0F) << 4) | (v2 >> 2));
+
+        if b3 == b'=' {
+            i += 4;
+            continue;
+        }
+
+        let v3 = decode_base64_char(b3)?;
+        out.push(((v2 & 0x03) << 6) | v3);
+        i += 4;
+    }
+
+    Ok(out.into_iter().map(char::from).collect())
+}
+
+fn decode_base64_char(ch: u8) -> Result<u8> {
+    let value = match ch {
+        b'A'..=b'Z' => ch - b'A',
+        b'a'..=b'z' => ch - b'a' + 26,
+        b'0'..=b'9' => ch - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => {
+            return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+        }
+    };
+    Ok(value)
+}
+
+fn encode_uri_like(src: &str, component: bool) -> String {
+    let mut out = String::new();
+    for b in src.as_bytes() {
+        if is_unescaped_uri_byte(*b, component) {
+            out.push(*b as char);
+        } else {
+            out.push('%');
+            out.push(to_hex_upper((*b >> 4) & 0x0F));
+            out.push(to_hex_upper(*b & 0x0F));
+        }
+    }
+    out
+}
+
+fn decode_uri_like(src: &str, component: bool) -> Result<String> {
+    let preserve_reserved = !component;
+    let bytes = src.as_bytes();
+    let mut out = String::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            let ch = src[i..].chars().next().ok_or_else(|| {
+                Error::ScriptRuntime("malformed URI sequence".into())
+            })?;
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        let first = parse_percent_byte(bytes, i)?;
+        if first < 0x80 {
+            let ch = first as char;
+            if preserve_reserved && is_decode_uri_reserved_char(ch) {
+                let raw = src
+                    .get(i..i + 3)
+                    .ok_or_else(|| Error::ScriptRuntime("malformed URI sequence".into()))?;
+                out.push_str(raw);
+            } else {
+                out.push(ch);
+            }
+            i += 3;
+            continue;
+        }
+
+        let len = utf8_sequence_len(first)
+            .ok_or_else(|| Error::ScriptRuntime("malformed URI sequence".into()))?;
+        let mut raw_end = i + 3;
+        let mut chunk = Vec::with_capacity(len);
+        chunk.push(first);
+        for _ in 1..len {
+            if raw_end >= bytes.len() || bytes[raw_end] != b'%' {
+                return Err(Error::ScriptRuntime("malformed URI sequence".into()));
+            }
+            chunk.push(parse_percent_byte(bytes, raw_end)?);
+            raw_end += 3;
+        }
+        let decoded = std::str::from_utf8(&chunk)
+            .map_err(|_| Error::ScriptRuntime("malformed URI sequence".into()))?;
+        out.push_str(decoded);
+        i = raw_end;
+    }
+
+    Ok(out)
+}
+
+fn js_escape(src: &str) -> String {
+    let mut out = String::new();
+    for unit in src.encode_utf16() {
+        if unit <= 0x7F && is_unescaped_legacy_escape_byte(unit as u8) {
+            out.push(unit as u8 as char);
+            continue;
+        }
+
+        if unit <= 0xFF {
+            let value = unit as u8;
+            out.push('%');
+            out.push(to_hex_upper((value >> 4) & 0x0F));
+            out.push(to_hex_upper(value & 0x0F));
+            continue;
+        }
+
+        out.push('%');
+        out.push('u');
+        out.push(to_hex_upper(((unit >> 12) & 0x0F) as u8));
+        out.push(to_hex_upper(((unit >> 8) & 0x0F) as u8));
+        out.push(to_hex_upper(((unit >> 4) & 0x0F) as u8));
+        out.push(to_hex_upper((unit & 0x0F) as u8));
+    }
+    out
+}
+
+fn js_unescape(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut units: Vec<u16> = Vec::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 5 < bytes.len()
+                && matches!(bytes[i + 1], b'u' | b'U')
+                && from_hex_digit(bytes[i + 2]).is_some()
+                && from_hex_digit(bytes[i + 3]).is_some()
+                && from_hex_digit(bytes[i + 4]).is_some()
+                && from_hex_digit(bytes[i + 5]).is_some()
+            {
+                let u = ((from_hex_digit(bytes[i + 2]).unwrap_or(0) as u16) << 12)
+                    | ((from_hex_digit(bytes[i + 3]).unwrap_or(0) as u16) << 8)
+                    | ((from_hex_digit(bytes[i + 4]).unwrap_or(0) as u16) << 4)
+                    | (from_hex_digit(bytes[i + 5]).unwrap_or(0) as u16);
+                units.push(u);
+                i += 6;
+                continue;
+            }
+
+            if i + 2 < bytes.len()
+                && from_hex_digit(bytes[i + 1]).is_some()
+                && from_hex_digit(bytes[i + 2]).is_some()
+            {
+                let u = ((from_hex_digit(bytes[i + 1]).unwrap_or(0) << 4)
+                    | from_hex_digit(bytes[i + 2]).unwrap_or(0)) as u16;
+                units.push(u);
+                i += 3;
+                continue;
+            }
+        }
+
+        let ch = src[i..].chars().next().unwrap_or_default();
+        let mut buf = [0u16; 2];
+        for unit in ch.encode_utf16(&mut buf).iter().copied() {
+            units.push(unit);
+        }
+        i += ch.len_utf8();
+    }
+
+    String::from_utf16_lossy(&units)
+}
+
+fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
+    if b.is_ascii_alphanumeric() {
+        return true;
+    }
+    if matches!(b, b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')') {
+        return true;
+    }
+    if !component && matches!(b, b';' | b',' | b'/' | b'?' | b':' | b'@' | b'&' | b'=' | b'+' | b'$' | b'#') {
+        return true;
+    }
+    false
+}
+
+fn is_decode_uri_reserved_char(ch: char) -> bool {
+    matches!(ch, ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#')
+}
+
+fn is_unescaped_legacy_escape_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'*' | b'+' | b'-' | b'.' | b'/' | b'@' | b'_')
+}
+
+fn parse_percent_byte(bytes: &[u8], offset: usize) -> Result<u8> {
+    if offset + 2 >= bytes.len() || bytes[offset] != b'%' {
+        return Err(Error::ScriptRuntime("malformed URI sequence".into()));
+    }
+    let hi = from_hex_digit(bytes[offset + 1])
+        .ok_or_else(|| Error::ScriptRuntime("malformed URI sequence".into()))?;
+    let lo = from_hex_digit(bytes[offset + 2])
+        .ok_or_else(|| Error::ScriptRuntime("malformed URI sequence".into()))?;
+    Ok((hi << 4) | lo)
+}
+
+fn utf8_sequence_len(first: u8) -> Option<usize> {
+    match first {
+        0xC2..=0xDF => Some(2),
+        0xE0..=0xEF => Some(3),
+        0xF0..=0xF4 => Some(4),
+        _ => None,
+    }
+}
+
+fn from_hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn to_hex_upper(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        10..=15 => (b'A' + (nibble - 10)) as char,
+        _ => '?',
+    }
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut it = value.chars();
     let mut out = String::new();
@@ -2952,6 +3377,21 @@ enum Expr {
     Float(f64),
     DateNow,
     MathRandom,
+    EncodeUri(Box<Expr>),
+    EncodeUriComponent(Box<Expr>),
+    DecodeUri(Box<Expr>),
+    DecodeUriComponent(Box<Expr>),
+    Escape(Box<Expr>),
+    Unescape(Box<Expr>),
+    IsNaN(Box<Expr>),
+    IsFinite(Box<Expr>),
+    Atob(Box<Expr>),
+    Btoa(Box<Expr>),
+    ParseInt {
+        value: Box<Expr>,
+        radix: Option<Box<Expr>>,
+    },
+    ParseFloat(Box<Expr>),
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -3404,6 +3844,7 @@ pub struct PendingTimer {
     pub interval_ms: Option<i64>,
 }
 
+#[derive(Debug)]
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
@@ -3425,6 +3866,167 @@ pub struct Harness {
     trace_logs: Vec<String>,
     trace_log_limit: usize,
     trace_to_stderr: bool,
+}
+
+#[derive(Debug)]
+pub struct MockWindow {
+    pages: Vec<MockPage>,
+    current: usize,
+}
+
+#[derive(Debug)]
+pub struct MockPage {
+    pub url: String,
+    harness: Harness,
+}
+
+impl MockWindow {
+    pub fn new() -> Self {
+        Self {
+            pages: Vec::new(),
+            current: 0,
+        }
+    }
+
+    pub fn open_page(&mut self, url: &str, html: &str) -> Result<usize> {
+        let harness = Harness::from_html(html)?;
+        if let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| page.url.eq_ignore_ascii_case(url))
+        {
+            self.pages[index] = MockPage {
+                url: url.to_string(),
+                harness,
+            };
+            self.current = index;
+            Ok(index)
+        } else {
+            self.pages.push(MockPage {
+                url: url.to_string(),
+                harness,
+            });
+            self.current = self.pages.len() - 1;
+            Ok(self.current)
+        }
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub fn switch_to(&mut self, url: &str) -> Result<()> {
+        let index = self
+            .pages
+            .iter()
+            .position(|page| page.url == url)
+            .ok_or_else(|| Error::ScriptRuntime(format!("unknown page: {url}")))?;
+        self.current = index;
+        Ok(())
+    }
+
+    pub fn switch_to_index(&mut self, index: usize) -> Result<()> {
+        if index >= self.pages.len() {
+            return Err(Error::ScriptRuntime(format!(
+                "page index out of range: {index}"
+            )));
+        }
+        self.current = index;
+        Ok(())
+    }
+
+    pub fn current_url(&self) -> Result<&str> {
+        self.pages
+            .get(self.current)
+            .map(|page| page.url.as_str())
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
+    }
+
+    pub fn current_document_mut(&mut self) -> Result<&mut Harness> {
+        self.pages
+            .get_mut(self.current)
+            .map(|page| &mut page.harness)
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
+    }
+
+    pub fn current_document(&self) -> Result<&Harness> {
+        self.pages
+            .get(self.current)
+            .map(|page| &page.harness)
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
+    }
+
+    pub fn with_current_document<R>(
+        &mut self,
+        f: impl FnOnce(&mut Harness) -> Result<R>,
+    ) -> Result<R> {
+        let harness = self.current_document_mut()?;
+        f(harness)
+    }
+
+    pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.type_text(selector, text)
+    }
+
+    pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.set_checked(selector, checked)
+    }
+
+    pub fn click(&mut self, selector: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.click(selector)
+    }
+
+    pub fn submit(&mut self, selector: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.submit(selector)
+    }
+
+    pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.dispatch(selector, event)
+    }
+
+    pub fn assert_text(&mut self, selector: &str, expected: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.assert_text(selector, expected)
+    }
+
+    pub fn assert_value(&mut self, selector: &str, expected: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.assert_value(selector, expected)
+    }
+
+    pub fn assert_checked(&mut self, selector: &str, expected: bool) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.assert_checked(selector, expected)
+    }
+
+    pub fn assert_exists(&mut self, selector: &str) -> Result<()> {
+        let page = self.current_document_mut()?;
+        page.assert_exists(selector)
+    }
+
+    pub fn take_trace_logs(&mut self) -> Result<Vec<String>> {
+        let page = self.current_document_mut()?;
+        Ok(page.take_trace_logs())
+    }
+}
+
+impl MockPage {
+    pub fn url(&self) -> &str {
+        self.url.as_str()
+    }
+
+    pub fn harness(&self) -> &Harness {
+        &self.harness
+    }
+
+    pub fn harness_mut(&mut self) -> &mut Harness {
+        &mut self.harness
+    }
 }
 
 impl Harness {
@@ -5218,6 +5820,63 @@ impl Harness {
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
             Expr::MathRandom => Ok(Value::Float(self.next_random_f64())),
+            Expr::EncodeUri(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(encode_uri_like(&value.as_string(), false)))
+            }
+            Expr::EncodeUriComponent(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(encode_uri_like(&value.as_string(), true)))
+            }
+            Expr::DecodeUri(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(decode_uri_like(&value.as_string(), false)?))
+            }
+            Expr::DecodeUriComponent(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(decode_uri_like(&value.as_string(), true)?))
+            }
+            Expr::Escape(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(js_escape(&value.as_string())))
+            }
+            Expr::Unescape(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(js_unescape(&value.as_string())))
+            }
+            Expr::IsNaN(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::Bool(Self::coerce_number_for_global(&value).is_nan()))
+            }
+            Expr::IsFinite(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::Bool(Self::coerce_number_for_global(&value).is_finite()))
+            }
+            Expr::Atob(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(decode_base64_to_binary_string(
+                    &value.as_string(),
+                )?))
+            }
+            Expr::Btoa(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::String(encode_binary_string_to_base64(
+                    &value.as_string(),
+                )?))
+            }
+            Expr::ParseInt { value, radix } => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                let radix = radix
+                    .as_ref()
+                    .map(|expr| self.eval_expr(expr, env, event_param, event))
+                    .transpose()?
+                    .map(|radix| Self::value_to_i64(&radix));
+                Ok(Value::Float(parse_js_parse_int(&value.as_string(), radix)))
+            }
+            Expr::ParseFloat(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::Float(parse_js_parse_float(&value.as_string())))
+            }
             Expr::Var(name) => env
                 .get(name)
                 .cloned()
@@ -5668,6 +6327,33 @@ impl Harness {
             Value::Null => 0.0,
             Value::Undefined => f64::NAN,
             _ => value.as_string().parse::<f64>().unwrap_or(0.0),
+        }
+    }
+
+    fn coerce_number_for_global(value: &Value) -> f64 {
+        match value {
+            Value::Number(v) => *v as f64,
+            Value::Float(v) => *v,
+            Value::Bool(v) => {
+                if *v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Value::Null => 0.0,
+            Value::Undefined => f64::NAN,
+            Value::String(v) => {
+                let trimmed = v.trim();
+                if trimmed.is_empty() {
+                    0.0
+                } else {
+                    trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                }
+            }
+            Value::Node(_) | Value::NodeList(_) | Value::FormData(_) | Value::Function(_) => {
+                f64::NAN
+            }
         }
     }
 
@@ -6209,6 +6895,17 @@ fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         return Ok(DomQuery::DocumentRoot);
     }
     cursor.set_pos(start);
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            if cursor.consume_ascii("document") {
+                cursor.skip_ws();
+            }
+        }
+        return Ok(DomQuery::DocumentRoot);
+    }
+    cursor.set_pos(start);
     if let Some(name) = cursor.parse_identifier() {
         return Ok(DomQuery::Var(name));
     }
@@ -6270,6 +6967,11 @@ fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
 
 fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        cursor.expect_byte(b'.')?;
+        cursor.skip_ws();
+    }
     cursor.expect_ascii("document")?;
     cursor.skip_ws();
     cursor.expect_byte(b'.')?;
@@ -9236,6 +9938,57 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::MathRandom);
     }
 
+    if let Some(value) = parse_encode_uri_component_expr(src)? {
+        return Ok(Expr::EncodeUriComponent(Box::new(value)));
+    }
+
+    if let Some(value) = parse_encode_uri_expr(src)? {
+        return Ok(Expr::EncodeUri(Box::new(value)));
+    }
+
+    if let Some(value) = parse_decode_uri_component_expr(src)? {
+        return Ok(Expr::DecodeUriComponent(Box::new(value)));
+    }
+
+    if let Some(value) = parse_decode_uri_expr(src)? {
+        return Ok(Expr::DecodeUri(Box::new(value)));
+    }
+
+    if let Some(value) = parse_escape_expr(src)? {
+        return Ok(Expr::Escape(Box::new(value)));
+    }
+
+    if let Some(value) = parse_unescape_expr(src)? {
+        return Ok(Expr::Unescape(Box::new(value)));
+    }
+
+    if let Some(value) = parse_is_nan_expr(src)? {
+        return Ok(Expr::IsNaN(Box::new(value)));
+    }
+
+    if let Some(value) = parse_is_finite_expr(src)? {
+        return Ok(Expr::IsFinite(Box::new(value)));
+    }
+
+    if let Some(value) = parse_atob_expr(src)? {
+        return Ok(Expr::Atob(Box::new(value)));
+    }
+
+    if let Some(value) = parse_btoa_expr(src)? {
+        return Ok(Expr::Btoa(Box::new(value)));
+    }
+
+    if let Some((value, radix)) = parse_parse_int_expr(src)? {
+        return Ok(Expr::ParseInt {
+            value: Box::new(value),
+            radix: radix.map(Box::new),
+        });
+    }
+
+    if let Some(value) = parse_parse_float_expr(src)? {
+        return Ok(Expr::ParseFloat(Box::new(value)));
+    }
+
     if let Some(tag_name) = parse_document_create_element_expr(src)? {
         return Ok(Expr::CreateElement(tag_name));
     }
@@ -9538,6 +10291,185 @@ fn parse_math_random_expr(src: &str) -> Result<bool> {
     cursor.expect_byte(b')')?;
     cursor.skip_ws();
     Ok(cursor.eof())
+}
+
+fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "isNaN", "isNaN requires exactly one argument")
+}
+
+fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(
+        src,
+        "encodeURI",
+        "encodeURI requires exactly one argument",
+    )
+}
+
+fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(
+        src,
+        "encodeURIComponent",
+        "encodeURIComponent requires exactly one argument",
+    )
+}
+
+fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(
+        src,
+        "decodeURI",
+        "decodeURI requires exactly one argument",
+    )
+}
+
+fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(
+        src,
+        "decodeURIComponent",
+        "decodeURIComponent requires exactly one argument",
+    )
+}
+
+fn parse_escape_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "escape", "escape requires exactly one argument")
+}
+
+fn parse_unescape_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "unescape", "unescape requires exactly one argument")
+}
+
+fn parse_is_finite_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "isFinite", "isFinite requires exactly one argument")
+}
+
+fn parse_atob_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "atob", "atob requires exactly one argument")
+}
+
+fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(src, "btoa", "btoa requires exactly one argument")
+}
+
+fn parse_global_single_arg_expr(src: &str, function_name: &str, arg_error: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii(function_name) {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(arg_error.into()));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(value))
+}
+
+fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("parseInt") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "parseInt requires one or two arguments".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "parseInt radix argument cannot be empty".into(),
+        ));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    let radix = if args.len() == 2 {
+        Some(parse_expr(args[1].trim())?)
+    } else {
+        None
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((value, radix)))
+}
+
+fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("parseFloat") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "parseFloat requires exactly one argument".into(),
+        ));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 
 fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
@@ -11758,6 +12690,63 @@ mod tests {
         h.set_checked("#agree", true)?;
         h.click("#submit")?;
         h.assert_text("#result", "OK:Taro")?;
+        Ok(())
+    }
+
+    #[test]
+    fn mock_window_supports_multiple_pages() -> Result<()> {
+        let mut win = MockWindow::new();
+        win.open_page(
+            "https://app.local/a",
+            r#"
+            <button id='btn'>A</button>
+            <p id='result'></p>
+            <script>
+              document.getElementById('btn').addEventListener('click', () => {
+                document.getElementById('result').textContent = 'A';
+              });
+            </script>
+        "#,
+        )?;
+
+        win.open_page(
+            "https://app.local/b",
+            r#"
+            <button id='btn'>B</button>
+            <p id='result'></p>
+            <script>
+              document.getElementById('btn').addEventListener('click', () => {
+                document.getElementById('result').textContent = 'B';
+              });
+            </script>
+        "#,
+        )?;
+
+        win.switch_to("https://app.local/a")?;
+        win.click("#btn")?;
+        win.assert_text("#result", "A")?;
+
+        win.switch_to("https://app.local/b")?;
+        win.assert_text("#result", "")?;
+        win.click("#btn")?;
+        win.assert_text("#result", "B")?;
+
+        win.switch_to("https://app.local/a")?;
+        win.assert_text("#result", "A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn window_aliases_document_in_script_parser() -> Result<()> {
+        let html = r#"
+        <p id='result'>before</p>
+        <script>
+          window.document.getElementById('result').textContent = 'after';
+        </script>
+        "#;
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "after")?;
         Ok(())
     }
 
@@ -18226,6 +19215,362 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "16:8:2:1000")?;
+        Ok(())
+    }
+
+    #[test]
+    fn encode_decode_uri_global_functions_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = encodeURI('https://a.example/a b?x=1&y=2#f');
+            const b = encodeURIComponent('a b&c=d');
+            const c = decodeURI('https://a.example/a%20b?x=1&y=2#f');
+            const d = decodeURI('%3Fx%3D1');
+            const e = decodeURIComponent('a%20b%26c%3Dd');
+            const f = window.encodeURIComponent('x y');
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "https://a.example/a%20b?x=1&y=2#f|a%20b%26c%3Dd|https://a.example/a b?x=1&y=2#f|%3Fx%3D1|a b&c=d|x%20y",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn decode_uri_invalid_sequence_returns_runtime_error_for_decode_uri() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            decodeURIComponent('%E0%A4%A');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("decodeURIComponent should fail for malformed input");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("malformed URI sequence")),
+            other => panic!("unexpected decode URI error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn escape_and_unescape_global_functions_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const kana = unescape('%u3042');
+            const escaped = escape('ABC abc +/' + kana);
+            const unescaped = unescape(escaped);
+            const viaWindow = window.unescape('%u3042%20A');
+            const viaWindowEscaped = window.escape('hello world');
+            document.getElementById('result').textContent =
+              escaped + '|' + unescaped + '|' + viaWindow + '|' + viaWindowEscaped;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "ABC%20abc%20+/%u3042|ABC abc +/あ|あ A|hello%20world",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn window_aliases_for_global_functions_match_direct_calls() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              window.encodeURI('a b?x=1') + '|' + encodeURI('a b?x=1') + '|' +
+              window.decodeURIComponent('a%20b%2Bc') + '|' + decodeURIComponent('a%20b%2Bc') + '|' +
+              window.unescape(window.escape('A B')) + '|' +
+              window.atob(window.btoa('ok')) + '|' +
+              window.isNaN('x') + '|' +
+              window.isFinite('3') + '|' +
+              window.parseInt('11', 2) + '|' +
+              window.parseFloat('2.5z');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "a%20b?x=1|a%20b?x=1|a b+c|a b+c|A B|ok|true|true|3|2.5")?;
+        Ok(())
+    }
+
+    #[test]
+    fn global_function_arity_errors_have_stable_messages() {
+        let cases = [
+            (
+                "<script>encodeURI();</script>",
+                "encodeURI requires exactly one argument",
+            ),
+            (
+                "<script>window.encodeURIComponent('a', 'b');</script>",
+                "encodeURIComponent requires exactly one argument",
+            ),
+            (
+                "<script>decodeURI('a', 'b');</script>",
+                "decodeURI requires exactly one argument",
+            ),
+            (
+                "<script>window.decodeURIComponent();</script>",
+                "decodeURIComponent requires exactly one argument",
+            ),
+            (
+                "<script>escape();</script>",
+                "escape requires exactly one argument",
+            ),
+            (
+                "<script>window.unescape('a', 'b');</script>",
+                "unescape requires exactly one argument",
+            ),
+            (
+                "<script>isNaN();</script>",
+                "isNaN requires exactly one argument",
+            ),
+            (
+                "<script>window.isFinite();</script>",
+                "isFinite requires exactly one argument",
+            ),
+            (
+                "<script>atob('YQ==', 'x');</script>",
+                "atob requires exactly one argument",
+            ),
+            (
+                "<script>window.btoa();</script>",
+                "btoa requires exactly one argument",
+            ),
+            (
+                "<script>parseFloat('1', 10);</script>",
+                "parseFloat requires exactly one argument",
+            ),
+            (
+                "<script>window.parseInt('1', 10, 10);</script>",
+                "parseInt requires one or two arguments",
+            ),
+        ];
+
+        for (html, expected) in cases {
+            let err = Harness::from_html(html).expect_err("script should fail to parse");
+            match err {
+                Error::ScriptParse(msg) => assert!(
+                    msg.contains(expected),
+                    "expected '{expected}' in '{msg}'"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn global_function_parser_respects_identifier_boundaries() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const escaped = escape('A B');
+            const encodedValue = encodeURIComponent('x y');
+            const parseIntValue = 7;
+            const parseFloatValue = 1.25;
+            const escapedValue = escaped;
+            const round = unescape(escapedValue);
+            document.getElementById('result').textContent =
+              escapedValue + ':' + encodedValue + ':' + round + ':' +
+              parseIntValue + ':' + parseFloatValue;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A%20B:x%20y:A B:7:1.25")?;
+        Ok(())
+    }
+
+    #[test]
+    fn btoa_non_latin1_input_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nonLatin1 = unescape('%u3042');
+            btoa(nonLatin1);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("btoa should reject non-Latin1 input");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("non-Latin1")),
+            other => panic!("unexpected btoa error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decode_uri_invalid_sequence_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            decodeURI('%E0%A4%A');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("decodeURI should fail for malformed input");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("malformed URI sequence")),
+            other => panic!("unexpected decode URI error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn is_nan_and_is_finite_global_functions_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = isNaN('abc');
+            const b = isNaN('  ');
+            const c = isNaN(undefined);
+            const d = isFinite('1.5');
+            const e = isFinite(Infinity);
+            const f = window.isFinite(null);
+            const g = window.isNaN(NaN);
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:false:true:true:false:true:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn atob_and_btoa_global_functions_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const encoded = btoa('abc123!?');
+            const decoded = atob(encoded);
+            const viaWindow = window.atob('QQ==');
+            document.getElementById('result').textContent =
+              encoded + ':' + decoded + ':' + viaWindow;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "YWJjMTIzIT8=:abc123!?:A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn atob_invalid_input_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='atob'>atob</button>
+        <script>
+          document.getElementById('atob').addEventListener('click', () => {
+            atob('@@@');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+
+        let atob_err = h.click("#atob").expect_err("atob should reject invalid base64");
+        match atob_err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("invalid base64")),
+            other => panic!("unexpected atob error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_int_global_function_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = parseInt('42px');
+            const b = parseInt('  -0x10');
+            const c = parseInt('10', 2);
+            const d = parseInt('10', 8);
+            const e = parseInt('0x10', 16);
+            const bad1 = parseInt('xyz');
+            const bad2 = parseInt('10', 1);
+            const f = window.parseInt('12', 10);
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' +
+              (bad1 === bad1) + ':' + (bad2 === bad2) + ':' + f;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "42:-16:2:8:16:false:false:12")?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_float_global_function_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = parseFloat('3.5px');
+            const b = parseFloat('  -2.5e2x');
+            const invalid = parseFloat('abc');
+            const d = window.parseFloat('42');
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + (invalid === invalid) + ':' + d;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3.5:-250:false:42")?;
         Ok(())
     }
 }
