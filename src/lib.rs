@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
 use std::fmt;
 
@@ -2875,6 +2875,12 @@ enum Expr {
         handler: ScriptHandler,
         delay_ms: Box<Expr>,
     },
+    QueueMicrotask {
+        handler: ScriptHandler,
+    },
+    PromiseThen {
+        callback: ScriptHandler,
+    },
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -3035,6 +3041,9 @@ enum Stmt {
     SetInterval {
         handler: ScriptHandler,
         delay_ms: Expr,
+    },
+    QueueMicrotask {
+        handler: ScriptHandler,
     },
     ClearTimeout {
         timer_id: Expr,
@@ -3209,6 +3218,12 @@ struct ScheduledTask {
     env: HashMap<String, Value>,
 }
 
+#[derive(Debug, Clone)]
+struct ScheduledMicrotask {
+    handler: ScriptHandler,
+    env: HashMap<String, Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTimer {
     pub id: i64,
@@ -3222,11 +3237,13 @@ pub struct Harness {
     listeners: ListenerStore,
     script_env: HashMap<String, Value>,
     task_queue: Vec<ScheduledTask>,
+    microtask_queue: VecDeque<ScheduledMicrotask>,
     active_element: Option<NodeId>,
     now_ms: i64,
     timer_step_limit: usize,
     next_timer_id: i64,
     next_task_order: i64,
+    task_depth: usize,
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
     rng_state: u64,
@@ -3246,11 +3263,13 @@ impl Harness {
             listeners: ListenerStore::default(),
             script_env: HashMap::new(),
             task_queue: Vec::new(),
+            microtask_queue: VecDeque::new(),
             active_element: None,
             now_ms: 0,
             timer_step_limit: 10_000,
             next_timer_id: 1,
             next_task_order: 0,
+            task_depth: 0,
             running_timer_id: None,
             running_timer_canceled: false,
             rng_state: 0x9E37_79B9_7F4A_7C15,
@@ -3683,12 +3702,14 @@ impl Harness {
         self.running_timer_id = Some(task.id);
         self.running_timer_canceled = false;
         let mut event = EventState::new("timeout", self.dom.root, self.now_ms);
-        self.execute_stmts(
-            &task.handler.stmts,
-            &task.handler.event_param,
-            &mut event,
-            &mut task.env,
-        )?;
+        self.run_in_task_context(|this| {
+            this.execute_stmts(
+                &task.handler.stmts,
+                &task.handler.event_param,
+                &mut event,
+                &mut task.env,
+            )
+        })?;
         let canceled = self.running_timer_canceled;
         self.running_timer_id = None;
         self.running_timer_canceled = false;
@@ -3957,64 +3978,66 @@ impl Harness {
         env: &mut HashMap<String, Value>,
     ) -> Result<EventState> {
         let mut event = EventState::new(event_type, target, self.now_ms);
+        self.run_in_task_context(|this| {
+            let mut path = Vec::new();
+            let mut cursor = Some(target);
+            while let Some(node) = cursor {
+                path.push(node);
+                cursor = this.dom.parent(node);
+            }
+            path.reverse();
 
-        let mut path = Vec::new();
-        let mut cursor = Some(target);
-        while let Some(node) = cursor {
-            path.push(node);
-            cursor = self.dom.parent(node);
-        }
-        path.reverse();
+            if path.is_empty() {
+                this.trace_event_done(&event, "empty_path");
+                return Ok(());
+            }
 
-        if path.is_empty() {
-            self.trace_event_done(&event, "empty_path");
-            return Ok(event);
-        }
-
-        // Capture phase.
-        if path.len() >= 2 {
-            for node in &path[..path.len() - 1] {
-                event.event_phase = 1;
-                event.current_target = *node;
-                self.invoke_listeners(*node, &mut event, env, true)?;
-                if event.propagation_stopped {
-                    self.trace_event_done(&event, "propagation_stopped");
-                    return Ok(event);
+            // Capture phase.
+            if path.len() >= 2 {
+                for node in &path[..path.len() - 1] {
+                    event.event_phase = 1;
+                    event.current_target = *node;
+                    this.invoke_listeners(*node, &mut event, env, true)?;
+                    if event.propagation_stopped {
+                        this.trace_event_done(&event, "propagation_stopped");
+                        return Ok(());
+                    }
                 }
             }
-        }
 
-        // Target phase: capture listeners first.
-        event.event_phase = 2;
-        event.current_target = target;
-        self.invoke_listeners(target, &mut event, env, true)?;
-        if event.propagation_stopped {
-            self.trace_event_done(&event, "propagation_stopped");
-            return Ok(event);
-        }
+            // Target phase: capture listeners first.
+            event.event_phase = 2;
+            event.current_target = target;
+            this.invoke_listeners(target, &mut event, env, true)?;
+            if event.propagation_stopped {
+                this.trace_event_done(&event, "propagation_stopped");
+                return Ok(());
+            }
 
-        // Target phase: bubble listeners.
-        event.event_phase = 2;
-        self.invoke_listeners(target, &mut event, env, false)?;
-        if event.propagation_stopped {
-            self.trace_event_done(&event, "propagation_stopped");
-            return Ok(event);
-        }
+            // Target phase: bubble listeners.
+            event.event_phase = 2;
+            this.invoke_listeners(target, &mut event, env, false)?;
+            if event.propagation_stopped {
+                this.trace_event_done(&event, "propagation_stopped");
+                return Ok(());
+            }
 
-        // Bubble phase.
-        if path.len() >= 2 {
-            for node in path[..path.len() - 1].iter().rev() {
-                event.event_phase = 3;
-                event.current_target = *node;
-                self.invoke_listeners(*node, &mut event, env, false)?;
-                if event.propagation_stopped {
-                    self.trace_event_done(&event, "propagation_stopped");
-                    return Ok(event);
+            // Bubble phase.
+            if path.len() >= 2 {
+                for node in path[..path.len() - 1].iter().rev() {
+                    event.event_phase = 3;
+                    event.current_target = *node;
+                    this.invoke_listeners(*node, &mut event, env, false)?;
+                    if event.propagation_stopped {
+                        this.trace_event_done(&event, "propagation_stopped");
+                        return Ok(());
+                    }
                 }
             }
-        }
 
-        self.trace_event_done(&event, "completed");
+            this.trace_event_done(&event, "completed");
+            Ok(())
+        })?;
         Ok(event)
     }
 
@@ -4130,6 +4153,61 @@ impl Harness {
                 self.trace_logs.remove(0);
             }
             self.trace_logs.push(line);
+        }
+    }
+
+    fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
+        self.microtask_queue.push_back(ScheduledMicrotask {
+            handler,
+            env: env.clone(),
+        });
+    }
+
+    fn run_microtask_queue(&mut self) -> Result<usize> {
+        let mut steps = 0usize;
+        self.task_depth += 1;
+        let result = loop {
+            let Some(mut task) = self.microtask_queue.pop_front() else {
+                break Ok(());
+            };
+            steps += 1;
+            if steps > self.timer_step_limit {
+                break Err(self.timer_step_limit_error(
+                    self.timer_step_limit,
+                    steps,
+                    Some(self.now_ms),
+                ));
+            }
+
+            let mut event = EventState::new("microtask", self.dom.root, self.now_ms);
+            let run = self.execute_stmts(
+                &task.handler.stmts,
+                &task.handler.event_param,
+                &mut event,
+                &mut task.env,
+            );
+            if let Err(err) = run {
+                break Err(err);
+            }
+        };
+        self.task_depth -= 1;
+        result?;
+        Ok(steps)
+    }
+
+    fn run_in_task_context<T>(&mut self, mut run: impl FnMut(&mut Self) -> Result<T>) -> Result<T> {
+        self.task_depth += 1;
+        let result = run(self);
+        self.task_depth -= 1;
+        let should_flush_microtasks = self.task_depth == 0;
+        match result {
+            Ok(value) => {
+                if should_flush_microtasks {
+                    self.run_microtask_queue()?;
+                }
+                Ok(value)
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -4414,6 +4492,9 @@ impl Harness {
                     let interval = Self::value_to_i64(&interval);
                     let _ = self.schedule_interval(handler.clone(), interval, env);
                 }
+                Stmt::QueueMicrotask { handler } => {
+                    self.queue_microtask(handler.clone(), env);
+                }
                 Stmt::ClearTimeout { timer_id } => {
                     let timer_id = self.eval_expr(timer_id, env, event_param, event)?;
                     let timer_id = Self::value_to_i64(&timer_id);
@@ -4657,6 +4738,14 @@ impl Harness {
                 let interval = Self::value_to_i64(&interval);
                 let id = self.schedule_interval(handler.clone(), interval, env);
                 Ok(Value::Number(id))
+            }
+            Expr::QueueMicrotask { handler } => {
+                self.queue_microtask(handler.clone(), env);
+                Ok(Value::Null)
+            }
+            Expr::PromiseThen { callback } => {
+                self.queue_microtask(callback.clone(), env);
+                Ok(Value::Null)
             }
             Expr::Binary { left, op, right } => {
                 let left = self.eval_expr(left, env, event_param, event)?;
@@ -5258,7 +5347,7 @@ impl Harness {
         let stmts = parse_block_statements(script)?;
         let mut event = EventState::new("script", self.dom.root, self.now_ms);
         let mut env = self.script_env.clone();
-        self.execute_stmts(&stmts, &None, &mut event, &mut env)?;
+        self.run_in_task_context(|this| this.execute_stmts(&stmts, &None, &mut event, &mut env))?;
         self.script_env = env;
 
         Ok(())
@@ -5566,6 +5655,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_set_interval_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_queue_microtask_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -7448,6 +7541,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
         });
     }
 
+    if let Some(handler) = parse_queue_microtask_expr(src)? {
+        return Ok(Expr::QueueMicrotask { handler });
+    }
+
+    if let Some(callback) = parse_promise_then_expr(src)? {
+        return Ok(Expr::PromiseThen { callback });
+    }
+
     if let Some((target, class_name)) = parse_class_list_contains_expr(src)? {
         return Ok(Expr::ClassListContains { target, class_name });
     }
@@ -7688,6 +7789,131 @@ fn parse_set_interval_expr(src: &str) -> Result<Option<(ScriptHandler, Expr)>> {
         return Ok(None);
     }
     Ok(Some((handler, delay_ms)))
+}
+
+fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
+    let mut cursor = Cursor::new(src);
+    let handler = parse_queue_microtask_call(&mut cursor)?;
+    cursor.skip_ws();
+    if cursor.eof() {
+        Ok(handler)
+    } else {
+        Ok(None)
+    }
+}
+
+fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    let Some(handler) = parse_queue_microtask_call(&mut cursor)? else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported queueMicrotask statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::QueueMicrotask { handler }))
+}
+
+fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
+    cursor.skip_ws();
+    if !cursor.consume_ascii("queueMicrotask") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() {
+        return Err(Error::ScriptParse(
+            "queueMicrotask requires 1 argument".into(),
+        ));
+    }
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(
+            "queueMicrotask supports only 1 argument".into(),
+        ));
+    }
+
+    let callback_arg = strip_js_comments(args[0]);
+    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
+    let (event_param, body) = parse_callback(&mut callback_cursor)?;
+    callback_cursor.skip_ws();
+    if !callback_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported queueMicrotask callback: {}",
+            args[0].trim()
+        )));
+    }
+
+    Ok(Some(ScriptHandler {
+        event_param,
+        stmts: parse_block_statements(&body)?,
+    }))
+}
+
+fn parse_promise_then_expr(src: &str) -> Result<Option<ScriptHandler>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("Promise") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("resolve") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let _ = cursor.read_balanced_block(b'(', b')')?;
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("then") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() {
+        return Err(Error::ScriptParse("Promise.then requires 1 argument".into()));
+    }
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(
+            "Promise.resolve().then supports only 1 callback argument".into(),
+        ));
+    }
+
+    let callback_arg = strip_js_comments(args[0]);
+    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
+    let (event_param, body) = parse_callback(&mut callback_cursor)?;
+    callback_cursor.skip_ws();
+    if !callback_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported Promise.then callback: {}",
+            args[0].trim()
+        )));
+    }
+
+    Ok(Some(ScriptHandler {
+        event_param,
+        stmts: parse_block_statements(&body)?,
+    }))
 }
 
 fn parse_template_literal(src: &str) -> Result<Expr> {
@@ -10828,6 +11054,29 @@ mod tests {
     }
 
     #[test]
+    fn if_block_and_following_statement_without_semicolon_are_split() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let text = '';
+            if (true) {
+              text = 'A';
+            }
+            text += 'B';
+            document.getElementById('result').textContent = text;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
     fn class_list_toggle_force_argument_works() -> Result<()> {
         let html = r#"
         <input id='force' type='checkbox'>
@@ -12028,6 +12277,56 @@ mod tests {
         h.assert_text("#result", "")?;
         h.flush()?;
         h.assert_text("#result", "0N1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn queue_microtask_runs_after_synchronous_task_body() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = 'A';
+            queueMicrotask(() => {
+              result.textContent = result.textContent + 'B';
+            });
+            result.textContent = result.textContent + 'C';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ACB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_then_microtask_runs_before_next_timer() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = 'A';
+            Promise.resolve().then(() => {
+              result.textContent = result.textContent + 'P';
+            });
+            setTimeout(() => {
+              result.textContent = result.textContent + 'T';
+            }, 0);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AP")?;
+        h.flush()?;
+        h.assert_text("#result", "APT")?;
         Ok(())
     }
 
