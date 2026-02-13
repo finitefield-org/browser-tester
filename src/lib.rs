@@ -3130,6 +3130,7 @@ enum Value {
     Number(i64),
     Float(f64),
     Array(Rc<RefCell<Vec<Value>>>),
+    Object(Rc<RefCell<Vec<(String, Value)>>>),
     Date(Rc<RefCell<i64>>),
     Null,
     Undefined,
@@ -3147,6 +3148,7 @@ impl Value {
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
             Self::Array(_) => true,
+            Self::Object(_) => true,
             Self::Date(_) => true,
             Self::Null => false,
             Self::Undefined => false,
@@ -3183,6 +3185,7 @@ impl Value {
                 }
                 out
             }
+            Self::Object(_) => "[object Object]".into(),
             Self::Date(_) => "[object Date]".into(),
             Self::Null => "null".into(),
             Self::Undefined => "undefined".into(),
@@ -3434,6 +3437,24 @@ enum Expr {
         radix: Option<Box<Expr>>,
     },
     ParseFloat(Box<Expr>),
+    JsonParse(Box<Expr>),
+    JsonStringify(Box<Expr>),
+    ObjectLiteral(Vec<(String, Expr)>),
+    ObjectGet {
+        target: String,
+        key: String,
+    },
+    ObjectKeys(Box<Expr>),
+    ObjectValues(Box<Expr>),
+    ObjectEntries(Box<Expr>),
+    ObjectHasOwn {
+        object: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ObjectHasOwnProperty {
+        target: String,
+        key: Box<Expr>,
+    },
     ArrayLiteral(Vec<Expr>),
     ArrayIsArray(Box<Expr>),
     ArrayLength(String),
@@ -3690,6 +3711,11 @@ enum Stmt {
     VarAssign {
         name: String,
         op: VarAssignOp,
+        expr: Expr,
+    },
+    ObjectAssign {
+        target: String,
+        key: Expr,
         expr: Expr,
     },
     FormDataAppend {
@@ -5402,6 +5428,12 @@ impl Harness {
                     env.insert(name.clone(), next.clone());
                     self.bind_timer_id_to_task_env(name, expr, &next);
                 }
+                Stmt::ObjectAssign { target, key, expr } => {
+                    let object = self.resolve_object_from_env(env, target)?;
+                    let key = self.eval_expr(key, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(expr, env, event_param, event)?;
+                    Self::object_set_entry(&mut object.borrow_mut(), key, value);
+                }
                 Stmt::FormDataAppend {
                     target_var,
                     name,
@@ -5422,6 +5454,18 @@ impl Harness {
                 }
                 Stmt::DomAssign { target, prop, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
+                    if let DomQuery::Var(name) = target {
+                        if let Some(Value::Object(entries)) = env.get(name) {
+                            if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                                Self::object_set_entry(
+                                    &mut entries.borrow_mut(),
+                                    key.to_string(),
+                                    value,
+                                );
+                                continue;
+                            }
+                        }
+                    }
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     match prop {
                         DomProp::TextContent => {
@@ -6210,6 +6254,112 @@ impl Harness {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::Float(parse_js_parse_float(&value.as_string())))
             }
+            Expr::JsonParse(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                Self::parse_json_text(&value)
+            }
+            Expr::JsonStringify(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                match Self::json_stringify_top_level(&value)? {
+                    Some(serialized) => Ok(Value::String(serialized)),
+                    None => Ok(Value::Undefined),
+                }
+            }
+            Expr::ObjectLiteral(entries) => {
+                let mut object_entries = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    Self::object_set_entry(&mut object_entries, key.clone(), value);
+                }
+                Ok(Self::new_object_value(object_entries))
+            }
+            Expr::ObjectGet { target, key } => match env.get(target) {
+                Some(Value::Object(entries)) => Ok(Self::object_get_entry(&entries.borrow(), key)
+                    .unwrap_or(Value::Undefined)),
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an object",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+            },
+            Expr::ObjectKeys(object) => {
+                let object = self.eval_expr(object, env, event_param, event)?;
+                match object {
+                    Value::Object(entries) => {
+                        let keys = entries
+                            .borrow()
+                            .iter()
+                            .map(|(key, _)| Value::String(key.clone()))
+                            .collect::<Vec<_>>();
+                        Ok(Self::new_array_value(keys))
+                    }
+                    _ => Err(Error::ScriptRuntime(
+                        "Object.keys argument must be an object".into(),
+                    )),
+                }
+            }
+            Expr::ObjectValues(object) => {
+                let object = self.eval_expr(object, env, event_param, event)?;
+                match object {
+                    Value::Object(entries) => {
+                        let values = entries
+                            .borrow()
+                            .iter()
+                            .map(|(_, value)| value.clone())
+                            .collect::<Vec<_>>();
+                        Ok(Self::new_array_value(values))
+                    }
+                    _ => Err(Error::ScriptRuntime(
+                        "Object.values argument must be an object".into(),
+                    )),
+                }
+            }
+            Expr::ObjectEntries(object) => {
+                let object = self.eval_expr(object, env, event_param, event)?;
+                match object {
+                    Value::Object(entries) => {
+                        let values = entries
+                            .borrow()
+                            .iter()
+                            .map(|(key, value)| {
+                                Self::new_array_value(vec![
+                                    Value::String(key.clone()),
+                                    value.clone(),
+                                ])
+                            })
+                            .collect::<Vec<_>>();
+                        Ok(Self::new_array_value(values))
+                    }
+                    _ => Err(Error::ScriptRuntime(
+                        "Object.entries argument must be an object".into(),
+                    )),
+                }
+            }
+            Expr::ObjectHasOwn { object, key } => {
+                let object = self.eval_expr(object, env, event_param, event)?;
+                let key = self.eval_expr(key, env, event_param, event)?.as_string();
+                match object {
+                    Value::Object(entries) => Ok(Value::Bool(
+                        Self::object_get_entry(&entries.borrow(), &key).is_some(),
+                    )),
+                    _ => Err(Error::ScriptRuntime(
+                        "Object.hasOwn first argument must be an object".into(),
+                    )),
+                }
+            }
+            Expr::ObjectHasOwnProperty { target, key } => {
+                let key = self.eval_expr(key, env, event_param, event)?.as_string();
+                match env.get(target) {
+                    Some(Value::Object(entries)) => Ok(Value::Bool(
+                        Self::object_get_entry(&entries.borrow(), &key).is_some(),
+                    )),
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an object",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
             Expr::ArrayLiteral(values) => {
                 let mut out = Vec::with_capacity(values.len());
                 for value in values {
@@ -6876,6 +7026,16 @@ impl Harness {
                 self.eval_binary(op, &left, &right)
             }
             Expr::DomRead { target, prop } => {
+                if let DomQuery::Var(name) = target {
+                    if let Some(Value::Object(entries)) = env.get(name) {
+                        if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                            return Ok(
+                                Self::object_get_entry(&entries.borrow(), key)
+                                    .unwrap_or(Value::Undefined),
+                            );
+                        }
+                    }
+                }
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 match prop {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
@@ -7061,6 +7221,7 @@ impl Harness {
                         | Value::NodeList(_)
                         | Value::FormData(_)
                         | Value::Array(_)
+                        | Value::Object(_)
                         | Value::Date(_) => "object",
                     }),
                     _ => {
@@ -7076,6 +7237,7 @@ impl Harness {
                             | Value::NodeList(_)
                             | Value::FormData(_)
                             | Value::Array(_)
+                            | Value::Object(_)
                             | Value::Date(_) => "object",
                         }
                     }
@@ -7180,6 +7342,10 @@ impl Harness {
             Value::Array(values) => self
                 .value_as_index(left)
                 .is_some_and(|index| index < values.borrow().len()),
+            Value::Object(entries) => {
+                let key = left.as_string();
+                entries.borrow().iter().any(|(name, _)| name == &key)
+            }
             Value::FormData(entries) => {
                 let key = left.as_string();
                 entries.iter().any(|(name, _)| name == &key)
@@ -7193,6 +7359,7 @@ impl Harness {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
+            (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
             _ => false,
@@ -7236,6 +7403,7 @@ impl Harness {
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
+            (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
             (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
@@ -7274,6 +7442,519 @@ impl Harness {
         Value::Array(Rc::new(RefCell::new(values)))
     }
 
+    fn new_object_value(entries: Vec<(String, Value)>) -> Value {
+        Value::Object(Rc::new(RefCell::new(entries)))
+    }
+
+    fn object_set_entry(entries: &mut Vec<(String, Value)>, key: String, value: Value) {
+        if let Some((_, existing)) = entries.iter_mut().find(|(name, _)| name == &key) {
+            *existing = value;
+        } else {
+            entries.push((key, value));
+        }
+    }
+
+    fn object_get_entry(entries: &[(String, Value)], key: &str) -> Option<Value> {
+        entries
+            .iter()
+            .find_map(|(name, value)| (name == key).then(|| value.clone()))
+    }
+
+    fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
+        match prop {
+            DomProp::Value => Some("value"),
+            DomProp::Checked => Some("checked"),
+            DomProp::Readonly => Some("readOnly"),
+            DomProp::Required => Some("required"),
+            DomProp::Disabled => Some("disabled"),
+            DomProp::TextContent => Some("textContent"),
+            DomProp::InnerHtml => Some("innerHTML"),
+            DomProp::ClassName => Some("className"),
+            DomProp::Id => Some("id"),
+            DomProp::Name => Some("name"),
+            DomProp::OffsetWidth => Some("offsetWidth"),
+            DomProp::OffsetHeight => Some("offsetHeight"),
+            DomProp::OffsetLeft => Some("offsetLeft"),
+            DomProp::OffsetTop => Some("offsetTop"),
+            DomProp::ScrollWidth => Some("scrollWidth"),
+            DomProp::ScrollHeight => Some("scrollHeight"),
+            DomProp::ScrollLeft => Some("scrollLeft"),
+            DomProp::ScrollTop => Some("scrollTop"),
+            DomProp::Dataset(_) | DomProp::Style(_) | DomProp::ActiveElement => None,
+        }
+    }
+
+    fn parse_json_text(src: &str) -> Result<Value> {
+        let bytes = src.as_bytes();
+        let mut i = 0usize;
+        Self::json_skip_ws(bytes, &mut i);
+        let value = Self::parse_json_value(src, bytes, &mut i)?;
+        Self::json_skip_ws(bytes, &mut i);
+        if i != bytes.len() {
+            return Err(Error::ScriptRuntime(
+                "JSON.parse invalid JSON: trailing characters".into(),
+            ));
+        }
+        Ok(value)
+    }
+
+    fn parse_json_value(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+        Self::json_skip_ws(bytes, i);
+        let Some(&b) = bytes.get(*i) else {
+            return Err(Error::ScriptRuntime(
+                "JSON.parse invalid JSON: unexpected end of input".into(),
+            ));
+        };
+
+        match b {
+            b'{' => Self::parse_json_object(src, bytes, i),
+            b'[' => Self::parse_json_array(src, bytes, i),
+            b'"' => Ok(Value::String(Self::parse_json_string(src, bytes, i)?)),
+            b't' => {
+                if Self::json_consume_ascii(bytes, i, "true") {
+                    Ok(Value::Bool(true))
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: unexpected token".into(),
+                    ))
+                }
+            }
+            b'f' => {
+                if Self::json_consume_ascii(bytes, i, "false") {
+                    Ok(Value::Bool(false))
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: unexpected token".into(),
+                    ))
+                }
+            }
+            b'n' => {
+                if Self::json_consume_ascii(bytes, i, "null") {
+                    Ok(Value::Null)
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: unexpected token".into(),
+                    ))
+                }
+            }
+            b'-' | b'0'..=b'9' => Self::parse_json_number(src, bytes, i),
+            _ => Err(Error::ScriptRuntime(
+                "JSON.parse invalid JSON: unexpected token".into(),
+            )),
+        }
+    }
+
+    fn parse_json_object(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+        *i += 1; // consume '{'
+        Self::json_skip_ws(bytes, i);
+        let mut entries = Vec::new();
+
+        if bytes.get(*i) == Some(&b'}') {
+            *i += 1;
+            return Ok(Self::new_object_value(entries));
+        }
+
+        loop {
+            Self::json_skip_ws(bytes, i);
+            if bytes.get(*i) != Some(&b'"') {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: object key must be string".into(),
+                ));
+            }
+            let key = Self::parse_json_string(src, bytes, i)?;
+            Self::json_skip_ws(bytes, i);
+            if bytes.get(*i) != Some(&b':') {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: expected ':' after object key".into(),
+                ));
+            }
+            *i += 1;
+            let value = Self::parse_json_value(src, bytes, i)?;
+            Self::object_set_entry(&mut entries, key, value);
+            Self::json_skip_ws(bytes, i);
+
+            match bytes.get(*i) {
+                Some(b',') => {
+                    *i += 1;
+                }
+                Some(b'}') => {
+                    *i += 1;
+                    break;
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: expected ',' or '}'".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self::new_object_value(entries))
+    }
+
+    fn parse_json_array(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+        *i += 1; // consume '['
+        Self::json_skip_ws(bytes, i);
+        let mut items = Vec::new();
+
+        if bytes.get(*i) == Some(&b']') {
+            *i += 1;
+            return Ok(Self::new_array_value(items));
+        }
+
+        loop {
+            let item = Self::parse_json_value(src, bytes, i)?;
+            items.push(item);
+            Self::json_skip_ws(bytes, i);
+            match bytes.get(*i) {
+                Some(b',') => {
+                    *i += 1;
+                }
+                Some(b']') => {
+                    *i += 1;
+                    break;
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: expected ',' or ']'".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self::new_array_value(items))
+    }
+
+    fn parse_json_string(src: &str, bytes: &[u8], i: &mut usize) -> Result<String> {
+        if bytes.get(*i) != Some(&b'"') {
+            return Err(Error::ScriptRuntime(
+                "JSON.parse invalid JSON: expected string".into(),
+            ));
+        }
+        *i += 1;
+        let mut out = String::new();
+
+        while *i < bytes.len() {
+            let b = bytes[*i];
+            if b == b'"' {
+                *i += 1;
+                return Ok(out);
+            }
+            if b < 0x20 {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: unescaped control character in string".into(),
+                ));
+            }
+            if b == b'\\' {
+                *i += 1;
+                let Some(&esc) = bytes.get(*i) else {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: unterminated escape sequence".into(),
+                    ));
+                };
+                match esc {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    b'/' => out.push('/'),
+                    b'b' => out.push('\u{0008}'),
+                    b'f' => out.push('\u{000C}'),
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
+                    b't' => out.push('\t'),
+                    b'u' => {
+                        *i += 1;
+                        let first = Self::parse_json_hex4(src, i)?;
+                        if (0xD800..=0xDBFF).contains(&first) {
+                            let Some(b'\\') = bytes.get(*i).copied() else {
+                                return Err(Error::ScriptRuntime(
+                                    "JSON.parse invalid JSON: invalid unicode surrogate pair"
+                                        .into(),
+                                ));
+                            };
+                            *i += 1;
+                            let Some(b'u') = bytes.get(*i).copied() else {
+                                return Err(Error::ScriptRuntime(
+                                    "JSON.parse invalid JSON: invalid unicode surrogate pair"
+                                        .into(),
+                                ));
+                            };
+                            *i += 1;
+                            let second = Self::parse_json_hex4(src, i)?;
+                            if !(0xDC00..=0xDFFF).contains(&second) {
+                                return Err(Error::ScriptRuntime(
+                                    "JSON.parse invalid JSON: invalid unicode surrogate pair"
+                                        .into(),
+                                ));
+                            }
+                            let codepoint = 0x10000
+                                + (((first as u32 - 0xD800) << 10) | (second as u32 - 0xDC00));
+                            let Some(ch) = char::from_u32(codepoint) else {
+                                return Err(Error::ScriptRuntime(
+                                    "JSON.parse invalid JSON: invalid unicode escape".into(),
+                                ));
+                            };
+                            out.push(ch);
+                            continue;
+                        } else if (0xDC00..=0xDFFF).contains(&first) {
+                            return Err(Error::ScriptRuntime(
+                                "JSON.parse invalid JSON: invalid unicode surrogate pair".into(),
+                            ));
+                        } else {
+                            let Some(ch) = char::from_u32(first as u32) else {
+                                return Err(Error::ScriptRuntime(
+                                    "JSON.parse invalid JSON: invalid unicode escape".into(),
+                                ));
+                            };
+                            out.push(ch);
+                            continue;
+                        }
+                    }
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "JSON.parse invalid JSON: invalid escape sequence".into(),
+                        ));
+                    }
+                }
+                *i += 1;
+                continue;
+            }
+
+            if b.is_ascii() {
+                out.push(b as char);
+                *i += 1;
+            } else {
+                let rest = src.get(*i..).ok_or_else(|| {
+                    Error::ScriptRuntime("JSON.parse invalid JSON: invalid utf-8".into())
+                })?;
+                let Some(ch) = rest.chars().next() else {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: invalid utf-8".into(),
+                    ));
+                };
+                out.push(ch);
+                *i += ch.len_utf8();
+            }
+        }
+
+        Err(Error::ScriptRuntime(
+            "JSON.parse invalid JSON: unterminated string".into(),
+        ))
+    }
+
+    fn parse_json_hex4(src: &str, i: &mut usize) -> Result<u16> {
+        let end = i.saturating_add(4);
+        let segment = src.get(*i..end).ok_or_else(|| {
+            Error::ScriptRuntime("JSON.parse invalid JSON: invalid unicode escape".into())
+        })?;
+        if !segment.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::ScriptRuntime(
+                "JSON.parse invalid JSON: invalid unicode escape".into(),
+            ));
+        }
+        *i = end;
+        u16::from_str_radix(segment, 16).map_err(|_| {
+            Error::ScriptRuntime("JSON.parse invalid JSON: invalid unicode escape".into())
+        })
+    }
+
+    fn parse_json_number(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+        let start = *i;
+
+        if bytes.get(*i) == Some(&b'-') {
+            *i += 1;
+        }
+
+        match bytes.get(*i).copied() {
+            Some(b'0') => {
+                *i += 1;
+                if bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.parse invalid JSON: invalid number".into(),
+                    ));
+                }
+            }
+            Some(b'1'..=b'9') => {
+                *i += 1;
+                while bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                    *i += 1;
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: invalid number".into(),
+                ));
+            }
+        }
+
+        if bytes.get(*i) == Some(&b'.') {
+            *i += 1;
+            if !bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: invalid number".into(),
+                ));
+            }
+            while bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                *i += 1;
+            }
+        }
+
+        if bytes.get(*i).is_some_and(|b| *b == b'e' || *b == b'E') {
+            *i += 1;
+            if bytes.get(*i).is_some_and(|b| *b == b'+' || *b == b'-') {
+                *i += 1;
+            }
+            if !bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                return Err(Error::ScriptRuntime(
+                    "JSON.parse invalid JSON: invalid number".into(),
+                ));
+            }
+            while bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+                *i += 1;
+            }
+        }
+
+        let token = src.get(start..*i).ok_or_else(|| {
+            Error::ScriptRuntime("JSON.parse invalid JSON: invalid number".into())
+        })?;
+        if !token.contains('.') && !token.contains('e') && !token.contains('E') {
+            if let Ok(n) = token.parse::<i64>() {
+                return Ok(Value::Number(n));
+            }
+        }
+        let n = token.parse::<f64>().map_err(|_| {
+            Error::ScriptRuntime("JSON.parse invalid JSON: invalid number".into())
+        })?;
+        Ok(Value::Float(n))
+    }
+
+    fn json_skip_ws(bytes: &[u8], i: &mut usize) {
+        while bytes.get(*i).is_some_and(|b| b.is_ascii_whitespace()) {
+            *i += 1;
+        }
+    }
+
+    fn json_consume_ascii(bytes: &[u8], i: &mut usize, token: &str) -> bool {
+        let token_bytes = token.as_bytes();
+        let end = i.saturating_add(token_bytes.len());
+        if end <= bytes.len() && &bytes[*i..end] == token_bytes {
+            *i = end;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn json_stringify_top_level(value: &Value) -> Result<Option<String>> {
+        let mut array_stack = Vec::new();
+        let mut object_stack = Vec::new();
+        Self::json_stringify_value(value, &mut array_stack, &mut object_stack)
+    }
+
+    fn json_stringify_value(
+        value: &Value,
+        array_stack: &mut Vec<usize>,
+        object_stack: &mut Vec<usize>,
+    ) -> Result<Option<String>> {
+        match value {
+            Value::String(v) => Ok(Some(format!("\"{}\"", Self::json_escape_string(v)))),
+            Value::Bool(v) => Ok(Some(if *v { "true".into() } else { "false".into() })),
+            Value::Number(v) => Ok(Some(v.to_string())),
+            Value::Float(v) => {
+                if v.is_finite() {
+                    Ok(Some(format_float(*v)))
+                } else {
+                    Ok(Some("null".into()))
+                }
+            }
+            Value::Null => Ok(Some("null".into())),
+            Value::Undefined
+            | Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_) => Ok(None),
+            Value::Date(v) => Ok(Some(format!(
+                "\"{}\"",
+                Self::json_escape_string(&Self::format_iso_8601_utc(*v.borrow()))
+            ))),
+            Value::Array(values) => {
+                let ptr = Rc::as_ptr(values) as usize;
+                if array_stack.contains(&ptr) {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.stringify circular structure".into(),
+                    ));
+                }
+                array_stack.push(ptr);
+
+                let items = values.borrow();
+                let mut out = String::from("[");
+                for (idx, item) in items.iter().enumerate() {
+                    if idx > 0 {
+                        out.push(',');
+                    }
+                    let serialized = Self::json_stringify_value(item, array_stack, object_stack)?
+                        .unwrap_or_else(|| "null".to_string());
+                    out.push_str(&serialized);
+                }
+                out.push(']');
+
+                array_stack.pop();
+                Ok(Some(out))
+            }
+            Value::Object(entries) => {
+                let ptr = Rc::as_ptr(entries) as usize;
+                if object_stack.contains(&ptr) {
+                    return Err(Error::ScriptRuntime(
+                        "JSON.stringify circular structure".into(),
+                    ));
+                }
+                object_stack.push(ptr);
+
+                let entries = entries.borrow();
+                let mut out = String::from("{");
+                let mut wrote = false;
+                for (key, value) in entries.iter() {
+                    let Some(serialized) =
+                        Self::json_stringify_value(value, array_stack, object_stack)?
+                    else {
+                        continue;
+                    };
+                    if wrote {
+                        out.push(',');
+                    }
+                    wrote = true;
+                    out.push('"');
+                    out.push_str(&Self::json_escape_string(key));
+                    out.push_str("\":");
+                    out.push_str(&serialized);
+                }
+                out.push('}');
+
+                object_stack.pop();
+                Ok(Some(out))
+            }
+        }
+    }
+
+    fn json_escape_string(src: &str) -> String {
+        let mut out = String::new();
+        for ch in src.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\u{0008}' => out.push_str("\\b"),
+                '\u{000C}' => out.push_str("\\f"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c <= '\u{001F}' => {
+                    out.push_str(&format!("\\u{:04X}", c as u32));
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
     fn new_date_value(timestamp_ms: i64) -> Value {
         Value::Date(Rc::new(RefCell::new(timestamp_ms)))
     }
@@ -7301,6 +7982,21 @@ impl Harness {
             Value::Date(value) => *value.borrow(),
             Value::String(value) => Self::parse_date_string_to_epoch_ms(value).unwrap_or(0),
             _ => Self::value_to_i64(value),
+        }
+    }
+
+    fn resolve_object_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<Vec<(String, Value)>>>> {
+        match env.get(target) {
+            Some(Value::Object(entries)) => Ok(entries.clone()),
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not an object",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
         }
     }
 
@@ -7754,7 +8450,11 @@ impl Harness {
                 }
             }
             Value::Date(v) => *v.borrow() as f64,
-            Value::Node(_) | Value::NodeList(_) | Value::FormData(_) | Value::Function(_) => {
+            Value::Object(_)
+            | Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_) => {
                 f64::NAN
             }
             Value::Array(values) => {
@@ -8100,6 +8800,7 @@ impl Harness {
                 })
                 .unwrap_or(0),
             Value::Date(value) => *value.borrow(),
+            Value::Object(_) => 0,
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
             Value::FormData(_) => 0,
@@ -8739,6 +9440,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_dom_assignment(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_object_assign(stmt)? {
         return Ok(parsed);
     }
 
@@ -9783,6 +10488,57 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
 
     let expr = parse_expr(rhs)?;
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
+}
+
+fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
+    let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
+        return Ok(None);
+    };
+
+    if op_len != 1 {
+        return Ok(None);
+    }
+
+    let lhs = stmt[..eq_pos].trim();
+    let rhs = stmt[eq_pos + op_len..].trim();
+    if lhs.is_empty() {
+        return Ok(None);
+    }
+
+    let mut cursor = Cursor::new(lhs);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    let key = if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(prop) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        Expr::String(prop)
+    } else if cursor.consume_byte(b'[') {
+        cursor.skip_ws();
+        let key_src = cursor.read_until_byte(b']')?;
+        cursor.skip_ws();
+        cursor.expect_byte(b']')?;
+        let key_src = key_src.trim();
+        if key_src.is_empty() {
+            return Err(Error::ScriptParse("object assignment key cannot be empty".into()));
+        }
+        parse_expr(key_src)?
+    } else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let expr = parse_expr(rhs)?;
+    Ok(Some(Stmt::ObjectAssign { target, key, expr }))
 }
 
 fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -11472,6 +12228,22 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::ParseFloat(Box::new(value)));
     }
 
+    if let Some(value) = parse_json_parse_expr(src)? {
+        return Ok(Expr::JsonParse(Box::new(value)));
+    }
+
+    if let Some(value) = parse_json_stringify_expr(src)? {
+        return Ok(Expr::JsonStringify(Box::new(value)));
+    }
+
+    if let Some(entries) = parse_object_literal_expr(src)? {
+        return Ok(Expr::ObjectLiteral(entries));
+    }
+
+    if let Some(expr) = parse_object_static_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(value) = parse_fetch_expr(src)? {
         return Ok(Expr::Fetch(Box::new(value)));
     }
@@ -11599,6 +12371,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some((target, prop)) = parse_dom_access(src)? {
         return Ok(Expr::DomRead { target, prop });
+    }
+
+    if let Some(expr) = parse_object_has_own_property_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_object_get_expr(src)? {
+        return Ok(expr);
     }
 
     if let Some(target) = parse_element_ref_expr(src)? {
@@ -12156,6 +12936,374 @@ fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(value))
+}
+
+fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("JSON") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("parse") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "JSON.parse requires exactly one argument".into(),
+        ));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(value))
+}
+
+fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("JSON") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("stringify") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "JSON.stringify requires exactly one argument".into(),
+        ));
+    }
+
+    let value = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(value))
+}
+
+fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(String, Expr)>>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'{') {
+        return Ok(None);
+    }
+
+    let entries_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let entries = split_top_level_by_char(&entries_src, b',');
+    if entries.len() == 1 && entries[0].trim().is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return Err(Error::ScriptParse(
+                "object literal does not support empty entries".into(),
+            ));
+        }
+
+        let Some(colon) = find_first_top_level_colon(entry) else {
+            return Err(Error::ScriptParse(
+                "object literal entry must use key: value".into(),
+            ));
+        };
+
+        let key_src = entry[..colon].trim();
+        let value_src = entry[colon + 1..].trim();
+        if value_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "object literal value cannot be empty".into(),
+            ));
+        }
+
+        let key = if (key_src.starts_with('\'') && key_src.ends_with('\''))
+            || (key_src.starts_with('"') && key_src.ends_with('"'))
+        {
+            parse_string_literal_exact(key_src)?
+        } else if is_ident(key_src) {
+            key_src.to_string()
+        } else {
+            return Err(Error::ScriptParse(
+                "object literal key must be identifier or string literal".into(),
+            ));
+        };
+
+        out.push((key, parse_expr(value_src)?));
+    }
+
+    Ok(Some(out))
+}
+
+fn find_first_top_level_colon(src: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b':' if paren == 0 && bracket == 0 && brace == 0 => return Some(i),
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    None
+}
+
+fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Object") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let expr = match method.as_str() {
+        "keys" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.keys requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectKeys(Box::new(parse_expr(args[0].trim())?))
+        }
+        "values" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.values requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectValues(Box::new(parse_expr(args[0].trim())?))
+        }
+        "entries" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.entries requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectEntries(Box::new(parse_expr(args[0].trim())?))
+        }
+        "hasOwn" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.hasOwn requires exactly two arguments".into(),
+                ));
+            }
+            Expr::ObjectHasOwn {
+                object: Box::new(parse_expr(args[0].trim())?),
+                key: Box::new(parse_expr(args[1].trim())?),
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(expr))
+}
+
+fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("hasOwnProperty") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "hasOwnProperty requires exactly one argument".into(),
+        ));
+    }
+    let key = parse_expr(args[0].trim())?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::ObjectHasOwnProperty {
+        target,
+        key: Box::new(key),
+    }))
+}
+
+fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(key) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::ObjectGet { target, key }))
 }
 
 fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
@@ -13321,6 +14469,9 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
+            if matches!(target, DomQuery::Var(_)) {
+                return Ok(None);
+            }
             let prop_label = if let Some(nested) = nested {
                 format!("{head}.{nested}")
             } else {
@@ -22178,6 +23329,14 @@ mod tests {
                 "parseInt requires one or two arguments",
             ),
             (
+                "<script>JSON.parse();</script>",
+                "JSON.parse requires exactly one argument",
+            ),
+            (
+                "<script>window.JSON.stringify('x', 1);</script>",
+                "JSON.stringify requires exactly one argument",
+            ),
+            (
                 "<script>fetch();</script>",
                 "fetch requires exactly one argument",
             ),
@@ -22200,6 +23359,26 @@ mod tests {
             (
                 "<script>Array.isArray();</script>",
                 "Array.isArray requires exactly one argument",
+            ),
+            (
+                "<script>Object.keys();</script>",
+                "Object.keys requires exactly one argument",
+            ),
+            (
+                "<script>window.Object.values(1, 2);</script>",
+                "Object.values requires exactly one argument",
+            ),
+            (
+                "<script>Object.entries();</script>",
+                "Object.entries requires exactly one argument",
+            ),
+            (
+                "<script>Object.hasOwn({ a: 1 });</script>",
+                "Object.hasOwn requires exactly two arguments",
+            ),
+            (
+                "<script>const obj = {}; obj.hasOwnProperty();</script>",
+                "hasOwnProperty requires exactly one argument",
             ),
         ];
 
@@ -22402,6 +23581,207 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "3.5:-250:false:42")?;
+        Ok(())
+    }
+
+    #[test]
+    fn json_parse_and_stringify_roundtrip_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = '{"a":1,"b":[true,null,"x"],"c":{"d":2}}';
+            const parsed = JSON.parse(source);
+            const out = JSON.stringify(parsed);
+            const arr = JSON.parse('[1,2,3]');
+            const viaWindow = window.JSON.stringify(window.JSON.parse('{"x":"y"}'));
+            document.getElementById('result').textContent = out + '|' + JSON.stringify(arr) + '|' + viaWindow;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "{\"a\":1,\"b\":[true,null,\"x\"],\"c\":{\"d\":2}}|[1,2,3]|{\"x\":\"y\"}",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn json_stringify_handles_special_values() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parsed = JSON.parse('"\\u3042\\n\\t"');
+            const encoded = JSON.stringify(parsed);
+            const topUndefined = JSON.stringify(undefined);
+            const finite = JSON.stringify(1.5);
+            const nan = JSON.stringify(NaN);
+            const inf = JSON.stringify(Infinity);
+            const arr = JSON.stringify([1, undefined, NaN, Infinity]);
+            const obj = JSON.stringify(JSON.parse('{"a":1,"b":null}'));
+            document.getElementById('result').textContent =
+              encoded + '|' + topUndefined + '|' + finite + '|' + nan + '|' + inf + '|' + arr + '|' + obj;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "\"あ\\n\\t\"|undefined|1.5|null|null|[1,null,null,null]|{\"a\":1,\"b\":null}",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn json_parse_invalid_input_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            JSON.parse('{bad json}');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("JSON.parse should fail for invalid input");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("JSON.parse invalid JSON")),
+            other => panic!("unexpected JSON.parse error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn json_stringify_circular_array_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [1];
+            arr.push(arr);
+            JSON.stringify(arr);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("JSON.stringify should fail for circular array");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("JSON.stringify circular structure")),
+            other => panic!("unexpected JSON.stringify error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn object_literal_property_access_and_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { a: 1, "b": 2, a: 3 };
+            obj.c = 4;
+            obj['d'] = obj.a + obj.b;
+            obj.value = 'v';
+
+            const keys = Object.keys(obj);
+            const values = Object.values(obj);
+            const entries = Object.entries(obj);
+            const firstEntry = entries[0];
+            const lastEntry = entries[4];
+            const ownA = Object.hasOwn(obj, 'a');
+            const ownZ = window.Object.hasOwn(obj, 'z');
+            const ownD = obj.hasOwnProperty('d');
+
+            document.getElementById('result').textContent =
+              obj.a + ':' + obj.b + ':' + obj.c + ':' + obj.d + ':' + obj.value + '|' +
+              keys.join(',') + '|' +
+              values.join(',') + '|' +
+              firstEntry[0] + ':' + firstEntry[1] + ':' + lastEntry[0] + ':' + lastEntry[1] + '|' +
+              ownA + ':' + ownZ + ':' + ownD;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "3:2:4:5:v|a,b,c,d,value|3,2,4,5,v|a:3:value:v|true:false:true",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn object_property_access_missing_key_returns_undefined() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { ok: 'yes' };
+            document.getElementById('result').textContent =
+              obj.missing + ':' + (typeof obj.missing) + ':' + obj.ok;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "undefined:undefined:yes")?;
+        Ok(())
+    }
+
+    #[test]
+    fn object_method_runtime_type_errors_are_reported() -> Result<()> {
+        let html = r#"
+        <button id='keys'>keys</button>
+        <button id='own'>own</button>
+        <script>
+          document.getElementById('keys').addEventListener('click', () => {
+            Object.keys(1);
+          });
+          document.getElementById('own').addEventListener('click', () => {
+            const x = 1;
+            x.hasOwnProperty('a');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+
+        let keys_err = h
+            .click("#keys")
+            .expect_err("Object.keys should reject non-object argument");
+        match keys_err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Object.keys argument must be an object"))
+            }
+            other => panic!("unexpected Object.keys error: {other:?}"),
+        }
+
+        let own_err = h
+            .click("#own")
+            .expect_err("hasOwnProperty should reject non-object receiver");
+        match own_err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("is not an object")),
+            other => panic!("unexpected hasOwnProperty error: {other:?}"),
+        }
+
         Ok(())
     }
 

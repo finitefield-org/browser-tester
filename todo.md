@@ -25,7 +25,7 @@
 - [ ] `structuredClone` をサポートする
 - [ ] `matchMedia` をサポートする
 - [x] `alert` / `confirm` / `prompt` をサポートする（`confirm`/`prompt` の返り値モックを含む）
-- [ ] `JSON.parse` / `JSON.stringify` をサポートする
+- [x] `JSON.parse` / `JSON.stringify` をサポートする
 
 ## 3. `String` オブジェクト関数 (実装 / テスト)
 
@@ -53,3 +53,10 @@
 - [x] `map` / `filter` / `reduce` をサポートする
 - [x] `forEach` / `find` / `some` / `every` / `includes` をサポートする
 - [x] `slice` / `splice` / `join` をサポートする
+
+## 6. `Object` オブジェクト関数 (実装 / テスト)
+
+- [x] オブジェクトリテラル (`{}`) をサポートする
+- [x] プロパティ参照 (`obj.key`) と代入 (`obj.key = ...`, `obj['key'] = ...`) をサポートする
+- [x] `Object.keys` / `Object.values` / `Object.entries` をサポートする
+- [x] `Object.hasOwn` / `obj.hasOwnProperty` をサポートする
