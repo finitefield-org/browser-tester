@@ -279,11 +279,165 @@ impl Dom {
     }
 
     fn set_value(&mut self, node_id: NodeId, value: &str) -> Result<()> {
+        if self
+            .tag_name(node_id)
+            .map(|tag| tag.eq_ignore_ascii_case("select"))
+            .unwrap_or(false)
+        {
+            return self.set_select_value(node_id, value);
+        }
+
         let element = self
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
         element.value = value.to_string();
         Ok(())
+    }
+
+    fn initialize_form_control_values(&mut self) -> Result<()> {
+        let nodes = self.all_element_nodes();
+        for node in nodes {
+            let is_textarea = self
+                .tag_name(node)
+                .map(|tag| tag.eq_ignore_ascii_case("textarea"))
+                .unwrap_or(false);
+            if is_textarea {
+                let text = self.text_content(node);
+                let element = self.element_mut(node).ok_or_else(|| {
+                    Error::ScriptRuntime("textarea target is not an element".into())
+                })?;
+                element.value = text;
+                continue;
+            }
+
+            let is_select = self
+                .tag_name(node)
+                .map(|tag| tag.eq_ignore_ascii_case("select"))
+                .unwrap_or(false);
+            if is_select {
+                self.sync_select_value(node)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_select_value_for_option(&mut self, option_node: NodeId) -> Result<()> {
+        if !self
+            .tag_name(option_node)
+            .map(|tag| tag.eq_ignore_ascii_case("option"))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let Some(select_node) = self.find_ancestor_by_tag(option_node, "select") else {
+            return Ok(());
+        };
+        self.sync_select_value(select_node)
+    }
+
+    fn set_select_value(&mut self, select_node: NodeId, requested: &str) -> Result<()> {
+        let tag = self
+            .tag_name(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+        if !tag.eq_ignore_ascii_case("select") {
+            return Err(Error::ScriptRuntime(
+                "set value target is not a select".into(),
+            ));
+        }
+
+        let mut options = Vec::new();
+        self.collect_select_options(select_node, &mut options);
+
+        let mut option_values = Vec::with_capacity(options.len());
+        for option in options {
+            option_values.push((option, self.option_effective_value(option)?));
+        }
+
+        let matched = option_values
+            .iter()
+            .find(|(_, value)| value == requested)
+            .map(|(node, value)| (*node, value.clone()));
+
+        for (option, _) in &option_values {
+            let option_element = self
+                .element_mut(*option)
+                .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
+            if Some(*option) == matched.as_ref().map(|(node, _)| *node) {
+                option_element
+                    .attrs
+                    .insert("selected".to_string(), "true".to_string());
+            } else {
+                option_element.attrs.remove("selected");
+            }
+        }
+
+        let element = self
+            .element_mut(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+        element.value = matched.map(|(_, value)| value).unwrap_or_default();
+        Ok(())
+    }
+
+    fn sync_select_value(&mut self, select_node: NodeId) -> Result<()> {
+        let value = self.select_value_from_options(select_node)?;
+        let element = self
+            .element_mut(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+        element.value = value;
+        Ok(())
+    }
+
+    fn select_value_from_options(&self, select_node: NodeId) -> Result<String> {
+        let tag = self
+            .tag_name(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+        if !tag.eq_ignore_ascii_case("select") {
+            return Err(Error::ScriptRuntime(
+                "select value target is not a select".into(),
+            ));
+        }
+
+        let mut options = Vec::new();
+        self.collect_select_options(select_node, &mut options);
+        if options.is_empty() {
+            return Ok(String::new());
+        }
+
+        let selected = options
+            .iter()
+            .copied()
+            .find(|option| self.attr(*option, "selected").is_some())
+            .unwrap_or(options[0]);
+        self.option_effective_value(selected)
+    }
+
+    fn collect_select_options(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        for child in &self.nodes[node.0].children {
+            if self
+                .tag_name(*child)
+                .map(|tag| tag.eq_ignore_ascii_case("option"))
+                .unwrap_or(false)
+            {
+                out.push(*child);
+            }
+            self.collect_select_options(*child, out);
+        }
+    }
+
+    fn option_effective_value(&self, option_node: NodeId) -> Result<String> {
+        let element = self
+            .element(option_node)
+            .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
+        if !element.tag_name.eq_ignore_ascii_case("option") {
+            return Err(Error::ScriptRuntime(
+                "option target is not an option".into(),
+            ));
+        }
+        if let Some(value) = element.attrs.get("value") {
+            return Ok(value.clone());
+        }
+        Ok(self.text_content(option_node))
     }
 
     fn checked(&self, node_id: NodeId) -> Result<bool> {
@@ -325,21 +479,23 @@ impl Dom {
             None
         };
         let connected = self.is_connected(node_id);
+        let (is_option, lowered) = {
+            let element = self.element_mut(node_id).ok_or_else(|| {
+                Error::ScriptRuntime("setAttribute target is not an element".into())
+            })?;
+            let is_option = element.tag_name.eq_ignore_ascii_case("option");
+            let lowered = name.to_ascii_lowercase();
+            element.attrs.insert(lowered.clone(), value.to_string());
 
-        let element = self
-            .element_mut(node_id)
-            .ok_or_else(|| Error::ScriptRuntime("setAttribute target is not an element".into()))?;
-
-        let lowered = name.to_ascii_lowercase();
-        element.attrs.insert(lowered.clone(), value.to_string());
-
-        if lowered == "value" {
-            element.value = value.to_string();
-        } else if lowered == "checked" {
-            element.checked = true;
-        } else if lowered == "disabled" {
-            element.disabled = true;
-        }
+            if lowered == "value" {
+                element.value = value.to_string();
+            } else if lowered == "checked" {
+                element.checked = true;
+            } else if lowered == "disabled" {
+                element.disabled = true;
+            }
+            (is_option, lowered)
+        };
 
         if lowered == "id" && connected {
             if let Some(old) = old_id {
@@ -348,6 +504,10 @@ impl Dom {
             if !value.is_empty() {
                 self.id_index.insert(value.to_string(), node_id);
             }
+        }
+
+        if is_option && (lowered == "selected" || lowered == "value") {
+            self.sync_select_value_for_option(node_id)?;
         }
 
         Ok(())
@@ -362,24 +522,31 @@ impl Dom {
             None
         };
         let connected = self.is_connected(node_id);
+        let is_option = {
+            let element = self.element_mut(node_id).ok_or_else(|| {
+                Error::ScriptRuntime("removeAttribute target is not an element".into())
+            })?;
+            let is_option = element.tag_name.eq_ignore_ascii_case("option");
+            element.attrs.remove(&lowered);
 
-        let element = self.element_mut(node_id).ok_or_else(|| {
-            Error::ScriptRuntime("removeAttribute target is not an element".into())
-        })?;
-        element.attrs.remove(&lowered);
-
-        if lowered == "value" {
-            element.value.clear();
-        } else if lowered == "checked" {
-            element.checked = false;
-        } else if lowered == "disabled" {
-            element.disabled = false;
-        }
+            if lowered == "value" {
+                element.value.clear();
+            } else if lowered == "checked" {
+                element.checked = false;
+            } else if lowered == "disabled" {
+                element.disabled = false;
+            }
+            is_option
+        };
 
         if lowered == "id" && connected {
             if let Some(old) = old_id {
                 self.id_index.remove(&old);
             }
+        }
+
+        if is_option && (lowered == "selected" || lowered == "value") {
+            self.sync_select_value_for_option(node_id)?;
         }
 
         Ok(())
@@ -1331,6 +1498,7 @@ enum Value {
     Number(i64),
     Float(f64),
     Node(NodeId),
+    FormData(Vec<(String, String)>),
 }
 
 impl Value {
@@ -1341,6 +1509,7 @@ impl Value {
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
             Self::Node(_) => true,
+            Self::FormData(_) => true,
         }
     }
 
@@ -1357,6 +1526,7 @@ impl Value {
             Self::Number(v) => v.to_string(),
             Self::Float(v) => format_float(*v),
             Self::Node(node) => format!("node-{}", node.0),
+            Self::FormData(_) => "[object FormData]".into(),
         }
     }
 }
@@ -1379,6 +1549,13 @@ enum DomQuery {
     ById(String),
     BySelector(String),
     BySelectorAllIndex { selector: String, index: usize },
+    FormElementsIndex { form: Box<DomQuery>, index: usize },
+    Var(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FormDataSource {
+    NewForm(DomQuery),
     Var(String),
 }
 
@@ -1389,6 +1566,9 @@ impl DomQuery {
             Self::BySelector(selector) => format!("document.querySelector('{selector}')"),
             Self::BySelectorAllIndex { selector, index } => {
                 format!("document.querySelectorAll('{selector}')[{index}]")
+            }
+            Self::FormElementsIndex { form, index } => {
+                format!("{}.elements[{index}]", form.describe_call())
             }
             Self::Var(name) => name.clone(),
         }
@@ -1462,6 +1642,24 @@ enum Expr {
     QuerySelectorAllLength {
         selector: String,
     },
+    FormElementsLength {
+        form: DomQuery,
+    },
+    FormDataNew {
+        form: DomQuery,
+    },
+    FormDataGet {
+        source: FormDataSource,
+        name: String,
+    },
+    FormDataHas {
+        source: FormDataSource,
+        name: String,
+    },
+    FormDataGetAllLength {
+        source: FormDataSource,
+        name: String,
+    },
     DomGetAttribute {
         target: DomQuery,
         name: String,
@@ -1516,6 +1714,11 @@ enum Stmt {
     VarDecl {
         name: String,
         expr: Expr,
+    },
+    FormDataAppend {
+        target_var: String,
+        name: Expr,
+        value: Expr,
     },
     DomAssign {
         target: DomQuery,
@@ -2268,6 +2471,117 @@ impl Harness {
         }
     }
 
+    fn form_elements(&self, form: NodeId) -> Result<Vec<NodeId>> {
+        let tag = self
+            .dom
+            .tag_name(form)
+            .ok_or_else(|| Error::ScriptRuntime("elements target is not an element".into()))?;
+        if !tag.eq_ignore_ascii_case("form") {
+            return Err(Error::ScriptRuntime(format!(
+                "{}.elements target is not a form",
+                self.event_node_label(form)
+            )));
+        }
+
+        let mut out = Vec::new();
+        self.collect_form_controls(form, &mut out);
+        Ok(out)
+    }
+
+    fn form_data_entries(&self, form: NodeId) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        for control in self.form_elements(form)? {
+            if !self.is_successful_form_data_control(control)? {
+                continue;
+            }
+            let name = self.dom.attr(control, "name").unwrap_or_default();
+            let value = self.form_data_control_value(control)?;
+            out.push((name, value));
+        }
+        Ok(out)
+    }
+
+    fn is_successful_form_data_control(&self, control: NodeId) -> Result<bool> {
+        if self.dom.disabled(control) {
+            return Ok(false);
+        }
+        let name = self.dom.attr(control, "name").unwrap_or_default();
+        if name.is_empty() {
+            return Ok(false);
+        }
+
+        let tag = self
+            .dom
+            .tag_name(control)
+            .ok_or_else(|| Error::ScriptRuntime("FormData target is not an element".into()))?;
+
+        if tag.eq_ignore_ascii_case("button") {
+            return Ok(false);
+        }
+
+        if tag.eq_ignore_ascii_case("input") {
+            let kind = self
+                .dom
+                .attr(control, "type")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if matches!(
+                kind.as_str(),
+                "button" | "submit" | "reset" | "file" | "image"
+            ) {
+                return Ok(false);
+            }
+            if kind == "checkbox" || kind == "radio" {
+                return self.dom.checked(control);
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn form_data_control_value(&self, control: NodeId) -> Result<String> {
+        let mut value = self.dom.value(control)?;
+        if value.is_empty()
+            && (is_checkbox_input(&self.dom, control) || is_radio_input(&self.dom, control))
+        {
+            value = "on".into();
+        }
+        Ok(value)
+    }
+
+    fn eval_form_data_source(
+        &self,
+        source: &FormDataSource,
+        env: &HashMap<String, Value>,
+    ) -> Result<Vec<(String, String)>> {
+        match source {
+            FormDataSource::NewForm(form) => {
+                let form_node = self.resolve_dom_query_required_runtime(form, env)?;
+                self.form_data_entries(form_node)
+            }
+            FormDataSource::Var(name) => match env.get(name) {
+                Some(Value::FormData(entries)) => Ok(entries.clone()),
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not a FormData instance",
+                    name
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown FormData variable: {}",
+                    name
+                ))),
+            },
+        }
+    }
+
+    fn collect_form_controls(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        for child in &self.dom.nodes[node.0].children {
+            if is_form_control(&self.dom, *child) {
+                out.push(*child);
+            }
+            self.collect_form_controls(*child, out);
+        }
+    }
+
     fn uncheck_other_radios_in_group(&mut self, target: NodeId) -> Result<()> {
         let target_name = self.dom.attr(target, "name").unwrap_or_default();
         if target_name.is_empty() {
@@ -2443,6 +2757,24 @@ impl Harness {
                             }
                         }
                     }
+                }
+                Stmt::FormDataAppend {
+                    target_var,
+                    name,
+                    value,
+                } => {
+                    let name = self.eval_expr(name, env, event_param, event)?;
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let entries = env.get_mut(target_var).ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unknown FormData variable: {}", target_var))
+                    })?;
+                    let Value::FormData(entries) = entries else {
+                        return Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a FormData instance",
+                            target_var
+                        )));
+                    };
+                    entries.push((name.as_string(), value.as_string()));
                 }
                 Stmt::DomAssign { target, prop, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -2782,6 +3114,36 @@ impl Harness {
                 let len = self.dom.query_selector_all(selector)?.len() as i64;
                 Ok(Value::Number(len))
             }
+            Expr::FormElementsLength { form } => {
+                let form_node = self.resolve_dom_query_required_runtime(form, env)?;
+                let len = self.form_elements(form_node)?.len() as i64;
+                Ok(Value::Number(len))
+            }
+            Expr::FormDataNew { form } => {
+                let form_node = self.resolve_dom_query_required_runtime(form, env)?;
+                Ok(Value::FormData(self.form_data_entries(form_node)?))
+            }
+            Expr::FormDataGet { source, name } => {
+                let entries = self.eval_form_data_source(source, env)?;
+                let value = entries
+                    .iter()
+                    .find_map(|(entry_name, value)| (entry_name == name).then(|| value.clone()))
+                    .unwrap_or_default();
+                Ok(Value::String(value))
+            }
+            Expr::FormDataHas { source, name } => {
+                let entries = self.eval_form_data_source(source, env)?;
+                let has = entries.iter().any(|(entry_name, _)| entry_name == name);
+                Ok(Value::Bool(has))
+            }
+            Expr::FormDataGetAllLength { source, name } => {
+                let entries = self.eval_form_data_source(source, env)?;
+                let len = entries
+                    .iter()
+                    .filter(|(entry_name, _)| entry_name == name)
+                    .count() as i64;
+                Ok(Value::Number(len))
+            }
             Expr::DomGetAttribute { target, name } => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 Ok(Value::String(self.dom.attr(node, name).unwrap_or_default()))
@@ -2895,6 +3257,7 @@ impl Harness {
             (Value::Float(l), Value::Number(r)) => *l == (*r as f64),
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
+            (Value::FormData(l), Value::FormData(r)) => l == r,
             _ => false,
         }
     }
@@ -2941,6 +3304,13 @@ impl Harness {
                 let all = self.dom.query_selector_all(selector)?;
                 Ok(all.get(*index).copied())
             }
+            DomQuery::FormElementsIndex { form, index } => {
+                let Some(form_node) = self.resolve_dom_query_static(form)? else {
+                    return Ok(None);
+                };
+                let all = self.form_elements(form_node)?;
+                Ok(all.get(*index).copied())
+            }
             DomQuery::Var(_) => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
             )),
@@ -2964,6 +3334,13 @@ impl Harness {
                     name
                 ))),
             },
+            DomQuery::FormElementsIndex { form, index } => {
+                let Some(form_node) = self.resolve_dom_query_runtime(form, env)? else {
+                    return Ok(None);
+                };
+                let all = self.form_elements(form_node)?;
+                Ok(all.get(*index).copied())
+            }
             _ => self.resolve_dom_query_static(target),
         }
     }
@@ -3019,6 +3396,7 @@ impl Harness {
                 .or_else(|| v.parse::<f64>().ok().map(|n| n as i64))
                 .unwrap_or(0),
             Value::Node(_) => 0,
+            Value::FormData(_) => 0,
         }
     }
 
@@ -3234,6 +3612,10 @@ fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegist
 fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
+    if let Ok(target) = parse_form_elements_item_target(cursor) {
+        return Ok(target);
+    }
+    cursor.set_pos(start);
     if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
     }
@@ -3243,6 +3625,39 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     }
     Err(Error::ScriptParse(format!(
         "expected element target at {}",
+        start
+    )))
+}
+
+fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+    let form = parse_form_elements_base(cursor)?;
+    cursor.skip_ws();
+    cursor.expect_byte(b'.')?;
+    cursor.skip_ws();
+    cursor.expect_ascii("elements")?;
+    cursor.skip_ws();
+    cursor.expect_byte(b'[')?;
+    cursor.skip_ws();
+    let index = cursor.parse_usize()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b']')?;
+    Ok(DomQuery::FormElementsIndex {
+        form: Box::new(form),
+        index,
+    })
+}
+
+fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+    let start = cursor.pos();
+    if let Ok(target) = parse_document_element_call(cursor) {
+        return Ok(target);
+    }
+    cursor.set_pos(start);
+    if let Some(name) = cursor.parse_identifier() {
+        return Ok(DomQuery::Var(name));
+    }
+    Err(Error::ScriptParse(format!(
+        "expected form target at {}",
         start
     )))
 }
@@ -3365,6 +3780,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_var_decl(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_form_data_append_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -3734,6 +4153,54 @@ fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::VarDecl {
         name: name.to_string(),
         expr,
+    }))
+}
+
+fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    let Some(target_var) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if method != "append" {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 2 {
+        return Ok(None);
+    }
+
+    let name = parse_expr(args[0].trim())?;
+    let value = parse_expr(args[1].trim())?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported FormData.append statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::FormDataAppend {
+        target_var,
+        name,
+        value,
     }))
 }
 
@@ -4823,12 +5290,36 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::QuerySelectorAllLength { selector });
     }
 
+    if let Some(form) = parse_form_elements_length_expr(src)? {
+        return Ok(Expr::FormElementsLength { form });
+    }
+
+    if let Some((source, name)) = parse_form_data_get_all_length_expr(src)? {
+        return Ok(Expr::FormDataGetAllLength { source, name });
+    }
+
+    if let Some((source, name)) = parse_form_data_get_expr(src)? {
+        return Ok(Expr::FormDataGet { source, name });
+    }
+
+    if let Some((source, name)) = parse_form_data_has_expr(src)? {
+        return Ok(Expr::FormDataHas { source, name });
+    }
+
+    if let Some(form) = parse_new_form_data_expr(src)? {
+        return Ok(Expr::FormDataNew { form });
+    }
+
     if let Some((target, name)) = parse_get_attribute_expr(src)? {
         return Ok(Expr::DomGetAttribute { target, name });
     }
 
     if let Some((target, name)) = parse_has_attribute_expr(src)? {
         return Ok(Expr::DomHasAttribute { target, name });
+    }
+
+    if let Some(target) = parse_form_elements_item_expr(src)? {
+        return Ok(Expr::DomRef(target));
     }
 
     if let Some(target) = parse_document_element_expr(src)? {
@@ -5313,6 +5804,204 @@ fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<String>> {
     }
 
     Ok(Some(selector))
+}
+
+fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let form = match parse_form_elements_base(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("elements") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("length") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(form))
+}
+
+fn parse_form_elements_item_expr(src: &str) -> Result<Option<DomQuery>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let target = match parse_form_elements_item_target(&mut cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(target))
+}
+
+fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(form) = parse_new_form_data_target(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(form))
+}
+
+fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+    parse_form_data_method_expr(src, "get")
+}
+
+fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+    parse_form_data_method_expr(src, "has")
+}
+
+fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let Some(source) = parse_form_data_source(&mut cursor)? else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if method != "getAll" {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let name = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("length") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some((source, name)))
+}
+
+fn parse_form_data_method_expr(
+    src: &str,
+    method: &str,
+) -> Result<Option<(FormDataSource, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let Some(source) = parse_form_data_source(&mut cursor)? else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(actual_method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if actual_method != method {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    let name = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some((source, name)))
+}
+
+fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
+    if let Some(form) = parse_new_form_data_target(cursor)? {
+        return Ok(Some(FormDataSource::NewForm(form)));
+    }
+
+    if let Some(var_name) = cursor.parse_identifier() {
+        return Ok(Some(FormDataSource::Var(var_name)));
+    }
+
+    Ok(None)
+}
+
+fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
+    cursor.skip_ws();
+    let start = cursor.pos();
+
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            cursor.set_pos(start);
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("FormData") {
+        cursor.set_pos(start);
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(args_src.trim(), b',');
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(
+            "new FormData requires exactly one argument".into(),
+        ));
+    }
+
+    let arg = args[0].trim();
+    let mut arg_cursor = Cursor::new(arg);
+    arg_cursor.skip_ws();
+    let form = parse_form_elements_base(&mut arg_cursor)?;
+    arg_cursor.skip_ws();
+    if !arg_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported FormData argument: {arg}"
+        )));
+    }
+
+    Ok(Some(form))
 }
 
 fn parse_string_literal_exact(src: &str) -> Result<String> {
@@ -5893,6 +6582,7 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
         }
     }
 
+    dom.initialize_form_control_values()?;
     Ok(ParseOutput { dom, scripts })
 }
 
@@ -6121,6 +6811,17 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
         i += 1;
     }
     None
+}
+
+fn is_form_control(dom: &Dom, node_id: NodeId) -> bool {
+    let Some(element) = dom.element(node_id) else {
+        return false;
+    };
+
+    element.tag_name.eq_ignore_ascii_case("input")
+        || element.tag_name.eq_ignore_ascii_case("select")
+        || element.tag_name.eq_ignore_ascii_case("textarea")
+        || element.tag_name.eq_ignore_ascii_case("button")
 }
 
 fn is_checkbox_input(dom: &Dom, node_id: NodeId) -> bool {
@@ -6503,6 +7204,379 @@ mod tests {
     }
 
     #[test]
+    fn form_elements_length_and_index_work() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' value='N'>
+          <textarea id='bio'>B</textarea>
+          <button id='ok' type='button'>OK</button>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('f');
+            document.getElementById('result').textContent =
+              form.elements.length + ':' +
+              form.elements[0].id + ':' +
+              form.elements[1].id + ':' +
+              form.elements[2].id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:name:bio:ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_elements_index_supports_direct_property_access() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='a' value='X'>
+          <input id='b' value='Y'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('f').elements[1].value;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "Y")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_elements_out_of_range_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='a' value='X'>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('f').elements[5].id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("out-of-range index should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("elements[5]"));
+                assert!(msg.contains("returned null"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn textarea_initial_value_is_loaded_from_markup_text() -> Result<()> {
+        let html = r#"
+        <textarea id='bio' name='bio'>HELLO</textarea>
+        "#;
+
+        let h = Harness::from_html(html)?;
+        h.assert_value("#bio", "HELLO")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_get_and_has_work_with_form_controls() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='Taro'>
+          <input id='agree' name='agree' type='checkbox' checked>
+          <input id='skip' name='skip' type='checkbox'>
+          <input id='disabled' name='disabled' value='x' disabled>
+          <button id='submit' name='submit' type='submit' value='go'>Go</button>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('f');
+            const fd = new FormData(form);
+            document.getElementById('result').textContent =
+              fd.get('name') + ':' +
+              fd.get('agree') + ':' +
+              fd.has('skip') + ':' +
+              fd.has('disabled') + ':' +
+              fd.has('submit');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "Taro:on:false:false:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_uses_textarea_and_select_initial_values() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <textarea id='bio' name='bio'>HELLO</textarea>
+          <select id='kind' name='kind'>
+            <option id='k1' value='A'>Alpha</option>
+            <option id='k2' selected>Beta</option>
+          </select>
+          <select id='city' name='city'>
+            <option id='c1' value='tokyo'>Tokyo</option>
+            <option id='c2' value='osaka'>Osaka</option>
+          </select>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            document.getElementById('result').textContent =
+              fd.get('bio') + ':' + fd.get('kind') + ':' + fd.get('city');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "HELLO:Beta:tokyo")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_reflects_option_selected_attribute_mutation() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <select id='kind' name='kind'>
+            <option id='k1' selected value='A'>Alpha</option>
+            <option id='k2' value='B'>Beta</option>
+          </select>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('k1').removeAttribute('selected');
+            document.getElementById('k2').setAttribute('selected', 'true');
+            const fd = new FormData(document.getElementById('f'));
+            document.getElementById('result').textContent = fd.get('kind');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn select_value_assignment_updates_selected_option_and_form_data() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <select id='kind' name='kind'>
+            <option id='k1' selected value='A'>Alpha</option>
+            <option id='k2' value='B'>Beta</option>
+          </select>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sel = document.getElementById('kind');
+            sel.value = 'B';
+            const fd = new FormData(document.getElementById('f'));
+            document.getElementById('result').textContent =
+              fd.get('kind') + ':' +
+              document.getElementById('k1').hasAttribute('selected') + ':' +
+              document.getElementById('k2').hasAttribute('selected') + ':' +
+              sel.value;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "B:false:true:B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn select_value_assignment_can_match_option_text_without_value_attribute() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <select id='kind' name='kind'>
+            <option id='k1'>Alpha</option>
+            <option id='k2'>Beta</option>
+          </select>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sel = document.getElementById('kind');
+            sel.value = 'Beta';
+            const fd = new FormData(document.getElementById('f'));
+            document.getElementById('result').textContent =
+              fd.get('kind') + ':' +
+              sel.value + ':' +
+              document.getElementById('k1').hasAttribute('selected') + ':' +
+              document.getElementById('k2').hasAttribute('selected');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "Beta:Beta:false:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_inline_constructor_call_works() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='Hanako'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              new FormData(document.getElementById('f')).get('name') + ':' +
+              new FormData(document.getElementById('f')).has('missing') + ':' +
+              new FormData(document.getElementById('f')).get('missing');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "Hanako:false:")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_get_all_length_and_append_work() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='t1' name='tag' value='A'>
+          <input id='t2' name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            fd.append('tag', 'C');
+            fd.append('other', 123);
+            document.getElementById('result').textContent =
+              fd.get('tag') + ':' +
+              fd.getAll('tag').length + ':' +
+              fd.getAll('other').length + ':' +
+              fd.get('other');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A:3:1:123")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_get_all_length_inline_constructor_works() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='t1' name='tag' value='A'>
+          <input id='t2' name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              new FormData(document.getElementById('f')).getAll('tag').length + ':' +
+              new FormData(document.getElementById('f')).getAll('missing').length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_method_on_non_form_data_variable_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='Hanako'>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = document.getElementById('f');
+            fd.get('name');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("non-FormData variable should fail on .get()");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("is not a FormData instance"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_append_on_non_form_data_variable_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='Hanako'>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = document.getElementById('f');
+            fd.append('k', 'v');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("non-FormData variable should fail on .append()");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("is not a FormData instance"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn stop_propagation_works() -> Result<()> {
         let html = r#"
         <div id='root'>
@@ -6523,6 +7597,81 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "btn")?;
+        Ok(())
+    }
+
+    #[test]
+    fn capture_listeners_fire_in_expected_order() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <div id='parent'>
+            <button id='btn'>X</button>
+          </div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('root').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'R';
+          }, true);
+          document.getElementById('parent').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'P';
+          }, true);
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'C';
+          }, true);
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'B';
+          });
+          document.getElementById('parent').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'p';
+          });
+          document.getElementById('root').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'r';
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "RPCBpr")?;
+        Ok(())
+    }
+
+    #[test]
+    fn remove_event_listener_respects_capture_flag() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'C';
+          }, true);
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'B';
+          });
+
+          document.getElementById('btn').removeEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'C';
+          });
+          document.getElementById('btn').removeEventListener('click', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'B';
+          }, true);
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "CB")?;
         Ok(())
     }
 

@@ -80,7 +80,7 @@ flowchart LR
   - `properties: ElementProperties`
 
 `ElementProperties` (MVP):
-- `value: String`（input/textarea）
+- `value: String`（input/textarea/select）
 - `checked: bool`（checkbox/radio）
 - `disabled: bool`
 - `selected_index: Option<usize>`（selectを見据えた拡張）
@@ -111,7 +111,10 @@ MVP対応:
 - 制御構文: `if/else`, 変数宣言, 代入, 三項演算子, 論理/比較演算子
 - 数値リテラル: 整数（例: `1`）と小数（例: `0.5`）
 - 算術演算子: `+`, `-`, `*`, `/`（単項マイナス対応。`+` は左結合で評価し、数値同士は加算・文字列が含まれる場合は連結）
-- DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`
+- DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`,
+  `form.elements.length`, `form.elements[index]`,
+  `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
+  `formData.getAll(name).length`
 - DOM更新: `textContent`, `value`, `checked`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
@@ -122,6 +125,19 @@ MVP対応:
 - 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
 - 乱数: `Math.random()`（決定論PRNGの浮動小数 `0.0 <= x < 1.0` を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
+
+`FormData` の簡易仕様（テスト用途）:
+- `new FormData(form)` は `form.elements` を走査してスナップショットを作る
+- 対象は `name` を持つ有効なコントロールのみ（`disabled` と `button/submit/reset/file/image` は除外）
+- checkbox/radio は `checked=true` のものだけ対象、`value` が空なら `"on"` を使う
+- `.get(name)` は最初の値を返し、存在しない場合は空文字
+- `.has(name)` はキー存在判定を返す
+- `.getAll(name).length` は同一キーの件数を返す
+- `formData.append(name, value)` は末尾に値を追加する（`FormData` 変数に対するstatementのみ対応）
+- `textarea` の初期値は要素本文テキストを使う
+- `select` の初期値は `selected` 付き `option` を優先し、なければ先頭 `option` を使う
+- `option` に `value` 属性がない場合、`option` のテキストを値として使う
+- `select.value = x` 代入時は一致する `option` を1つ選択状態にし、他は非選択にする
 
 ### 7.3 Rust<->Scriptブリッジ
 - ASTノード内の`DomQuery`/`DomProp`を介してDOMへアクセス
@@ -581,7 +597,7 @@ AssertionFailed: assert_text
 - `innerHTML` の仕様拡張（サニタイズ/DOMParser互換性の向上）
 - タイマー相当の安全制御（`flush` ステップ上限や診断情報の改善）
 - `radio` グループ排他
-- `form.elements` / `FormData` 的な最小API
+- `FormData` の追加メソッド（`append`, `getAll` など）
 
 拡張時も「必要なユースケース起点でAPIを足す」方針を維持する。
 
