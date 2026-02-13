@@ -109,3 +109,69 @@ fn debug_ternary_variable() {
     println!("ternary var: {}", h.dump_dom("#result").unwrap());
     h.assert_text("#result", "start:none").unwrap();
 }
+
+#[test]
+fn debug_while_loop() {
+    let html = r#"
+    <button id='btn'>run</button>
+    <p id='result'></p>
+    <script>
+      document.getElementById('btn').addEventListener('click', () => {
+        let counter = 0;
+        let text = '';
+        while (counter < 3) {
+          text += 'x';
+          counter = counter + 1;
+        };
+        document.getElementById('result').textContent = text + ':' + counter;
+      });
+    </script>
+    "#;
+
+    let mut h = Harness::from_html(html).unwrap();
+    h.click("#btn").unwrap();
+    h.assert_text("#result", "xxx:3").unwrap();
+}
+
+#[test]
+fn debug_for_loop() {
+    let html = r#"
+    <button id='btn'>run</button>
+    <p id='result'></p>
+    <script>
+      document.getElementById('btn').addEventListener('click', () => {
+        let text = '';
+        for (let i = 0; i < 3; i = i + 1) {
+          text += 'y';
+        };
+        document.getElementById('result').textContent = text;
+      });
+    </script>
+    "#;
+
+    let mut h = Harness::from_html(html).unwrap();
+    h.click("#btn").unwrap();
+    h.assert_text("#result", "yyy").unwrap();
+}
+
+#[test]
+fn debug_if_block_and_next_statement_without_semicolon() {
+    let html = r#"
+    <button id='btn'>run</button>
+    <p id='result'></p>
+    <script>
+      document.getElementById('btn').addEventListener('click', () => {
+        let text = '';
+        if (true) {
+          text += 'x';
+        }
+        text += 'y';
+        document.getElementById('result').textContent = text;
+      });
+    </script>
+    "#;
+
+    let mut h = Harness::from_html(html).unwrap();
+    h.click("#btn").unwrap();
+    h.assert_text("#result", "xy").unwrap();
+}

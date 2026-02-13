@@ -3049,6 +3049,16 @@ enum Stmt {
         index_var: Option<String>,
         body: Vec<Stmt>,
     },
+    For {
+        init: Option<Box<Stmt>>,
+        cond: Option<Expr>,
+        post: Option<Box<Stmt>>,
+        body: Vec<Stmt>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
     If {
         cond: Expr,
         then_stmts: Vec<Stmt>,
@@ -4465,6 +4475,36 @@ impl Harness {
                         }
                     }
                 }
+                Stmt::For {
+                    init,
+                    cond,
+                    post,
+                    body,
+                } => {
+                    if let Some(init) = init.as_deref() {
+                        self.execute_stmts(std::slice::from_ref(init), event_param, event, env)?;
+                    }
+
+                    loop {
+                        let should_run = if let Some(cond) = cond {
+                            self.eval_expr(cond, env, event_param, event)?.truthy()
+                        } else {
+                            true
+                        };
+                        if !should_run {
+                            break;
+                        }
+                        self.execute_stmts(body, event_param, event, env)?;
+                        if let Some(post) = post.as_deref() {
+                            self.execute_stmts(std::slice::from_ref(post), event_param, event, env)?;
+                        }
+                    }
+                }
+                Stmt::While { cond, body } => {
+                    while self.eval_expr(cond, env, event_param, event)?.truthy() {
+                        self.execute_stmts(body, event_param, event, env)?;
+                    }
+                }
                 Stmt::If {
                     cond,
                     then_stmts,
@@ -5469,6 +5509,14 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_while_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_for_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_query_selector_all_foreach_stmt(stmt)? {
         return Ok(parsed);
     }
@@ -5751,6 +5799,106 @@ fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    if !cursor.consume_ascii("while") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+
+    cursor.skip_ws();
+    let cond_src = cursor.read_balanced_block(b'(', b')')?;
+    let cond = parse_expr(cond_src.trim())?;
+
+    cursor.skip_ws();
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    let body = parse_block_statements(&body_src)?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported while statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::While { cond, body }))
+}
+
+fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    if !cursor.consume_ascii("for") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+
+    cursor.skip_ws();
+    let header_src = cursor.read_balanced_block(b'(', b')')?;
+    let header_parts = split_top_level_by_char(header_src.trim(), b';');
+    if header_parts.len() != 3 {
+        return Err(Error::ScriptParse(format!("unsupported for statement: {stmt}")));
+    }
+
+    let init = parse_for_clause_stmt(header_parts[0])?;
+    let cond = if header_parts[1].trim().is_empty() {
+        None
+    } else {
+        Some(parse_expr(header_parts[1].trim())?)
+    };
+    let post = parse_for_clause_stmt(header_parts[2])?;
+
+    cursor.skip_ws();
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    let body = parse_block_statements(&body_src)?;
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!("unsupported for statement tail: {stmt}")));
+    }
+
+    Ok(Some(Stmt::For {
+        init,
+        cond,
+        post,
+        body,
+    }))
+}
+
+fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(parsed) = parse_var_decl(src)? {
+        return Ok(Some(Box::new(parsed)));
+    }
+
+    if let Some(parsed) = parse_var_assign(src)? {
+        return Ok(Some(Box::new(parsed)));
+    }
+
+    let expr = parse_expr(src).map_err(|_| {
+        Error::ScriptParse(format!("unsupported for-loop clause: {src}"))
+    })?;
+    Ok(Some(Box::new(Stmt::Expr(expr))))
+}
+
 fn split_top_level_statements(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut out = Vec::new();
@@ -5782,7 +5930,21 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
                 b'[' => bracket += 1,
                 b']' => bracket = bracket.saturating_sub(1),
                 b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
+                b'}' => {
+                    brace = brace.saturating_sub(1);
+                    if paren == 0 && bracket == 0 && brace == 0 {
+                        let tail = body.get(i + 1..).unwrap_or_default().trim_start();
+                        let is_else_tail = tail.starts_with("else")
+                            && (tail.as_bytes().len() == 4
+                                || !is_ident_char(*tail.as_bytes().get(4).unwrap_or(&b'\0')));
+                        if !tail.is_empty() && !is_else_tail {
+                            if let Some(part) = body.get(start..=i) {
+                                out.push(part.to_string());
+                            }
+                            start = i + 1;
+                        }
+                    }
+                }
                 b';' => {
                     if paren == 0 && bracket == 0 && brace == 0 {
                         if let Some(part) = body.get(start..i) {
@@ -8154,6 +8316,77 @@ fn unescape_string(src: &str) -> String {
     out
 }
 
+fn decode_html_character_references(src: &str) -> String {
+    if !src.contains('&') {
+        return src.to_string();
+    }
+
+    fn decode_numeric(value: &str) -> Option<char> {
+        let codepoint = if let Some(hex) = value.strip_prefix("x").or_else(|| value.strip_prefix("X")) {
+            u32::from_str_radix(hex, 16).ok()?
+        } else {
+            u32::from_str_radix(value, 10).ok()?
+        };
+        char::from_u32(codepoint)
+    }
+
+    fn decode_named(value: &str) -> Option<char> {
+        match value {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some('\u{00A0}'),
+            "copy" => Some('©'),
+            "reg" => Some('®'),
+            "trade" => Some('™'),
+            "divide" => Some('÷'),
+            "times" => Some('×'),
+            "euro" => Some('€'),
+            "pound" => Some('£'),
+            "yen" => Some('¥'),
+            _ => None,
+        }
+    }
+
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < src.len() {
+        let ch = src[i..].chars().next().unwrap_or_default();
+        if ch != '&' {
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        let tail = &src[i + 1..];
+        let Some(end_offset) = tail.find(';') else {
+            out.push('&');
+            i += 1;
+            continue;
+        };
+
+        let raw = &tail[..end_offset];
+        let decoded = if let Some(rest) = raw.strip_prefix('#') {
+            decode_numeric(rest)
+        } else {
+            decode_named(raw)
+        };
+
+        if let Some(value) = decoded {
+            out.push(value);
+            i += end_offset + 2;
+        } else {
+            out.push('&');
+            i += 1;
+        }
+    }
+
+    out
+}
+
 fn strip_outer_parens(mut src: &str) -> &str {
     loop {
         let trimmed = src.trim();
@@ -8718,7 +8951,7 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
 
             if tag.eq_ignore_ascii_case("script") {
                 let close = find_case_insensitive_end_tag(bytes, i, b"script")
-                    .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
+                .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
                 if let Some(script_body) = html.get(i..close) {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
@@ -8747,7 +8980,7 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
                 let parent = *stack
                     .last()
                     .ok_or_else(|| Error::HtmlParse("missing parent element".into()))?;
-                dom.create_text(parent, text.to_string());
+                dom.create_text(parent, decode_html_character_references(text));
             }
         }
     }
@@ -8882,7 +9115,7 @@ fn parse_attr_value(html: &str, bytes: &[u8], i: &mut usize) -> Result<String> {
             .ok_or_else(|| Error::HtmlParse("invalid attribute value".into()))?
             .to_string();
         *i += 1;
-        return Ok(value);
+        return Ok(decode_html_character_references(&value));
     }
 
     let start = *i;
@@ -8898,7 +9131,7 @@ fn parse_attr_value(html: &str, bytes: &[u8], i: &mut usize) -> Result<String> {
         .get(start..*i)
         .ok_or_else(|| Error::HtmlParse("invalid attribute value".into()))?
         .to_string();
-    Ok(value)
+    Ok(decode_html_character_references(&value))
 }
 
 fn skip_ws(bytes: &[u8], i: &mut usize) {
@@ -9439,6 +9672,47 @@ mod tests {
         h.set_checked("#agree", true)?;
         h.click("#submit")?;
         h.assert_text("#result", "OK:Taro")?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_in_text_nodes_are_decoded() -> Result<()> {
+        let html = "<p id='result'>&lt;A &amp; B&gt;&nbsp;&copy;</p>";
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "<A & B>\u{00A0}©")?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_in_attribute_values_are_decoded() -> Result<()> {
+        let html = r#"
+        <div id='result' data-value='a&amp;b&nbsp;&#x3c;'></div>
+        <script>
+          document.getElementById('result').textContent =
+            document.getElementById('result').getAttribute('data-value');
+        </script>
+        "#;
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "a&b\u{00A0}<")?;
+        Ok(())
+    }
+
+    #[test]
+    fn html_entities_in_inner_html_are_decoded() -> Result<()> {
+        let html = r#"
+        <div id='host'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('host').innerHTML =
+            '<span id="value">a&amp;b&nbsp;</span>';
+          document.getElementById('result').textContent =
+            document.getElementById('value').textContent;
+        </script>
+        "#;
+
+        let h = Harness::from_html(html)?;
+        h.assert_text("#result", "a&b\u{00A0}")?;
         Ok(())
     }
 
