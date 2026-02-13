@@ -539,18 +539,31 @@ fn execute_stmts(
 MVP実装案:
 - 文字列を簡易パースして `SelectorAst` を作る
 - 右から左へのマッチングで親探索
+- 対応セレクタ: `#id`, `.class`, `タグ`, `[attr]`, `[attr='value']`, `*`, `:first-child`, `:last-child`, `:nth-child(n)`, 子孫/子/隣接/一般兄弟結合子
+- `:nth-child(n)` は現時点では `1,2,3...` のみ受け付ける（0/負数/式系は未対応）
+- 属性値比較は現在 `=` のみ対応
 
 ```rust
-enum SimpleSelector {
-    Id(String),
-    Class(String),
-    Tag(String),
-    AttrEq { key: String, value: String },
+enum SelectorPseudoClass {
+    FirstChild,
+    LastChild,
+    NthChild(usize),
 }
 
 struct SelectorStep {
-    simple: Vec<SimpleSelector>,
-    combinator: Option<Combinator>, // Descendant only in MVP
+    tag: Option<String>,
+    universal: bool,
+    id: Option<String>,
+    classes: Vec<String>,
+    attrs: Vec<SelectorAttrCondition>,
+    pseudo_classes: Vec<SelectorPseudoClass>,
+}
+
+enum SelectorCombinator {
+    Descendant,
+    Child,
+    AdjacentSibling,
+    GeneralSibling,
 }
 ```
 

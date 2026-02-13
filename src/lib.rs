@@ -969,10 +969,14 @@ impl Dom {
             return false;
         };
 
-        if let Some(tag) = &step.tag {
-            if !element.tag_name.eq_ignore_ascii_case(tag) {
-                return false;
+        if !step.universal {
+            if let Some(tag) = &step.tag {
+                if !element.tag_name.eq_ignore_ascii_case(tag) {
+                    return false;
+                }
             }
+        } else if step.tag.is_some() {
+            return false;
         }
 
         if let Some(id) = &step.id {
@@ -999,7 +1003,70 @@ impl Dom {
             }
         }
 
+        for pseudo in &step.pseudo_classes {
+            let matched = match pseudo {
+                SelectorPseudoClass::FirstChild => self.is_first_element_child(node_id),
+                SelectorPseudoClass::LastChild => self.is_last_element_child(node_id),
+                SelectorPseudoClass::NthChild(selector) => {
+                    self.is_nth_element_child(node_id, selector)
+                }
+            };
+            if !matched {
+                return false;
+            }
+        }
+
         true
+    }
+
+    fn is_first_element_child(&self, node_id: NodeId) -> bool {
+        self.previous_element_sibling(node_id).is_none()
+    }
+
+    fn is_last_element_child(&self, node_id: NodeId) -> bool {
+        self.next_element_sibling(node_id).is_none()
+    }
+
+    fn is_nth_element_child(
+        &self,
+        node_id: NodeId,
+        selector: &NthChildSelector,
+    ) -> bool {
+        let Some(index) = self.element_index(node_id) else {
+            return false;
+        };
+        match selector {
+            NthChildSelector::Exact(expected) => index == *expected,
+            NthChildSelector::Odd => index % 2 == 1,
+            NthChildSelector::Even => index % 2 == 0,
+        }
+    }
+
+    fn element_index(&self, node_id: NodeId) -> Option<usize> {
+        let parent = self.parent(node_id)?;
+        let mut index = 0usize;
+        for child in &self.nodes[parent.0].children {
+            if self.element(*child).is_none() {
+                continue;
+            }
+            index += 1;
+            if *child == node_id {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    fn next_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
+        let parent = self.parent(node_id)?;
+        let children = &self.nodes[parent.0].children;
+        let pos = children.iter().position(|id| *id == node_id)?;
+        for sibling in children.iter().skip(pos + 1) {
+            if self.element(*sibling).is_some() {
+                return Some(*sibling);
+            }
+        }
+        None
     }
 
     fn previous_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
@@ -1183,17 +1250,38 @@ enum SelectorAttrCondition {
     Eq { key: String, value: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectorPseudoClass {
+    FirstChild,
+    LastChild,
+    NthChild(NthChildSelector),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NthChildSelector {
+    Exact(usize),
+    Odd,
+    Even,
+}
+
 #[derive(Debug, Clone, Default)]
 struct SelectorStep {
     tag: Option<String>,
+    universal: bool,
     id: Option<String>,
     classes: Vec<String>,
     attrs: Vec<SelectorAttrCondition>,
+    pseudo_classes: Vec<SelectorPseudoClass>,
 }
 
 impl SelectorStep {
     fn id_only(&self) -> Option<&str> {
-        if self.tag.is_none() && self.classes.is_empty() && self.attrs.is_empty() {
+        if !self.universal
+            && self.tag.is_none()
+            && self.classes.is_empty()
+            && self.attrs.is_empty()
+            && self.pseudo_classes.is_empty()
+        {
             self.id.as_deref()
         } else {
             None
@@ -1369,6 +1457,13 @@ fn parse_selector_step(part: &str) -> Result<SelectorStep> {
 
     while i < bytes.len() {
         match bytes[i] {
+            b'*' => {
+                if step.universal {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                }
+                step.universal = true;
+                i += 1;
+            }
             b'#' => {
                 i += 1;
                 let Some((id, next)) = parse_selector_ident(part, i) else {
@@ -1392,8 +1487,19 @@ fn parse_selector_step(part: &str) -> Result<SelectorStep> {
                 step.attrs.push(attr);
                 i = next;
             }
+            b':' => {
+                let Some((pseudo, next)) = parse_selector_pseudo(part, i) else {
+                    return Err(Error::UnsupportedSelector(part.into()));
+                };
+                step.pseudo_classes.push(pseudo);
+                i = next;
+            }
             _ => {
-                if step.tag.is_some() || step.id.is_some() || !step.classes.is_empty() {
+                if step.tag.is_some()
+                    || step.id.is_some()
+                    || !step.classes.is_empty()
+                    || step.universal
+                {
                     return Err(Error::UnsupportedSelector(part.into()));
                 }
                 let Some((tag, next)) = parse_selector_ident(part, i) else {
@@ -1405,10 +1511,78 @@ fn parse_selector_step(part: &str) -> Result<SelectorStep> {
         }
     }
 
-    if step.tag.is_none() && step.id.is_none() && step.classes.is_empty() && step.attrs.is_empty() {
+    if step.tag.is_none()
+        && step.id.is_none()
+        && step.classes.is_empty()
+        && step.attrs.is_empty()
+        && !step.universal
+        && step.pseudo_classes.is_empty()
+    {
         return Err(Error::UnsupportedSelector(part.into()));
     }
     Ok(step)
+}
+
+fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClass, usize)> {
+    if part.as_bytes().get(start)? != &b':' {
+        return None;
+    }
+    let start = start + 1;
+    let tail = part.get(start..)?;
+    if let Some(rest) = tail.strip_prefix("first-child") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "first-child".len();
+            return Some((SelectorPseudoClass::FirstChild, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("last-child") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "last-child".len();
+            return Some((SelectorPseudoClass::LastChild, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("nth-child(") {
+        let body = rest;
+        let Some(close_pos) = body.find(')') else {
+            return None;
+        };
+        let raw = body[..close_pos].trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let selector = match raw.to_ascii_lowercase().as_str() {
+            "odd" => NthChildSelector::Odd,
+            "even" => NthChildSelector::Even,
+            other => {
+                if other.starts_with('+') || other.starts_with('-') {
+                    return None;
+                }
+                let value = other.parse::<usize>().ok()?;
+                if value == 0 {
+                    return None;
+                }
+                NthChildSelector::Exact(value)
+            }
+        };
+        if raw.starts_with('+') || raw.starts_with('-') {
+            return None;
+        }
+        let next = start + "nth-child(".len() + close_pos + 1;
+        if let Some(ch) = part.as_bytes().get(next) {
+            if !is_selector_continuation(ch) {
+                return None;
+            }
+        }
+        return Some((SelectorPseudoClass::NthChild(selector), next));
+    }
+
+    None
+}
+
+fn is_selector_continuation(next: &u8) -> bool {
+    matches!(next, b'.' | b'#' | b'[' | b':')
 }
 
 fn parse_selector_ident(src: &str, start: usize) -> Option<(String, usize)> {
@@ -9949,6 +10123,119 @@ mod tests {
     }
 
     #[test]
+    fn selector_universal_selector_matches_first_element() -> Result<()> {
+        let html = r#"
+        <div id='root'>
+          <section id='first'>A</section>
+          <p id='second'>B</p>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = document.querySelector('*').id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "root")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_universal_with_class_selector_work() -> Result<()> {
+        let html = r#"
+        <main id='root'>
+          <p id='first' class='x'>A</p>
+          <span id='second' class='x'>B</span>
+          <div id='third' class='x'>C</div>
+        </main>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = document.querySelector('*.x').id;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "first")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_pseudo_classes_work() -> Result<()> {
+        let html = r#"
+        <ul id='list'>
+          <li id='first' class='item'>A</li>
+          <li id='second' class='item'>B</li>
+          <li id='third' class='item'>C</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = document.querySelector('.item:first-child').id;
+            const last = document.querySelector('.item:last-child').id;
+            const second = document.querySelector('li:nth-child(2)').id;
+            document.getElementById('result').textContent = first + ':' + last + ':' + second;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "first:third:second")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_nth_child_odd_even_work() -> Result<()> {
+        let html = r#"
+        <ul>
+          <li id='one' class='item'>A</li>
+          <li id='two' class='item'>B</li>
+          <li id='three' class='item'>C</li>
+          <li id='four' class='item'>D</li>
+        </ul>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const odd = document.querySelector('li:nth-child(odd)').id;
+            const even = document.querySelector('li:nth-child(even)').id;
+            document.getElementById('result').textContent = odd + ':' + even;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "one:two")?;
+        Ok(())
+    }
+
+    #[test]
+    fn selector_parse_rejects_invalid_nth_child() {
+        assert!(
+            parse_selector_step("li:nth-child(0)").is_err(),
+            "nth-child(0) should be invalid in this engine"
+        );
+        assert!(
+            parse_selector_step("li:nth-child(-1)").is_err(),
+            "negative nth-child should be invalid in this engine"
+        );
+        assert!(
+            parse_selector_step("li:nth-child(2n+1)").is_err(),
+            "expression nth-child should be invalid in this engine"
+        );
+    }
+
+    #[test]
     fn selector_trailing_group_separator_is_rejected() -> Result<()> {
         let html = r#"<div id='x'></div>"#;
         let h = Harness::from_html(html)?;
@@ -9960,6 +10247,30 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         Ok(())
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_child_single_arg() {
+        let step = parse_selector_step("li:nth-child(2)").expect("parse should succeed");
+        assert_eq!(step.tag, Some("li".into()));
+        assert_eq!(
+            step.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::Exact(2))]
+        );
+    }
+
+    #[test]
+    fn selector_parse_supports_nth_child_odd_even() {
+        let odd = parse_selector_step("li:nth-child(odd)").expect("parse should succeed");
+        let even = parse_selector_step("li:nth-child(even)").expect("parse should succeed");
+        assert_eq!(
+            odd.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::Odd)]
+        );
+        assert_eq!(
+            even.pseudo_classes,
+            vec![SelectorPseudoClass::NthChild(NthChildSelector::Even)]
+        );
     }
 
     #[test]
