@@ -3139,7 +3139,7 @@ enum Value {
     Node(NodeId),
     NodeList(Vec<NodeId>),
     FormData(Vec<(String, String)>),
-    Function(ScriptHandler),
+    Function(Rc<FunctionValue>),
 }
 
 #[derive(Debug, Clone)]
@@ -3159,6 +3159,19 @@ impl PartialEq for RegexValue {
             && self.global == other.global
             && self.sticky == other.sticky
             && self.last_index == other.last_index
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FunctionValue {
+    handler: ScriptHandler,
+    captured_env: HashMap<String, Value>,
+    global_scope: bool,
+}
+
+impl PartialEq for FunctionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.handler == other.handler && self.global_scope == other.global_scope
     }
 }
 
@@ -3633,6 +3646,13 @@ enum Expr {
         message: Box<Expr>,
         default: Option<Box<Expr>>,
     },
+    FunctionConstructor {
+        args: Vec<Expr>,
+    },
+    FunctionCall {
+        target: String,
+        args: Vec<Expr>,
+    },
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -3823,6 +3843,10 @@ enum Stmt {
     VarDecl {
         name: String,
         expr: Expr,
+    },
+    FunctionDecl {
+        name: String,
+        handler: ScriptHandler,
     },
     VarAssign {
         name: String,
@@ -5460,12 +5484,12 @@ impl Harness {
                     .get(name)
                     .cloned()
                     .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
-                let Value::Function(handler) = value else {
+                let Value::Function(function) = value else {
                     return Err(Error::ScriptRuntime(format!(
                         "timer callback '{name}' is not a function"
                     )));
                 };
-                handler
+                function.handler.clone()
             }
         };
         handler.bind_event_params(callback_args, env);
@@ -5485,6 +5509,70 @@ impl Harness {
         }
     }
 
+    fn make_function_value(
+        &self,
+        handler: ScriptHandler,
+        env: &HashMap<String, Value>,
+        global_scope: bool,
+    ) -> Value {
+        let captured_env = if global_scope {
+            self.script_env.clone()
+        } else {
+            env.clone()
+        };
+        Value::Function(Rc::new(FunctionValue {
+            handler,
+            captured_env,
+            global_scope,
+        }))
+    }
+
+    fn execute_function_call(
+        &mut self,
+        function: &FunctionValue,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
+        let mut call_env = if function.global_scope {
+            self.script_env.clone()
+        } else {
+            function.captured_env.clone()
+        };
+        call_env.remove(INTERNAL_RETURN_SLOT);
+        function.handler.bind_event_params(args, &mut call_env);
+        let mut call_event = event.clone();
+        let flow = self.execute_stmts(&function.handler.stmts, &None, &mut call_event, &mut call_env)?;
+        match flow {
+            ExecFlow::Continue => Ok(Value::Undefined),
+            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
+            ExecFlow::ContinueLoop => {
+                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
+            }
+            ExecFlow::Return => Ok(call_env
+                .remove(INTERNAL_RETURN_SLOT)
+                .unwrap_or(Value::Undefined)),
+        }
+    }
+
+    fn parse_function_constructor_param_names(spec: &str) -> Result<Vec<String>> {
+        let mut params = Vec::new();
+        for raw in spec.split(',') {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return Err(Error::ScriptRuntime(
+                    "new Function parameter name cannot be empty".into(),
+                ));
+            }
+            if !is_ident(raw) {
+                return Err(Error::ScriptRuntime(format!(
+                    "new Function parameter name is invalid: {raw}"
+                )));
+            }
+            params.push(raw.to_string());
+        }
+        Ok(params)
+    }
+
     fn execute_stmts(
         &mut self,
         stmts: &[Stmt],
@@ -5498,6 +5586,10 @@ impl Harness {
                     let value = self.eval_expr(expr, env, event_param, event)?;
                     env.insert(name.clone(), value.clone());
                     self.bind_timer_id_to_task_env(name, expr, &value);
+                }
+                Stmt::FunctionDecl { name, handler } => {
+                    let function = self.make_function_value(handler.clone(), env, false);
+                    env.insert(name.clone(), function);
                 }
                 Stmt::VarAssign { name, op, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -7129,6 +7221,51 @@ impl Harness {
                     None => Ok(Value::Null),
                 }
             }
+            Expr::FunctionConstructor { args } => {
+                if args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "new Function requires at least one argument".into(),
+                    ));
+                }
+
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    let part = self.eval_expr(arg, env, event_param, event)?.as_string();
+                    parts.push(part);
+                }
+
+                let body_src = parts
+                    .last()
+                    .cloned()
+                    .ok_or_else(|| Error::ScriptRuntime("new Function requires body argument".into()))?;
+                let mut params = Vec::new();
+                for part in parts.iter().take(parts.len().saturating_sub(1)) {
+                    params.extend(Self::parse_function_constructor_param_names(part)?);
+                }
+
+                let stmts = parse_block_statements(&body_src).map_err(|err| {
+                    Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
+                })?;
+                Ok(self.make_function_value(
+                    ScriptHandler { params, stmts },
+                    env,
+                    true,
+                ))
+            }
+            Expr::FunctionCall { target, args } => {
+                let callee = env
+                    .get(target)
+                    .cloned()
+                    .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
+                let Value::Function(function) = callee else {
+                    return Err(Error::ScriptRuntime(format!("'{target}' is not a function")));
+                };
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                self.execute_function_call(function.as_ref(), &evaluated_args, event)
+            }
             Expr::Var(name) => env
                 .get(name)
                 .cloned()
@@ -7156,7 +7293,7 @@ impl Harness {
                 let node = self.dom.create_detached_text(text.clone());
                 Ok(Value::Node(node))
             }
-            Expr::Function { handler } => Ok(Value::Function(handler.clone())),
+            Expr::Function { handler } => Ok(self.make_function_value(handler.clone(), env, false)),
             Expr::SetTimeout { handler, delay_ms } => {
                 let delay = self.eval_expr(delay_ms, env, event_param, event)?;
                 let delay = Self::value_to_i64(&delay);
@@ -7655,6 +7792,7 @@ impl Harness {
             (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
             (Value::RegExp(l), Value::RegExp(r)) => Rc::ptr_eq(l, r),
             (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
+            (Value::Function(l), Value::Function(r)) => Rc::ptr_eq(l, r),
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
             (Value::Undefined, Value::Undefined) => true,
@@ -10112,6 +10250,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_function_decl_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_var_decl(stmt)? {
         return Ok(parsed);
     }
@@ -10975,6 +11117,48 @@ fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
         return false;
     };
     rest.is_empty() || !is_ident_char(*rest.as_bytes().first().unwrap_or(&b'\0'))
+}
+
+fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("function") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let Some(name) = cursor.parse_identifier() else {
+        return Err(Error::ScriptParse(
+            "function declaration requires a function name".into(),
+        ));
+    };
+    cursor.skip_ws();
+    let params_src = cursor.read_balanced_block(b'(', b')')?;
+    let params = parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
+    cursor.skip_ws();
+    let body = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported function declaration tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::FunctionDecl {
+        name,
+        handler: ScriptHandler {
+            params,
+            stmts: parse_block_statements(&body)?,
+        },
+    }))
 }
 
 fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
@@ -12902,6 +13086,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_new_function_expr(src)? {
+        return Ok(expr);
+    }
+
     if parse_date_now_expr(src)? {
         return Ok(Expr::DateNow);
     }
@@ -13131,6 +13319,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_object_get_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_function_call_expr(src)? {
         return Ok(expr);
     }
 
@@ -13537,6 +13729,70 @@ fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<E
     };
 
     Ok(Some(Expr::RegexNew { pattern, flags }))
+}
+
+fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Function") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    if args.is_empty() {
+        return Err(Error::ScriptParse(
+            "new Function requires at least one argument".into(),
+        ));
+    }
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(
+                "new Function arguments cannot be empty".into(),
+            ));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::FunctionConstructor { args: parsed }))
 }
 
 fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
@@ -14475,6 +14731,47 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     Ok(Some(Expr::ObjectGet { target, key }))
+}
+
+fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(
+                "function call arguments cannot be empty".into(),
+            ));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::FunctionCall {
+        target,
+        args: parsed,
+    }))
 }
 
 fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
@@ -24828,6 +25125,41 @@ mod tests {
         h.assert_text("#result", "")?;
         h.advance_time(1)?;
         h.assert_text("#result", "R16")?;
+        Ok(())
+    }
+
+    #[test]
+    fn function_constructor_uses_global_scope_while_closure_keeps_local_scope() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          var x = 10;
+
+          function createFunction1() {
+            const x = 20;
+            return new Function("return x;");
+          }
+
+          function createFunction2() {
+            const x = 20;
+            function f() {
+              return x;
+            }
+            return f;
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const f1 = createFunction1();
+            const f2 = createFunction2();
+            document.getElementById('result').textContent = f1() + ':' + f2();
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "10:20")?;
         Ok(())
     }
 
