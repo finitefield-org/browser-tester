@@ -67,7 +67,14 @@
 - [x] `Math[Symbol.toStringTag]` をサポートする
 - [x] 主要静的メソッド（`abs` / `acos` / `acosh` / `asin` / `asinh` / `atan` / `atan2` / `atanh` / `cbrt` / `ceil` / `clz32` / `cos` / `cosh` / `exp` / `expm1` / `floor` / `f16round` / `fround` / `hypot` / `imul` / `log` / `log10` / `log1p` / `log2` / `max` / `min` / `pow` / `random` / `round` / `sign` / `sin` / `sinh` / `sqrt` / `sumPrecise` / `tan` / `tanh` / `trunc`）をサポートする
 
-## 8. JavaScript演算子の未実装項目 (実装 / テスト)
+## 8. `Number` コンストラクタ・静的/インスタンスメソッド (実装 / テスト)
+
+- [x] `Number()` / `new Number()` の基本変換をサポートする
+- [x] `Number` 静的プロパティ（`EPSILON` / `MAX_SAFE_INTEGER` / `MAX_VALUE` / `MIN_SAFE_INTEGER` / `MIN_VALUE` / `NaN` / `NEGATIVE_INFINITY` / `POSITIVE_INFINITY`）をサポートする
+- [x] `Number` 静的メソッド（`isFinite` / `isInteger` / `isNaN` / `isSafeInteger` / `parseFloat` / `parseInt`）をサポートする
+- [x] `Number` インスタンスメソッド（`toExponential` / `toFixed` / `toLocaleString` / `toPrecision` / `toString` / `valueOf`）をサポートする
+
+## 9. JavaScript演算子の未実装項目 (実装 / テスト)
 
 - [ ] `await` 演算子をサポートする
 - [ ] `??` (nullish coalescing) をサポートする
