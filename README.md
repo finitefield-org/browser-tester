@@ -49,7 +49,7 @@ cargo test
 ## Runtime Policy
 
 - `eval` is intentionally not implemented to keep the runtime secure and deterministic.
-- Time support is based on `Date.now()`; `performance.now()` is not implemented.
+- Time support is based on the fake clock and exposed via `Date.now()` and `performance.now()`.
 
 ## Test Mocks
 

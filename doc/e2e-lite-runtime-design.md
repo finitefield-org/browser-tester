@@ -124,7 +124,7 @@ MVP対応:
 - タイマー: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
   `clearTimeout(timerId)` / `clearInterval(timerId)`
-- 時刻: `Date.now()`（fake clockの現在値 `now_ms` を返す）
+- 時刻: `Date.now()` / `performance.now()`（fake clockの現在値 `now_ms` を返す）
 - 乱数: `Math.random()`（決定論PRNGの浮動小数 `0.0 <= x < 1.0` を返す）
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 - `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft`（最小実装として数値返却）
@@ -211,7 +211,7 @@ MVP対応:
 - `harness.pending_timers()` で現在キュー中のタイマー（`due_at`,`order` 昇順）を取得できる
 
 ### 9.3 決定論サポート
-- `Date.now()` は fake clock（`now_ms`）を返す
+- `Date.now()` / `performance.now()` は fake clock（`now_ms`）を返す
 - `now_ms` は `advance_time(ms)` / `flush()` によりのみ進む
 - `Math.random()` は決定論PRNGで生成される
 - `Harness::set_random_seed(seed)` で乱数列を再現可能にする

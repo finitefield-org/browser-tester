@@ -92,3 +92,8 @@
 - [x] `BigInt` の基本演算子（`+ - * / % **`, bitwise, shift, 比較）をサポートする
 - [x] `BigInt.prototype.toLocaleString` / `toString` / `valueOf` をサポートする
 - [x] 混在演算時（`BigInt` と `Number`）のエラーをサポートする
+
+## 11. ランタイムポリシー上の未実装機能 (要検討)
+
+- [ ] `eval` の扱いを方針決定する（未実装のまま維持するか、限定的にサポートするかを決める）
+- [x] `performance.now()` をサポートする

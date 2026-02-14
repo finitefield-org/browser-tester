@@ -48,7 +48,7 @@ cargo test
 ## ランタイム方針
 
 - セキュリティと決定論を維持するため、`eval` は意図的に実装していません。
-- 時刻 API は `Date.now()` を基準にしており、`performance.now()` は未実装です。
+- 時刻 API は fake clock を基準にしており、`Date.now()` と `performance.now()` を提供します。
 
 ## テストモック
 

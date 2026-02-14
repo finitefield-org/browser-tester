@@ -3949,6 +3949,7 @@ enum Expr {
     Float(f64),
     BigInt(JsBigInt),
     DateNow,
+    PerformanceNow,
     DateNew {
         value: Option<Box<Expr>>,
     },
@@ -7407,6 +7408,7 @@ impl Harness {
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::BigInt(value) => Ok(Value::BigInt(value.clone())),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
+            Expr::PerformanceNow => Ok(Value::Float(self.now_ms as f64)),
             Expr::DateNew { value } => {
                 let timestamp_ms = if let Some(value) = value {
                     let value = self.eval_expr(value, env, event_param, event)?;
@@ -19599,6 +19601,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DateNow);
     }
 
+    if parse_performance_now_expr(src)? {
+        return Ok(Expr::PerformanceNow);
+    }
+
     if let Some(value) = parse_date_parse_expr(src)? {
         return Ok(Expr::DateParse(Box::new(value)));
     }
@@ -20581,6 +20587,47 @@ fn parse_date_now_expr(src: &str) -> Result<bool> {
     cursor.skip_ws();
     if !cursor.consume_ascii("now") {
         return Ok(false);
+    }
+    cursor.skip_ws();
+    cursor.expect_byte(b'(')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b')')?;
+    cursor.skip_ws();
+    Ok(cursor.eof())
+}
+
+fn parse_performance_now_expr(src: &str) -> Result<bool> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(false);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("performance") {
+        return Ok(false);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(false);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("now") {
+        return Ok(false);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(false);
+        }
     }
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
@@ -30586,6 +30633,35 @@ mod tests {
         h.flush()?;
         h.assert_text("#result", "0:25")?;
         assert_eq!(h.now_ms(), 25);
+        Ok(())
+    }
+
+    #[test]
+    fn performance_now_uses_fake_clock_for_handlers_and_timers() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.textContent = performance.now() + ':' + window.performance.now();
+            setTimeout(() => {
+              result.textContent = result.textContent + ':' + performance.now();
+            }, 10);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.advance_time(7)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "7:7")?;
+
+        h.advance_time(9)?;
+        h.assert_text("#result", "7:7")?;
+
+        h.advance_time(1)?;
+        h.assert_text("#result", "7:7:17")?;
         Ok(())
     }
 
