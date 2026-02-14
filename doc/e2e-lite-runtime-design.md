@@ -324,24 +324,6 @@ pub struct PendingTimer {
 - 過去バグは必ずfixture HTML化
 - fixtureごとに期待スナップショット保有
 
-## 14. 実装フェーズ
-
-### Phase 1 (MVP)
-- DOM基本操作
-- `querySelector`最小対応
-- インラインscript実行
-- `click/input/change` + assert
-
-### Phase 2
-- `submit`、フォーム要素拡張
-- エラー/差分表示強化
-- トレースログ
-
-### Phase 3
-- セレクタ拡張
-- microtaskの安定化
-- 高速化（index、再利用）
-
 ## 15. 代表的ユースケース
 
 ```rust
@@ -620,8 +602,3 @@ AssertionFailed: assert_text
 設計方針:
 - 1回の失敗で原因特定できる情報量を確保
 - セレクタ未解決と値不一致は必ず区別
-
-## 27. 将来拡張ポイント
-
-- `radio` グループ排他
-- `FormData` の追加メソッド（`append`, `getAll` など）

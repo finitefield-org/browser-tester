@@ -558,10 +558,53 @@ impl Dom {
     }
 
     fn set_checked(&mut self, node_id: NodeId, checked: bool) -> Result<()> {
+        if checked && is_radio_input(self, node_id) {
+            self.uncheck_other_radios_in_group(node_id);
+        }
         let element = self
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("checked target is not an element".into()))?;
         element.checked = checked;
+        Ok(())
+    }
+
+    fn uncheck_other_radios_in_group(&mut self, target: NodeId) {
+        let target_name = self.attr(target, "name").unwrap_or_default();
+        if target_name.is_empty() {
+            return;
+        }
+        let target_form = self.find_ancestor_by_tag(target, "form");
+
+        let all_nodes = self.all_element_nodes();
+        for node in all_nodes {
+            if node == target {
+                continue;
+            }
+            if !is_radio_input(self, node) {
+                continue;
+            }
+            if self.attr(node, "name").unwrap_or_default() != target_name {
+                continue;
+            }
+            if self.find_ancestor_by_tag(node, "form") != target_form {
+                continue;
+            }
+            if let Some(element) = self.element_mut(node) {
+                element.checked = false;
+            }
+        }
+    }
+
+    fn normalize_radio_groups(&mut self) -> Result<()> {
+        let all_nodes = self.all_element_nodes();
+        for node in all_nodes {
+            if !is_radio_input(self, node) {
+                continue;
+            }
+            if self.attr(node, "checked").is_some() {
+                self.set_checked(node, true)?;
+            }
+        }
         Ok(())
     }
 
@@ -3829,6 +3872,7 @@ enum ClassListMethod {
 enum BinaryOp {
     Or,
     And,
+    Nullish,
     Eq,
     Ne,
     StrictEq,
@@ -3867,6 +3911,9 @@ enum VarAssignOp {
     ShiftLeft,
     ShiftRight,
     UnsignedShiftRight,
+    LogicalAnd,
+    LogicalOr,
+    Nullish,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4087,7 +4134,7 @@ enum Expr {
     ObjectConstruct {
         value: Option<Box<Expr>>,
     },
-    ObjectLiteral(Vec<(ObjectLiteralKey, Expr)>),
+    ObjectLiteral(Vec<ObjectLiteralEntry>),
     ObjectGet {
         target: String,
         key: String,
@@ -4300,6 +4347,10 @@ enum Expr {
         source: FormDataSource,
         name: String,
     },
+    FormDataGetAll {
+        source: FormDataSource,
+        name: String,
+    },
     FormDataGetAllLength {
         source: FormDataSource,
         name: String,
@@ -4323,6 +4374,11 @@ enum Expr {
     Void(Box<Expr>),
     Delete(Box<Expr>),
     TypeOf(Box<Expr>),
+    Await(Box<Expr>),
+    Yield(Box<Expr>),
+    YieldStar(Box<Expr>),
+    Comma(Vec<Expr>),
+    Spread(Box<Expr>),
     Add(Vec<Expr>),
     Ternary {
         cond: Box<Expr>,
@@ -4349,6 +4405,12 @@ enum StringTrimMode {
 enum ObjectLiteralKey {
     Static(String),
     Computed(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ObjectLiteralEntry {
+    Pair(ObjectLiteralKey, Expr),
+    Spread(Expr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4594,6 +4656,14 @@ enum Stmt {
     VarUpdate {
         name: String,
         delta: i8,
+    },
+    ArrayDestructureAssign {
+        targets: Vec<Option<String>>,
+        expr: Expr,
+    },
+    ObjectDestructureAssign {
+        bindings: Vec<(String, String)>,
+        expr: Expr,
     },
     ObjectAssign {
         target: String,
@@ -5321,9 +5391,6 @@ impl Harness {
 
         let current = self.dom.checked(target)?;
         if current != checked {
-            if kind == "radio" && checked {
-                self.uncheck_other_radios_in_group(target)?;
-            }
             self.dom.set_checked(target, checked)?;
             self.dispatch_event(target, "input")?;
             self.dispatch_event(target, "change")?;
@@ -5363,7 +5430,6 @@ impl Harness {
             if is_radio_input(&self.dom, target) {
                 let current = self.dom.checked(target)?;
                 if !current {
-                    self.uncheck_other_radios_in_group(target)?;
                     self.dom.set_checked(target, true)?;
                     self.dispatch_event(target, "input")?;
                     self.dispatch_event(target, "change")?;
@@ -5795,19 +5861,6 @@ impl Harness {
         self.dom.find_ancestor_by_tag(target, "form")
     }
 
-    fn form_owner(&self, node_id: NodeId) -> Option<NodeId> {
-        if self
-            .dom
-            .tag_name(node_id)
-            .map(|t| t.eq_ignore_ascii_case("form"))
-            .unwrap_or(false)
-        {
-            Some(node_id)
-        } else {
-            self.dom.find_ancestor_by_tag(node_id, "form")
-        }
-    }
-
     fn form_elements(&self, form: NodeId) -> Result<Vec<NodeId>> {
         let tag = self
             .dom
@@ -5917,34 +5970,6 @@ impl Harness {
             }
             self.collect_form_controls(*child, out);
         }
-    }
-
-    fn uncheck_other_radios_in_group(&mut self, target: NodeId) -> Result<()> {
-        let target_name = self.dom.attr(target, "name").unwrap_or_default();
-        if target_name.is_empty() {
-            return Ok(());
-        }
-        let target_form = self.form_owner(target);
-
-        for node in self.dom.all_element_nodes() {
-            if node == target {
-                continue;
-            }
-            if !is_radio_input(&self.dom, node) {
-                continue;
-            }
-            if self.dom.attr(node, "name").unwrap_or_default() != target_name {
-                continue;
-            }
-            if self.form_owner(node) != target_form {
-                continue;
-            }
-            if self.dom.checked(node)? {
-                self.dom.set_checked(node, false)?;
-            }
-        }
-
-        Ok(())
     }
 
     fn dispatch_event(&mut self, target: NodeId, event_type: &str) -> Result<EventState> {
@@ -6418,38 +6443,82 @@ impl Harness {
                     env.insert(name.clone(), function);
                 }
                 Stmt::VarAssign { name, op, expr } => {
-                    let value = self.eval_expr(expr, env, event_param, event)?;
                     let previous = env
                         .get(name)
                         .cloned()
                         .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
 
                     let next = match op {
-                        VarAssignOp::Assign => value,
-                        VarAssignOp::Add => self.add_values(&previous, &value)?,
-                        VarAssignOp::Sub => self.eval_binary(&BinaryOp::Sub, &previous, &value)?,
-                        VarAssignOp::Mul => self.eval_binary(&BinaryOp::Mul, &previous, &value)?,
-                        VarAssignOp::Pow => self.eval_binary(&BinaryOp::Pow, &previous, &value)?,
+                        VarAssignOp::Assign => self.eval_expr(expr, env, event_param, event)?,
+                        VarAssignOp::Add => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.add_values(&previous, &value)?
+                        }
+                        VarAssignOp::Sub => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.eval_binary(&BinaryOp::Sub, &previous, &value)?
+                        }
+                        VarAssignOp::Mul => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.eval_binary(&BinaryOp::Mul, &previous, &value)?
+                        }
+                        VarAssignOp::Pow => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.eval_binary(&BinaryOp::Pow, &previous, &value)?
+                        }
                         VarAssignOp::BitOr => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::BitOr, &previous, &value)?
                         }
                         VarAssignOp::BitXor => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::BitXor, &previous, &value)?
                         }
                         VarAssignOp::BitAnd => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::BitAnd, &previous, &value)?
                         }
                         VarAssignOp::ShiftLeft => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::ShiftLeft, &previous, &value)?
                         }
                         VarAssignOp::ShiftRight => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::ShiftRight, &previous, &value)?
                         }
                         VarAssignOp::UnsignedShiftRight => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
                             self.eval_binary(&BinaryOp::UnsignedShiftRight, &previous, &value)?
                         }
-                        VarAssignOp::Div => self.eval_binary(&BinaryOp::Div, &previous, &value)?,
-                        VarAssignOp::Mod => self.eval_binary(&BinaryOp::Mod, &previous, &value)?,
+                        VarAssignOp::Div => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.eval_binary(&BinaryOp::Div, &previous, &value)?
+                        }
+                        VarAssignOp::Mod => {
+                            let value = self.eval_expr(expr, env, event_param, event)?;
+                            self.eval_binary(&BinaryOp::Mod, &previous, &value)?
+                        }
+                        VarAssignOp::LogicalAnd => {
+                            if previous.truthy() {
+                                self.eval_expr(expr, env, event_param, event)?
+                            } else {
+                                previous.clone()
+                            }
+                        }
+                        VarAssignOp::LogicalOr => {
+                            if previous.truthy() {
+                                previous.clone()
+                            } else {
+                                self.eval_expr(expr, env, event_param, event)?
+                            }
+                        }
+                        VarAssignOp::Nullish => {
+                            if matches!(&previous, Value::Null | Value::Undefined) {
+                                self.eval_expr(expr, env, event_param, event)?
+                            } else {
+                                previous.clone()
+                            }
+                        }
                     };
                     env.insert(name.clone(), next.clone());
                     self.bind_timer_id_to_task_env(name, expr, &next);
@@ -6477,6 +6546,43 @@ impl Harness {
                         }
                     };
                     env.insert(name.clone(), next);
+                }
+                Stmt::ArrayDestructureAssign { targets, expr } => {
+                    let value = self.eval_expr(expr, env, event_param, event)?;
+                    let values = self.array_like_values_from_value(&value)?;
+                    for (index, target_name) in targets.iter().enumerate() {
+                        let Some(target_name) = target_name else {
+                            continue;
+                        };
+                        if !env.contains_key(target_name) {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {}",
+                                target_name
+                            )));
+                        }
+                        let next = values.get(index).cloned().unwrap_or(Value::Undefined);
+                        env.insert(target_name.clone(), next);
+                    }
+                }
+                Stmt::ObjectDestructureAssign { bindings, expr } => {
+                    let value = self.eval_expr(expr, env, event_param, event)?;
+                    let Value::Object(entries) = value else {
+                        return Err(Error::ScriptRuntime(
+                            "object destructuring source must be an object".into(),
+                        ));
+                    };
+                    let entries = entries.borrow();
+                    for (source_key, target_name) in bindings {
+                        if !env.contains_key(target_name) {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {}",
+                                target_name
+                            )));
+                        }
+                        let next = Self::object_get_entry(&entries, source_key)
+                            .unwrap_or(Value::Undefined);
+                        env.insert(target_name.clone(), next);
+                    }
                 }
                 Stmt::ObjectAssign { target, key, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -7743,16 +7849,61 @@ impl Harness {
             }
             Expr::ObjectLiteral(entries) => {
                 let mut object_entries = Vec::with_capacity(entries.len());
-                for (key, value) in entries {
-                    let value = self.eval_expr(value, env, event_param, event)?;
-                    let key = match key {
-                        ObjectLiteralKey::Static(key) => key.clone(),
-                        ObjectLiteralKey::Computed(expr) => {
-                            let key = self.eval_expr(expr, env, event_param, event)?;
-                            self.property_key_to_storage_key(&key)
+                for entry in entries {
+                    match entry {
+                        ObjectLiteralEntry::Pair(key, value) => {
+                            let value = self.eval_expr(value, env, event_param, event)?;
+                            let key = match key {
+                                ObjectLiteralKey::Static(key) => key.clone(),
+                                ObjectLiteralKey::Computed(expr) => {
+                                    let key = self.eval_expr(expr, env, event_param, event)?;
+                                    self.property_key_to_storage_key(&key)
+                                }
+                            };
+                            Self::object_set_entry(&mut object_entries, key, value);
                         }
-                    };
-                    Self::object_set_entry(&mut object_entries, key, value);
+                        ObjectLiteralEntry::Spread(expr) => {
+                            let spread_value = self.eval_expr(expr, env, event_param, event)?;
+                            match spread_value {
+                                Value::Null | Value::Undefined => {}
+                                Value::Object(entries) => {
+                                    for (key, value) in entries.borrow().iter() {
+                                        if Self::is_internal_object_key(key) {
+                                            continue;
+                                        }
+                                        Self::object_set_entry(
+                                            &mut object_entries,
+                                            key.clone(),
+                                            value.clone(),
+                                        );
+                                    }
+                                }
+                                Value::Array(values) => {
+                                    for (index, value) in values.borrow().iter().enumerate() {
+                                        Self::object_set_entry(
+                                            &mut object_entries,
+                                            index.to_string(),
+                                            value.clone(),
+                                        );
+                                    }
+                                }
+                                Value::String(text) => {
+                                    for (index, ch) in text.chars().enumerate() {
+                                        Self::object_set_entry(
+                                            &mut object_entries,
+                                            index.to_string(),
+                                            Value::String(ch.to_string()),
+                                        );
+                                    }
+                                }
+                                _ => {
+                                    return Err(Error::ScriptRuntime(
+                                        "object spread source must be an object, array, string, null, or undefined".into(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok(Self::new_object_value(object_entries))
             }
@@ -7984,7 +8135,13 @@ impl Harness {
             Expr::ArrayLiteral(values) => {
                 let mut out = Vec::with_capacity(values.len());
                 for value in values {
-                    out.push(self.eval_expr(value, env, event_param, event)?);
+                    match value {
+                        Expr::Spread(expr) => {
+                            let spread_value = self.eval_expr(expr, env, event_param, event)?;
+                            out.extend(self.array_like_values_from_value(&spread_value)?);
+                        }
+                        _ => out.push(self.eval_expr(value, env, event_param, event)?),
+                    }
                 }
                 Ok(Self::new_array_value(out))
             }
@@ -9147,6 +9304,15 @@ impl Harness {
                 let has = entries.iter().any(|(entry_name, _)| entry_name == name);
                 Ok(Value::Bool(has))
             }
+            Expr::FormDataGetAll { source, name } => {
+                let entries = self.eval_form_data_source(source, env)?;
+                let values = entries
+                    .iter()
+                    .filter(|(entry_name, _)| entry_name == name)
+                    .map(|(_, value)| Value::String(value.clone()))
+                    .collect::<Vec<_>>();
+                Ok(Self::new_array_value(values))
+            }
             Expr::FormDataGetAllLength { source, name } => {
                 let entries = self.eval_form_data_source(source, env)?;
                 let len = entries
@@ -9331,6 +9497,44 @@ impl Harness {
                 };
                 Ok(Value::String(js_type.to_string()))
             }
+            Expr::Await(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                if let Value::Promise(promise) = value {
+                    let settled = {
+                        let promise = promise.borrow();
+                        match &promise.state {
+                            PromiseState::Pending => None,
+                            PromiseState::Fulfilled(value) => {
+                                Some(PromiseSettledValue::Fulfilled(value.clone()))
+                            }
+                            PromiseState::Rejected(reason) => {
+                                Some(PromiseSettledValue::Rejected(reason.clone()))
+                            }
+                        }
+                    };
+                    match settled {
+                        Some(PromiseSettledValue::Fulfilled(value)) => Ok(value),
+                        Some(PromiseSettledValue::Rejected(reason)) => Err(Error::ScriptRuntime(
+                            format!("await rejected Promise: {}", reason.as_string()),
+                        )),
+                        None => Ok(Value::Undefined),
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
+            Expr::Yield(inner) => self.eval_expr(inner, env, event_param, event),
+            Expr::YieldStar(inner) => self.eval_expr(inner, env, event_param, event),
+            Expr::Comma(parts) => {
+                let mut last = Value::Undefined;
+                for part in parts {
+                    last = self.eval_expr(part, env, event_param, event)?;
+                }
+                Ok(last)
+            }
+            Expr::Spread(_) => Err(Error::ScriptRuntime(
+                "spread syntax is only supported in array and object literals".into(),
+            )),
             Expr::Add(parts) => {
                 if parts.is_empty() {
                     return Ok(Value::String(String::new()));
@@ -9389,6 +9593,13 @@ impl Harness {
         let out = match op {
             BinaryOp::Or => Value::Bool(left.truthy() || right.truthy()),
             BinaryOp::And => Value::Bool(left.truthy() && right.truthy()),
+            BinaryOp::Nullish => {
+                if matches!(left, Value::Null | Value::Undefined) {
+                    right.clone()
+                } else {
+                    left.clone()
+                }
+            }
             BinaryOp::Eq => Value::Bool(self.loose_equal(left, right)),
             BinaryOp::Ne => Value::Bool(!self.loose_equal(left, right)),
             BinaryOp::StrictEq => Value::Bool(self.strict_equal(left, right)),
@@ -16266,6 +16477,10 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_destructure_assign(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_var_assign(stmt)? {
         return Ok(parsed);
     }
@@ -17094,6 +17309,10 @@ fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail:
     if tail.is_empty() {
         return false;
     }
+    if tail.starts_with('=') {
+        // Preserve object destructuring assignment: `{ a, b } = value`.
+        return false;
+    }
     if is_keyword_prefix(tail, "else") {
         return false;
     }
@@ -17232,6 +17451,9 @@ fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
         "<<=" => VarAssignOp::ShiftLeft,
         ">>=" => VarAssignOp::ShiftRight,
         ">>>=" => VarAssignOp::UnsignedShiftRight,
+        "&&=" => VarAssignOp::LogicalAnd,
+        "||=" => VarAssignOp::LogicalOr,
+        "??=" => VarAssignOp::Nullish,
         _ => {
             return Err(Error::ScriptParse(format!(
                 "unsupported assignment operator: {stmt}"
@@ -17259,6 +17481,115 @@ fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
         op_len,
         stmt.get(eq_pos + op_len..).unwrap_or_default(),
     ))
+}
+
+fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
+        return Ok(None);
+    };
+    if op_len != 1 {
+        return Ok(None);
+    }
+
+    let lhs = stmt[..eq_pos].trim();
+    let rhs = stmt[eq_pos + op_len..].trim();
+    if lhs.is_empty() || rhs.is_empty() {
+        return Ok(None);
+    }
+
+    if lhs.starts_with('[') && lhs.ends_with(']') {
+        let targets = parse_array_destructure_pattern(lhs)?;
+        let expr = parse_expr(rhs)?;
+        return Ok(Some(Stmt::ArrayDestructureAssign { targets, expr }));
+    }
+    if lhs.starts_with('{') && lhs.ends_with('}') {
+        let bindings = parse_object_destructure_pattern(lhs)?;
+        let expr = parse_expr(rhs)?;
+        return Ok(Some(Stmt::ObjectDestructureAssign { bindings, expr }));
+    }
+
+    Ok(None)
+}
+
+fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'[', b']')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid array destructuring pattern: {pattern}"
+        )));
+    }
+
+    let items = split_top_level_by_char(&items_src, b',');
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut targets = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            targets.push(None);
+            continue;
+        }
+        if !is_ident(item) {
+            return Err(Error::ScriptParse(format!(
+                "array destructuring target must be an identifier: {item}"
+            )));
+        }
+        targets.push(Some(item.to_string()));
+    }
+    Ok(targets)
+}
+
+fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String)>> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid object destructuring pattern: {pattern}"
+        )));
+    }
+
+    let items = split_top_level_by_char(&items_src, b',');
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut bindings = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err(Error::ScriptParse(
+                "object destructuring pattern does not support empty entries".into(),
+            ));
+        }
+
+        if let Some(colon) = find_first_top_level_colon(item) {
+            let source = item[..colon].trim();
+            let target = item[colon + 1..].trim();
+            if !is_ident(source) || !is_ident(target) {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+            bindings.push((source.to_string(), target.to_string()));
+        } else {
+            if !is_ident(item) {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be an identifier: {item}"
+                )));
+            }
+            bindings.push((item.to_string(), item.to_string()));
+        }
+    }
+
+    Ok(bindings)
 }
 
 fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -18443,7 +18774,7 @@ fn parse_expr(src: &str) -> Result<Expr> {
         return Ok(handler_expr);
     }
 
-    parse_ternary_expr(src)
+    parse_comma_expr(src)
 }
 
 fn strip_js_comments(src: &str) -> String {
@@ -18566,10 +18897,30 @@ fn strip_js_comments(src: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| src.to_string())
 }
 
+fn parse_comma_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let parts = split_top_level_by_char(src, b',');
+    if parts.len() == 1 {
+        return parse_ternary_expr(src);
+    }
+
+    let mut parsed = Vec::with_capacity(parts.len());
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "invalid comma expression: {src}"
+            )));
+        }
+        parsed.push(parse_ternary_expr(part)?);
+    }
+    Ok(Expr::Comma(parsed))
+}
+
 fn parse_ternary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
 
-    if let Some(q_pos) = find_top_level_char(src, b'?') {
+    if let Some(q_pos) = find_top_level_ternary_question(src) {
         let cond_src = src[..q_pos].trim();
         let colon_pos = find_matching_ternary_colon(src, q_pos + 1).ok_or_else(|| {
             Error::ScriptParse(format!("invalid ternary expression (missing ':'): {src}"))
@@ -18591,10 +18942,22 @@ fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let (parts, ops) = split_top_level_by_ops(src, &["||"]);
     if ops.is_empty() {
+        return parse_nullish_expr(src);
+    }
+    fold_binary(parts, ops, parse_nullish_expr, |op| match op {
+        "||" => BinaryOp::Or,
+        _ => unreachable!(),
+    })
+}
+
+fn parse_nullish_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let (parts, ops) = split_top_level_by_ops(src, &["??"]);
+    if ops.is_empty() {
         return parse_logical_and_expr(src);
     }
     fold_binary(parts, ops, parse_logical_and_expr, |op| match op {
-        "||" => BinaryOp::Or,
+        "??" => BinaryOp::Nullish,
         _ => unreachable!(),
     })
 }
@@ -18854,6 +19217,9 @@ fn parse_mul_expr(src: &str) -> Result<Expr> {
     if let Some((pattern, flags)) = parse_regex_literal_expr(src)? {
         return Ok(Expr::RegexLiteral { pattern, flags });
     }
+    if src.strip_prefix("yield*").is_some() {
+        return parse_pow_expr(src);
+    }
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut ops: Vec<u8> = Vec::new();
@@ -19034,6 +19400,34 @@ fn parse_unary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
         return parse_expr(src);
+    }
+    if let Some(rest) = strip_keyword_operator(src, "await") {
+        if rest.is_empty() {
+            return Err(Error::ScriptParse(
+                "await operator requires an operand".into(),
+            ));
+        }
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::Await(Box::new(inner)));
+    }
+    if let Some(rest) = src.strip_prefix("yield*") {
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            return Err(Error::ScriptParse(
+                "yield* operator requires an operand".into(),
+            ));
+        }
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::YieldStar(Box::new(inner)));
+    }
+    if let Some(rest) = strip_keyword_operator(src, "yield") {
+        if rest.is_empty() {
+            return Err(Error::ScriptParse(
+                "yield operator requires an operand".into(),
+            ));
+        }
+        let inner = parse_unary_expr(rest)?;
+        return Ok(Expr::Yield(Box::new(inner)));
     }
     if let Some(rest) = strip_keyword_operator(src, "typeof") {
         let inner = parse_unary_expr(rest)?;
@@ -19384,6 +19778,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some((source, name)) = parse_form_data_get_all_length_expr(src)? {
         return Ok(Expr::FormDataGetAllLength { source, name });
+    }
+
+    if let Some((source, name)) = parse_form_data_get_all_expr(src)? {
+        return Ok(Expr::FormDataGetAll { source, name });
     }
 
     if let Some((source, name)) = parse_form_data_get_expr(src)? {
@@ -22395,7 +22793,7 @@ fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(ObjectLiteralKey, Expr)>>> {
+fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'{') {
@@ -22420,6 +22818,17 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(ObjectLiteralKey, 
             return Err(Error::ScriptParse(
                 "object literal does not support empty entries".into(),
             ));
+        }
+
+        if let Some(rest) = entry.strip_prefix("...") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return Err(Error::ScriptParse(
+                    "object spread source cannot be empty".into(),
+                ));
+            }
+            out.push(ObjectLiteralEntry::Spread(parse_expr(rest)?));
+            continue;
         }
 
         let Some(colon) = find_first_top_level_colon(entry) else {
@@ -22456,7 +22865,7 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(ObjectLiteralKey, 
             ));
         };
 
-        out.push((key, parse_expr(value_src)?));
+        out.push(ObjectLiteralEntry::Pair(key, parse_expr(value_src)?));
     }
 
     Ok(Some(out))
@@ -22859,7 +23268,17 @@ fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
                 "array literal does not support empty elements".into(),
             ));
         }
-        out.push(parse_expr(item)?);
+        if let Some(rest) = item.strip_prefix("...") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return Err(Error::ScriptParse(
+                    "array spread source cannot be empty".into(),
+                ));
+            }
+            out.push(Expr::Spread(Box::new(parse_expr(rest)?)));
+        } else {
+            out.push(parse_expr(item)?);
+        }
     }
     Ok(Some(out))
 }
@@ -24468,6 +24887,10 @@ fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)
     parse_form_data_method_expr(src, "has")
 }
 
+fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+    parse_form_data_method_expr(src, "getAll")
+}
+
 fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -24872,71 +25295,6 @@ fn is_fully_wrapped_in_parens(src: &str) -> bool {
     depth == 0
 }
 
-fn find_top_level_char(src: &str, target: u8) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                _ => {
-                    if b == target && paren == 0 && bracket == 0 && brace == 0 {
-                        return Some(i);
-                    }
-                }
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
-        }
-
-        i += 1;
-    }
-
-    None
-}
-
 fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
@@ -24975,6 +25333,12 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
                             } else {
                                 i += 1;
                             }
+                        } else if i >= 2 && &bytes[i - 2..=i] == b"&&=" {
+                            return Some((i - 2, 3));
+                        } else if i >= 2 && &bytes[i - 2..=i] == b"||=" {
+                            return Some((i - 2, 3));
+                        } else if i >= 2 && &bytes[i - 2..=i] == b"??=" {
+                            return Some((i - 2, 3));
                         } else if i >= 2 && &bytes[i - 2..=i] == b"**=" {
                             return Some((i - 2, 3));
                         } else if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
@@ -25025,6 +25389,74 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     None
 }
 
+fn find_top_level_ternary_question(src: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StrState {
+        None,
+        Single,
+        Double,
+        Backtick,
+    }
+    let mut state = StrState::None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            StrState::None => match b {
+                b'\'' => state = StrState::Single,
+                b'"' => state = StrState::Double,
+                b'`' => state = StrState::Backtick,
+                b'(' => paren += 1,
+                b')' => paren = paren.saturating_sub(1),
+                b'[' => bracket += 1,
+                b']' => bracket = bracket.saturating_sub(1),
+                b'{' => brace += 1,
+                b'}' => brace = brace.saturating_sub(1),
+                b'?' if paren == 0 && bracket == 0 && brace == 0 => {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+                        i += 1;
+                    } else {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            },
+            StrState::Single => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Double => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'"' {
+                    state = StrState::None;
+                }
+            }
+            StrState::Backtick => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'`' {
+                    state = StrState::None;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
 fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = from;
@@ -25057,7 +25489,11 @@ fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
                 b'{' => brace += 1,
                 b'}' => brace = brace.saturating_sub(1),
                 b'?' if paren == 0 && bracket == 0 && brace == 0 => {
-                    nested_ternary += 1;
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+                        i += 1;
+                    } else {
+                        nested_ternary += 1;
+                    }
                 }
                 b':' if paren == 0 && bracket == 0 && brace == 0 => {
                     if nested_ternary == 0 {
@@ -25431,6 +25867,7 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
     }
 
     dom.initialize_form_control_values()?;
+    dom.normalize_radio_groups()?;
     Ok(ParseOutput { dom, scripts })
 }
 
@@ -26619,6 +27056,62 @@ mod tests {
     }
 
     #[test]
+    fn form_data_get_all_returns_array_values_in_order() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='t1' name='tag' value='A'>
+          <input id='t2' name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            fd.append('tag', 'C');
+            const tags = fd.getAll('tag');
+            const missing = fd.getAll('missing');
+            document.getElementById('result').textContent =
+              tags.length + ':' +
+              tags[0] + ':' +
+              tags[1] + ':' +
+              tags[2] + ':' +
+              tags.join('|') + ':' +
+              missing.length;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:A:B:C:A|B|C:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_get_all_inline_constructor_returns_array() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='t1' name='tag' value='A'>
+          <input id='t2' name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const tags = new FormData(document.getElementById('f')).getAll('tag');
+            document.getElementById('result').textContent =
+              tags.length + ':' + tags[0] + ':' + tags[1];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2:A:B")?;
+        Ok(())
+    }
+
+    #[test]
     fn form_data_method_on_non_form_data_variable_returns_runtime_error() -> Result<()> {
         let html = r#"
         <form id='f'>
@@ -26637,6 +27130,34 @@ mod tests {
         let err = h
             .click("#btn")
             .expect_err("non-FormData variable should fail on .get()");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("is not a FormData instance"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn form_data_get_all_on_non_form_data_variable_returns_runtime_error() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='Hanako'>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = document.getElementById('f');
+            fd.getAll('name');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("non-FormData variable should fail on .getAll()");
         match err {
             Error::ScriptRuntime(msg) => {
                 assert!(msg.contains("is not a FormData instance"));
@@ -33343,6 +33864,65 @@ mod tests {
     }
 
     #[test]
+    fn radio_checked_property_assignment_preserves_group_exclusivity() -> Result<()> {
+        let html = r#"
+        <form id='f1'>
+          <input id='r1' type='radio' name='plan'>
+          <input id='r2' type='radio' name='plan'>
+        </form>
+        <form id='f2'>
+          <input id='r3' type='radio' name='plan'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('r1').checked = true;
+            document.getElementById('r3').checked = true;
+            document.getElementById('r2').checked = true;
+            document.getElementById('result').textContent =
+              document.getElementById('r1').checked + ':' +
+              document.getElementById('r2').checked + ':' +
+              document.getElementById('r3').checked;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "false:true:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn radio_group_defaults_are_normalized_on_parse_and_form_reset() -> Result<()> {
+        let html = r#"
+        <form id='f'>
+          <input id='r1' type='radio' name='plan' checked>
+          <input id='r2' type='radio' name='plan' checked>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('r1').checked = true;
+            document.getElementById('f').reset();
+            document.getElementById('result').textContent =
+              document.getElementById('r1').checked + ':' +
+              document.getElementById('r2').checked;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.assert_checked("#r1", false)?;
+        h.assert_checked("#r2", true)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "false:true")?;
+        Ok(())
+    }
+
+    #[test]
     fn disabled_controls_ignore_user_actions() -> Result<()> {
         let html = r#"
         <input id='name' disabled value='init'>
@@ -33662,6 +34242,178 @@ mod tests {
             "#result",
             "undefined:undefined:number:number:true:false:true:false",
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn await_operator_supports_values_and_fulfilled_promises() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const direct = await 7;
+            const promised = await Promise.resolve('ok');
+            document.getElementById('result').textContent = direct + ':' + promised;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "7:ok")?;
+        Ok(())
+    }
+
+    #[test]
+    fn nullish_coalescing_operator_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = null ?? 'x';
+            const b = undefined ?? 'y';
+            const c = false ?? 'z';
+            const d = 0 ?? 9;
+            const e = '' ?? 'fallback';
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "x:y:false:0:")?;
+        Ok(())
+    }
+
+    #[test]
+    fn logical_assignment_operators_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 0;
+            let b = 2;
+            let c = null;
+            let d = 'keep';
+            let e = 0;
+            let f = 'set';
+
+            a ||= 5;
+            b &&= 7;
+            c ??= 9;
+            d ||= 'alt';
+            e &&= 4;
+            f ??= 'x';
+
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "5:7:9:keep:0:set")?;
+        Ok(())
+    }
+
+    #[test]
+    fn destructuring_assignment_for_array_and_object_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let first = 0;
+            let second = 2;
+            let third = 0;
+            let a = '';
+            let b = '';
+
+            [first, , third] = [10, 20, 30];
+            { a, b } = { a: 'A', b: 'B', c: 'C' };
+
+            document.getElementById('result').textContent =
+              first + ':' + second + ':' + third + ':' + a + ':' + b;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "10:2:30:A:B")?;
+        Ok(())
+    }
+
+    #[test]
+    fn yield_and_yield_star_operators_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = yield 3;
+            const b = yield* (2 + 3);
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:5")?;
+        Ok(())
+    }
+
+    #[test]
+    fn spread_syntax_for_array_and_object_literals_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const base = [2, 3];
+            const arr = [1, ...base, 4];
+            const obj1 = { a: 1, b: 2 };
+            const obj2 = { ...obj1, b: 9, c: 3 };
+            document.getElementById('result').textContent =
+              arr.join(',') + '|' + obj2.a + ':' + obj2.b + ':' + obj2.c;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1,2,3,4|1:9:3")?;
+        Ok(())
+    }
+
+    #[test]
+    fn comma_operator_returns_last_value_in_order() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = (1, 2, 3);
+            const y = (alert('first'), alert('second'), 'ok');
+            document.getElementById('result').textContent = x + ':' + y;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "3:ok")?;
+        assert_eq!(
+            h.take_alert_messages(),
+            vec!["first".to_string(), "second".to_string()]
+        );
         Ok(())
     }
 

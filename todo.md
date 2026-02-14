@@ -76,13 +76,13 @@
 
 ## 9. JavaScript演算子の未実装項目 (実装 / テスト)
 
-- [ ] `await` 演算子をサポートする
-- [ ] `??` (nullish coalescing) をサポートする
-- [ ] `&&=` / `||=` / `??=` をサポートする
-- [ ] 分割代入 (`[a, b] = arr`, `{ a, b } = obj`) をサポートする
-- [ ] `yield` / `yield*` をサポートする
-- [ ] spread syntax (`...obj`) をサポートする
-- [ ] comma operator (`,`) をサポートする
+- [x] `await` 演算子をサポートする
+- [x] `??` (nullish coalescing) をサポートする
+- [x] `&&=` / `||=` / `??=` をサポートする
+- [x] 分割代入 (`[a, b] = arr`, `{ a, b } = obj`) をサポートする
+- [x] `yield` / `yield*` をサポートする
+- [x] spread syntax (`...obj`) をサポートする
+- [x] comma operator (`,`) をサポートする
 
 ## 10. `BigInt` コンストラクタ・静的/インスタンスメソッド (実装 / テスト)
 
