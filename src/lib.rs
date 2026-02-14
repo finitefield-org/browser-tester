@@ -3143,11 +3143,28 @@ fn parse_selector_attr_value(src: &str, start: usize) -> Result<(String, usize)>
 struct ArrayBufferValue {
     bytes: Vec<u8>,
     max_byte_length: Option<usize>,
+    detached: bool,
 }
 
 impl ArrayBufferValue {
     fn byte_length(&self) -> usize {
-        self.bytes.len()
+        if self.detached {
+            0
+        } else {
+            self.bytes.len()
+        }
+    }
+
+    fn max_byte_length(&self) -> usize {
+        if self.detached {
+            0
+        } else {
+            self.max_byte_length.unwrap_or(self.bytes.len())
+        }
+    }
+
+    fn resizable(&self) -> bool {
+        !self.detached && self.max_byte_length.is_some()
     }
 }
 
@@ -3241,6 +3258,128 @@ impl TypedArrayValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct MapValue {
+    entries: Vec<(Value, Value)>,
+    properties: Vec<(String, Value)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SetValue {
+    values: Vec<Value>,
+    properties: Vec<(String, Value)>,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseValue {
+    id: usize,
+    state: PromiseState,
+    reactions: Vec<PromiseReaction>,
+}
+
+impl PartialEq for PromiseValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PromiseState {
+    Pending,
+    Fulfilled(Value),
+    Rejected(Value),
+}
+
+#[derive(Debug, Clone)]
+struct PromiseReaction {
+    kind: PromiseReactionKind,
+}
+
+#[derive(Debug, Clone)]
+enum PromiseReactionKind {
+    Then {
+        on_fulfilled: Option<Value>,
+        on_rejected: Option<Value>,
+        result: Rc<RefCell<PromiseValue>>,
+    },
+    Finally {
+        callback: Option<Value>,
+        result: Rc<RefCell<PromiseValue>>,
+    },
+    FinallyContinuation {
+        original: PromiseSettledValue,
+        result: Rc<RefCell<PromiseValue>>,
+    },
+    ResolveTo {
+        target: Rc<RefCell<PromiseValue>>,
+    },
+    All {
+        state: Rc<RefCell<PromiseAllState>>,
+        index: usize,
+    },
+    AllSettled {
+        state: Rc<RefCell<PromiseAllSettledState>>,
+        index: usize,
+    },
+    Any {
+        state: Rc<RefCell<PromiseAnyState>>,
+        index: usize,
+    },
+    Race {
+        state: Rc<RefCell<PromiseRaceState>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum PromiseSettledValue {
+    Fulfilled(Value),
+    Rejected(Value),
+}
+
+#[derive(Debug, Clone)]
+struct PromiseAllState {
+    result: Rc<RefCell<PromiseValue>>,
+    remaining: usize,
+    values: Vec<Option<Value>>,
+    settled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseAllSettledState {
+    result: Rc<RefCell<PromiseValue>>,
+    remaining: usize,
+    values: Vec<Option<Value>>,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseAnyState {
+    result: Rc<RefCell<PromiseValue>>,
+    remaining: usize,
+    reasons: Vec<Option<Value>>,
+    settled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseRaceState {
+    result: Rc<RefCell<PromiseValue>>,
+    settled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseCapabilityFunction {
+    promise: Rc<RefCell<PromiseValue>>,
+    reject: bool,
+    already_called: Rc<RefCell<bool>>,
+}
+
+impl PartialEq for PromiseCapabilityFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.reject == other.reject
+            && self.promise.borrow().id == other.promise.borrow().id
+            && Rc::ptr_eq(&self.already_called, &other.already_called)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum Value {
     String(String),
     Bool(bool),
@@ -3249,10 +3388,17 @@ enum Value {
     BigInt(JsBigInt),
     Array(Rc<RefCell<Vec<Value>>>),
     Object(Rc<RefCell<Vec<(String, Value)>>>),
+    Promise(Rc<RefCell<PromiseValue>>),
+    Map(Rc<RefCell<MapValue>>),
+    Set(Rc<RefCell<SetValue>>),
     ArrayBuffer(Rc<RefCell<ArrayBufferValue>>),
     TypedArray(Rc<RefCell<TypedArrayValue>>),
     TypedArrayConstructor(TypedArrayConstructorKind),
     ArrayBufferConstructor,
+    PromiseConstructor,
+    MapConstructor,
+    SetConstructor,
+    PromiseCapability(Rc<PromiseCapabilityFunction>),
     RegExp(Rc<RefCell<RegexValue>>),
     Date(Rc<RefCell<i64>>),
     Null,
@@ -3315,10 +3461,17 @@ impl Value {
             Self::BigInt(v) => !v.is_zero(),
             Self::Array(_) => true,
             Self::Object(_) => true,
+            Self::Promise(_) => true,
+            Self::Map(_) => true,
+            Self::Set(_) => true,
             Self::ArrayBuffer(_) => true,
             Self::TypedArray(_) => true,
             Self::TypedArrayConstructor(_) => true,
             Self::ArrayBufferConstructor => true,
+            Self::PromiseConstructor => true,
+            Self::MapConstructor => true,
+            Self::SetConstructor => true,
+            Self::PromiseCapability(_) => true,
             Self::RegExp(_) => true,
             Self::Date(_) => true,
             Self::Null => false,
@@ -3358,6 +3511,9 @@ impl Value {
                 out
             }
             Self::Object(_) => "[object Object]".into(),
+            Self::Promise(_) => "[object Promise]".into(),
+            Self::Map(_) => "[object Map]".into(),
+            Self::Set(_) => "[object Set]".into(),
             Self::ArrayBuffer(_) => "[object ArrayBuffer]".into(),
             Self::TypedArray(value) => {
                 let value = value.borrow();
@@ -3368,6 +3524,10 @@ impl Value {
                 TypedArrayConstructorKind::Abstract => "TypedArray".to_string(),
             },
             Self::ArrayBufferConstructor => "ArrayBuffer".to_string(),
+            Self::PromiseConstructor => "Promise".to_string(),
+            Self::MapConstructor => "Map".to_string(),
+            Self::SetConstructor => "Set".to_string(),
+            Self::PromiseCapability(_) => "[object Function]".into(),
             Self::RegExp(value) => {
                 let value = value.borrow();
                 format!("/{}/{}", value.source, value.flags)
@@ -3663,9 +3823,22 @@ enum Expr {
         called_with_new: bool,
     },
     ArrayBufferConstructor,
+    ArrayBufferIsView(Box<Expr>),
+    ArrayBufferDetached(String),
+    ArrayBufferMaxByteLength(String),
+    ArrayBufferResizable(String),
     ArrayBufferResize {
         target: String,
         new_byte_length: Box<Expr>,
+    },
+    ArrayBufferSlice {
+        target: String,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
+    ArrayBufferTransfer {
+        target: String,
+        to_fixed_length: bool,
     },
     TypedArrayConstructorRef(TypedArrayConstructorKind),
     TypedArrayConstruct {
@@ -3677,6 +3850,44 @@ enum Expr {
         callee: Box<Expr>,
         args: Vec<Expr>,
         called_with_new: bool,
+    },
+    PromiseConstruct {
+        executor: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    PromiseConstructor,
+    PromiseStaticMethod {
+        method: PromiseStaticMethod,
+        args: Vec<Expr>,
+    },
+    PromiseMethod {
+        target: Box<Expr>,
+        method: PromiseInstanceMethod,
+        args: Vec<Expr>,
+    },
+    MapConstruct {
+        iterable: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    MapConstructor,
+    MapStaticMethod {
+        method: MapStaticMethod,
+        args: Vec<Expr>,
+    },
+    MapMethod {
+        target: String,
+        method: MapInstanceMethod,
+        args: Vec<Expr>,
+    },
+    SetConstruct {
+        iterable: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    SetConstructor,
+    SetMethod {
+        target: String,
+        method: SetInstanceMethod,
+        args: Vec<Expr>,
     },
     TypedArrayStaticBytesPerElement(TypedArrayKind),
     TypedArrayStaticMethod {
@@ -3875,9 +4086,6 @@ enum Expr {
     },
     QueueMicrotask {
         handler: ScriptHandler,
-    },
-    PromiseThen {
-        callback: ScriptHandler,
     },
     Binary {
         left: Box<Expr>,
@@ -4079,6 +4287,53 @@ enum TypedArrayInstanceMethod {
     ToSorted,
     Values,
     With,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MapStaticMethod {
+    GroupBy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromiseStaticMethod {
+    Resolve,
+    Reject,
+    All,
+    AllSettled,
+    Any,
+    Race,
+    Try,
+    WithResolvers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MapInstanceMethod {
+    Get,
+    Has,
+    Delete,
+    Clear,
+    ForEach,
+    GetOrInsert,
+    GetOrInsertComputed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromiseInstanceMethod {
+    Then,
+    Catch,
+    Finally,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetInstanceMethod {
+    Add,
+    Union,
+    Intersection,
+    Difference,
+    SymmetricDifference,
+    IsDisjointFrom,
+    IsSubsetOf,
+    IsSupersetOf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4449,9 +4704,15 @@ struct ScheduledTask {
 }
 
 #[derive(Debug, Clone)]
-struct ScheduledMicrotask {
-    handler: ScriptHandler,
-    env: HashMap<String, Value>,
+enum ScheduledMicrotask {
+    Script {
+        handler: ScriptHandler,
+        env: HashMap<String, Value>,
+    },
+    Promise {
+        reaction: PromiseReactionKind,
+        settled: PromiseSettledValue,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4474,6 +4735,7 @@ pub struct Harness {
     timer_step_limit: usize,
     next_timer_id: i64,
     next_task_order: i64,
+    next_promise_id: usize,
     task_depth: usize,
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
@@ -4668,6 +4930,7 @@ impl Harness {
             timer_step_limit: 10_000,
             next_timer_id: 1,
             next_task_order: 0,
+            next_promise_id: 1,
             task_depth: 0,
             running_timer_id: None,
             running_timer_canceled: false,
@@ -5670,17 +5933,26 @@ impl Harness {
     }
 
     fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
-        self.microtask_queue.push_back(ScheduledMicrotask {
+        self.microtask_queue.push_back(ScheduledMicrotask::Script {
             handler,
             env: env.clone(),
         });
+    }
+
+    fn queue_promise_reaction_microtask(
+        &mut self,
+        reaction: PromiseReactionKind,
+        settled: PromiseSettledValue,
+    ) {
+        self.microtask_queue
+            .push_back(ScheduledMicrotask::Promise { reaction, settled });
     }
 
     fn run_microtask_queue(&mut self) -> Result<usize> {
         let mut steps = 0usize;
         self.task_depth += 1;
         let result = loop {
-            let Some(mut task) = self.microtask_queue.pop_front() else {
+            let Some(task) = self.microtask_queue.pop_front() else {
                 break Ok(());
             };
             steps += 1;
@@ -5692,20 +5964,22 @@ impl Harness {
                 ));
             }
 
-            let mut event = EventState::new("microtask", self.dom.root, self.now_ms);
-            let event_param = task
-                .handler
-                .first_event_param()
-                .map(|event_param| event_param.to_string());
-            let run = self.execute_stmts(
-                &task.handler.stmts,
-                &event_param,
-                &mut event,
-                &mut task.env,
-            );
-            let run = run.map(|_| ());
-            if let Err(err) = run {
-                break Err(err);
+            match task {
+                ScheduledMicrotask::Script { handler, mut env } => {
+                    let mut event = EventState::new("microtask", self.dom.root, self.now_ms);
+                    let event_param = handler
+                        .first_event_param()
+                        .map(|event_param| event_param.to_string());
+                    let run =
+                        self.execute_stmts(&handler.stmts, &event_param, &mut event, &mut env);
+                    let run = run.map(|_| ());
+                    if let Err(err) = run {
+                        break Err(err);
+                    }
+                }
+                ScheduledMicrotask::Promise { reaction, settled } => {
+                    self.run_promise_reaction_task(reaction, settled)?;
+                }
             }
         };
         self.task_depth -= 1;
@@ -5805,6 +6079,47 @@ impl Harness {
             captured_env,
             global_scope,
         }))
+    }
+
+    fn is_callable_value(&self, value: &Value) -> bool {
+        matches!(value, Value::Function(_) | Value::PromiseCapability(_))
+    }
+
+    fn execute_callable_value(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
+        match callable {
+            Value::Function(function) => self.execute_function_call(function.as_ref(), args, event),
+            Value::PromiseCapability(capability) => {
+                self.invoke_promise_capability(capability, args)
+            }
+            _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+        }
+    }
+
+    fn invoke_promise_capability(
+        &mut self,
+        capability: &PromiseCapabilityFunction,
+        args: &[Value],
+    ) -> Result<Value> {
+        let mut already_called = capability.already_called.borrow_mut();
+        if *already_called {
+            return Ok(Value::Undefined);
+        }
+        *already_called = true;
+        drop(already_called);
+
+        let value = args.first().cloned().unwrap_or(Value::Undefined);
+        if capability.reject {
+            self.promise_reject(&capability.promise, value);
+            Ok(Value::Undefined)
+        } else {
+            self.promise_resolve(&capability.promise, value)?;
+            Ok(Value::Undefined)
+        }
     }
 
     fn execute_function_call(
@@ -5949,6 +6264,14 @@ impl Harness {
                                 continue;
                             };
                             self.typed_array_set_index(values, index, value)?;
+                        }
+                        Some(Value::Map(map)) => {
+                            let key = key.as_string();
+                            Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
+                        }
+                        Some(Value::Set(set)) => {
+                            let key = key.as_string();
+                            Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
                         }
                         Some(_) => {
                             return Err(Error::ScriptRuntime(format!(
@@ -6323,19 +6646,57 @@ impl Harness {
                     }
                 }
                 Stmt::ArrayForEach { target, callback } => {
-                    let values = self.resolve_array_from_env(env, target)?;
-                    let input = values.borrow().clone();
-                    for (idx, item) in input.into_iter().enumerate() {
-                        self.execute_array_callback_in_env(
-                            callback,
-                            &[
-                                item,
-                                Value::Number(idx as i64),
-                                Value::Array(values.clone()),
-                            ],
-                            env,
-                            event,
-                        )?;
+                    let target_value = env.get(target).cloned();
+                    match target_value {
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                self.execute_array_callback_in_env(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                            }
+                        }
+                        Some(Value::Map(map)) => {
+                            let snapshot = map.borrow().entries.clone();
+                            for (key, value) in snapshot {
+                                self.execute_array_callback_in_env(
+                                    callback,
+                                    &[value, key, Value::Map(map.clone())],
+                                    env,
+                                    event,
+                                )?;
+                            }
+                        }
+                        Some(Value::Set(set)) => {
+                            let snapshot = set.borrow().values.clone();
+                            for value in snapshot {
+                                self.execute_array_callback_in_env(
+                                    callback,
+                                    &[value.clone(), value, Value::Set(set.clone())],
+                                    env,
+                                    event,
+                                )?;
+                            }
+                        }
+                        Some(_) => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not an array",
+                                target
+                            )));
+                        }
+                        None => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {}",
+                                target
+                            )));
+                        }
                     }
                 }
                 Stmt::For {
@@ -6458,10 +6819,12 @@ impl Harness {
                             .map(Value::Node)
                             .collect::<Vec<_>>(),
                         Value::Array(values) => values.borrow().clone(),
+                        Value::Map(map) => self.map_entries_array(&map),
+                        Value::Set(set) => set.borrow().values.clone(),
                         Value::Null | Value::Undefined => Vec::new(),
                         _ => {
                             return Err(Error::ScriptRuntime(
-                                "for...of iterable must be a NodeList or Array".into(),
+                                "for...of iterable must be a NodeList, Array, Map, or Set".into(),
                             ));
                         }
                     };
@@ -6838,6 +7201,22 @@ impl Harness {
                 event,
             ),
             Expr::ArrayBufferConstructor => Ok(Value::ArrayBufferConstructor),
+            Expr::ArrayBufferIsView(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Ok(Value::Bool(matches!(value, Value::TypedArray(_))))
+            }
+            Expr::ArrayBufferDetached(target) => {
+                let buffer = self.resolve_array_buffer_from_env(env, target)?;
+                Ok(Value::Bool(buffer.borrow().detached))
+            }
+            Expr::ArrayBufferMaxByteLength(target) => {
+                let buffer = self.resolve_array_buffer_from_env(env, target)?;
+                Ok(Value::Number(buffer.borrow().max_byte_length() as i64))
+            }
+            Expr::ArrayBufferResizable(target) => {
+                let buffer = self.resolve_array_buffer_from_env(env, target)?;
+                Ok(Value::Bool(buffer.borrow().resizable()))
+            }
             Expr::ArrayBufferResize {
                 target,
                 new_byte_length,
@@ -6846,6 +7225,38 @@ impl Harness {
                 let new_byte_length = Self::value_to_i64(&new_byte_length);
                 self.resize_array_buffer_in_env(env, target, new_byte_length)?;
                 Ok(Value::Undefined)
+            }
+            Expr::ArrayBufferSlice { target, start, end } => {
+                let buffer = self.resolve_array_buffer_from_env(env, target)?;
+                Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
+                let source = buffer.borrow();
+                let len = source.bytes.len();
+                let start = if let Some(start) = start {
+                    let start = self.eval_expr(start, env, event_param, event)?;
+                    Self::normalize_slice_index(len, Self::value_to_i64(&start))
+                } else {
+                    0
+                };
+                let end = if let Some(end) = end {
+                    let end = self.eval_expr(end, env, event_param, event)?;
+                    Self::normalize_slice_index(len, Self::value_to_i64(&end))
+                } else {
+                    len
+                };
+                let end = end.max(start);
+                let bytes = source.bytes[start..end].to_vec();
+                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+                    bytes,
+                    max_byte_length: None,
+                    detached: false,
+                }))))
+            }
+            Expr::ArrayBufferTransfer {
+                target,
+                to_fixed_length,
+            } => {
+                let buffer = self.resolve_array_buffer_from_env(env, target)?;
+                self.transfer_array_buffer(&buffer, *to_fixed_length)
             }
             Expr::TypedArrayConstructorRef(kind) => Ok(Value::TypedArrayConstructor(kind.clone())),
             Expr::TypedArrayConstruct {
@@ -6865,6 +7276,60 @@ impl Harness {
                 event_param,
                 event,
             ),
+            Expr::PromiseConstruct {
+                executor,
+                called_with_new,
+            } => self.eval_promise_construct(
+                executor,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::PromiseConstructor => Ok(Value::PromiseConstructor),
+            Expr::PromiseStaticMethod { method, args } => {
+                self.eval_promise_static_method(*method, args, env, event_param, event)
+            }
+            Expr::PromiseMethod {
+                target,
+                method,
+                args,
+            } => self.eval_promise_method(target, *method, args, env, event_param, event),
+            Expr::MapConstruct {
+                iterable,
+                called_with_new,
+            } => self.eval_map_construct(
+                iterable,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::MapConstructor => Ok(Value::MapConstructor),
+            Expr::MapStaticMethod { method, args } => {
+                self.eval_map_static_method(*method, args, env, event_param, event)
+            }
+            Expr::MapMethod {
+                target,
+                method,
+                args,
+            } => self.eval_map_method(target, *method, args, env, event_param, event),
+            Expr::SetConstruct {
+                iterable,
+                called_with_new,
+            } => self.eval_set_construct(
+                iterable,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::SetConstructor => Ok(Value::SetConstructor),
+            Expr::SetMethod {
+                target,
+                method,
+                args,
+            } => self.eval_set_method(target, *method, args, env, event_param, event),
             Expr::TypedArrayStaticBytesPerElement(kind) => {
                 Ok(Value::Number(kind.bytes_per_element() as i64))
             }
@@ -6989,6 +7454,50 @@ impl Harness {
             Expr::ObjectGet { target, key } => match env.get(target) {
                 Some(Value::Object(entries)) => Ok(Self::object_get_entry(&entries.borrow(), key)
                     .unwrap_or(Value::Undefined)),
+                Some(Value::Promise(promise)) => {
+                    if key == "constructor" {
+                        Ok(Value::PromiseConstructor)
+                    } else {
+                        let promise = promise.borrow();
+                        if key == "status" {
+                            let status = match &promise.state {
+                                PromiseState::Pending => "pending",
+                                PromiseState::Fulfilled(_) => "fulfilled",
+                                PromiseState::Rejected(_) => "rejected",
+                            };
+                            Ok(Value::String(status.to_string()))
+                        } else {
+                            Ok(Value::Undefined)
+                        }
+                    }
+                }
+                Some(Value::Map(map)) => {
+                    let map = map.borrow();
+                    if key == "size" {
+                        Ok(Value::Number(map.entries.len() as i64))
+                    } else if key == "constructor" {
+                        Ok(Value::MapConstructor)
+                    } else {
+                        Ok(Self::object_get_entry(&map.properties, key).unwrap_or(Value::Undefined))
+                    }
+                }
+                Some(Value::Set(set)) => {
+                    let set = set.borrow();
+                    if key == "size" {
+                        Ok(Value::Number(set.values.len() as i64))
+                    } else if key == "constructor" {
+                        Ok(Value::SetConstructor)
+                    } else {
+                        Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
+                    }
+                }
+                Some(Value::ArrayBuffer(_)) => {
+                    if key == "constructor" {
+                        Ok(Value::ArrayBufferConstructor)
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                }
                 Some(_) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not an object",
                     target
@@ -7655,6 +8164,31 @@ impl Harness {
                         let end = end.max(start);
                         self.new_typed_array_from_values(kind, &snapshot[start..end])
                     }
+                    Some(Value::ArrayBuffer(buffer)) => {
+                        Self::ensure_array_buffer_not_detached(buffer, "slice")?;
+                        let source = buffer.borrow();
+                        let len = source.bytes.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+                            bytes: source.bytes[start..end].to_vec(),
+                            max_byte_length: None,
+                            detached: false,
+                        }))))
+                    }
                     Some(Value::String(value)) => {
                         let len = value.chars().count();
                         let start = start
@@ -8002,14 +8536,17 @@ impl Harness {
                     .get(target)
                     .cloned()
                     .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
-                let Value::Function(function) = callee else {
-                    return Err(Error::ScriptRuntime(format!("'{target}' is not a function")));
-                };
                 let mut evaluated_args = Vec::with_capacity(args.len());
                 for arg in args {
                     evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
                 }
-                self.execute_function_call(function.as_ref(), &evaluated_args, event)
+                self.execute_callable_value(&callee, &evaluated_args, event)
+                    .map_err(|err| match err {
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime(format!("'{target}' is not a function"))
+                        }
+                        other => other,
+                    })
             }
             Expr::Var(name) => env
                 .get(name)
@@ -8069,10 +8606,6 @@ impl Harness {
             }
             Expr::QueueMicrotask { handler } => {
                 self.queue_microtask(handler.clone(), env);
-                Ok(Value::Null)
-            }
-            Expr::PromiseThen { callback } => {
-                self.queue_microtask(callback.clone(), env);
                 Ok(Value::Null)
             }
             Expr::Binary { left, op, right } => {
@@ -8281,7 +8814,12 @@ impl Harness {
                         Value::BigInt(_) => "bigint",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
-                        Value::TypedArrayConstructor(_) | Value::ArrayBufferConstructor => {
+                        Value::TypedArrayConstructor(_)
+                        | Value::ArrayBufferConstructor
+                        | Value::PromiseConstructor
+                        | Value::MapConstructor
+                        | Value::SetConstructor
+                        | Value::PromiseCapability(_) => {
                             "function"
                         }
                         Value::Function(_) => "function",
@@ -8290,10 +8828,13 @@ impl Harness {
                         | Value::FormData(_)
                         | Value::Array(_)
                         | Value::Object(_)
-                        | Value::ArrayBuffer(_)
-                        | Value::TypedArray(_)
-                        | Value::RegExp(_)
-                        | Value::Date(_) => "object",
+                            | Value::Map(_)
+                            | Value::Set(_)
+                            | Value::Promise(_)
+                            | Value::ArrayBuffer(_)
+                            | Value::TypedArray(_)
+                            | Value::RegExp(_)
+                            | Value::Date(_) => "object",
                     }),
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
@@ -8304,7 +8845,12 @@ impl Harness {
                             Value::BigInt(_) => "bigint",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
-                            Value::TypedArrayConstructor(_) | Value::ArrayBufferConstructor => {
+                            Value::TypedArrayConstructor(_)
+                            | Value::ArrayBufferConstructor
+                            | Value::PromiseConstructor
+                            | Value::MapConstructor
+                            | Value::SetConstructor
+                            | Value::PromiseCapability(_) => {
                                 "function"
                             }
                             Value::Function(_) => "function",
@@ -8313,6 +8859,9 @@ impl Harness {
                             | Value::FormData(_)
                             | Value::Array(_)
                             | Value::Object(_)
+                            | Value::Map(_)
+                            | Value::Set(_)
+                            | Value::Promise(_)
                             | Value::ArrayBuffer(_)
                             | Value::TypedArray(_)
                             | Value::RegExp(_)
@@ -8576,10 +9125,17 @@ impl Harness {
             value,
             Value::Array(_)
                 | Value::Object(_)
+                | Value::Promise(_)
+                | Value::Map(_)
+                | Value::Set(_)
                 | Value::ArrayBuffer(_)
                 | Value::TypedArray(_)
                 | Value::TypedArrayConstructor(_)
                 | Value::ArrayBufferConstructor
+                | Value::PromiseConstructor
+                | Value::MapConstructor
+                | Value::SetConstructor
+                | Value::PromiseCapability(_)
                 | Value::RegExp(_)
                 | Value::Date(_)
                 | Value::Node(_)
@@ -8593,10 +9149,17 @@ impl Harness {
         match value {
             Value::Array(_)
             | Value::Object(_)
+            | Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Date(_)
             | Value::Node(_)
@@ -8635,6 +9198,9 @@ impl Harness {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
+            (Value::Map(left), Value::Map(right)) => Rc::ptr_eq(left, right),
+            (Value::Set(left), Value::Set(right)) => Rc::ptr_eq(left, right),
+            (Value::Promise(left), Value::Promise(right)) => Rc::ptr_eq(left, right),
             (Value::TypedArray(left), Value::TypedArray(right)) => Rc::ptr_eq(left, right),
             (Value::ArrayBuffer(left), Value::ArrayBuffer(right)) => Rc::ptr_eq(left, right),
             (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
@@ -8684,10 +9250,17 @@ impl Harness {
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
+            (Value::Map(l), Value::Map(r)) => Rc::ptr_eq(l, r),
+            (Value::Set(l), Value::Set(r)) => Rc::ptr_eq(l, r),
+            (Value::Promise(l), Value::Promise(r)) => Rc::ptr_eq(l, r),
             (Value::TypedArray(l), Value::TypedArray(r)) => Rc::ptr_eq(l, r),
             (Value::ArrayBuffer(l), Value::ArrayBuffer(r)) => Rc::ptr_eq(l, r),
             (Value::TypedArrayConstructor(l), Value::TypedArrayConstructor(r)) => l == r,
             (Value::ArrayBufferConstructor, Value::ArrayBufferConstructor) => true,
+            (Value::PromiseConstructor, Value::PromiseConstructor) => true,
+            (Value::MapConstructor, Value::MapConstructor) => true,
+            (Value::SetConstructor, Value::SetConstructor) => true,
+            (Value::PromiseCapability(l), Value::PromiseCapability(r)) => Rc::ptr_eq(l, r),
             (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
             (Value::RegExp(l), Value::RegExp(r)) => Rc::ptr_eq(l, r),
             (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
@@ -9286,13 +9859,23 @@ impl Harness {
             | Value::FormData(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::Function(_) => Ok(None),
             Value::RegExp(_) => Ok(Some("{}".to_string())),
             Value::Date(v) => Ok(Some(format!(
                 "\"{}\"",
                 Self::json_escape_string(&Self::format_iso_8601_utc(*v.borrow()))
             ))),
-            Value::ArrayBuffer(_) | Value::TypedArray(_) => Ok(Some("{}".to_string())),
+            Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_) => {
+                Ok(Some("{}".to_string()))
+            }
             Value::Array(values) => {
                 let ptr = Rc::as_ptr(values) as usize;
                 if array_stack.contains(&ptr) {
@@ -9395,6 +9978,7 @@ impl Harness {
                 Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
                     bytes: buffer.bytes.clone(),
                     max_byte_length: buffer.max_byte_length,
+                    detached: buffer.detached,
                 }))))
             }
             Value::TypedArray(array) => {
@@ -9403,12 +9987,27 @@ impl Harness {
                 let cloned_buffer = Rc::new(RefCell::new(ArrayBufferValue {
                     bytes: buffer.bytes.clone(),
                     max_byte_length: buffer.max_byte_length,
+                    detached: buffer.detached,
                 }));
                 Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
                     kind: array.kind,
                     buffer: cloned_buffer,
                     byte_offset: array.byte_offset,
                     fixed_length: array.fixed_length,
+                }))))
+            }
+            Value::Map(map) => {
+                let map = map.borrow();
+                Ok(Value::Map(Rc::new(RefCell::new(MapValue {
+                    entries: map.entries.clone(),
+                    properties: map.properties.clone(),
+                }))))
+            }
+            Value::Set(set) => {
+                let set = set.borrow();
+                Ok(Value::Set(Rc::new(RefCell::new(SetValue {
+                    values: set.values.clone(),
+                    properties: set.properties.clone(),
                 }))))
             }
             Value::Array(values) => {
@@ -9451,8 +10050,13 @@ impl Harness {
             Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
+            | Value::Promise(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::Function(_) => Err(Error::ScriptRuntime(
                 "structuredClone value is not cloneable".into(),
             )),
@@ -9970,10 +10574,17 @@ impl Harness {
                 Self::parse_js_bigint_from_string(&rendered)
             }
             Value::Object(_)
+            | Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10000,10 +10611,17 @@ impl Harness {
             | Value::Float(_)
             | Value::Date(_)
             | Value::Object(_)
+            | Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10154,10 +10772,17 @@ impl Harness {
             Value::String(v) => Self::parse_js_number_from_string(v),
             Value::Date(v) => *v.borrow() as f64,
             Value::Object(_)
+            | Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10624,6 +11249,15 @@ impl Harness {
         match value {
             Value::Array(values) => Ok(values.borrow().clone()),
             Value::TypedArray(values) => self.typed_array_snapshot(values),
+            Value::Map(map) => {
+                let map = map.borrow();
+                Ok(map
+                    .entries
+                    .iter()
+                    .map(|(key, value)| Self::new_array_value(vec![key.clone(), value.clone()]))
+                    .collect::<Vec<_>>())
+            }
+            Value::Set(set) => Ok(set.borrow().values.clone()),
             Value::String(text) => Ok(text
                 .chars()
                 .map(|ch| Value::String(ch.to_string()))
@@ -10650,6 +11284,7 @@ impl Harness {
         Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
             bytes: vec![0; byte_length],
             max_byte_length,
+            detached: false,
         })))
     }
 
@@ -10658,6 +11293,7 @@ impl Harness {
         let buffer = Rc::new(RefCell::new(ArrayBufferValue {
             bytes: vec![0; byte_length],
             max_byte_length: None,
+            detached: false,
         }));
         Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
             kind,
@@ -11019,6 +11655,7 @@ impl Harness {
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         new_byte_length: i64,
     ) -> Result<()> {
+        Self::ensure_array_buffer_not_detached(buffer, "resize")?;
         if new_byte_length < 0 {
             return Err(Error::ScriptRuntime(
                 "ArrayBuffer resize length must be non-negative".into(),
@@ -11037,6 +11674,46 @@ impl Harness {
         }
         buffer.borrow_mut().bytes.resize(new_byte_length, 0);
         Ok(())
+    }
+
+    fn ensure_array_buffer_not_detached(
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        method: &str,
+    ) -> Result<()> {
+        if buffer.borrow().detached {
+            return Err(Error::ScriptRuntime(format!(
+                "Cannot perform ArrayBuffer.prototype.{method} on a detached ArrayBuffer"
+            )));
+        }
+        Ok(())
+    }
+
+    fn transfer_array_buffer(
+        &mut self,
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        to_fixed_length: bool,
+    ) -> Result<Value> {
+        Self::ensure_array_buffer_not_detached(buffer, if to_fixed_length {
+            "transferToFixedLength"
+        } else {
+            "transfer"
+        })?;
+        let mut source = buffer.borrow_mut();
+        let bytes = source.bytes.clone();
+        let max_byte_length = if to_fixed_length {
+            None
+        } else {
+            source.max_byte_length
+        };
+        source.bytes.clear();
+        source.max_byte_length = None;
+        source.detached = true;
+        drop(source);
+        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+            bytes,
+            max_byte_length,
+            detached: false,
+        }))))
     }
 
     fn resize_array_buffer_in_env(
@@ -11185,16 +11862,1325 @@ impl Harness {
         }
     }
 
+    fn same_value_zero(&self, left: &Value, right: &Value) -> bool {
+        if let (Some(left_num), Some(right_num)) =
+            (Self::number_primitive_value(left), Self::number_primitive_value(right))
+        {
+            if left_num.is_nan() && right_num.is_nan() {
+                return true;
+            }
+        }
+        self.strict_equal(left, right)
+    }
+
+    fn map_entry_index(&self, map: &MapValue, key: &Value) -> Option<usize> {
+        map.entries
+            .iter()
+            .position(|(existing_key, _)| self.same_value_zero(existing_key, key))
+    }
+
+    fn map_set_entry(&self, map: &mut MapValue, key: Value, value: Value) {
+        if let Some(index) = self.map_entry_index(map, &key) {
+            map.entries[index].1 = value;
+        } else {
+            map.entries.push((key, value));
+        }
+    }
+
+    fn map_entries_array(&self, map: &Rc<RefCell<MapValue>>) -> Vec<Value> {
+        map.borrow()
+            .entries
+            .iter()
+            .map(|(key, value)| Self::new_array_value(vec![key.clone(), value.clone()]))
+            .collect::<Vec<_>>()
+    }
+
+    fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {
+        set.values
+            .iter()
+            .position(|existing_value| self.same_value_zero(existing_value, value))
+    }
+
+    fn set_add_value(&self, set: &mut SetValue, value: Value) {
+        if self.set_value_index(set, &value).is_none() {
+            set.values.push(value);
+        }
+    }
+
+    fn set_values_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
+        set.borrow().values.clone()
+    }
+
+    fn set_entries_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
+        set.borrow()
+            .values
+            .iter()
+            .map(|value| Self::new_array_value(vec![value.clone(), value.clone()]))
+            .collect::<Vec<_>>()
+    }
+
+    fn set_like_keys_snapshot(&self, value: &Value) -> Result<Vec<Value>> {
+        match value {
+            Value::Set(set) => Ok(set.borrow().values.clone()),
+            Value::Map(map) => Ok(map
+                .borrow()
+                .entries
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>()),
+            _ => Err(Error::ScriptRuntime(
+                "Set composition argument must be set-like (Set or Map)".into(),
+            )),
+        }
+    }
+
+    fn set_like_has_value(&self, value: &Value, candidate: &Value) -> Result<bool> {
+        match value {
+            Value::Set(set) => Ok(self.set_value_index(&set.borrow(), candidate).is_some()),
+            Value::Map(map) => Ok(self.map_entry_index(&map.borrow(), candidate).is_some()),
+            _ => Err(Error::ScriptRuntime(
+                "Set composition argument must be set-like (Set or Map)".into(),
+            )),
+        }
+    }
+
+    fn eval_map_construct(
+        &mut self,
+        iterable: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime("Map constructor must be called with new".into()));
+        }
+
+        let map = Rc::new(RefCell::new(MapValue {
+            entries: Vec::new(),
+            properties: Vec::new(),
+        }));
+
+        let Some(iterable) = iterable else {
+            return Ok(Value::Map(map));
+        };
+
+        let iterable = self.eval_expr(iterable, env, event_param, event)?;
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::Map(map));
+        }
+
+        match iterable {
+            Value::Map(source) => {
+                let source = source.borrow();
+                map.borrow_mut().entries = source.entries.clone();
+            }
+            other => {
+                let entries = self.array_like_values_from_value(&other)?;
+                for entry in entries {
+                    let pair = self.array_like_values_from_value(&entry).map_err(|_| {
+                        Error::ScriptRuntime(
+                            "Map constructor iterable values must be [key, value] pairs".into(),
+                        )
+                    })?;
+                    if pair.len() < 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Map constructor iterable values must be [key, value] pairs".into(),
+                        ));
+                    }
+                    self.map_set_entry(&mut map.borrow_mut(), pair[0].clone(), pair[1].clone());
+                }
+            }
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    fn eval_map_static_method(
+        &mut self,
+        method: MapStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            MapStaticMethod::GroupBy => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.groupBy requires exactly two arguments".into(),
+                    ));
+                }
+                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                let callback = self.eval_expr(&args[1], env, event_param, event)?;
+                let values = self.array_like_values_from_value(&iterable)?;
+                let map = Rc::new(RefCell::new(MapValue {
+                    entries: Vec::new(),
+                    properties: Vec::new(),
+                }));
+                for (index, item) in values.into_iter().enumerate() {
+                    let group_key = self.execute_callback_value(
+                        &callback,
+                        &[item.clone(), Value::Number(index as i64)],
+                        event,
+                    )?;
+                    let mut map_ref = map.borrow_mut();
+                    if let Some(entry_index) = self.map_entry_index(&map_ref, &group_key) {
+                        match &mut map_ref.entries[entry_index].1 {
+                            Value::Array(group_values) => group_values.borrow_mut().push(item),
+                            _ => {
+                                map_ref.entries[entry_index].1 =
+                                    Self::new_array_value(vec![item]);
+                            }
+                        }
+                    } else {
+                        map_ref
+                            .entries
+                            .push((group_key, Self::new_array_value(vec![item])));
+                    }
+                }
+                Ok(Value::Map(map))
+            }
+        }
+    }
+
+    fn eval_map_method(
+        &mut self,
+        target: &str,
+        method: MapInstanceMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let target_value = env
+            .get(target)
+            .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+
+        if let Value::Set(set) = target_value {
+            let set = set.clone();
+            return match method {
+                MapInstanceMethod::Has => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime("Map.has requires exactly one argument".into()));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    Ok(Value::Bool(self.set_value_index(&set.borrow(), &key).is_some()))
+                }
+                MapInstanceMethod::Delete => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "Map.delete requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    let mut set_ref = set.borrow_mut();
+                    if let Some(index) = self.set_value_index(&set_ref, &key) {
+                        set_ref.values.remove(index);
+                        Ok(Value::Bool(true))
+                    } else {
+                        Ok(Value::Bool(false))
+                    }
+                }
+                MapInstanceMethod::Clear => {
+                    if !args.is_empty() {
+                        return Err(Error::ScriptRuntime("Map.clear does not take arguments".into()));
+                    }
+                    set.borrow_mut().values.clear();
+                    Ok(Value::Undefined)
+                }
+                MapInstanceMethod::ForEach => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Map.forEach requires a callback and optional thisArg".into(),
+                        ));
+                    }
+                    let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                    if args.len() == 2 {
+                        let _ = self.eval_expr(&args[1], env, event_param, event)?;
+                    }
+                    let snapshot = set.borrow().values.clone();
+                    for value in snapshot {
+                        let _ = self.execute_callback_value(
+                            &callback,
+                            &[value.clone(), value, Value::Set(set.clone())],
+                            event,
+                        )?;
+                    }
+                    Ok(Value::Undefined)
+                }
+                _ => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not a Map",
+                    target
+                ))),
+            };
+        }
+
+        if let Value::FormData(entries) = target_value {
+            let entries = entries.clone();
+            return match method {
+                MapInstanceMethod::Get => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "Map.get requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                    let value = entries
+                        .iter()
+                        .find_map(|(entry_name, value)| (entry_name == &key).then(|| value.clone()))
+                        .unwrap_or_default();
+                    Ok(Value::String(value))
+                }
+                MapInstanceMethod::Has => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "Map.has requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                    let has = entries.iter().any(|(entry_name, _)| entry_name == &key);
+                    Ok(Value::Bool(has))
+                }
+                _ => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not a Map",
+                    target
+                ))),
+            };
+        }
+
+        let Value::Map(map) = target_value else {
+            if matches!(method, MapInstanceMethod::Get | MapInstanceMethod::Has) {
+                return Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not a FormData instance",
+                    target
+                )));
+            }
+            return Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a Map",
+                target
+            )));
+        };
+        let map = map.clone();
+        match method {
+            MapInstanceMethod::Get => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime("Map.get requires exactly one argument".into()));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                let map_ref = map.borrow();
+                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                    Ok(map_ref.entries[index].1.clone())
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            MapInstanceMethod::Has => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime("Map.has requires exactly one argument".into()));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                let has = self.map_entry_index(&map.borrow(), &key).is_some();
+                Ok(Value::Bool(has))
+            }
+            MapInstanceMethod::Delete => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.delete requires exactly one argument".into(),
+                    ));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                let mut map_ref = map.borrow_mut();
+                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                    map_ref.entries.remove(index);
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+            MapInstanceMethod::Clear => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime("Map.clear does not take arguments".into()));
+                }
+                map.borrow_mut().entries.clear();
+                Ok(Value::Undefined)
+            }
+            MapInstanceMethod::ForEach => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                if args.len() == 2 {
+                    let _ = self.eval_expr(&args[1], env, event_param, event)?;
+                }
+                let snapshot = map.borrow().entries.clone();
+                for (key, value) in snapshot {
+                    let _ = self.execute_callback_value(
+                        &callback,
+                        &[value, key, Value::Map(map.clone())],
+                        event,
+                    )?;
+                }
+                Ok(Value::Undefined)
+            }
+            MapInstanceMethod::GetOrInsert => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.getOrInsert requires exactly two arguments".into(),
+                    ));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                let default_value = self.eval_expr(&args[1], env, event_param, event)?;
+                let mut map_ref = map.borrow_mut();
+                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                    Ok(map_ref.entries[index].1.clone())
+                } else {
+                    map_ref.entries.push((key, default_value.clone()));
+                    Ok(default_value)
+                }
+            }
+            MapInstanceMethod::GetOrInsertComputed => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.getOrInsertComputed requires exactly two arguments".into(),
+                    ));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                {
+                    let map_ref = map.borrow();
+                    if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                        return Ok(map_ref.entries[index].1.clone());
+                    }
+                }
+                let callback = self.eval_expr(&args[1], env, event_param, event)?;
+                let computed = self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
+                map.borrow_mut().entries.push((key, computed.clone()));
+                Ok(computed)
+            }
+        }
+    }
+
+    fn eval_set_construct(
+        &mut self,
+        iterable: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime("Set constructor must be called with new".into()));
+        }
+
+        let set = Rc::new(RefCell::new(SetValue {
+            values: Vec::new(),
+            properties: Vec::new(),
+        }));
+
+        let Some(iterable) = iterable else {
+            return Ok(Value::Set(set));
+        };
+
+        let iterable = self.eval_expr(iterable, env, event_param, event)?;
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::Set(set));
+        }
+
+        let values = self.array_like_values_from_value(&iterable)?;
+        for value in values {
+            self.set_add_value(&mut set.borrow_mut(), value);
+        }
+        Ok(Value::Set(set))
+    }
+
+    fn eval_set_method(
+        &mut self,
+        target: &str,
+        method: SetInstanceMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let target_value = env
+            .get(target)
+            .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+        let Value::Set(set) = target_value else {
+            return Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a Set",
+                target
+            )));
+        };
+        let set = set.clone();
+
+        match method {
+            SetInstanceMethod::Add => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime("Set.add requires exactly one argument".into()));
+                }
+                let value = self.eval_expr(&args[0], env, event_param, event)?;
+                self.set_add_value(&mut set.borrow_mut(), value);
+                Ok(Value::Set(set))
+            }
+            SetInstanceMethod::Union => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime("Set.union requires exactly one argument".into()));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                let other_keys = self.set_like_keys_snapshot(&other)?;
+                let mut out = SetValue {
+                    values: set.borrow().values.clone(),
+                    properties: Vec::new(),
+                };
+                for key in other_keys {
+                    self.set_add_value(&mut out, key);
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(out))))
+            }
+            SetInstanceMethod::Intersection => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.intersection requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                let snapshot = set.borrow().values.clone();
+                let mut out = SetValue {
+                    values: Vec::new(),
+                    properties: Vec::new(),
+                };
+                for value in snapshot {
+                    if self.set_like_has_value(&other, &value)? {
+                        self.set_add_value(&mut out, value);
+                    }
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(out))))
+            }
+            SetInstanceMethod::Difference => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.difference requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                let snapshot = set.borrow().values.clone();
+                let mut out = SetValue {
+                    values: Vec::new(),
+                    properties: Vec::new(),
+                };
+                for value in snapshot {
+                    if !self.set_like_has_value(&other, &value)? {
+                        self.set_add_value(&mut out, value);
+                    }
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(out))))
+            }
+            SetInstanceMethod::SymmetricDifference => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.symmetricDifference requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                let other_keys = self.set_like_keys_snapshot(&other)?;
+                let mut out = SetValue {
+                    values: set.borrow().values.clone(),
+                    properties: Vec::new(),
+                };
+                for key in other_keys {
+                    if let Some(index) = self.set_value_index(&out, &key) {
+                        out.values.remove(index);
+                    } else {
+                        out.values.push(key);
+                    }
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(out))))
+            }
+            SetInstanceMethod::IsDisjointFrom => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isDisjointFrom requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                for value in &set.borrow().values {
+                    if self.set_like_has_value(&other, value)? {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            SetInstanceMethod::IsSubsetOf => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isSubsetOf requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                for value in &set.borrow().values {
+                    if !self.set_like_has_value(&other, value)? {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            SetInstanceMethod::IsSupersetOf => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isSupersetOf requires exactly one argument".into(),
+                    ));
+                }
+                let other = self.eval_expr(&args[0], env, event_param, event)?;
+                for value in self.set_like_keys_snapshot(&other)? {
+                    if self.set_value_index(&set.borrow(), &value).is_none() {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+        }
+    }
+
+    fn promise_error_reason(err: Error) -> Value {
+        Value::String(format!("{err}"))
+    }
+
+    fn new_pending_promise(&mut self) -> Rc<RefCell<PromiseValue>> {
+        let id = self.next_promise_id;
+        self.next_promise_id = self.next_promise_id.saturating_add(1);
+        Rc::new(RefCell::new(PromiseValue {
+            id,
+            state: PromiseState::Pending,
+            reactions: Vec::new(),
+        }))
+    }
+
+    fn new_promise_capability_functions(
+        &self,
+        promise: Rc<RefCell<PromiseValue>>,
+    ) -> (Value, Value) {
+        let already_called = Rc::new(RefCell::new(false));
+        let resolve = Value::PromiseCapability(Rc::new(PromiseCapabilityFunction {
+            promise: promise.clone(),
+            reject: false,
+            already_called: already_called.clone(),
+        }));
+        let reject = Value::PromiseCapability(Rc::new(PromiseCapabilityFunction {
+            promise,
+            reject: true,
+            already_called,
+        }));
+        (resolve, reject)
+    }
+
+    fn promise_add_reaction(
+        &mut self,
+        promise: &Rc<RefCell<PromiseValue>>,
+        kind: PromiseReactionKind,
+    ) {
+        let settled = {
+            let mut promise_ref = promise.borrow_mut();
+            match &promise_ref.state {
+                PromiseState::Pending => {
+                    promise_ref.reactions.push(PromiseReaction { kind });
+                    return;
+                }
+                PromiseState::Fulfilled(value) => PromiseSettledValue::Fulfilled(value.clone()),
+                PromiseState::Rejected(reason) => PromiseSettledValue::Rejected(reason.clone()),
+            }
+        };
+        self.queue_promise_reaction_microtask(kind, settled);
+    }
+
+    fn promise_fulfill(&mut self, promise: &Rc<RefCell<PromiseValue>>, value: Value) {
+        let reactions = {
+            let mut promise_ref = promise.borrow_mut();
+            if !matches!(promise_ref.state, PromiseState::Pending) {
+                return;
+            }
+            promise_ref.state = PromiseState::Fulfilled(value.clone());
+            std::mem::take(&mut promise_ref.reactions)
+        };
+        for reaction in reactions {
+            self.queue_promise_reaction_microtask(
+                reaction.kind,
+                PromiseSettledValue::Fulfilled(value.clone()),
+            );
+        }
+    }
+
+    fn promise_reject(&mut self, promise: &Rc<RefCell<PromiseValue>>, reason: Value) {
+        let reactions = {
+            let mut promise_ref = promise.borrow_mut();
+            if !matches!(promise_ref.state, PromiseState::Pending) {
+                return;
+            }
+            promise_ref.state = PromiseState::Rejected(reason.clone());
+            std::mem::take(&mut promise_ref.reactions)
+        };
+        for reaction in reactions {
+            self.queue_promise_reaction_microtask(
+                reaction.kind,
+                PromiseSettledValue::Rejected(reason.clone()),
+            );
+        }
+    }
+
+    fn promise_resolve(
+        &mut self,
+        promise: &Rc<RefCell<PromiseValue>>,
+        value: Value,
+    ) -> Result<()> {
+        if !matches!(promise.borrow().state, PromiseState::Pending) {
+            return Ok(());
+        }
+
+        if let Value::Promise(other) = &value {
+            if Rc::ptr_eq(other, promise) {
+                self.promise_reject(
+                    promise,
+                    Value::String("TypeError: Cannot resolve promise with itself".into()),
+                );
+                return Ok(());
+            }
+
+            let settled = {
+                let other_ref = other.borrow();
+                match &other_ref.state {
+                    PromiseState::Pending => None,
+                    PromiseState::Fulfilled(value) => {
+                        Some(PromiseSettledValue::Fulfilled(value.clone()))
+                    }
+                    PromiseState::Rejected(reason) => {
+                        Some(PromiseSettledValue::Rejected(reason.clone()))
+                    }
+                }
+            };
+
+            if let Some(settled) = settled {
+                match settled {
+                    PromiseSettledValue::Fulfilled(value) => self.promise_fulfill(promise, value),
+                    PromiseSettledValue::Rejected(reason) => self.promise_reject(promise, reason),
+                }
+            } else {
+                self.promise_add_reaction(
+                    other,
+                    PromiseReactionKind::ResolveTo {
+                        target: promise.clone(),
+                    },
+                );
+            }
+            return Ok(());
+        }
+
+        if let Value::Object(entries) = &value {
+            let then = {
+                let entries = entries.borrow();
+                Self::object_get_entry(&entries, "then")
+            };
+
+            if let Some(then) = then {
+                if self.is_callable_value(&then) {
+                    let (resolve, reject) =
+                        self.new_promise_capability_functions(promise.clone());
+                    let event = EventState::new("microtask", self.dom.root, self.now_ms);
+                    match self.execute_callable_value(&then, &[resolve, reject], &event) {
+                        Ok(_) => {}
+                        Err(err) => self.promise_reject(promise, Self::promise_error_reason(err)),
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
+        self.promise_fulfill(promise, value);
+        Ok(())
+    }
+
+    fn promise_resolve_value_as_promise(
+        &mut self,
+        value: Value,
+    ) -> Result<Rc<RefCell<PromiseValue>>> {
+        if let Value::Promise(promise) = value {
+            return Ok(promise);
+        }
+        let promise = self.new_pending_promise();
+        self.promise_resolve(&promise, value)?;
+        Ok(promise)
+    }
+
+    fn promise_then_internal(
+        &mut self,
+        promise: &Rc<RefCell<PromiseValue>>,
+        on_fulfilled: Option<Value>,
+        on_rejected: Option<Value>,
+    ) -> Rc<RefCell<PromiseValue>> {
+        let result = self.new_pending_promise();
+        self.promise_add_reaction(
+            promise,
+            PromiseReactionKind::Then {
+                on_fulfilled,
+                on_rejected,
+                result: result.clone(),
+            },
+        );
+        result
+    }
+
+    fn eval_promise_construct(
+        &mut self,
+        executor: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "Promise constructor must be called with new".into(),
+            ));
+        }
+        let Some(executor) = executor else {
+            return Err(Error::ScriptRuntime(
+                "Promise constructor requires exactly one executor".into(),
+            ));
+        };
+        let executor = self.eval_expr(executor, env, event_param, event)?;
+        if !self.is_callable_value(&executor) {
+            return Err(Error::ScriptRuntime(
+                "Promise constructor executor must be a function".into(),
+            ));
+        }
+
+        let promise = self.new_pending_promise();
+        let (resolve, reject) = self.new_promise_capability_functions(promise.clone());
+        if let Err(err) = self.execute_callable_value(&executor, &[resolve, reject], event) {
+            self.promise_reject(&promise, Self::promise_error_reason(err));
+        }
+        Ok(Value::Promise(promise))
+    }
+
+    fn eval_promise_static_method(
+        &mut self,
+        method: PromiseStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            PromiseStaticMethod::Resolve => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.resolve supports zero or one argument".into(),
+                    ));
+                }
+                let value = if let Some(value) = args.first() {
+                    self.eval_expr(value, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                if let Value::Promise(promise) = value {
+                    return Ok(Value::Promise(promise));
+                }
+                let promise = self.new_pending_promise();
+                self.promise_resolve(&promise, value)?;
+                Ok(Value::Promise(promise))
+            }
+            PromiseStaticMethod::Reject => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.reject supports zero or one argument".into(),
+                    ));
+                }
+                let reason = if let Some(reason) = args.first() {
+                    self.eval_expr(reason, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                let promise = self.new_pending_promise();
+                self.promise_reject(&promise, reason);
+                Ok(Value::Promise(promise))
+            }
+            PromiseStaticMethod::All => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.all requires exactly one argument".into(),
+                    ));
+                }
+                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                self.eval_promise_all(iterable)
+            }
+            PromiseStaticMethod::AllSettled => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.allSettled requires exactly one argument".into(),
+                    ));
+                }
+                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                self.eval_promise_all_settled(iterable)
+            }
+            PromiseStaticMethod::Any => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.any requires exactly one argument".into(),
+                    ));
+                }
+                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                self.eval_promise_any(iterable)
+            }
+            PromiseStaticMethod::Race => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.race requires exactly one argument".into(),
+                    ));
+                }
+                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                self.eval_promise_race(iterable)
+            }
+            PromiseStaticMethod::Try => {
+                if args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.try requires at least one argument".into(),
+                    ));
+                }
+                let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                let mut callback_args = Vec::with_capacity(args.len().saturating_sub(1));
+                for arg in args.iter().skip(1) {
+                    callback_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                let promise = self.new_pending_promise();
+                match self.execute_callable_value(&callback, &callback_args, event) {
+                    Ok(value) => {
+                        self.promise_resolve(&promise, value)?;
+                    }
+                    Err(err) => {
+                        self.promise_reject(&promise, Self::promise_error_reason(err));
+                    }
+                }
+                Ok(Value::Promise(promise))
+            }
+            PromiseStaticMethod::WithResolvers => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.withResolvers does not take arguments".into(),
+                    ));
+                }
+                let promise = self.new_pending_promise();
+                let (resolve, reject) = self.new_promise_capability_functions(promise.clone());
+                Ok(Self::new_object_value(vec![
+                    ("promise".into(), Value::Promise(promise)),
+                    ("resolve".into(), resolve),
+                    ("reject".into(), reject),
+                ]))
+            }
+        }
+    }
+
+    fn eval_promise_method(
+        &mut self,
+        target: &Expr,
+        method: PromiseInstanceMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let target = self.eval_expr(target, env, event_param, event)?;
+        let Value::Promise(promise) = target else {
+            return Err(Error::ScriptRuntime(
+                "Promise instance method target must be a Promise".into(),
+            ));
+        };
+
+        match method {
+            PromiseInstanceMethod::Then => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.then supports up to two arguments".into(),
+                    ));
+                }
+                let on_fulfilled = if let Some(arg) = args.first() {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    if self.is_callable_value(&value) {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let on_rejected = if args.len() >= 2 {
+                    let value = self.eval_expr(&args[1], env, event_param, event)?;
+                    if self.is_callable_value(&value) {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                Ok(Value::Promise(
+                    self.promise_then_internal(&promise, on_fulfilled, on_rejected),
+                ))
+            }
+            PromiseInstanceMethod::Catch => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.catch supports at most one argument".into(),
+                    ));
+                }
+                let on_rejected = if let Some(arg) = args.first() {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    if self.is_callable_value(&value) {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                Ok(Value::Promise(
+                    self.promise_then_internal(&promise, None, on_rejected),
+                ))
+            }
+            PromiseInstanceMethod::Finally => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Promise.finally supports at most one argument".into(),
+                    ));
+                }
+                let callback = if let Some(arg) = args.first() {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    if self.is_callable_value(&value) {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let result = self.new_pending_promise();
+                self.promise_add_reaction(
+                    &promise,
+                    PromiseReactionKind::Finally {
+                        callback,
+                        result: result.clone(),
+                    },
+                );
+                Ok(Value::Promise(result))
+            }
+        }
+    }
+
+    fn eval_promise_all(&mut self, iterable: Value) -> Result<Value> {
+        let values = self.array_like_values_from_value(&iterable)?;
+        let result = self.new_pending_promise();
+        if values.is_empty() {
+            self.promise_fulfill(&result, Self::new_array_value(Vec::new()));
+            return Ok(Value::Promise(result));
+        }
+
+        let state = Rc::new(RefCell::new(PromiseAllState {
+            result: result.clone(),
+            remaining: values.len(),
+            values: vec![None; values.len()],
+            settled: false,
+        }));
+
+        for (index, value) in values.into_iter().enumerate() {
+            let promise = self.promise_resolve_value_as_promise(value)?;
+            self.promise_add_reaction(
+                &promise,
+                PromiseReactionKind::All {
+                    state: state.clone(),
+                    index,
+                },
+            );
+        }
+
+        Ok(Value::Promise(result))
+    }
+
+    fn eval_promise_all_settled(&mut self, iterable: Value) -> Result<Value> {
+        let values = self.array_like_values_from_value(&iterable)?;
+        let result = self.new_pending_promise();
+        if values.is_empty() {
+            self.promise_fulfill(&result, Self::new_array_value(Vec::new()));
+            return Ok(Value::Promise(result));
+        }
+
+        let state = Rc::new(RefCell::new(PromiseAllSettledState {
+            result: result.clone(),
+            remaining: values.len(),
+            values: vec![None; values.len()],
+        }));
+
+        for (index, value) in values.into_iter().enumerate() {
+            let promise = self.promise_resolve_value_as_promise(value)?;
+            self.promise_add_reaction(
+                &promise,
+                PromiseReactionKind::AllSettled {
+                    state: state.clone(),
+                    index,
+                },
+            );
+        }
+
+        Ok(Value::Promise(result))
+    }
+
+    fn eval_promise_any(&mut self, iterable: Value) -> Result<Value> {
+        let values = self.array_like_values_from_value(&iterable)?;
+        let result = self.new_pending_promise();
+        if values.is_empty() {
+            self.promise_reject(&result, Self::new_aggregate_error_value(Vec::new()));
+            return Ok(Value::Promise(result));
+        }
+
+        let state = Rc::new(RefCell::new(PromiseAnyState {
+            result: result.clone(),
+            remaining: values.len(),
+            reasons: vec![None; values.len()],
+            settled: false,
+        }));
+
+        for (index, value) in values.into_iter().enumerate() {
+            let promise = self.promise_resolve_value_as_promise(value)?;
+            self.promise_add_reaction(
+                &promise,
+                PromiseReactionKind::Any {
+                    state: state.clone(),
+                    index,
+                },
+            );
+        }
+
+        Ok(Value::Promise(result))
+    }
+
+    fn eval_promise_race(&mut self, iterable: Value) -> Result<Value> {
+        let values = self.array_like_values_from_value(&iterable)?;
+        let result = self.new_pending_promise();
+        if values.is_empty() {
+            return Ok(Value::Promise(result));
+        }
+
+        let state = Rc::new(RefCell::new(PromiseRaceState {
+            result: result.clone(),
+            settled: false,
+        }));
+
+        for value in values {
+            let promise = self.promise_resolve_value_as_promise(value)?;
+            self.promise_add_reaction(
+                &promise,
+                PromiseReactionKind::Race {
+                    state: state.clone(),
+                },
+            );
+        }
+
+        Ok(Value::Promise(result))
+    }
+
+    fn new_aggregate_error_value(reasons: Vec<Value>) -> Value {
+        Self::new_object_value(vec![
+            ("name".into(), Value::String("AggregateError".into())),
+            (
+                "message".into(),
+                Value::String("All promises were rejected".into()),
+            ),
+            ("errors".into(), Self::new_array_value(reasons)),
+        ])
+    }
+
+    fn run_promise_reaction_task(
+        &mut self,
+        reaction: PromiseReactionKind,
+        settled: PromiseSettledValue,
+    ) -> Result<()> {
+        let event = EventState::new("microtask", self.dom.root, self.now_ms);
+        match reaction {
+            PromiseReactionKind::Then {
+                on_fulfilled,
+                on_rejected,
+                result,
+            } => match settled {
+                PromiseSettledValue::Fulfilled(value) => {
+                    if let Some(callback) = on_fulfilled {
+                        match self.execute_callable_value(&callback, std::slice::from_ref(&value), &event) {
+                            Ok(next) => self.promise_resolve(&result, next)?,
+                            Err(err) => self.promise_reject(&result, Self::promise_error_reason(err)),
+                        }
+                    } else {
+                        self.promise_fulfill(&result, value);
+                    }
+                }
+                PromiseSettledValue::Rejected(reason) => {
+                    if let Some(callback) = on_rejected {
+                        match self.execute_callable_value(&callback, std::slice::from_ref(&reason), &event) {
+                            Ok(next) => self.promise_resolve(&result, next)?,
+                            Err(err) => self.promise_reject(&result, Self::promise_error_reason(err)),
+                        }
+                    } else {
+                        self.promise_reject(&result, reason);
+                    }
+                }
+            },
+            PromiseReactionKind::Finally { callback, result } => {
+                if let Some(callback) = callback {
+                    match self.execute_callable_value(&callback, &[], &event) {
+                        Ok(next) => {
+                            let continuation = self.promise_resolve_value_as_promise(next)?;
+                            self.promise_add_reaction(
+                                &continuation,
+                                PromiseReactionKind::FinallyContinuation {
+                                    original: settled,
+                                    result,
+                                },
+                            );
+                        }
+                        Err(err) => self.promise_reject(&result, Self::promise_error_reason(err)),
+                    }
+                } else {
+                    match settled {
+                        PromiseSettledValue::Fulfilled(value) => self.promise_fulfill(&result, value),
+                        PromiseSettledValue::Rejected(reason) => self.promise_reject(&result, reason),
+                    }
+                }
+            }
+            PromiseReactionKind::FinallyContinuation { original, result } => match settled {
+                PromiseSettledValue::Fulfilled(_) => match original {
+                    PromiseSettledValue::Fulfilled(value) => self.promise_fulfill(&result, value),
+                    PromiseSettledValue::Rejected(reason) => self.promise_reject(&result, reason),
+                },
+                PromiseSettledValue::Rejected(reason) => self.promise_reject(&result, reason),
+            },
+            PromiseReactionKind::ResolveTo { target } => match settled {
+                PromiseSettledValue::Fulfilled(value) => self.promise_resolve(&target, value)?,
+                PromiseSettledValue::Rejected(reason) => self.promise_reject(&target, reason),
+            },
+            PromiseReactionKind::All { state, index } => {
+                let mut state_ref = state.borrow_mut();
+                if state_ref.settled {
+                    return Ok(());
+                }
+                match settled {
+                    PromiseSettledValue::Fulfilled(value) => {
+                        if state_ref.values[index].is_none() {
+                            state_ref.values[index] = Some(value);
+                            state_ref.remaining = state_ref.remaining.saturating_sub(1);
+                        }
+                        if state_ref.remaining == 0 {
+                            state_ref.settled = true;
+                            let result = state_ref.result.clone();
+                            let values = state_ref
+                                .values
+                                .iter()
+                                .map(|value| value.clone().unwrap_or(Value::Undefined))
+                                .collect::<Vec<_>>();
+                            drop(state_ref);
+                            self.promise_fulfill(&result, Self::new_array_value(values));
+                        }
+                    }
+                    PromiseSettledValue::Rejected(reason) => {
+                        state_ref.settled = true;
+                        let result = state_ref.result.clone();
+                        drop(state_ref);
+                        self.promise_reject(&result, reason);
+                    }
+                }
+            }
+            PromiseReactionKind::AllSettled { state, index } => {
+                let mut state_ref = state.borrow_mut();
+                if state_ref.remaining == 0 {
+                    return Ok(());
+                }
+                if state_ref.values[index].is_none() {
+                    let entry = match settled {
+                        PromiseSettledValue::Fulfilled(value) => Self::new_object_value(vec![
+                            ("status".into(), Value::String("fulfilled".into())),
+                            ("value".into(), value),
+                        ]),
+                        PromiseSettledValue::Rejected(reason) => Self::new_object_value(vec![
+                            ("status".into(), Value::String("rejected".into())),
+                            ("reason".into(), reason),
+                        ]),
+                    };
+                    state_ref.values[index] = Some(entry);
+                    state_ref.remaining = state_ref.remaining.saturating_sub(1);
+                }
+                if state_ref.remaining == 0 {
+                    let result = state_ref.result.clone();
+                    let values = state_ref
+                        .values
+                        .iter()
+                        .map(|value| value.clone().unwrap_or(Value::Undefined))
+                        .collect::<Vec<_>>();
+                    drop(state_ref);
+                    self.promise_fulfill(&result, Self::new_array_value(values));
+                }
+            }
+            PromiseReactionKind::Any { state, index } => {
+                let mut state_ref = state.borrow_mut();
+                if state_ref.settled {
+                    return Ok(());
+                }
+                match settled {
+                    PromiseSettledValue::Fulfilled(value) => {
+                        state_ref.settled = true;
+                        let result = state_ref.result.clone();
+                        drop(state_ref);
+                        self.promise_fulfill(&result, value);
+                    }
+                    PromiseSettledValue::Rejected(reason) => {
+                        if state_ref.reasons[index].is_none() {
+                            state_ref.reasons[index] = Some(reason);
+                            state_ref.remaining = state_ref.remaining.saturating_sub(1);
+                        }
+                        if state_ref.remaining == 0 {
+                            state_ref.settled = true;
+                            let result = state_ref.result.clone();
+                            let reasons = state_ref
+                                .reasons
+                                .iter()
+                                .map(|reason| reason.clone().unwrap_or(Value::Undefined))
+                                .collect::<Vec<_>>();
+                            drop(state_ref);
+                            self.promise_reject(&result, Self::new_aggregate_error_value(reasons));
+                        }
+                    }
+                }
+            }
+            PromiseReactionKind::Race { state } => {
+                let mut state_ref = state.borrow_mut();
+                if state_ref.settled {
+                    return Ok(());
+                }
+                state_ref.settled = true;
+                let result = state_ref.result.clone();
+                drop(state_ref);
+                match settled {
+                    PromiseSettledValue::Fulfilled(value) => self.promise_fulfill(&result, value),
+                    PromiseSettledValue::Rejected(reason) => self.promise_reject(&result, reason),
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn execute_callback_value(
         &mut self,
         callback: &Value,
         args: &[Value],
         event: &EventState,
     ) -> Result<Value> {
-        let Value::Function(function) = callback else {
-            return Err(Error::ScriptRuntime("callback is not a function".into()));
-        };
-        self.execute_function_call(function.as_ref(), args, event)
+        self.execute_callable_value(callback, args, event)
     }
 
     fn eval_typed_array_method(
@@ -11210,6 +13196,87 @@ impl Harness {
             let Some(target_value) = env.get(target) else {
                 return Err(Error::ScriptRuntime(format!("unknown variable: {}", target)));
             };
+
+            if let Value::Map(map) = target_value {
+                return match method {
+                    TypedArrayInstanceMethod::Set => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "Map.set requires exactly two arguments".into(),
+                            ));
+                        }
+                        let key = self.eval_expr(&args[0], env, event_param, event)?;
+                        let value = self.eval_expr(&args[1], env, event_param, event)?;
+                        self.map_set_entry(&mut map.borrow_mut(), key, value);
+                        Ok(Value::Map(map.clone()))
+                    }
+                    TypedArrayInstanceMethod::Entries => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Map.entries does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_array_value(self.map_entries_array(map)))
+                    }
+                    TypedArrayInstanceMethod::Keys => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Map.keys does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_array_value(
+                            map.borrow()
+                                .entries
+                                .iter()
+                                .map(|(key, _)| key.clone())
+                                .collect(),
+                        ))
+                    }
+                    TypedArrayInstanceMethod::Values => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Map.values does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_array_value(
+                            map.borrow()
+                                .entries
+                                .iter()
+                                .map(|(_, value)| value.clone())
+                                .collect(),
+                        ))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
+
+            if let Value::Set(set) = target_value {
+                return match method {
+                    TypedArrayInstanceMethod::Entries => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Set.entries does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_array_value(self.set_entries_array(set)))
+                    }
+                    TypedArrayInstanceMethod::Keys | TypedArrayInstanceMethod::Values => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Set.keys/values does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_array_value(self.set_values_array(set)))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
 
             if matches!(
                 method,
@@ -11351,6 +13418,11 @@ impl Harness {
         }
 
         let array = self.resolve_typed_array_from_env(env, target)?;
+        if array.borrow().buffer.borrow().detached {
+            return Err(Error::ScriptRuntime(
+                "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+            ));
+        }
         let kind = array.borrow().kind;
         let len = array.borrow().observed_length();
         let this_value = Value::TypedArray(array.clone());
@@ -12187,10 +14259,17 @@ impl Harness {
             Value::String(v) => Self::parse_js_number_from_string(v),
             Value::Date(v) => *v.borrow() as f64,
             Value::Object(_)
+            | Value::Promise(_)
+            | Value::Map(_)
+            | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::SetConstructor
+            | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -12544,10 +14623,17 @@ impl Harness {
                 .unwrap_or(0),
             Value::Date(value) => *value.borrow(),
             Value::Object(_) => 0,
+            Value::Promise(_) => 0,
+            Value::Map(_) => 0,
+            Value::Set(_) => 0,
             Value::ArrayBuffer(_) => 0,
             Value::TypedArray(_) => 0,
             Value::TypedArrayConstructor(_) => 0,
             Value::ArrayBufferConstructor => 0,
+            Value::PromiseConstructor => 0,
+            Value::MapConstructor => 0,
+            Value::SetConstructor => 0,
+            Value::PromiseCapability(_) => 0,
             Value::RegExp(_) => 0,
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
@@ -12954,10 +15040,10 @@ fn parse_callback_parameter_list(
     Ok(params)
 }
 
-fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<String> {
+fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
     cursor.skip_ws();
     if cursor.peek() == Some(b'{') {
-        return cursor.read_balanced_block(b'{', b'}');
+        return Ok((cursor.read_balanced_block(b'{', b'}')?, false));
     }
 
     let src = cursor
@@ -12978,7 +15064,7 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<String> {
         if !stripped.is_empty() {
             if parse_expr(stripped).is_ok() {
                 cursor.set_pos(cursor.i + expr_src.len());
-                return Ok(stripped.to_string());
+                return Ok((stripped.to_string(), true));
             }
         }
 
@@ -13010,8 +15096,14 @@ fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
-    let (params, body) = parsed;
-    let stmts = parse_block_statements(&body)?;
+    let (params, body, concise_body) = parsed;
+    let stmts = if concise_body {
+        vec![Stmt::Return {
+            value: Some(parse_expr(body.trim())?),
+        }]
+    } else {
+        parse_block_statements(&body)?
+    };
     Ok(Some(Expr::Function {
         handler: ScriptHandler {
             params,
@@ -13024,7 +15116,7 @@ fn parse_callback(
     cursor: &mut Cursor<'_>,
     max_params: usize,
     label: &str,
-) -> Result<(Vec<String>, String)> {
+) -> Result<(Vec<String>, String, bool)> {
     cursor.skip_ws();
 
     let params = if cursor
@@ -13052,7 +15144,7 @@ fn parse_callback(
         let params = parse_callback_parameter_list(&params, max_params, label)?;
         cursor.skip_ws();
         let body = cursor.read_balanced_block(b'{', b'}')?;
-        return Ok((params, body));
+        return Ok((params, body, false));
     } else if cursor.consume_byte(b'(') {
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
@@ -13067,8 +15159,8 @@ fn parse_callback(
 
     cursor.skip_ws();
     cursor.expect_ascii("=>")?;
-    let body = parse_arrow_or_block_body(cursor)?;
-    Ok((params, body))
+    let (body, concise_body) = parse_arrow_or_block_body(cursor)?;
+    Ok((params, body, concise_body))
 }
 
 fn parse_timer_callback(
@@ -13076,7 +15168,9 @@ fn parse_timer_callback(
     src: &str,
 ) -> Result<TimerCallback> {
     let mut cursor = Cursor::new(src);
-    if let Ok((params, body)) = parse_callback(&mut cursor, usize::MAX, "timer callback parameters") {
+    if let Ok((params, body, _)) =
+        parse_callback(&mut cursor, usize::MAX, "timer callback parameters")
+    {
         cursor.skip_ws();
         if cursor.eof() {
             return Ok(TimerCallback::Inline(ScriptHandler {
@@ -14439,12 +16533,18 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 || args[0].trim().is_empty() {
+    if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "forEach requires exactly one callback argument".into(),
+            "forEach requires a callback and optional thisArg".into(),
         ));
     }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
+    }
     let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+    if args.len() == 2 {
+        let _ = parse_expr(args[1].trim())?;
+    }
 
     cursor.skip_ws();
     cursor.consume_byte(b';');
@@ -14495,15 +16595,20 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
         let index_var = params.get(1).cloned();
 
         cursor.skip_ws();
-    let body = parse_arrow_or_block_body(&mut cursor)?;
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported forEach callback tail: {src}"
-        )));
+        let (body, concise_body) = parse_arrow_or_block_body(&mut cursor)?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported forEach callback tail: {src}"
+            )));
         }
 
-        return Ok((item_var, index_var, parse_block_statements(&body)?));
+        let body_stmts = if concise_body {
+            vec![Stmt::Expr(parse_expr(body.trim())?)]
+        } else {
+            parse_block_statements(&body)?
+        };
+        return Ok((item_var, index_var, body_stmts));
     } else if cursor.consume_byte(b'(') {
         let params_src = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
@@ -14531,7 +16636,7 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
     cursor.skip_ws();
     cursor.expect_ascii("=>")?;
     cursor.skip_ws();
-    let body = parse_arrow_or_block_body(&mut cursor)?;
+    let (body, concise_body) = parse_arrow_or_block_body(&mut cursor)?;
     cursor.skip_ws();
     if !cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -14539,7 +16644,12 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
         )));
     }
 
-    Ok((item_var, index_var, parse_block_statements(&body)?))
+    let body_stmts = if concise_body {
+        vec![Stmt::Expr(parse_expr(body.trim())?)]
+    } else {
+        parse_block_statements(&body)?
+    };
+    Ok((item_var, index_var, body_stmts))
 }
 
 fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -15220,7 +17330,7 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.skip_ws();
     cursor.expect_byte(b',')?;
     cursor.skip_ws();
-    let (params, body) = parse_callback(&mut cursor, 1, "callback parameters")?;
+    let (params, body, _) = parse_callback(&mut cursor, 1, "callback parameters")?;
 
     cursor.skip_ws();
     let capture = if cursor.consume_byte(b',') {
@@ -16039,6 +18149,18 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_promise_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_map_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_set_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(value) = parse_encode_uri_component_expr(src)? {
         return Ok(Expr::EncodeUriComponent(Box::new(value)));
     }
@@ -16149,6 +18271,18 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_map_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_set_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_promise_method_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_string_method_expr(src)? {
         return Ok(expr);
     }
@@ -16201,10 +18335,6 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some(handler) = parse_queue_microtask_expr(src)? {
         return Ok(Expr::QueueMicrotask { handler });
-    }
-
-    if let Some(callback) = parse_promise_then_expr(src)? {
-        return Ok(Expr::PromiseThen { callback });
     }
 
     if let Some((target, class_name)) = parse_class_list_contains_expr(src)? {
@@ -17619,6 +19749,475 @@ fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
     )))
 }
 
+fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Promise") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "Promise supports exactly one executor argument".into(),
+            ));
+        }
+        let executor = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse(
+                    "Promise executor argument cannot be empty".into(),
+                ));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::PromiseConstruct {
+            executor,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::PromiseConstruct {
+                executor: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let method = match member.as_str() {
+            "resolve" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "Promise.resolve supports zero or one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::Resolve
+            }
+            "reject" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "Promise.reject supports zero or one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::Reject
+            }
+            "all" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.all requires exactly one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::All
+            }
+            "allSettled" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.allSettled requires exactly one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::AllSettled
+            }
+            "any" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.any requires exactly one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::Any
+            }
+            "race" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.race requires exactly one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::Race
+            }
+            "try" => {
+                if args.is_empty() || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.try requires at least one argument".into(),
+                    ));
+                }
+                PromiseStaticMethod::Try
+            }
+            "withResolvers" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Promise.withResolvers does not take arguments".into(),
+                    ));
+                }
+                PromiseStaticMethod::WithResolvers
+            }
+            _ => return Ok(None),
+        };
+
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "Promise.{} argument cannot be empty",
+                    member
+                )));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::PromiseStaticMethod {
+            method,
+            args: parsed,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::PromiseConstructor))
+}
+
+fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = src.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+        let mut cursor = Cursor::new(tail_src);
+        let Some(member) = cursor.parse_identifier() else {
+            continue;
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            continue;
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let method = match member.as_str() {
+            "then" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "Promise.then supports up to two arguments".into(),
+                    ));
+                }
+                PromiseInstanceMethod::Then
+            }
+            "catch" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "Promise.catch supports at most one argument".into(),
+                    ));
+                }
+                PromiseInstanceMethod::Catch
+            }
+            "finally" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "Promise.finally supports at most one argument".into(),
+                    ));
+                }
+                PromiseInstanceMethod::Finally
+            }
+            _ => continue,
+        };
+
+        let mut parsed_args = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "Promise.{} argument cannot be empty",
+                    member
+                )));
+            }
+            parsed_args.push(parse_expr(arg)?);
+        }
+
+        return Ok(Some(Expr::PromiseMethod {
+            target: Box::new(parse_expr(base_src)?),
+            method,
+            args: parsed_args,
+        }));
+    }
+    Ok(None)
+}
+
+fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Map") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse("Map supports zero or one argument".into()));
+        }
+        let iterable = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse("Map argument cannot be empty".into()));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::MapConstruct {
+            iterable,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::MapConstruct {
+                iterable: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if member != "groupBy" {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "Map.groupBy requires exactly two arguments".into(),
+            ));
+        }
+        let parsed = vec![parse_expr(args[0].trim())?, parse_expr(args[1].trim())?];
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::MapStaticMethod {
+            method: MapStaticMethod::GroupBy,
+            args: parsed,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::MapConstructor))
+}
+
+fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Set") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse("Set supports zero or one argument".into()));
+        }
+        let iterable = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse("Set argument cannot be empty".into()));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::SetConstruct {
+            iterable,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::SetConstruct {
+                iterable: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::SetConstructor))
+}
+
 fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -17708,6 +20307,39 @@ fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if member != "isView" {
+            return Ok(None);
+        }
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() != 1 || args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "ArrayBuffer.isView requires exactly one argument".into(),
+            ));
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ArrayBufferIsView(Box::new(parse_expr(
+            args[0].trim(),
+        )?))));
+    }
+
     if !cursor.eof() {
         return Ok(None);
     }
@@ -17776,24 +20408,99 @@ fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
     };
     cursor.skip_ws();
 
-    if member != "resize" {
+    let property_expr = match member.as_str() {
+        "detached" => Some(Expr::ArrayBufferDetached(target.clone())),
+        "maxByteLength" => Some(Expr::ArrayBufferMaxByteLength(target.clone())),
+        "resizable" => Some(Expr::ArrayBufferResizable(target.clone())),
+        _ => None,
+    };
+    if let Some(expr) = property_expr {
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(expr));
+    }
+
+    if cursor.peek() != Some(b'(') {
         return Ok(None);
     }
+
     let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 || args[0].trim().is_empty() {
-        return Err(Error::ScriptParse(
-            "ArrayBuffer.resize requires exactly one argument".into(),
-        ));
-    }
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
-    Ok(Some(Expr::ArrayBufferResize {
-        target,
-        new_byte_length: Box::new(parse_expr(args[0].trim())?),
-    }))
+
+    match member.as_str() {
+        "resize" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.resize requires exactly one argument".into(),
+                ));
+            }
+            Ok(Some(Expr::ArrayBufferResize {
+                target,
+                new_byte_length: Box::new(parse_expr(args[0].trim())?),
+            }))
+        }
+        "slice" => {
+            if args.len() > 2 {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.slice supports up to two arguments".into(),
+                ));
+            }
+            if args.len() >= 1 && args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.slice start cannot be empty".into(),
+                ));
+            }
+            if args.len() == 2 && args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.slice end cannot be empty".into(),
+                ));
+            }
+            let start = if let Some(first) = args.first() {
+                Some(Box::new(parse_expr(first.trim())?))
+            } else {
+                None
+            };
+            let end = if args.len() == 2 {
+                Some(Box::new(parse_expr(args[1].trim())?))
+            } else {
+                None
+            };
+            Ok(Some(Expr::ArrayBufferSlice { target, start, end }))
+        }
+        "transfer" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.transfer does not take arguments".into(),
+                ));
+            }
+            Ok(Some(Expr::ArrayBufferTransfer {
+                target,
+                to_fixed_length: false,
+            }))
+        }
+        "transferToFixedLength" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "ArrayBuffer.transferToFixedLength does not take arguments".into(),
+                ));
+            }
+            Ok(Some(Expr::ArrayBufferTransfer {
+                target,
+                to_fixed_length: true,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
@@ -17876,6 +20583,225 @@ fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(Expr::TypedArrayMethod {
+        target,
+        method,
+        args: parsed,
+    }))
+}
+
+fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let method = match member.as_str() {
+        "get" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("Map.get requires exactly one argument".into()));
+            }
+            MapInstanceMethod::Get
+        }
+        "has" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("Map.has requires exactly one argument".into()));
+            }
+            MapInstanceMethod::Has
+        }
+        "delete" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("Map.delete requires exactly one argument".into()));
+            }
+            MapInstanceMethod::Delete
+        }
+        "clear" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("Map.clear does not take arguments".into()));
+            }
+            MapInstanceMethod::Clear
+        }
+        "forEach" => {
+            if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Map.forEach requires a callback and optional thisArg".into(),
+                ));
+            }
+            if args.len() == 2 && args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Map.forEach thisArg cannot be empty".into(),
+                ));
+            }
+            MapInstanceMethod::ForEach
+        }
+        "getOrInsert" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Map.getOrInsert requires exactly two arguments".into(),
+                ));
+            }
+            MapInstanceMethod::GetOrInsert
+        }
+        "getOrInsertComputed" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Map.getOrInsertComputed requires exactly two arguments".into(),
+                ));
+            }
+            MapInstanceMethod::GetOrInsertComputed
+        }
+        _ => return Ok(None),
+    };
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "Map.{} argument cannot be empty",
+                member
+            )));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::MapMethod {
+        target,
+        method,
+        args: parsed,
+    }))
+}
+
+fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    let method = match member.as_str() {
+        "add" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("Set.add requires exactly one argument".into()));
+            }
+            SetInstanceMethod::Add
+        }
+        "union" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("Set.union requires exactly one argument".into()));
+            }
+            SetInstanceMethod::Union
+        }
+        "intersection" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.intersection requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::Intersection
+        }
+        "difference" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.difference requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::Difference
+        }
+        "symmetricDifference" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.symmetricDifference requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::SymmetricDifference
+        }
+        "isDisjointFrom" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.isDisjointFrom requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::IsDisjointFrom
+        }
+        "isSubsetOf" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.isSubsetOf requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::IsSubsetOf
+        }
+        "isSupersetOf" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Set.isSupersetOf requires exactly one argument".into(),
+                ));
+            }
+            SetInstanceMethod::IsSupersetOf
+        }
+        _ => return Ok(None),
+    };
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "Set.{} argument cannot be empty",
+                member
+            )));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::SetMethod {
         target,
         method,
         args: parsed,
@@ -18907,7 +21833,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
 fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
     let callback_arg = strip_js_comments(arg);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (params, body) = parse_callback(&mut callback_cursor, max_params, label)?;
+    let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
     callback_cursor.skip_ws();
     if !callback_cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -18916,8 +21842,10 @@ fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result
         )));
     }
 
-    let stmts = if let Ok(expr) = parse_expr(body.trim()) {
-        vec![Stmt::Return { value: Some(expr) }]
+    let stmts = if concise_body {
+        vec![Stmt::Return {
+            value: Some(parse_expr(body.trim())?),
+        }]
     } else {
         parse_block_statements(&body)?
     };
@@ -19721,69 +22649,11 @@ fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHa
 
     let callback_arg = strip_js_comments(args[0]);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (params, body) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
+    let (params, body, _) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
     callback_cursor.skip_ws();
     if !callback_cursor.eof() {
         return Err(Error::ScriptParse(format!(
             "unsupported queueMicrotask callback: {}",
-            args[0].trim()
-        )));
-    }
-
-    Ok(Some(ScriptHandler {
-        params,
-        stmts: parse_block_statements(&body)?,
-    }))
-}
-
-fn parse_promise_then_expr(src: &str) -> Result<Option<ScriptHandler>> {
-    let mut cursor = Cursor::new(src);
-    cursor.skip_ws();
-    if !cursor.consume_ascii("Promise") {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    if !cursor.consume_byte(b'.') {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    if !cursor.consume_ascii("resolve") {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    let _ = cursor.read_balanced_block(b'(', b')')?;
-    cursor.skip_ws();
-    if !cursor.consume_byte(b'.') {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    if !cursor.consume_ascii("then") {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-
-    let args_src = cursor.read_balanced_block(b'(', b')')?;
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
-    let args = split_top_level_by_char(&args_src, b',');
-    if args.is_empty() {
-        return Err(Error::ScriptParse("Promise.then requires 1 argument".into()));
-    }
-    if args.len() != 1 {
-        return Err(Error::ScriptParse(
-            "Promise.resolve().then supports only 1 callback argument".into(),
-        ));
-    }
-
-    let callback_arg = strip_js_comments(args[0]);
-    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (params, body) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
-    callback_cursor.skip_ws();
-    if !callback_cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported Promise.then callback: {}",
             args[0].trim()
         )));
     }
@@ -23802,6 +26672,303 @@ mod tests {
         h.assert_text("#result", "AP")?;
         h.flush()?;
         h.assert_text("#result", "APT")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_direct_then_chain_parses_and_runs() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.resolve('A')
+              .then((value) => value + 'B')
+              .then((value) => {
+                result.textContent = value;
+              })
+              .catch((reason) => {
+                result.textContent = 'ERR:' + reason;
+              });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AB")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_constructor_resolves_via_timer() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            new Promise((resolve) => {
+              setTimeout(() => {
+                resolve('done');
+              }, 0);
+            }).then((value) => {
+              result.textContent = value;
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.flush()?;
+        h.assert_text("#result", "done")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_catch_and_finally_chain_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.reject('E')
+              .catch((reason) => {
+                result.textContent = reason;
+                return 'recovered';
+              })
+              .finally(() => {
+                result.textContent = result.textContent + 'F';
+              });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "EF")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_finally_waits_for_returned_promise() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.resolve('A')
+              .finally(() => {
+                return new Promise((resolve) => {
+                  setTimeout(() => resolve('x'), 0);
+                });
+              })
+              .then((value) => {
+                result.textContent = value;
+              });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.flush()?;
+        h.assert_text("#result", "A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_with_resolvers_can_be_used_externally() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const bag = Promise.withResolvers();
+            const resolveBag = bag.resolve;
+            const rejectBag = bag.reject;
+
+            bag.promise
+              .then((value) => {
+                result.textContent = 'ok:' + value;
+              })
+              .catch((reason) => {
+                result.textContent = 'ng:' + reason;
+              });
+
+            resolveBag('A');
+            rejectBag('B');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ok:A")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_all_resolves_values_in_input_order() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.all([Promise.resolve('A'), 2]).then((values) => {
+              result.textContent = values.join(',');
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A,2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_all_settled_returns_outcome_objects() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.allSettled([Promise.resolve('A'), Promise.reject('B')]).then((values) => {
+              result.textContent = JSON.stringify(values);
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            r#"[{"status":"fulfilled","value":"A"},{"status":"rejected","reason":"B"}]"#,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_any_rejects_with_aggregate_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.any([Promise.reject('E1'), Promise.reject('E2')]).catch((reason) => {
+              const errors = reason.errors;
+              result.textContent = reason.name + ':' + errors.join(',');
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "AggregateError:E1,E2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_race_settles_with_first_settled_value() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.race([
+              Promise.resolve('fast'),
+              new Promise((resolve) => {
+                setTimeout(() => resolve('slow'), 0);
+              })
+            ]).then((value) => {
+              result.textContent = value;
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "fast")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_try_wraps_sync_return_and_error() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            Promise.try(() => 'ok')
+              .then((value) => {
+                result.textContent = value;
+                return Promise.try(() => missingVar);
+              })
+              .catch((reason) => {
+                if (reason.includes('unknown variable')) {
+                  result.textContent = result.textContent + ':caught';
+                } else {
+                  result.textContent = 'unexpected:' + reason;
+                }
+              });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "ok:caught")?;
+        Ok(())
+    }
+
+    #[test]
+    fn promise_constructor_requires_new_keyword() {
+        let err = Harness::from_html("<script>Promise(() => {});</script>")
+            .expect_err("Promise without new should throw");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Promise constructor must be called with new"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_function_value_can_be_called() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const fn = (value) => {
+              result.textContent = value;
+            };
+            fn('A');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "A")?;
         Ok(())
     }
 
@@ -30532,6 +33699,472 @@ mod tests {
                 }
                 other => panic!("unexpected error: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn map_set_get_size_delete_and_iteration_order_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const map = new Map();
+            map.set('a', 1);
+            map.set('b', 2);
+            map.set('c', 3);
+            map.set('a', 97);
+
+            const deleted = map.delete('b');
+            const missing = map.delete('missing');
+
+            let forEachOut = '';
+            map.forEach((value, key, self) => {
+              forEachOut = forEachOut + key + '=' + value + ':' + (self === map) + ';';
+            });
+
+            let forOfOut = '';
+            for (const pair of map) {
+              forOfOut = forOfOut + pair[0] + '=' + pair[1] + ';';
+            }
+
+            const entries = map.entries();
+            const keys = map.keys();
+            const values = map.values();
+
+            document.getElementById('result').textContent =
+              map.get('a') + ':' +
+              map.size + ':' +
+              deleted + ':' +
+              missing + ':' +
+              forEachOut + ':' +
+              forOfOut + ':' +
+              entries.length + ':' +
+              keys.join(',') + ':' +
+              values.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "97:2:true:false:a=97:true;c=3:true;:a=97;c=3;:2:a,c:97,3",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn map_same_value_zero_and_wrong_property_assignment_behavior_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const map = new Map();
+            const keyArr = [];
+
+            map.set(NaN, 'not-a-number');
+            map.set(0, 'zero');
+            map.set(-0, 'minus-zero');
+            map.set(keyArr, 'arr');
+
+            const wrongMap = new Map();
+            wrongMap['bla'] = 'blaa';
+            wrongMap['bla2'] = 'blaaa2';
+
+            document.getElementById('result').textContent =
+              map.get(Number('foo')) + ':' +
+              map.get(0) + ':' +
+              map.has(-0) + ':' +
+              map.get([]) + ':' +
+              map.get(keyArr) + ':' +
+              wrongMap.has('bla') + ':' +
+              wrongMap.size + ':' +
+              wrongMap.bla;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "not-a-number:minus-zero:true:undefined:arr:false:0:blaa",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn map_group_by_and_get_or_insert_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const grouped = Map.groupBy([1, 2, 3, 4, 5], function(value) { return value % 2; });
+            const odd = grouped.get(1);
+            const even = grouped.get(0);
+            const map = new Map();
+            const first = map.getOrInsert('count', 1);
+            const second = map.getOrInsert('count', 9);
+            const computed1 = map.getOrInsertComputed('lazy', function(key) { return key + '-value'; });
+            const computed2 = map.getOrInsertComputed('lazy', function() { return 'ignored'; });
+
+            document.getElementById('result').textContent =
+              odd.join(',') + ':' +
+              even.join(',') + ':' +
+              first + ':' +
+              second + ':' +
+              computed1 + ':' +
+              computed2 + ':' +
+              map.size;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1,3,5:2,4:1:1:lazy-value:lazy-value:2")?;
+        Ok(())
+    }
+
+    #[test]
+    fn map_constructor_clone_and_error_cases_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const original = new Map([[1, 'one'], [2, 'two']]);
+            const clone = new Map(original);
+            clone.set(1, 'uno');
+            const cleared = new Map([[1, 'x']]);
+            cleared.clear();
+            document.getElementById('result').textContent =
+              original.get(1) + ':' + clone.get(1) + ':' + (original === clone) + ':' +
+              clone.size + ':' + cleared.size;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "one:uno:false:2:0")?;
+
+        let err = Harness::from_html("<script>Map();</script>")
+            .expect_err("calling Map constructor without new should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Map constructor must be called with new"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const value = []; value.delete('x');</script>")
+            .expect_err("Map methods on non-map value should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("is not a Map")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn set_basic_methods_and_iteration_order_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const set = new Set();
+            set.add(1);
+            set.add(2);
+            set.add(2);
+            set.add(NaN);
+            set.add(Number('foo'));
+            set.delete(2);
+            set.add(2);
+
+            let order = '';
+            for (const item of set) {
+              order = order + item + ',';
+            }
+
+            const keys = set.keys();
+            const values = set.values();
+            const entries = set.entries();
+
+            let forEachOut = '';
+            set.forEach((value, key, self) => {
+              forEachOut = forEachOut + value + '=' + key + ':' + (self === set) + ';';
+            });
+
+            document.getElementById('result').textContent =
+              set.size + ':' +
+              set.has(NaN) + ':' +
+              set.has(2) + ':' +
+              order + ':' +
+              keys.join('|') + ':' +
+              values.join('|') + ':' +
+              entries.length + ':' +
+              forEachOut;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "3:true:true:1,NaN,2,:1|NaN|2:1|NaN|2:3:1=1:true;NaN=NaN:true;2=2:true;",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_composition_methods_and_map_set_like_argument_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = new Set([1, 2, 3, 4]);
+            const b = new Set([3, 4, 5]);
+            const m = new Map([[2, 'two'], [7, 'seven']]);
+
+            const union = a.union(b);
+            const intersection = a.intersection(b);
+            const difference = a.difference(b);
+            const symmetric = a.symmetricDifference(b);
+            const unionMap = a.union(m);
+
+            const disjoint = a.isDisjointFrom(new Set([8, 9]));
+            const subsetSet = new Set([1, 2]);
+            const supersetSet = new Set([1, 4]);
+            const subsetMapSet = new Set([2]);
+            const subset = subsetSet.isSubsetOf(a);
+            const superset = a.isSupersetOf(supersetSet);
+            const subsetMap = subsetMapSet.isSubsetOf(m);
+
+            const unionValues = union.values();
+            const intersectionValues = intersection.values();
+            const differenceValues = difference.values();
+            const symmetricValues = symmetric.values();
+            const unionMapValues = unionMap.values();
+
+            document.getElementById('result').textContent =
+              unionValues.join(',') + ':' +
+              intersectionValues.join(',') + ':' +
+              differenceValues.join(',') + ':' +
+              symmetricValues.join(',') + ':' +
+              unionMapValues.join(',') + ':' +
+              disjoint + ':' + subset + ':' + superset + ':' + subsetMap;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "1,2,3,4,5:3,4:1,2:1,2,5:1,2,3,4,7:true:true:true:true",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_constructor_iterable_and_property_assignment_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const map = new Map([[1, 'one'], [2, 'two']]);
+            const fromArr = new Set([1, 1, 2, 3]);
+            const fromMap = new Set(map);
+            const fromMapValues = fromMap.values();
+
+            const wrongSet = new Set();
+            wrongSet['bla'] = 'x';
+
+            const obj = {};
+            fromArr.add(obj);
+            fromArr.add({});
+
+            document.getElementById('result').textContent =
+              fromArr.size + ':' +
+              fromArr.has(1) + ':' +
+              fromArr.has(4) + ':' +
+              fromMap.size + ':' +
+              fromMapValues.join('|') + ':' +
+              wrongSet.has('bla') + ':' +
+              wrongSet.size + ':' +
+              wrongSet.bla;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "5:true:false:2:1,one|2,two:false:0:x")?;
+        Ok(())
+    }
+
+    #[test]
+    fn set_constructor_and_composition_errors_work() {
+        let err = Harness::from_html("<script>Set();</script>")
+            .expect_err("calling Set constructor without new should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Set constructor must be called with new"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const set = new Set([1]); set.union([1,2]);</script>")
+            .expect_err("Set.union requires a set-like argument");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("set-like")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const arr = []; arr.union(new Set([1]));</script>")
+            .expect_err("Set method target must be a Set");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("is not a Set")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_buffer_properties_slice_and_is_view_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const buffer = new ArrayBuffer(8, { maxByteLength: 16 });
+          const view = new Uint8Array(buffer);
+          view.set([10, 20, 30, 40]);
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const sliced = buffer.slice(1, 3);
+            const slicedView = new Uint8Array(sliced);
+            document.getElementById('result').textContent =
+              buffer.byteLength + ':' +
+              buffer.resizable + ':' +
+              buffer.maxByteLength + ':' +
+              buffer.detached + ':' +
+              ArrayBuffer.isView(view) + ':' +
+              ArrayBuffer.isView(buffer) + ':' +
+              sliced.byteLength + ':' +
+              sliced.resizable + ':' +
+              sliced.maxByteLength + ':' +
+              (buffer.constructor === ArrayBuffer) + ':' +
+              slicedView.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "8:true:16:false:true:false:2:false:2:true:20,30",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn array_buffer_transfer_and_transfer_to_fixed_length_detach_source() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const buffer = new ArrayBuffer(6, { maxByteLength: 12 });
+            const view = new Uint8Array(buffer);
+            view.set([1, 2, 3, 4, 5, 6]);
+
+            const moved = buffer.transfer();
+            const fixed = moved.transferToFixedLength();
+            const fixedView = new Uint8Array(fixed);
+
+            document.getElementById('result').textContent =
+              buffer.detached + ':' +
+              buffer.byteLength + ':' +
+              view.byteLength + ':' +
+              moved.detached + ':' +
+              moved.byteLength + ':' +
+              moved.resizable + ':' +
+              moved.maxByteLength + ':' +
+              fixed.detached + ':' +
+              fixed.byteLength + ':' +
+              fixed.resizable + ':' +
+              fixed.maxByteLength + ':' +
+              fixedView.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "true:0:0:true:0:false:0:false:6:false:6:1,2,3,4,5,6",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn array_buffer_detached_behavior_errors_work() {
+        let err = Harness::from_html(
+            "<script>const b = new ArrayBuffer(4, { maxByteLength: 8 }); b.transfer(); b.resize(2);</script>",
+        )
+        .expect_err("resize on detached ArrayBuffer should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("detached ArrayBuffer")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html(
+            "<script>const b = new ArrayBuffer(4); b.transfer(); b.slice(0, 1);</script>",
+        )
+        .expect_err("slice on detached ArrayBuffer should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("detached ArrayBuffer")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html(
+            "<script>const b = new ArrayBuffer(4); const ta = new Uint8Array(b); b.transfer(); ta.fill(1);</script>",
+        )
+        .expect_err("typed array methods on detached backing buffer should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("detached ArrayBuffer")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_buffer_is_view_arity_and_transfer_arity_errors_work() {
+        let err = Harness::from_html("<script>ArrayBuffer.isView();</script>")
+            .expect_err("ArrayBuffer.isView without args should fail");
+        match err {
+            Error::ScriptParse(msg) => {
+                assert!(msg.contains("ArrayBuffer.isView requires exactly one argument"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const b = new ArrayBuffer(4); b.transfer(1);</script>")
+            .expect_err("ArrayBuffer.transfer with args should fail");
+        match err {
+            Error::ScriptParse(msg) => {
+                assert!(msg.contains("ArrayBuffer.transfer does not take arguments"))
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 }
