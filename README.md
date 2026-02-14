@@ -1,7 +1,14 @@
 # browser-tester
 
+A pure Rust crate for deterministic browser-like testing in Rust.
+
 - Japanese translation: `translations/ja/README.md`
 - Design doc: `doc/e2e-lite-runtime-design.md`
+
+## Purpose
+
+- Provide an in-process, deterministic runtime for DOM and script testing.
+- Enable browser interaction tests without external browsers, WebDriver, or Node.js.
 
 ## Usage
 

@@ -1,3 +1,10 @@
+//! Deterministic in-memory browser runtime for Rust tests.
+//!
+//! This crate provides a lightweight DOM and JavaScript-like runtime tailored
+//! for deterministic unit and integration testing.
+//! Use [`Harness`] as the main entry point to load HTML, simulate user actions,
+//! control fake time, and assert DOM state.
+
 use num_bigint::{BigInt as JsBigInt, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use regex::{Captures, Regex, RegexBuilder};
