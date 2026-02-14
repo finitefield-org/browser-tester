@@ -23,7 +23,7 @@
 - [x] `requestAnimationFrame` / `cancelAnimationFrame` をサポートする
 - [x] `fetch` をサポートする（テスト用途向けにモックへ差し替え可能な設計）
 - [x] `structuredClone` をサポートする
-- [ ] `matchMedia` をサポートする
+- [x] `matchMedia` をサポートする
 - [x] `alert` / `confirm` / `prompt` をサポートする（`confirm`/`prompt` の返り値モックを含む）
 - [x] `JSON.parse` / `JSON.stringify` をサポートする
 

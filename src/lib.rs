@@ -3933,6 +3933,12 @@ enum EventExprProp {
     TimeStamp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchMediaProp {
+    Matches,
+    Media,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Expr {
     String(String),
@@ -4271,6 +4277,11 @@ enum Expr {
     },
     StructuredClone(Box<Expr>),
     Fetch(Box<Expr>),
+    MatchMedia(Box<Expr>),
+    MatchMediaProp {
+        query: Box<Expr>,
+        prop: MatchMediaProp,
+    },
     Alert(Box<Expr>),
     Confirm(Box<Expr>),
     Prompt {
@@ -5020,6 +5031,9 @@ pub struct Harness {
     rng_state: u64,
     fetch_mocks: HashMap<String, String>,
     fetch_calls: Vec<String>,
+    match_media_mocks: HashMap<String, bool>,
+    match_media_calls: Vec<String>,
+    default_match_media_matches: bool,
     alert_messages: Vec<String>,
     confirm_responses: VecDeque<bool>,
     default_confirm_response: bool,
@@ -5219,6 +5233,9 @@ impl Harness {
             rng_state: 0x9E37_79B9_7F4A_7C15,
             fetch_mocks: HashMap::new(),
             fetch_calls: Vec::new(),
+            match_media_mocks: HashMap::new(),
+            match_media_calls: Vec::new(),
+            default_match_media_matches: false,
             alert_messages: Vec::new(),
             confirm_responses: VecDeque::new(),
             default_confirm_response: false,
@@ -5293,6 +5310,22 @@ impl Harness {
 
     pub fn take_fetch_calls(&mut self) -> Vec<String> {
         std::mem::take(&mut self.fetch_calls)
+    }
+
+    pub fn set_match_media_mock(&mut self, query: &str, matches: bool) {
+        self.match_media_mocks.insert(query.to_string(), matches);
+    }
+
+    pub fn clear_match_media_mocks(&mut self) {
+        self.match_media_mocks.clear();
+    }
+
+    pub fn set_default_match_media_matches(&mut self, matches: bool) {
+        self.default_match_media_matches = matches;
+    }
+
+    pub fn take_match_media_calls(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.match_media_calls)
     }
 
     pub fn enqueue_confirm_response(&mut self, accepted: bool) {
@@ -9073,6 +9106,32 @@ impl Harness {
                     Error::ScriptRuntime(format!("fetch mock not found for request: {request}"))
                 })?;
                 Ok(Value::String(response))
+            }
+            Expr::MatchMedia(query) => {
+                let query = self.eval_expr(query, env, event_param, event)?.as_string();
+                self.match_media_calls.push(query.clone());
+                let matches = self
+                    .match_media_mocks
+                    .get(&query)
+                    .copied()
+                    .unwrap_or(self.default_match_media_matches);
+                Ok(Self::new_object_value(vec![
+                    ("matches".into(), Value::Bool(matches)),
+                    ("media".into(), Value::String(query)),
+                ]))
+            }
+            Expr::MatchMediaProp { query, prop } => {
+                let query = self.eval_expr(query, env, event_param, event)?.as_string();
+                self.match_media_calls.push(query.clone());
+                let matches = self
+                    .match_media_mocks
+                    .get(&query)
+                    .copied()
+                    .unwrap_or(self.default_match_media_matches);
+                match prop {
+                    MatchMediaProp::Matches => Ok(Value::Bool(matches)),
+                    MatchMediaProp::Media => Ok(Value::String(query)),
+                }
             }
             Expr::Alert(message) => {
                 let message = self
@@ -19663,6 +19722,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::Fetch(Box::new(value)));
     }
 
+    if let Some(expr) = parse_match_media_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(value) = parse_alert_expr(src)? {
         return Ok(Expr::Alert(Box::new(value)));
     }
@@ -23177,6 +23240,64 @@ fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "fetch", "fetch requires exactly one argument")
 }
 
+fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("matchMedia") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "matchMedia requires exactly one argument".into(),
+        ));
+    }
+    let query = parse_expr(args[0].trim())?;
+
+    cursor.skip_ws();
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(prop_name) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        let prop = match prop_name.as_str() {
+            "matches" => MatchMediaProp::Matches,
+            "media" => MatchMediaProp::Media,
+            _ => return Ok(None),
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::MatchMediaProp {
+            query: Box::new(query),
+            prop,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::MatchMedia(Box::new(query))))
+}
+
 fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
@@ -24646,7 +24767,9 @@ fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    if !cursor.consume_byte(b'(') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     let selector = cursor.parse_string_literal()?;
     cursor.skip_ws();
@@ -24676,7 +24799,9 @@ fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    if !cursor.consume_byte(b'(') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     let selector = cursor.parse_string_literal()?;
     cursor.skip_ws();
@@ -35001,6 +35126,69 @@ mod tests {
     }
 
     #[test]
+    fn match_media_uses_registered_mocks_and_records_calls() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = matchMedia('(min-width: 768px)');
+            const b = window.matchMedia('(prefers-color-scheme: dark)');
+            const c = matchMedia('(min-width: 768px)').matches;
+            const d = window.matchMedia('(prefers-color-scheme: dark)').media;
+            document.getElementById('result').textContent =
+              a.matches + ':' + a.media + ':' +
+              b.matches + ':' + b.media + ':' +
+              c + ':' + d;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.set_match_media_mock("(min-width: 768px)", true);
+        h.set_match_media_mock("(prefers-color-scheme: dark)", false);
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "true:(min-width: 768px):false:(prefers-color-scheme: dark):true:(prefers-color-scheme: dark)",
+        )?;
+        assert_eq!(
+            h.take_match_media_calls(),
+            vec![
+                "(min-width: 768px)".to_string(),
+                "(prefers-color-scheme: dark)".to_string(),
+                "(min-width: 768px)".to_string(),
+                "(prefers-color-scheme: dark)".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn match_media_default_value_can_be_configured() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const first = matchMedia('(unknown-query)').matches;
+            const second = window.matchMedia('(unknown-query)').matches;
+            document.getElementById('result').textContent = first + ':' + second;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "false:false")?;
+
+        h.set_default_match_media_matches(true);
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true")?;
+        Ok(())
+    }
+
+    #[test]
     fn structured_clone_deep_copies_objects_arrays_and_dates() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -35229,6 +35417,10 @@ mod tests {
             (
                 "<script>fetch();</script>",
                 "fetch requires exactly one argument",
+            ),
+            (
+                "<script>matchMedia();</script>",
+                "matchMedia requires exactly one argument",
             ),
             (
                 "<script>structuredClone();</script>",
