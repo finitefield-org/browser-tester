@@ -83,3 +83,12 @@
 - [ ] `yield` / `yield*` をサポートする
 - [ ] spread syntax (`...obj`) をサポートする
 - [ ] comma operator (`,`) をサポートする
+
+## 10. `BigInt` コンストラクタ・静的/インスタンスメソッド (実装 / テスト)
+
+- [x] BigInt リテラル（`123n` / `0xFFn` / `0o77n` / `0b101n`）をサポートする
+- [x] `BigInt()` の変換と `new BigInt()` エラーをサポートする
+- [x] `BigInt.asIntN` / `BigInt.asUintN` をサポートする
+- [x] `BigInt` の基本演算子（`+ - * / % **`, bitwise, shift, 比較）をサポートする
+- [x] `BigInt.prototype.toLocaleString` / `toString` / `valueOf` をサポートする
+- [x] 混在演算時（`BigInt` と `Number`）のエラーをサポートする

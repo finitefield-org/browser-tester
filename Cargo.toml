@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 regex = "1"
+num-bigint = "0.4"
+num-traits = "0.2"

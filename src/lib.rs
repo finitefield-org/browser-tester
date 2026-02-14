@@ -1,3 +1,5 @@
+use num_bigint::{BigInt as JsBigInt, Sign};
+use num_traits::{One, ToPrimitive, Zero};
 use regex::{Regex, RegexBuilder};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -3143,6 +3145,7 @@ enum Value {
     Bool(bool),
     Number(i64),
     Float(f64),
+    BigInt(JsBigInt),
     Array(Rc<RefCell<Vec<Value>>>),
     Object(Rc<RefCell<Vec<(String, Value)>>>),
     RegExp(Rc<RefCell<RegexValue>>),
@@ -3204,6 +3207,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
+            Self::BigInt(v) => !v.is_zero(),
             Self::Array(_) => true,
             Self::Object(_) => true,
             Self::RegExp(_) => true,
@@ -3229,6 +3233,7 @@ impl Value {
             }
             Self::Number(v) => v.to_string(),
             Self::Float(v) => format_float(*v),
+            Self::BigInt(v) => v.to_string(),
             Self::Array(values) => {
                 let values = values.borrow();
                 let mut out = String::new();
@@ -3465,6 +3470,7 @@ enum Expr {
     Undefined,
     Number(i64),
     Float(f64),
+    BigInt(JsBigInt),
     DateNow,
     DateNew {
         value: Option<Box<Expr>>,
@@ -3517,6 +3523,19 @@ enum Expr {
     NumberInstanceMethod {
         value: Box<Expr>,
         method: NumberInstanceMethod,
+        args: Vec<Expr>,
+    },
+    BigIntConstruct {
+        value: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    BigIntMethod {
+        method: BigIntMethod,
+        args: Vec<Expr>,
+    },
+    BigIntInstanceMethod {
+        value: Box<Expr>,
+        method: BigIntInstanceMethod,
         args: Vec<Expr>,
     },
     EncodeUri(Box<Expr>),
@@ -3877,6 +3896,19 @@ enum NumberInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BigIntMethod {
+    AsIntN,
+    AsUintN,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BigIntInstanceMethod {
+    ToLocaleString,
+    ToString,
+    ValueOf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeTreeMethod {
     After,
     Append,
@@ -3910,6 +3942,10 @@ enum Stmt {
         name: String,
         op: VarAssignOp,
         expr: Expr,
+    },
+    VarUpdate {
+        name: String,
+        delta: i8,
     },
     ObjectAssign {
         target: String,
@@ -5658,12 +5694,10 @@ impl Harness {
 
                     let next = match op {
                         VarAssignOp::Assign => value,
-                        VarAssignOp::Add => self.add_values(&previous, &value),
-                        VarAssignOp::Sub => Value::Float(self.numeric_value(&previous) - self.numeric_value(&value)),
-                        VarAssignOp::Mul => Value::Float(self.numeric_value(&previous) * self.numeric_value(&value)),
-                        VarAssignOp::Pow => Value::Float(
-                            self.numeric_value(&previous).powf(self.numeric_value(&value)),
-                        ),
+                        VarAssignOp::Add => self.add_values(&previous, &value)?,
+                        VarAssignOp::Sub => self.eval_binary(&BinaryOp::Sub, &previous, &value)?,
+                        VarAssignOp::Mul => self.eval_binary(&BinaryOp::Mul, &previous, &value)?,
+                        VarAssignOp::Pow => self.eval_binary(&BinaryOp::Pow, &previous, &value)?,
                         VarAssignOp::BitOr => self.eval_binary(&BinaryOp::BitOr, &previous, &value)?,
                         VarAssignOp::BitXor => self.eval_binary(&BinaryOp::BitXor, &previous, &value)?,
                         VarAssignOp::BitAnd => self.eval_binary(&BinaryOp::BitAnd, &previous, &value)?,
@@ -5676,23 +5710,35 @@ impl Harness {
                         VarAssignOp::UnsignedShiftRight => {
                             self.eval_binary(&BinaryOp::UnsignedShiftRight, &previous, &value)?
                         }
-                        VarAssignOp::Div => {
-                            let rhs = self.numeric_value(&value);
-                            if rhs == 0.0 {
-                                return Err(Error::ScriptRuntime("division by zero".into()));
-                            }
-                            Value::Float(self.numeric_value(&previous) / rhs)
-                        }
-                        VarAssignOp::Mod => {
-                            let rhs = self.numeric_value(&value);
-                            if rhs == 0.0 {
-                                return Err(Error::ScriptRuntime("modulo by zero".into()));
-                            }
-                            Value::Float(self.numeric_value(&previous) % rhs)
-                        }
+                        VarAssignOp::Div => self.eval_binary(&BinaryOp::Div, &previous, &value)?,
+                        VarAssignOp::Mod => self.eval_binary(&BinaryOp::Mod, &previous, &value)?,
                     };
                     env.insert(name.clone(), next.clone());
                     self.bind_timer_id_to_task_env(name, expr, &next);
+                }
+                Stmt::VarUpdate { name, delta } => {
+                    let previous = env
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
+                    let next = match previous {
+                        Value::Number(value) => {
+                            if let Some(sum) = value.checked_add(i64::from(*delta)) {
+                                Value::Number(sum)
+                            } else {
+                                Value::Float((value as f64) + f64::from(*delta))
+                            }
+                        }
+                        Value::Float(value) => Value::Float(value + f64::from(*delta)),
+                        Value::BigInt(value) => Value::BigInt(value + JsBigInt::from(*delta)),
+                        _ => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "cannot apply update operator to '{}'",
+                                name
+                            )))
+                        }
+                    };
+                    env.insert(name.clone(), next);
                 }
                 Stmt::ObjectAssign { target, key, expr } => {
                     let object = self.resolve_object_from_env(env, target)?;
@@ -6381,6 +6427,7 @@ impl Harness {
             Expr::Undefined => Ok(Value::Undefined),
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
+            Expr::BigInt(value) => Ok(Value::BigInt(value.clone())),
             Expr::DateNow => Ok(Value::Number(self.now_ms)),
             Expr::DateNew { value } => {
                 let timestamp_ms = if let Some(value) = value {
@@ -6538,6 +6585,28 @@ impl Harness {
                 method,
                 args,
             } => self.eval_number_instance_method(*method, value, args, env, event_param, event),
+            Expr::BigIntConstruct {
+                value,
+                called_with_new,
+            } => {
+                if *called_with_new {
+                    return Err(Error::ScriptRuntime("BigInt is not a constructor".into()));
+                }
+                let value = value
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .unwrap_or(Value::Undefined);
+                Ok(Value::BigInt(Self::coerce_bigint_for_constructor(&value)?))
+            }
+            Expr::BigIntMethod { method, args } => {
+                self.eval_bigint_method(*method, args, env, event_param, event)
+            }
+            Expr::BigIntInstanceMethod {
+                value,
+                method,
+                args,
+            } => self.eval_bigint_instance_method(*method, value, args, env, event_param, event),
             Expr::EncodeUri(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::String(encode_uri_like(&value.as_string(), false)))
@@ -7578,15 +7647,24 @@ impl Harness {
                 match value {
                     Value::Number(v) => Ok(Value::Number(-v)),
                     Value::Float(v) => Ok(Value::Float(-v)),
+                    Value::BigInt(v) => Ok(Value::BigInt(-v)),
                     other => Ok(Value::Float(-self.numeric_value(&other))),
                 }
             }
             Expr::Pos(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
+                if matches!(value, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "unary plus is not supported for BigInt values".into(),
+                    ));
+                }
                 Ok(Value::Float(self.numeric_value(&value)))
             }
             Expr::BitNot(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
+                if let Value::BigInt(v) = value {
+                    return Ok(Value::BigInt(!v));
+                }
                 Ok(Value::Number((!self.to_i32_for_bitwise(&value)) as i64))
             }
             Expr::Not(inner) => {
@@ -7610,6 +7688,7 @@ impl Harness {
                         Value::Null => "object",
                         Value::Bool(_) => "boolean",
                         Value::Number(_) | Value::Float(_) => "number",
+                        Value::BigInt(_) => "bigint",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
                         Value::Function(_) => "function",
@@ -7627,6 +7706,7 @@ impl Harness {
                             Value::Null => "object",
                             Value::Bool(_) => "boolean",
                             Value::Number(_) | Value::Float(_) => "number",
+                            Value::BigInt(_) => "bigint",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
                             Value::Function(_) => "function",
@@ -7653,7 +7733,7 @@ impl Harness {
                 let mut acc = self.eval_expr(first, env, event_param, event)?;
                 for part in iter {
                     let rhs = self.eval_expr(part, env, event_param, event)?;
-                    acc = self.add_values(&acc, &rhs);
+                    acc = self.add_values(&acc, &rhs)?;
                 }
                 Ok(acc)
             }
@@ -7683,40 +7763,132 @@ impl Harness {
             BinaryOp::In => Value::Bool(self.value_in(left, right)),
             BinaryOp::InstanceOf => Value::Bool(self.value_instance_of(left, right)),
             BinaryOp::BitOr => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(l | r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in bitwise operations".into(),
+                    ));
+                }
                 Value::Number(i64::from(self.to_i32_for_bitwise(left) | self.to_i32_for_bitwise(right)))
             }
             BinaryOp::BitXor => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(l ^ r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in bitwise operations".into(),
+                    ));
+                }
                 Value::Number(i64::from(
                     self.to_i32_for_bitwise(left) ^ self.to_i32_for_bitwise(right),
                 ))
             }
             BinaryOp::BitAnd => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(l & r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in bitwise operations".into(),
+                    ));
+                }
                 Value::Number(i64::from(
                     self.to_i32_for_bitwise(left) & self.to_i32_for_bitwise(right),
                 ))
             }
             BinaryOp::ShiftLeft => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(Self::bigint_shift_left(l, r)?));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in bitwise operations".into(),
+                    ));
+                }
                 let shift = self.to_u32_for_bitwise(right) & 0x1f;
                 Value::Number(i64::from(self.to_i32_for_bitwise(left) << shift))
             }
             BinaryOp::ShiftRight => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(Self::bigint_shift_right(l, r)?));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in bitwise operations".into(),
+                    ));
+                }
                 let shift = self.to_u32_for_bitwise(right) & 0x1f;
                 Value::Number(i64::from(self.to_i32_for_bitwise(left) >> shift))
             }
             BinaryOp::UnsignedShiftRight => {
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "BigInt values do not support unsigned right shift".into(),
+                    ));
+                }
                 let shift = self.to_u32_for_bitwise(right) & 0x1f;
                 Value::Number(i64::from(self.to_u32_for_bitwise(left) >> shift))
             }
             BinaryOp::Pow => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    if r.sign() == Sign::Minus {
+                        return Err(Error::ScriptRuntime(
+                            "BigInt exponent must be non-negative".into(),
+                        ));
+                    }
+                    let exp = r.to_u32().ok_or_else(|| {
+                        Error::ScriptRuntime("BigInt exponent is too large".into())
+                    })?;
+                    return Ok(Value::BigInt(l.pow(exp)));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in arithmetic operations".into(),
+                    ));
+                }
                 Value::Float(self.numeric_value(left).powf(self.numeric_value(right)))
             }
             BinaryOp::Lt => Value::Bool(self.compare(left, right, |l, r| l < r)),
             BinaryOp::Gt => Value::Bool(self.compare(left, right, |l, r| l > r)),
             BinaryOp::Le => Value::Bool(self.compare(left, right, |l, r| l <= r)),
             BinaryOp::Ge => Value::Bool(self.compare(left, right, |l, r| l >= r)),
-            BinaryOp::Sub => Value::Float(self.numeric_value(left) - self.numeric_value(right)),
-            BinaryOp::Mul => Value::Float(self.numeric_value(left) * self.numeric_value(right)),
+            BinaryOp::Sub => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(l - r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in arithmetic operations".into(),
+                    ));
+                }
+                Value::Float(self.numeric_value(left) - self.numeric_value(right))
+            }
+            BinaryOp::Mul => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    return Ok(Value::BigInt(l * r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in arithmetic operations".into(),
+                    ));
+                }
+                Value::Float(self.numeric_value(left) * self.numeric_value(right))
+            }
             BinaryOp::Mod => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    if r.is_zero() {
+                        return Err(Error::ScriptRuntime("modulo by zero".into()));
+                    }
+                    return Ok(Value::BigInt(l % r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in arithmetic operations".into(),
+                    ));
+                }
                 let rhs = self.numeric_value(right);
                 if rhs == 0.0 {
                     return Err(Error::ScriptRuntime("modulo by zero".into()));
@@ -7724,6 +7896,17 @@ impl Harness {
                 Value::Float(self.numeric_value(left) % rhs)
             }
             BinaryOp::Div => {
+                if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
+                    if r.is_zero() {
+                        return Err(Error::ScriptRuntime("division by zero".into()));
+                    }
+                    return Ok(Value::BigInt(l / r));
+                }
+                if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and other types in arithmetic operations".into(),
+                    ));
+                }
                 let rhs = self.numeric_value(right);
                 if rhs == 0.0 {
                     return Err(Error::ScriptRuntime("division by zero".into()));
@@ -7741,6 +7924,16 @@ impl Harness {
 
         match (left, right) {
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
+            (Value::BigInt(l), Value::String(r)) => {
+                Self::parse_js_bigint_from_string(r).is_ok_and(|parsed| parsed == *l)
+            }
+            (Value::String(l), Value::BigInt(r)) => {
+                Self::parse_js_bigint_from_string(l).is_ok_and(|parsed| parsed == *r)
+            }
+            (Value::BigInt(_), Value::Number(_) | Value::Float(_))
+            | (Value::Number(_) | Value::Float(_), Value::BigInt(_)) => {
+                Self::number_bigint_loose_equal(left, right)
+            }
             (Value::Number(_) | Value::Float(_), Value::String(_))
             | (Value::String(_), Value::Number(_) | Value::Float(_)) => {
                 Self::coerce_number_for_global(left) == Self::coerce_number_for_global(right)
@@ -7772,6 +7965,7 @@ impl Harness {
                 | Value::Bool(_)
                 | Value::Number(_)
                 | Value::Float(_)
+                | Value::BigInt(_)
                 | Value::Null
                 | Value::Undefined
         )
@@ -7848,6 +8042,7 @@ impl Harness {
                     usize::try_from(*v as i64).ok()
                 }
             }
+            Value::BigInt(v) => v.to_usize(),
             Value::String(s) => {
                 if let Ok(int) = s.parse::<i64>() {
                     usize::try_from(int).ok()
@@ -7872,6 +8067,7 @@ impl Harness {
             (Value::Float(l), Value::Float(r)) => l == r,
             (Value::Number(l), Value::Float(r)) => (*l as f64) == *r,
             (Value::Float(l), Value::Number(r)) => *l == (*r as f64),
+            (Value::BigInt(l), Value::BigInt(r)) => l == r,
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
@@ -7890,25 +8086,148 @@ impl Harness {
     where
         F: Fn(f64, f64) -> bool,
     {
+        match (left, right) {
+            (Value::BigInt(l), Value::BigInt(r)) => {
+                return op(
+                    l.to_f64().unwrap_or_else(|| {
+                        if l.sign() == Sign::Minus {
+                            f64::NEG_INFINITY
+                        } else {
+                            f64::INFINITY
+                        }
+                    }),
+                    r.to_f64().unwrap_or_else(|| {
+                        if r.sign() == Sign::Minus {
+                            f64::NEG_INFINITY
+                        } else {
+                            f64::INFINITY
+                        }
+                    }),
+                );
+            }
+            (Value::BigInt(l), Value::Number(_) | Value::Float(_)) => {
+                let r = self.numeric_value(right);
+                if r.is_nan() {
+                    return false;
+                }
+                if let Some(rb) = Self::f64_to_bigint_if_integral(r) {
+                    return op(
+                        l.to_f64().unwrap_or_else(|| {
+                            if l.sign() == Sign::Minus {
+                                f64::NEG_INFINITY
+                            } else {
+                                f64::INFINITY
+                            }
+                        }),
+                        rb.to_f64().unwrap_or_else(|| {
+                            if rb.sign() == Sign::Minus {
+                                f64::NEG_INFINITY
+                            } else {
+                                f64::INFINITY
+                            }
+                        }),
+                    );
+                }
+                return op(
+                    l.to_f64().unwrap_or_else(|| {
+                        if l.sign() == Sign::Minus {
+                            f64::NEG_INFINITY
+                        } else {
+                            f64::INFINITY
+                        }
+                    }),
+                    r,
+                );
+            }
+            (Value::Number(_) | Value::Float(_), Value::BigInt(r)) => {
+                let l = self.numeric_value(left);
+                if l.is_nan() {
+                    return false;
+                }
+                if let Some(lb) = Self::f64_to_bigint_if_integral(l) {
+                    return op(
+                        lb.to_f64().unwrap_or_else(|| {
+                            if lb.sign() == Sign::Minus {
+                                f64::NEG_INFINITY
+                            } else {
+                                f64::INFINITY
+                            }
+                        }),
+                        r.to_f64().unwrap_or_else(|| {
+                            if r.sign() == Sign::Minus {
+                                f64::NEG_INFINITY
+                            } else {
+                                f64::INFINITY
+                            }
+                        }),
+                    );
+                }
+                return op(
+                    l,
+                    r.to_f64().unwrap_or_else(|| {
+                        if r.sign() == Sign::Minus {
+                            f64::NEG_INFINITY
+                        } else {
+                            f64::INFINITY
+                        }
+                    }),
+                );
+            }
+            _ => {}
+        }
         let l = self.numeric_value(left);
         let r = self.numeric_value(right);
         op(l, r)
     }
 
-    fn add_values(&self, left: &Value, right: &Value) -> Value {
+    fn number_bigint_loose_equal(left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::BigInt(l), Value::Number(r)) => *l == JsBigInt::from(*r),
+            (Value::BigInt(l), Value::Float(r)) => {
+                Self::f64_to_bigint_if_integral(*r).is_some_and(|rb| rb == *l)
+            }
+            (Value::Number(l), Value::BigInt(r)) => JsBigInt::from(*l) == *r,
+            (Value::Float(l), Value::BigInt(r)) => {
+                Self::f64_to_bigint_if_integral(*l).is_some_and(|lb| lb == *r)
+            }
+            _ => false,
+        }
+    }
+
+    fn f64_to_bigint_if_integral(value: f64) -> Option<JsBigInt> {
+        if !value.is_finite() || value.fract() != 0.0 {
+            return None;
+        }
+        if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+            return Some(JsBigInt::from(value as i64));
+        }
+        let rendered = format!("{value:.0}");
+        JsBigInt::parse_bytes(rendered.as_bytes(), 10)
+    }
+
+    fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
         if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
-            return Value::String(format!("{}{}", left.as_string(), right.as_string()));
+            return Ok(Value::String(format!("{}{}", left.as_string(), right.as_string())));
+        }
+
+        if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
+            return match (left, right) {
+                (Value::BigInt(l), Value::BigInt(r)) => Ok(Value::BigInt(l + r)),
+                _ => Err(Error::ScriptRuntime(
+                    "cannot mix BigInt and other types in addition".into(),
+                )),
+            };
         }
 
         match (left, right) {
             (Value::Number(l), Value::Number(r)) => {
                 if let Some(sum) = l.checked_add(*r) {
-                    Value::Number(sum)
+                    Ok(Value::Number(sum))
                 } else {
-                    Value::Float((*l as f64) + (*r as f64))
+                    Ok(Value::Float((*l as f64) + (*r as f64)))
                 }
             }
-            _ => Value::Float(self.numeric_value(left) + self.numeric_value(right)),
+            _ => Ok(Value::Float(self.numeric_value(left) + self.numeric_value(right))),
         }
     }
 
@@ -8340,6 +8659,9 @@ impl Harness {
                     Ok(Some("null".into()))
                 }
             }
+            Value::BigInt(_) => Err(Error::ScriptRuntime(
+                "JSON.stringify does not support BigInt values".into(),
+            )),
             Value::Null => Ok(Some("null".into())),
             Value::Undefined
             | Value::Node(_)
@@ -8440,6 +8762,7 @@ impl Harness {
             Value::Bool(v) => Ok(Value::Bool(*v)),
             Value::Number(v) => Ok(Value::Number(*v)),
             Value::Float(v) => Ok(Value::Float(*v)),
+            Value::BigInt(v) => Ok(Value::BigInt(v.clone())),
             Value::Null => Ok(Value::Null),
             Value::Undefined => Ok(Value::Undefined),
             Value::Date(v) => Ok(Value::Date(Rc::new(RefCell::new(*v.borrow())))),
@@ -8785,6 +9108,32 @@ impl Harness {
             args_value.push(self.eval_expr(arg, env, event_param, event)?);
         }
 
+        if let Value::BigInt(bigint) = &value {
+            return match method {
+                NumberInstanceMethod::ToLocaleString => Ok(Value::String(bigint.to_string())),
+                NumberInstanceMethod::ToString => {
+                    let radix = if let Some(arg) = args_value.first() {
+                        let radix = Self::value_to_i64(arg);
+                        if !(2..=36).contains(&radix) {
+                            return Err(Error::ScriptRuntime(
+                                "toString radix must be between 2 and 36".into(),
+                            ));
+                        }
+                        radix as u32
+                    } else {
+                        10
+                    };
+                    Ok(Value::String(bigint.to_str_radix(radix)))
+                }
+                NumberInstanceMethod::ValueOf => Ok(Value::BigInt(bigint.clone())),
+                NumberInstanceMethod::ToExponential
+                | NumberInstanceMethod::ToFixed
+                | NumberInstanceMethod::ToPrecision => Err(Error::ScriptRuntime(
+                    "number formatting methods are not supported for BigInt values".into(),
+                )),
+            };
+        }
+
         let numeric = Self::coerce_number_for_number_constructor(&value);
 
         match method {
@@ -8859,6 +9208,257 @@ impl Harness {
         }
     }
 
+    fn eval_bigint_method(
+        &mut self,
+        method: BigIntMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+        let bits_i64 = Self::value_to_i64(&values[0]);
+        if bits_i64 < 0 {
+            return Err(Error::ScriptRuntime(
+                "BigInt bit width must be a non-negative integer".into(),
+            ));
+        }
+        let bits = usize::try_from(bits_i64).map_err(|_| {
+            Error::ScriptRuntime("BigInt bit width is too large".into())
+        })?;
+        let value = Self::coerce_bigint_for_builtin_op(&values[1])?;
+        let out = match method {
+            BigIntMethod::AsIntN => Self::bigint_as_int_n(bits, &value),
+            BigIntMethod::AsUintN => Self::bigint_as_uint_n(bits, &value),
+        };
+        Ok(Value::BigInt(out))
+    }
+
+    fn eval_bigint_instance_method(
+        &mut self,
+        method: BigIntInstanceMethod,
+        value: &Expr,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let value = self.eval_expr(value, env, event_param, event)?;
+        let value = Self::coerce_bigint_for_builtin_op(&value)?;
+        let mut args_value = Vec::with_capacity(args.len());
+        for arg in args {
+            args_value.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+
+        match method {
+            BigIntInstanceMethod::ToLocaleString => Ok(Value::String(value.to_string())),
+            BigIntInstanceMethod::ToString => {
+                let radix = if let Some(arg) = args_value.first() {
+                    let radix = Self::value_to_i64(arg);
+                    if !(2..=36).contains(&radix) {
+                        return Err(Error::ScriptRuntime(
+                            "toString radix must be between 2 and 36".into(),
+                        ));
+                    }
+                    radix as u32
+                } else {
+                    10
+                };
+                Ok(Value::String(value.to_str_radix(radix)))
+            }
+            BigIntInstanceMethod::ValueOf => Ok(Value::BigInt(value)),
+        }
+    }
+
+    fn bigint_as_uint_n(bits: usize, value: &JsBigInt) -> JsBigInt {
+        if bits == 0 {
+            return JsBigInt::zero();
+        }
+        let modulo = JsBigInt::one() << bits;
+        let mut out = value % &modulo;
+        if out.sign() == Sign::Minus {
+            out += &modulo;
+        }
+        out
+    }
+
+    fn bigint_as_int_n(bits: usize, value: &JsBigInt) -> JsBigInt {
+        if bits == 0 {
+            return JsBigInt::zero();
+        }
+        let modulo = JsBigInt::one() << bits;
+        let threshold = JsBigInt::one() << (bits - 1);
+        let unsigned = Self::bigint_as_uint_n(bits, value);
+        if unsigned >= threshold {
+            unsigned - modulo
+        } else {
+            unsigned
+        }
+    }
+
+    fn coerce_bigint_for_constructor(value: &Value) -> Result<JsBigInt> {
+        match value {
+            Value::BigInt(value) => Ok(value.clone()),
+            Value::Bool(value) => Ok(if *value {
+                JsBigInt::one()
+            } else {
+                JsBigInt::zero()
+            }),
+            Value::Number(value) => Ok(JsBigInt::from(*value)),
+            Value::Float(value) => {
+                if value.is_finite() && value.fract() == 0.0 {
+                    Ok(JsBigInt::from(*value as i64))
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "cannot convert Number value to BigInt".into(),
+                    ))
+                }
+            }
+            Value::String(value) => Self::parse_js_bigint_from_string(value),
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
+                "cannot convert null or undefined to BigInt".into(),
+            )),
+            Value::Date(value) => Ok(JsBigInt::from(*value.borrow())),
+            Value::Array(values) => {
+                let rendered = Value::Array(values.clone()).as_string();
+                Self::parse_js_bigint_from_string(&rendered)
+            }
+            Value::Object(_)
+            | Value::RegExp(_)
+            | Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_) => Err(Error::ScriptRuntime(
+                "cannot convert object value to BigInt".into(),
+            )),
+        }
+    }
+
+    fn coerce_bigint_for_builtin_op(value: &Value) -> Result<JsBigInt> {
+        match value {
+            Value::BigInt(value) => Ok(value.clone()),
+            Value::Bool(value) => Ok(if *value {
+                JsBigInt::one()
+            } else {
+                JsBigInt::zero()
+            }),
+            Value::String(value) => Self::parse_js_bigint_from_string(value),
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
+                "cannot convert null or undefined to BigInt".into(),
+            )),
+            Value::Number(_)
+            | Value::Float(_)
+            | Value::Date(_)
+            | Value::Object(_)
+            | Value::RegExp(_)
+            | Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_)
+            | Value::Array(_) => Err(Error::ScriptRuntime(
+                "cannot convert value to BigInt".into(),
+            )),
+        }
+    }
+
+    fn parse_js_bigint_from_string(src: &str) -> Result<JsBigInt> {
+        let trimmed = src.trim();
+        if trimmed.is_empty() {
+            return Ok(JsBigInt::zero());
+        }
+
+        if let Some(rest) = trimmed.strip_prefix('+') {
+            return Self::parse_signed_decimal_bigint(rest, false);
+        }
+        if let Some(rest) = trimmed.strip_prefix('-') {
+            return Self::parse_signed_decimal_bigint(rest, true);
+        }
+
+        if let Some(rest) = trimmed
+            .strip_prefix("0x")
+            .or_else(|| trimmed.strip_prefix("0X"))
+        {
+            return Self::parse_prefixed_bigint(rest, 16, trimmed);
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("0o")
+            .or_else(|| trimmed.strip_prefix("0O"))
+        {
+            return Self::parse_prefixed_bigint(rest, 8, trimmed);
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("0b")
+            .or_else(|| trimmed.strip_prefix("0B"))
+        {
+            return Self::parse_prefixed_bigint(rest, 2, trimmed);
+        }
+
+        Self::parse_signed_decimal_bigint(trimmed, false)
+    }
+
+    fn parse_prefixed_bigint(src: &str, radix: u32, original: &str) -> Result<JsBigInt> {
+        if src.is_empty() {
+            return Err(Error::ScriptRuntime(format!(
+                "cannot convert {} to a BigInt",
+                original
+            )));
+        }
+        JsBigInt::parse_bytes(src.as_bytes(), radix).ok_or_else(|| {
+            Error::ScriptRuntime(format!("cannot convert {} to a BigInt", original))
+        })
+    }
+
+    fn parse_signed_decimal_bigint(src: &str, negative: bool) -> Result<JsBigInt> {
+        let original = format!("{}{}", if negative { "-" } else { "" }, src);
+        if src.is_empty() || !src.as_bytes().iter().all(u8::is_ascii_digit) {
+            return Err(Error::ScriptRuntime(format!(
+                "cannot convert {} to a BigInt",
+                original
+            )));
+        }
+        let mut value = JsBigInt::parse_bytes(src.as_bytes(), 10).ok_or_else(|| {
+            Error::ScriptRuntime(format!(
+                "cannot convert {} to a BigInt",
+                original
+            ))
+        })?;
+        if negative {
+            value = -value;
+        }
+        Ok(value)
+    }
+
+    fn bigint_shift_left(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
+        if shift.sign() == Sign::Minus {
+            let magnitude = (-shift)
+                .to_usize()
+                .ok_or_else(|| Error::ScriptRuntime("BigInt shift count is too large".into()))?;
+            Ok(value >> magnitude)
+        } else {
+            let magnitude = shift
+                .to_usize()
+                .ok_or_else(|| Error::ScriptRuntime("BigInt shift count is too large".into()))?;
+            Ok(value << magnitude)
+        }
+    }
+
+    fn bigint_shift_right(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
+        if shift.sign() == Sign::Minus {
+            let magnitude = (-shift)
+                .to_usize()
+                .ok_or_else(|| Error::ScriptRuntime("BigInt shift count is too large".into()))?;
+            Ok(value << magnitude)
+        } else {
+            let magnitude = shift
+                .to_usize()
+                .ok_or_else(|| Error::ScriptRuntime("BigInt shift count is too large".into()))?;
+            Ok(value >> magnitude)
+        }
+    }
+
     fn number_primitive_value(value: &Value) -> Option<f64> {
         match value {
             Value::Number(value) => Some(*value as f64),
@@ -8884,6 +9484,13 @@ impl Harness {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
+            Value::BigInt(v) => v.to_f64().unwrap_or_else(|| {
+                if v.sign() == Sign::Minus {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            }),
             Value::Bool(v) => {
                 if *v {
                     1.0
@@ -9736,6 +10343,13 @@ impl Harness {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
+            Value::BigInt(v) => v.to_f64().unwrap_or_else(|| {
+                if v.sign() == Sign::Minus {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            }),
             Value::Date(v) => *v.borrow() as f64,
             Value::Null => 0.0,
             Value::Undefined => f64::NAN,
@@ -9747,6 +10361,13 @@ impl Harness {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
+            Value::BigInt(v) => v.to_f64().unwrap_or_else(|| {
+                if v.sign() == Sign::Minus {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            }),
             Value::Bool(v) => {
                 if *v {
                     1.0
@@ -10079,6 +10700,13 @@ impl Harness {
         match value {
             Value::Number(v) => *v,
             Value::Float(v) => *v as i64,
+            Value::BigInt(v) => v.to_i64().unwrap_or_else(|| {
+                if v.sign() == Sign::Minus {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            }),
             Value::Bool(v) => {
                 if *v {
                     1
@@ -11412,10 +12040,9 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     if let Some(name) = src.strip_prefix("++") {
         let name = name.trim();
         if is_ident(name) {
-            return Some(Stmt::VarAssign {
+            return Some(Stmt::VarUpdate {
                 name: name.to_string(),
-                op: VarAssignOp::Add,
-                expr: Expr::Number(1),
+                delta: 1,
             });
         }
     }
@@ -11423,10 +12050,9 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     if let Some(name) = src.strip_prefix("--") {
         let name = name.trim();
         if is_ident(name) {
-            return Some(Stmt::VarAssign {
+            return Some(Stmt::VarUpdate {
                 name: name.to_string(),
-                op: VarAssignOp::Add,
-                expr: Expr::Number(-1),
+                delta: -1,
             });
         }
     }
@@ -11434,10 +12060,9 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     if let Some(name) = src.strip_suffix("++") {
         let name = name.trim();
         if is_ident(name) {
-            return Some(Stmt::VarAssign {
+            return Some(Stmt::VarUpdate {
                 name: name.to_string(),
-                op: VarAssignOp::Add,
-                expr: Expr::Number(1),
+                delta: 1,
             });
         }
     }
@@ -11445,10 +12070,9 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     if let Some(name) = src.strip_suffix("--") {
         let name = name.trim();
         if is_ident(name) {
-            return Some(Stmt::VarAssign {
+            return Some(Stmt::VarUpdate {
                 name: name.to_string(),
-                op: VarAssignOp::Add,
-                expr: Expr::Number(-1),
+                delta: -1,
             });
         }
     }
@@ -13584,6 +14208,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_bigint_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(value) = parse_encode_uri_component_expr(src)? {
         return Ok(Expr::EncodeUriComponent(Box::new(value)));
     }
@@ -13695,6 +14323,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_number_method_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_bigint_method_expr(src)? {
         return Ok(expr);
     }
 
@@ -13824,6 +14456,10 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
+    if let Some(value) = parse_bigint_literal(src)? {
+        return Ok(Some(value));
+    }
+
     if let Some(value) = parse_prefixed_integer_literal(src, "0x", 16)? {
         return Ok(Some(value));
     }
@@ -13879,6 +14515,36 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
         )));
     }
     Ok(Some(Expr::Float(n)))
+}
+
+fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
+    let Some(raw) = src.strip_suffix('n') else {
+        return Ok(None);
+    };
+    if raw.is_empty() || !raw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        return Ok(None);
+    }
+
+    let (digits, radix) = if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        (hex, 16u32)
+    } else if let Some(octal) = raw.strip_prefix("0o").or_else(|| raw.strip_prefix("0O")) {
+        (octal, 8u32)
+    } else if let Some(binary) = raw.strip_prefix("0b").or_else(|| raw.strip_prefix("0B")) {
+        (binary, 2u32)
+    } else {
+        if raw.len() > 1 && raw.starts_with('0') {
+            return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+        }
+        (raw, 10u32)
+    };
+
+    if digits.is_empty() {
+        return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+    }
+
+    let value = JsBigInt::parse_bytes(digits.as_bytes(), radix)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+    Ok(Some(Expr::BigInt(value)))
 }
 
 fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result<Option<Expr>> {
@@ -14839,6 +15505,122 @@ fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
         "isSafeInteger" => Some(NumberMethod::IsSafeInteger),
         "parseFloat" => Some(NumberMethod::ParseFloat),
         "parseInt" => Some(NumberMethod::ParseInt),
+        _ => None,
+    }
+}
+
+fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("BigInt") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "BigInt supports zero or one argument".into(),
+            ));
+        }
+        let value = if let Some(arg) = args.first() {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse("BigInt argument cannot be empty".into()));
+            }
+            Some(Box::new(parse_expr(arg)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::BigIntConstruct {
+            value,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        return Ok(None);
+    }
+
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let Some(method) = parse_bigint_method_name(&member) else {
+        return Ok(None);
+    };
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "BigInt.{member} requires exactly two arguments"
+        )));
+    }
+
+    let parsed = vec![parse_expr(args[0].trim())?, parse_expr(args[1].trim())?];
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::BigIntMethod {
+        method,
+        args: parsed,
+    }))
+}
+
+fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
+    match name {
+        "asIntN" => Some(BigIntMethod::AsIntN),
+        "asUintN" => Some(BigIntMethod::AsUintN),
         _ => None,
     }
 }
@@ -15979,6 +16761,97 @@ fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod>
         "toPrecision" => Some(NumberInstanceMethod::ToPrecision),
         "toString" => Some(NumberInstanceMethod::ToString),
         "valueOf" => Some(NumberInstanceMethod::ValueOf),
+        _ => None,
+    }
+}
+
+fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = src.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+
+        let mut cursor = Cursor::new(tail_src);
+        let Some(method_name) = cursor.parse_identifier() else {
+            continue;
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            continue;
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let Some(method) = parse_bigint_instance_method_name(&method_name) else {
+            continue;
+        };
+
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let parsed = match method {
+            BigIntInstanceMethod::ToLocaleString | BigIntInstanceMethod::ValueOf => {
+                if !args.is_empty() {
+                    let method_name = match method {
+                        BigIntInstanceMethod::ToLocaleString => "toLocaleString",
+                        BigIntInstanceMethod::ValueOf => "valueOf",
+                        _ => unreachable!(),
+                    };
+                    return Err(Error::ScriptParse(format!(
+                        "{method_name} does not take arguments"
+                    )));
+                }
+                Vec::new()
+            }
+            BigIntInstanceMethod::ToString => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "toString supports at most one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse("toString argument cannot be empty".into()));
+                }
+                if args.len() == 1 {
+                    vec![parse_expr(args[0].trim())?]
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+
+        return Ok(Some(Expr::BigIntInstanceMethod {
+            value: Box::new(parse_expr(base_src)?),
+            method,
+            args: parsed,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod> {
+    match name {
+        "toLocaleString" => Some(BigIntInstanceMethod::ToLocaleString),
+        "toString" => Some(BigIntInstanceMethod::ToString),
+        "valueOf" => Some(BigIntInstanceMethod::ValueOf),
         _ => None,
     }
 }
@@ -22789,6 +23662,240 @@ mod tests {
                 assert!(msg.contains("toString radix must be between 2 and 36"))
             }
             other => panic!("unexpected toString error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_literals_constructor_and_typeof_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const bigA = 9007199254740991n;
+            const bigB = BigInt(9007199254740991);
+            const bigC = BigInt("0x1fffffffffffff");
+            const bigD = BigInt("0o377777777777777777");
+            const bigE = BigInt("0b11111111111111111111111111111111111111111111111111111");
+            const typeA = typeof bigA;
+            const typeB = typeof bigB;
+            const falsyBranch = 0n ? 't' : 'f';
+            const truthyBranch = 12n ? 't' : 'f';
+            const concat = 'x' + 1n;
+            document.getElementById('result').textContent =
+              bigA + ':' + bigB + ':' + bigC + ':' + bigD + ':' + bigE + ':' +
+              typeA + ':' + typeB + ':' + falsyBranch + ':' + truthyBranch + ':' + concat;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "9007199254740991:9007199254740991:9007199254740991:9007199254740991:9007199254740991:bigint:bigint:f:t:x1",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_static_and_instance_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = BigInt.asIntN(8, 257n);
+            const b = BigInt.asIntN(8, 255n);
+            const c = BigInt.asUintN(8, -1n);
+            const d = window.BigInt.asUintN(8, 257n);
+            const e = (255n).toString(16);
+            const f = (255n).toString();
+            const g = (255n).toLocaleString();
+            const h = (255n).valueOf() === 255n;
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g + ':' + h;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:-1:255:1:ff:255:255:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_arithmetic_and_bitwise_operations_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const previousMaxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+            const maxPlusTwo = previousMaxSafe + 2n;
+            const prod = previousMaxSafe * 2n;
+            const diff = prod - 10n;
+            const mod = prod % 10n;
+            const pow = 2n ** 54n;
+            const neg = pow * -1n;
+            const div1 = 4n / 2n;
+            const div2 = 5n / 2n;
+            const bitAnd = 6n & 3n;
+            const bitOr = 6n | 3n;
+            const bitXor = 6n ^ 3n;
+            const shl = 8n << 1n;
+            const shr = 8n >> 1n;
+            const shlNeg = 8n << -1n;
+            document.getElementById('result').textContent =
+              maxPlusTwo + ':' + diff + ':' + mod + ':' + pow + ':' + neg + ':' +
+              div1 + ':' + div2 + ':' + bitAnd + ':' + bitOr + ':' + bitXor + ':' +
+              shl + ':' + shr + ':' + shlNeg;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "9007199254740993:18014398509481972:2:18014398509481984:-18014398509481984:2:2:2:7:5:16:4:4",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_comparisons_and_increment_decrement_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 1n;
+            ++n;
+            n++;
+            --n;
+            n--;
+            const a = 0n == 0;
+            const b = 0n === 0;
+            const c = 1n < 2;
+            const d = 2n > 1;
+            const e = 2n > 2;
+            const f = 2n >= 2;
+            document.getElementById('result').textContent =
+              n + ':' + a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' +
+              (typeof n) + ':' + (0n ? 't' : 'f') + ':' + (12n ? 't' : 'f');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:true:false:true:true:false:true:bigint:f:t")?;
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_mixed_type_and_unsupported_operations_report_errors() -> Result<()> {
+        let html = r#"
+        <button id='mix'>mix</button>
+        <button id='ushift'>ushift</button>
+        <button id='unary'>unary</button>
+        <script>
+          document.getElementById('mix').addEventListener('click', () => {
+            const v = 1n + 1;
+          });
+          document.getElementById('ushift').addEventListener('click', () => {
+            const v = 1n >>> 0n;
+          });
+          document.getElementById('unary').addEventListener('click', () => {
+            const v = +1n;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+
+        let mix_err = h
+            .click("#mix")
+            .expect_err("mixed BigInt/Number arithmetic should fail");
+        match mix_err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("cannot mix BigInt and other types in addition"))
+            }
+            other => panic!("unexpected mixed operation error: {other:?}"),
+        }
+
+        let us_err = h
+            .click("#ushift")
+            .expect_err("unsigned right shift for BigInt should fail");
+        match us_err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("BigInt values do not support unsigned right shift"))
+            }
+            other => panic!("unexpected unsigned shift error: {other:?}"),
+        }
+
+        let unary_err = h
+            .click("#unary")
+            .expect_err("unary plus for BigInt should fail");
+        match unary_err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("unary plus is not supported for BigInt values"))
+            }
+            other => panic!("unexpected unary plus error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn bigint_constructor_and_json_stringify_errors_are_reported() -> Result<()> {
+        let html = r#"
+        <button id='ctor'>ctor</button>
+        <button id='newctor'>newctor</button>
+        <button id='json'>json</button>
+        <script>
+          document.getElementById('ctor').addEventListener('click', () => {
+            BigInt('1.5');
+          });
+          document.getElementById('newctor').addEventListener('click', () => {
+            new BigInt(1);
+          });
+          document.getElementById('json').addEventListener('click', () => {
+            JSON.stringify({ a: 1n });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+
+        let ctor_err = h
+            .click("#ctor")
+            .expect_err("BigInt constructor should reject decimal string");
+        match ctor_err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("cannot convert 1.5 to a BigInt")),
+            other => panic!("unexpected BigInt conversion error: {other:?}"),
+        }
+
+        let new_ctor_err = h
+            .click("#newctor")
+            .expect_err("new BigInt should fail");
+        match new_ctor_err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("BigInt is not a constructor")),
+            other => panic!("unexpected new BigInt error: {other:?}"),
+        }
+
+        let json_err = h
+            .click("#json")
+            .expect_err("JSON.stringify with BigInt should fail");
+        match json_err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("JSON.stringify does not support BigInt values"))
+            }
+            other => panic!("unexpected JSON.stringify BigInt error: {other:?}"),
         }
 
         Ok(())
