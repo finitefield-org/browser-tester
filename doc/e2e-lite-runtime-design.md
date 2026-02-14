@@ -23,7 +23,7 @@
 
 ### 2.2 Out of Scope
 - 外部CSS/JSファイルの読み込み
-- AJAX/fetch/XHR/WebSocket
+- 実ネットワークI/O（XHR/WebSocket/外部HTTP）。`fetch` はモック注入でのみ対応
 - 画面描画、レイアウト計算、スタイル適用、アクセシビリティツリー
 - iframe、shadow DOM、custom elements（MVPでは非対応）
 
@@ -83,12 +83,13 @@ flowchart LR
 - `value: String`（input/textarea/select）
 - `checked: bool`（checkbox/radio）
 - `disabled: bool`
-- `selected_index: Option<usize>`（selectを見据えた拡張）
+- `readonly: bool`
+- `required: bool`
 
 ### 6.2 インデックス
-- `id_index: HashMap<String, NodeId>`
+- `id_index: HashMap<String, Vec<NodeId>>`
 - `class_index: HashMap<String, Vec<NodeId>>`（必要時）
-- 先に `id` と単純セレクタ最適化のみ実装で十分
+- `#id` / `getElementById` は同一idの先頭要素を返し、重複idは内部で保持する
 
 ### 6.3 セレクタ
 MVP対応:
@@ -106,11 +107,11 @@ MVP対応:
 - `<script>`文字列を自前パーサでASTへ変換し、自前評価器で実行
 - 対応範囲はテスト用途に必要なJSサブセットへ限定し、非対応構文は`ScriptParse`で明示エラー
 
-### 7.2 対応する構文/DOM API（最小）
-- リスナー登録: `document.*.addEventListener(...)`
-- 制御構文: `if/else`, 変数宣言, 代入, 三項演算子, 論理/比較演算子
-- 数値リテラル: 整数（例: `1`）と小数（例: `0.5`）
-- 算術演算子: `+`, `-`, `*`, `/`（単項マイナス対応。`+` は左結合で評価し、数値同士は加算・文字列が含まれる場合は連結）
+### 7.2 対応する構文/DOM API（主要）
+- リスナー登録/解除: `addEventListener(...)`, `removeEventListener(...)`
+- 制御構文: `if/else`, `while`, `do...while`, `for`, `for...in`, `for...of`, `break`, `continue`, `return`
+- 主要演算子: 三項演算子, 論理/比較/厳密比較, 算術, bitwise, 代入演算子（`+=`, `&&=`, `??=` など）
+- 数値リテラル: 整数/小数/指数/16進/8進/2進、BigIntリテラル
 - DOM参照: `getElementById`, `querySelector`, `querySelectorAll`, `querySelectorAll(...).length`,
   `form.elements.length`, `form.elements[index]`,
   `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
@@ -118,14 +119,16 @@ MVP対応:
 - DOM更新: `textContent`, `value`, `checked`, `disabled`, `readonly`, `required`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `matches(selector)`, `closest(selector)`（未一致時は `null`）,
-  `getComputedStyle(element).getPropertyValue(property)`
+  `getComputedStyle(element).getPropertyValue(property)`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
-  `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText`, `innerHTML`
+  `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`
 - タイマー: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   （timer ID返却。実時間待ちは行わず、`harness.advance_time(ms)` / `harness.flush()` で実行）,
-  `clearTimeout(timerId)` / `clearInterval(timerId)`
+  `clearTimeout(timerId)` / `clearInterval(timerId)`,
+  `requestAnimationFrame` / `cancelAnimationFrame`, `queueMicrotask`
 - 時刻: `Date.now()` / `performance.now()`（fake clockの現在値 `now_ms` を返す）
 - 乱数: `Math.random()`（決定論PRNGの浮動小数 `0.0 <= x < 1.0` を返す）
+- モック前提API: `fetch`, `matchMedia`, `alert`, `confirm`, `prompt`
 - イベント: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
 - `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft`（最小実装として数値返却）
 
@@ -133,7 +136,7 @@ MVP対応:
 - 第一優先: テストに必須なDOM参照・更新（`getElementById`, `querySelector*`, `textContent`, `value`, `checked`, `disabled`, `readonly`, `required`, `classList`, `dataset`, `style`, `append*`/`remove*`系）
 - 第二優先: タイマー/イベント/フォーム関連（`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `preventDefault`, `FormData`, `submit`）
 - 第三優先: `focus` などの表示・計測系API
-- 非対応は `ScriptParse`/`Runtime` レイヤで明示エラーとして失敗させる（静かな無視はしない）
+- 非対応は `ScriptParse`/`ScriptRuntime` レイヤで明示エラーとして失敗させる（静かな無視はしない）
 - 優先拡張順は `dataset/style` → DOMイベント周り → `offset/scroll`（読取最小実装） → その他表示・計測系
 
 #### 7.2.2 パーサ判定順（実装メモ）
@@ -163,7 +166,9 @@ MVP対応:
 
 ### 8.1 Eventオブジェクト
 フィールド:
-- `type`, `target`, `currentTarget`, `bubbles`, `cancelable`, `defaultPrevented`
+- `type`, `target`, `currentTarget`, `bubbles`, `cancelable`, `defaultPrevented`, `isTrusted`
+- `eventPhase`, `timeStamp`
+- 参照用プロパティ: `targetName`, `currentTargetName`, `targetId`, `currentTargetId`
 - 内部制御: `propagation_stopped`, `immediate_propagation_stopped`
 
 ### 8.2 伝播アルゴリズム
@@ -182,7 +187,7 @@ MVP対応:
 
 `click` on submit button:
 1. 祖先`form`の`submit`イベント発火
-2. `preventDefault`されなければ成功扱い（遷移は実装しない）
+2. 画面遷移などの既定動作は行わない（`preventDefault` 状態は `event.defaultPrevented` として観測可能）
 
 ## 9. Runtime実行モデル
 
@@ -190,11 +195,10 @@ MVP対応:
 1. HTML parse（自前HTMLパーサ）
 2. DOM構築
 3. `<script>`を文書順で同期実行
-4. 初期タスクキュー実行
+4. `<script>` 実行で発生した microtask は各トップレベルタスク終了時に実行（timerは残す）
 
 ### 9.2 タスクキュー
-- MVPは同期実行が基本
-- 将来のため microtask風キューを保持
+- 同期実行を基本としつつ、microtaskキュー（`queueMicrotask` / Promise reaction）を実装
 - タイマーは実時間を待たず、fake clock（初期値 `0ms`）で決定論的に実行する
 - `harness.advance_time(ms)` で fake clock を進め、`due_at <= now` のタイマーのみ実行する
 - `harness.run_due_timers()` で `now_ms` を進めずに、`due_at <= now_ms` のタイマーのみ実行する
@@ -212,7 +216,7 @@ MVP対応:
 
 ### 9.3 決定論サポート
 - `Date.now()` / `performance.now()` は fake clock（`now_ms`）を返す
-- `now_ms` は `advance_time(ms)` / `flush()` によりのみ進む
+- `now_ms` は `advance_time(ms)` / `advance_time_to(ms)` / `flush()` / `run_next_timer()` により進む
 - `Math.random()` は決定論PRNGで生成される
 - `Harness::set_random_seed(seed)` で乱数列を再現可能にする
 
@@ -222,31 +226,53 @@ MVP対応:
 pub struct Harness { /* runtime */ }
 
 impl Harness {
-    pub fn from_html(html: &str) -> Result<Self, Error>;
+    pub fn from_html(html: &str) -> Result<Self>;
 
     // Action
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()>;
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()>;
     pub fn click(&mut self, selector: &str) -> Result<()>;
+    pub fn focus(&mut self, selector: &str) -> Result<()>;
+    pub fn blur(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()>;
-    pub fn set_random_seed(&mut self, seed: u64);
-    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
-    pub fn now_ms(&self) -> i64;
-    pub fn clear_timer(&mut self, timer_id: i64) -> bool;
-    pub fn clear_all_timers(&mut self) -> usize;
-    pub fn pending_timers(&self) -> Vec<PendingTimer>;
-    pub fn run_due_timers(&mut self) -> Result<usize>;
-    pub fn advance_time(&mut self, ms: i64) -> Result<()>;
-    pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()>;
-    pub fn flush(&mut self) -> Result<()>;
-    pub fn run_next_timer(&mut self) -> Result<bool>;
-    pub fn run_next_due_timer(&mut self) -> Result<bool>;
+    pub fn dump_dom(&self, selector: &str) -> Result<String>;
+
+    // Trace
+    pub fn enable_trace(&mut self, enabled: bool);
     pub fn take_trace_logs(&mut self) -> Vec<String>;
     pub fn set_trace_stderr(&mut self, enabled: bool);
     pub fn set_trace_events(&mut self, enabled: bool);
     pub fn set_trace_timers(&mut self, enabled: bool);
     pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()>;
+
+    // Determinism / clocks
+    pub fn set_random_seed(&mut self, seed: u64);
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()>;
+    pub fn now_ms(&self) -> i64;
+    pub fn advance_time(&mut self, ms: i64) -> Result<()>;
+    pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()>;
+    pub fn flush(&mut self) -> Result<()>;
+    pub fn clear_timer(&mut self, timer_id: i64) -> bool;
+    pub fn clear_all_timers(&mut self) -> usize;
+    pub fn pending_timers(&self) -> Vec<PendingTimer>;
+    pub fn run_due_timers(&mut self) -> Result<usize>;
+    pub fn run_next_timer(&mut self) -> Result<bool>;
+    pub fn run_next_due_timer(&mut self) -> Result<bool>;
+
+    // Mock / browser-like globals
+    pub fn set_fetch_mock(&mut self, url: &str, body: &str);
+    pub fn clear_fetch_mocks(&mut self);
+    pub fn take_fetch_calls(&mut self) -> Vec<String>;
+    pub fn set_match_media_mock(&mut self, query: &str, matches: bool);
+    pub fn clear_match_media_mocks(&mut self);
+    pub fn set_default_match_media_matches(&mut self, matches: bool);
+    pub fn take_match_media_calls(&mut self) -> Vec<String>;
+    pub fn enqueue_confirm_response(&mut self, accepted: bool);
+    pub fn set_default_confirm_response(&mut self, accepted: bool);
+    pub fn enqueue_prompt_response(&mut self, value: Option<&str>);
+    pub fn set_default_prompt_response(&mut self, value: Option<&str>);
+    pub fn take_alert_messages(&mut self) -> Vec<String>;
 
     // Assert
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()>;
@@ -279,16 +305,18 @@ pub struct PendingTimer {
 ## 11. エラー設計
 
 `Error`分類:
+- `HtmlParse { message }`
+- `ScriptParse { message }`
+- `ScriptRuntime { message }`
 - `SelectorNotFound { selector }`
 - `UnsupportedSelector { selector }`
 - `TypeMismatch { selector, expected, actual }`
-- `JsException { message, stack }`
 - `AssertionFailed { selector, expected, actual, dom_snippet }`
 
 失敗時は次を必ず含める:
 - 対象セレクタ
 - 期待値/実値
-- 対象ノード周辺のHTML断片（最大N文字）
+- 対象ノード周辺のHTML断片（最大200文字）
 
 ## 12. ログ・デバッグ
 
@@ -360,7 +388,7 @@ fn submit_updates_result() -> anyhow::Result<()> {
 - Selector: 自前実装
 - Script runtime: 自前パーサ + 自前評価器
 - Error: 独自 `Error` enum
-- 外部依存は極小（現状は標準ライブラリ中心）
+- 外部依存は最小限（`regex`, `num-bigint`, `num-traits`）
 
 ## 17. 既知リスクと対策
 
@@ -404,6 +432,8 @@ pub struct ElementProps {
     pub value: String,
     pub checked: bool,
     pub disabled: bool,
+    pub readonly: bool,
+    pub required: bool,
 }
 
 #[derive(Debug)]
@@ -417,41 +447,40 @@ pub struct Node {
 pub struct Document {
     pub nodes: Vec<Node>,
     pub root: NodeId,
-    pub id_index: std::collections::HashMap<String, NodeId>,
+    pub id_index: std::collections::HashMap<String, Vec<NodeId>>,
 }
 ```
 
 ### 19.2 イベントリスナー保持構造
 
 ```rust
-pub type ListenerId = u64;
-
 pub struct ListenerEntry {
-    pub id: ListenerId,
-    pub event_type: String,
-    pub use_capture: bool,
+    pub capture: bool,
     pub callback: ScriptHandler,
 }
 
 pub struct ListenerStore {
-    // node_id -> listeners
-    pub map: std::collections::HashMap<NodeId, Vec<ListenerEntry>>,
-    pub next_id: ListenerId,
+    // node_id -> event_type -> listeners
+    pub map: std::collections::HashMap<
+        NodeId,
+        std::collections::HashMap<String, Vec<ListenerEntry>>,
+    >,
 }
 ```
 
 要点:
-- `removeEventListener` は `event_type + callback + use_capture` で一致削除
+- `removeEventListener` は `event_type + callback + capture` で一致削除
 - dispatch中にリスナー配列が変更されても安全になるよう、実行対象はスナップショットを使う
 
 ### 19.3 ランタイム集約構造
 
 ```rust
 pub struct Runtime {
-    pub document: Document,
+    pub dom: Dom,
     pub listeners: ListenerStore,
-    pub script: ScriptRuntime,
-    pub task_queue: TaskQueue,
+    pub script_env: std::collections::HashMap<String, Value>,
+    pub task_queue: Vec<ScheduledTask>,
+    pub microtask_queue: std::collections::VecDeque<ScheduledMicrotask>,
     pub trace: bool,
     pub trace_events: bool,
     pub trace_timers: bool,
@@ -468,7 +497,7 @@ pub struct Runtime {
 1. 受け取ったHTML文字列をparse
 2. `document` ノード作成
 3. Element/Textを順にArenaへ格納
-4. `id`属性を見つけた時点で `id_index` 登録（重複は後勝ちではなくエラー推奨）
+4. `id`属性を見つけた時点で `id_index` 登録（重複idは `Vec<NodeId>` として保持）
 5. `<script>`要素のテキストを文書順で収集
 6. DOM構築完了後にscriptを同期実行
 
@@ -479,15 +508,15 @@ pub struct Runtime {
 ## 21. スクリプト実行詳細
 
 ### 21.1 実行モデル
-- `<script>`を文単位で解析してリスナー登録情報へ変換
+- `<script>`を文単位で解析して `Stmt` / `Expr` のASTへ変換
 - リスナー本文は `Stmt` / `Expr` のASTへ変換して保持
 - イベント発火時に `execute_stmts` でASTを評価し、DOMへ副作用を反映
 
 ### 21.2 代表APIのRust側シグネチャ
 
 ```rust
-fn parse_listener_registration(cursor: &mut Cursor<'_>) -> Result<ListenerRegistration>;
 fn parse_block_statements(body: &str) -> Result<Vec<Stmt>>;
+fn parse_single_statement(stmt: &str) -> Result<Stmt>;
 fn execute_stmts(
     &mut self,
     stmts: &[Stmt],
@@ -510,13 +539,14 @@ fn execute_stmts(
 3. `click` をdispatch
 4. `defaultPrevented` が `false` の場合に既定動作
 5. 既定動作により必要なら `input`/`change`/`submit` を追加dispatch
-6. task queue flush（auto flush設定時）
+6. トップレベルタスク終了時に microtask queue を自動実行
 
 ### 22.2 `type_text(selector, text)` の動作順
 1. 対象が `input`/`textarea` であることを検証
-2. `value` を `text` に置換
-3. `input` dispatch（`bubbles=true`）
-4. `change` は呼ばない（`change`は明示イベントやblur相当時）
+2. `disabled` / `readonly` の場合は何もしない
+3. `value` を `text` に置換
+4. `input` dispatch（`bubbles=true`）
+5. `change` は呼ばない（`change`は明示イベントやblur相当時）
 
 ### 22.3 `set_checked(selector, checked)` の動作順
 1. 対象がcheckbox/radioであることを検証
@@ -535,13 +565,15 @@ MVP実装案:
   `:nth-child(n)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`,
   `:nth-last-child(n|odd|even|an+b)`,
   `:nth-of-type(n|odd|even|an+b)`, `:nth-last-of-type(n|odd|even|an+b)`,
+  `:empty`,
   `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`,
   `:read-only`（非標準別名 `:readonly` 対応）,
   `:read-write`, `:focus`, `:focus-within`, `:active`,
-  `:not(selector)`（selector-list 対応）など, 子孫/子/隣接/一般兄弟結合子
+  `:not(selector)`, `:is(selector)`, `:where(selector)`, `:has(selector)`（selector-list 対応）など,
+  子孫/子/隣接/一般兄弟結合子
 - `:nth-child(an+b)` は `2n+1`, `-n+3`, `n+1` などをサポート。`n` は1ベース要素インデックス。
 - `:nth-last-child(an+b|odd|even|n)` も同様に1ベース要素インデックスの末尾基準でサポート。
-- 属性値比較は現在 `=` のみ対応
+- 属性演算子は `=`, `^=`, `$=`, `*=`, `~=`, `|=` をサポート
 
 ```rust
 enum SelectorPseudoClass {
@@ -551,9 +583,20 @@ enum SelectorPseudoClass {
     LastOfType,
     OnlyChild,
     OnlyOfType,
+    Checked,
+    Disabled,
+    Enabled,
+    Required,
+    Optional,
+    Readonly,
+    Readwrite,
+    Empty,
     Focus,
     FocusWithin,
     Active,
+    Is(Vec<Vec<SelectorPart>>),
+    Where(Vec<Vec<SelectorPart>>),
+    Has(Vec<Vec<SelectorPart>>),
     NthOfType(NthChildSelector),
     NthLastOfType(NthChildSelector),
     Not(Vec<Vec<SelectorPart>>),
