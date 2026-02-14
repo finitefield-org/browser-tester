@@ -1,13 +1,12 @@
 # browser-tester
 
-- Japanese translation: `translations/ja/README.md`
-- Design doc: `doc/e2e-lite-runtime-design.md`
+- 設計ドキュメント: `doc/e2e-lite-runtime-design.md`
 
-## Usage
+## 使い方
 
-1. Create a test harness from HTML.
-2. Interact with elements using selectors.
-3. Assert the resulting DOM state.
+1. HTML からテストハーネスを作成します。
+2. セレクタを使って要素を操作します。
+3. 期待する DOM 状態をアサートします。
 
 ```rust
 use browser_tester::Harness;
@@ -33,24 +32,24 @@ fn main() -> browser_tester::Result<()> {
 }
 ```
 
-Run tests:
+テスト実行:
 
 ```bash
 cargo test
 ```
 
-## Runtime Policy
+## ランタイム方針
 
-- `eval` is intentionally not implemented to keep the runtime secure and deterministic.
-- Time support is based on `Date.now()`; `performance.now()` is not implemented.
+- セキュリティと決定論を維持するため、`eval` は意図的に実装していません。
+- 時刻 API は `Date.now()` を基準にしており、`performance.now()` は未実装です。
 
-## Test Mocks
+## テストモック
 
-- `fetch` is designed to be replaced with mocks in tests.
-- `confirm` / `prompt` provide APIs to inject mock return values.
-- Common APIs:
+- `fetch` はテスト時にモックへ差し替える前提で設計されています。
+- `confirm` / `prompt` は、戻り値をモック注入できる API を提供します。
+- 主な API:
   - `Harness::set_fetch_mock(url, body)`
   - `Harness::enqueue_confirm_response(bool)`
   - `Harness::enqueue_prompt_response(Option<&str>)`
 
-Developed by [Finite Field, K.K.](https://finitefield.org).
+開発: [Finite Field, K.K.](https://finitefield.org)
