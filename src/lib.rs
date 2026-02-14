@@ -1,6 +1,6 @@
 use num_bigint::{BigInt as JsBigInt, Sign};
 use num_traits::{One, ToPrimitive, Zero};
-use regex::{Regex, RegexBuilder};
+use regex::{Captures, Regex, RegexBuilder};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
@@ -8,6 +8,8 @@ use std::fmt;
 use std::rc::Rc;
 
 const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
+const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
+const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -3379,6 +3381,19 @@ impl PartialEq for PromiseCapabilityFunction {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SymbolValue {
+    id: usize,
+    description: Option<String>,
+    registry_key: Option<String>,
+}
+
+impl PartialEq for SymbolValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     String(String),
@@ -3398,7 +3413,10 @@ enum Value {
     PromiseConstructor,
     MapConstructor,
     SetConstructor,
+    SymbolConstructor,
+    RegExpConstructor,
     PromiseCapability(Rc<PromiseCapabilityFunction>),
+    Symbol(Rc<SymbolValue>),
     RegExp(Rc<RefCell<RegexValue>>),
     Date(Rc<RefCell<i64>>),
     Null,
@@ -3414,9 +3432,15 @@ struct RegexValue {
     source: String,
     flags: String,
     global: bool,
+    ignore_case: bool,
+    multiline: bool,
+    dot_all: bool,
     sticky: bool,
+    has_indices: bool,
+    unicode: bool,
     compiled: Regex,
     last_index: usize,
+    properties: Vec<(String, Value)>,
 }
 
 impl PartialEq for RegexValue {
@@ -3424,8 +3448,14 @@ impl PartialEq for RegexValue {
         self.source == other.source
             && self.flags == other.flags
             && self.global == other.global
+            && self.ignore_case == other.ignore_case
+            && self.multiline == other.multiline
+            && self.dot_all == other.dot_all
             && self.sticky == other.sticky
+            && self.has_indices == other.has_indices
+            && self.unicode == other.unicode
             && self.last_index == other.last_index
+            && self.properties == other.properties
     }
 }
 
@@ -3449,6 +3479,8 @@ struct RegexFlags {
     multiline: bool,
     dot_all: bool,
     sticky: bool,
+    has_indices: bool,
+    unicode: bool,
 }
 
 impl Value {
@@ -3471,7 +3503,10 @@ impl Value {
             Self::PromiseConstructor => true,
             Self::MapConstructor => true,
             Self::SetConstructor => true,
+            Self::SymbolConstructor => true,
+            Self::RegExpConstructor => true,
             Self::PromiseCapability(_) => true,
+            Self::Symbol(_) => true,
             Self::RegExp(_) => true,
             Self::Date(_) => true,
             Self::Null => false,
@@ -3527,7 +3562,16 @@ impl Value {
             Self::PromiseConstructor => "Promise".to_string(),
             Self::MapConstructor => "Map".to_string(),
             Self::SetConstructor => "Set".to_string(),
+            Self::SymbolConstructor => "Symbol".to_string(),
+            Self::RegExpConstructor => "RegExp".to_string(),
             Self::PromiseCapability(_) => "[object Function]".into(),
+            Self::Symbol(value) => {
+                if let Some(description) = &value.description {
+                    format!("Symbol({description})")
+                } else {
+                    "Symbol()".to_string()
+                }
+            }
             Self::RegExp(value) => {
                 let value = value.borrow();
                 format!("/{}/{}", value.source, value.flags)
@@ -3778,6 +3822,11 @@ enum Expr {
         pattern: Box<Expr>,
         flags: Option<Box<Expr>>,
     },
+    RegExpConstructor,
+    RegExpStaticMethod {
+        method: RegExpStaticMethod,
+        args: Vec<Expr>,
+    },
     RegexTest {
         regex: Box<Expr>,
         input: Box<Expr>,
@@ -3785,6 +3834,9 @@ enum Expr {
     RegexExec {
         regex: Box<Expr>,
         input: Box<Expr>,
+    },
+    RegexToString {
+        regex: Box<Expr>,
     },
     MathConst(MathConst),
     MathMethod {
@@ -3889,6 +3941,16 @@ enum Expr {
         method: SetInstanceMethod,
         args: Vec<Expr>,
     },
+    SymbolConstruct {
+        description: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    SymbolConstructor,
+    SymbolStaticMethod {
+        method: SymbolStaticMethod,
+        args: Vec<Expr>,
+    },
+    SymbolStaticProperty(SymbolStaticProperty),
     TypedArrayStaticBytesPerElement(TypedArrayKind),
     TypedArrayStaticMethod {
         kind: TypedArrayKind,
@@ -3921,11 +3983,15 @@ enum Expr {
     ParseFloat(Box<Expr>),
     JsonParse(Box<Expr>),
     JsonStringify(Box<Expr>),
-    ObjectLiteral(Vec<(String, Expr)>),
+    ObjectConstruct {
+        value: Option<Box<Expr>>,
+    },
+    ObjectLiteral(Vec<(ObjectLiteralKey, Expr)>),
     ObjectGet {
         target: String,
         key: String,
     },
+    ObjectGetOwnPropertySymbols(Box<Expr>),
     ObjectKeys(Box<Expr>),
     ObjectValues(Box<Expr>),
     ObjectEntries(Box<Expr>),
@@ -4035,6 +4101,10 @@ enum Expr {
         value: Box<Expr>,
         start: Option<Box<Expr>>,
         end: Option<Box<Expr>>,
+    },
+    StringMatch {
+        value: Box<Expr>,
+        pattern: Box<Expr>,
     },
     StringSplit {
         value: Box<Expr>,
@@ -4174,6 +4244,12 @@ enum StringTrimMode {
     End,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum ObjectLiteralKey {
+    Static(String),
+    Computed(Box<Expr>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MathConst {
     E,
@@ -4292,6 +4368,36 @@ enum TypedArrayInstanceMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapStaticMethod {
     GroupBy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SymbolStaticMethod {
+    For,
+    KeyFor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SymbolStaticProperty {
+    AsyncDispose,
+    AsyncIterator,
+    Dispose,
+    HasInstance,
+    IsConcatSpreadable,
+    Iterator,
+    Match,
+    MatchAll,
+    Replace,
+    Search,
+    Species,
+    Split,
+    ToPrimitive,
+    ToStringTag,
+    Unscopables,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegExpStaticMethod {
+    Escape,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4736,6 +4842,7 @@ pub struct Harness {
     next_timer_id: i64,
     next_task_order: i64,
     next_promise_id: usize,
+    next_symbol_id: usize,
     task_depth: usize,
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
@@ -4747,6 +4854,9 @@ pub struct Harness {
     default_confirm_response: bool,
     prompt_responses: VecDeque<Option<String>>,
     default_prompt_response: Option<String>,
+    symbol_registry: HashMap<String, Rc<SymbolValue>>,
+    symbols_by_id: HashMap<usize, Rc<SymbolValue>>,
+    well_known_symbols: HashMap<String, Rc<SymbolValue>>,
     trace: bool,
     trace_events: bool,
     trace_timers: bool,
@@ -4931,6 +5041,7 @@ impl Harness {
             next_timer_id: 1,
             next_task_order: 0,
             next_promise_id: 1,
+            next_symbol_id: 1,
             task_depth: 0,
             running_timer_id: None,
             running_timer_canceled: false,
@@ -4942,6 +5053,9 @@ impl Harness {
             default_confirm_response: false,
             prompt_responses: VecDeque::new(),
             default_prompt_response: None,
+            symbol_registry: HashMap::new(),
+            symbols_by_id: HashMap::new(),
+            well_known_symbols: HashMap::new(),
             trace: false,
             trace_events: true,
             trace_timers: true,
@@ -6246,7 +6360,7 @@ impl Harness {
                     let key = self.eval_expr(key, env, event_param, event)?;
                     match env.get(target) {
                         Some(Value::Object(object)) => {
-                            let key = key.as_string();
+                            let key = self.property_key_to_storage_key(&key);
                             Self::object_set_entry(&mut object.borrow_mut(), key, value);
                         }
                         Some(Value::Array(values)) => {
@@ -6266,12 +6380,26 @@ impl Harness {
                             self.typed_array_set_index(values, index, value)?;
                         }
                         Some(Value::Map(map)) => {
-                            let key = key.as_string();
+                            let key = self.property_key_to_storage_key(&key);
                             Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
                         }
                         Some(Value::Set(set)) => {
-                            let key = key.as_string();
+                            let key = self.property_key_to_storage_key(&key);
                             Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
+                        }
+                        Some(Value::RegExp(regex)) => {
+                            let key = self.property_key_to_storage_key(&key);
+                            if key == "lastIndex" {
+                                let mut regex = regex.borrow_mut();
+                                let next = Self::value_to_i64(&value);
+                                regex.last_index = if next <= 0 { 0 } else { next as usize };
+                            } else {
+                                Self::object_set_entry(
+                                    &mut regex.borrow_mut().properties,
+                                    key,
+                                    value,
+                                );
+                            }
                         }
                         Some(_) => {
                             return Err(Error::ScriptRuntime(format!(
@@ -7104,6 +7232,10 @@ impl Harness {
                     .transpose()?;
                 Self::new_regex_from_values(&pattern, flags.as_ref())
             }
+            Expr::RegExpConstructor => Ok(Value::RegExpConstructor),
+            Expr::RegExpStaticMethod { method, args } => {
+                self.eval_regexp_static_method(*method, args, env, event_param, event)
+            }
             Expr::RegexTest { regex, input } => {
                 let regex = self.eval_expr(regex, env, event_param, event)?;
                 let input = self.eval_expr(input, env, event_param, event)?.as_string();
@@ -7123,6 +7255,15 @@ impl Harness {
                         .map(Value::String)
                         .collect::<Vec<_>>(),
                 ))
+            }
+            Expr::RegexToString { regex } => {
+                let regex = self.eval_expr(regex, env, event_param, event)?;
+                if let Ok(regex) = Self::resolve_regex_from_value(&regex) {
+                    let regex = regex.borrow();
+                    Ok(Value::String(format!("/{}/{}", regex.source, regex.flags)))
+                } else {
+                    Ok(Value::String(regex.as_string()))
+                }
             }
             Expr::MathConst(constant) => match constant {
                 MathConst::E => Ok(Value::Float(std::f64::consts::E)),
@@ -7330,6 +7471,23 @@ impl Harness {
                 method,
                 args,
             } => self.eval_set_method(target, *method, args, env, event_param, event),
+            Expr::SymbolConstruct {
+                description,
+                called_with_new,
+            } => self.eval_symbol_construct(
+                description,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::SymbolConstructor => Ok(Value::SymbolConstructor),
+            Expr::SymbolStaticMethod { method, args } => {
+                self.eval_symbol_static_method(*method, args, env, event_param, event)
+            }
+            Expr::SymbolStaticProperty(property) => {
+                Ok(self.eval_symbol_static_property(*property))
+            }
             Expr::TypedArrayStaticBytesPerElement(kind) => {
                 Ok(Value::Number(kind.bytes_per_element() as i64))
             }
@@ -7443,11 +7601,45 @@ impl Harness {
                     None => Ok(Value::Undefined),
                 }
             }
+            Expr::ObjectConstruct { value } => {
+                let value = value
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .unwrap_or(Value::Undefined);
+                match value {
+                    Value::Null | Value::Undefined => Ok(Self::new_object_value(Vec::new())),
+                    Value::Object(object) => Ok(Value::Object(object)),
+                    Value::Array(array) => Ok(Value::Array(array)),
+                    Value::Date(date) => Ok(Value::Date(date)),
+                    Value::Map(map) => Ok(Value::Map(map)),
+                    Value::Set(set) => Ok(Value::Set(set)),
+                    Value::ArrayBuffer(buffer) => Ok(Value::ArrayBuffer(buffer)),
+                    Value::TypedArray(array) => Ok(Value::TypedArray(array)),
+                    Value::Promise(promise) => Ok(Value::Promise(promise)),
+                    Value::RegExp(regex) => Ok(Value::RegExp(regex)),
+                    Value::Symbol(symbol) => Ok(Self::new_object_value(vec![(
+                        INTERNAL_SYMBOL_WRAPPER_KEY.to_string(),
+                        Value::Number(symbol.id as i64),
+                    )])),
+                    primitive => Ok(Self::new_object_value(vec![(
+                        "value".into(),
+                        Value::String(primitive.as_string()),
+                    )])),
+                }
+            }
             Expr::ObjectLiteral(entries) => {
                 let mut object_entries = Vec::with_capacity(entries.len());
                 for (key, value) in entries {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    Self::object_set_entry(&mut object_entries, key.clone(), value);
+                    let key = match key {
+                        ObjectLiteralKey::Static(key) => key.clone(),
+                        ObjectLiteralKey::Computed(expr) => {
+                            let key = self.eval_expr(expr, env, event_param, event)?;
+                            self.property_key_to_storage_key(&key)
+                        }
+                    };
+                    Self::object_set_entry(&mut object_entries, key, value);
                 }
                 Ok(Self::new_object_value(object_entries))
             }
@@ -7498,12 +7690,63 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                 }
+                Some(Value::Symbol(symbol)) => {
+                    let value = match key.as_str() {
+                        "description" => symbol
+                            .description
+                            .as_ref()
+                            .map(|value| Value::String(value.clone()))
+                            .unwrap_or(Value::Undefined),
+                        "constructor" => Value::SymbolConstructor,
+                        _ => Value::Undefined,
+                    };
+                    Ok(value)
+                }
+                Some(Value::RegExp(regex)) => {
+                    let regex = regex.borrow();
+                    let value = match key.as_str() {
+                        "source" => Value::String(regex.source.clone()),
+                        "flags" => Value::String(regex.flags.clone()),
+                        "global" => Value::Bool(regex.global),
+                        "ignoreCase" => Value::Bool(regex.ignore_case),
+                        "multiline" => Value::Bool(regex.multiline),
+                        "dotAll" => Value::Bool(regex.dot_all),
+                        "sticky" => Value::Bool(regex.sticky),
+                        "hasIndices" => Value::Bool(regex.has_indices),
+                        "unicode" => Value::Bool(regex.unicode),
+                        "unicodeSets" => Value::Bool(false),
+                        "lastIndex" => Value::Number(regex.last_index as i64),
+                        "constructor" => Value::RegExpConstructor,
+                        _ => Self::object_get_entry(&regex.properties, key)
+                            .unwrap_or(Value::Undefined),
+                    };
+                    Ok(value)
+                }
                 Some(_) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not an object",
                     target
                 ))),
                 None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
             },
+            Expr::ObjectGetOwnPropertySymbols(object) => {
+                let object = self.eval_expr(object, env, event_param, event)?;
+                match object {
+                    Value::Object(entries) => {
+                        let mut out = Vec::new();
+                        for (key, _) in entries.borrow().iter() {
+                            if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
+                                if let Some(symbol) = self.symbols_by_id.get(&symbol_id) {
+                                    out.push(Value::Symbol(symbol.clone()));
+                                }
+                            }
+                        }
+                        Ok(Self::new_array_value(out))
+                    }
+                    _ => Err(Error::ScriptRuntime(
+                        "Object.getOwnPropertySymbols argument must be an object".into(),
+                    )),
+                }
+            }
             Expr::ObjectKeys(object) => {
                 let object = self.eval_expr(object, env, event_param, event)?;
                 match object {
@@ -7511,6 +7754,7 @@ impl Harness {
                         let keys = entries
                             .borrow()
                             .iter()
+                            .filter(|(key, _)| !Self::is_internal_object_key(key))
                             .map(|(key, _)| Value::String(key.clone()))
                             .collect::<Vec<_>>();
                         Ok(Self::new_array_value(keys))
@@ -7527,6 +7771,7 @@ impl Harness {
                         let values = entries
                             .borrow()
                             .iter()
+                            .filter(|(key, _)| !Self::is_internal_object_key(key))
                             .map(|(_, value)| value.clone())
                             .collect::<Vec<_>>();
                         Ok(Self::new_array_value(values))
@@ -7543,6 +7788,7 @@ impl Harness {
                         let values = entries
                             .borrow()
                             .iter()
+                            .filter(|(key, _)| !Self::is_internal_object_key(key))
                             .map(|(key, value)| {
                                 Self::new_array_value(vec![
                                     Value::String(key.clone()),
@@ -7559,7 +7805,8 @@ impl Harness {
             }
             Expr::ObjectHasOwn { object, key } => {
                 let object = self.eval_expr(object, env, event_param, event)?;
-                let key = self.eval_expr(key, env, event_param, event)?.as_string();
+                let key = self.eval_expr(key, env, event_param, event)?;
+                let key = self.property_key_to_storage_key(&key);
                 match object {
                     Value::Object(entries) => Ok(Value::Bool(
                         Self::object_get_entry(&entries.borrow(), &key).is_some(),
@@ -7598,7 +7845,8 @@ impl Harness {
                 }
             }
             Expr::ObjectHasOwnProperty { target, key } => {
-                let key = self.eval_expr(key, env, event_param, event)?.as_string();
+                let key = self.eval_expr(key, env, event_param, event)?;
+                let key = self.property_key_to_storage_key(&key);
                 match env.get(target) {
                     Some(Value::Object(entries)) => Ok(Value::Bool(
                         Self::object_get_entry(&entries.borrow(), &key).is_some(),
@@ -7638,28 +7886,47 @@ impl Harness {
             }
             Expr::ArrayIndex { target, index } => {
                 let index = self.eval_expr(index, env, event_param, event)?;
-                let Some(index) = self.value_as_index(&index) else {
-                    return Ok(Value::Undefined);
-                };
                 match env.get(target) {
-                    Some(Value::Array(values)) => Ok(values
-                        .borrow()
-                        .get(index)
-                        .cloned()
-                        .unwrap_or(Value::Undefined)),
+                    Some(Value::Object(entries)) => {
+                        let key = self.property_key_to_storage_key(&index);
+                        Ok(Self::object_get_entry(&entries.borrow(), &key).unwrap_or(Value::Undefined))
+                    }
+                    Some(Value::Array(values)) => {
+                        let Some(index) = self.value_as_index(&index) else {
+                            return Ok(Value::Undefined);
+                        };
+                        Ok(values
+                            .borrow()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or(Value::Undefined))
+                    }
                     Some(Value::TypedArray(values)) => {
+                        let Some(index) = self.value_as_index(&index) else {
+                            return Ok(Value::Undefined);
+                        };
                         self.typed_array_get_index(values, index)
                     }
-                    Some(Value::NodeList(nodes)) => Ok(nodes
-                        .get(index)
-                        .copied()
-                        .map(Value::Node)
-                        .unwrap_or(Value::Undefined)),
-                    Some(Value::String(value)) => Ok(value
-                        .chars()
-                        .nth(index)
-                        .map(|ch| Value::String(ch.to_string()))
-                        .unwrap_or(Value::Undefined)),
+                    Some(Value::NodeList(nodes)) => {
+                        let Some(index) = self.value_as_index(&index) else {
+                            return Ok(Value::Undefined);
+                        };
+                        Ok(nodes
+                            .get(index)
+                            .copied()
+                            .map(Value::Node)
+                            .unwrap_or(Value::Undefined))
+                    }
+                    Some(Value::String(value)) => {
+                        let Some(index) = self.value_as_index(&index) else {
+                            return Ok(Value::Undefined);
+                        };
+                        Ok(value
+                            .chars()
+                            .nth(index)
+                            .map(|ch| Value::String(ch.to_string()))
+                            .unwrap_or(Value::Undefined))
+                    }
                     Some(_) => Err(Error::ScriptRuntime(format!(
                         "variable '{}' is not an array",
                         target
@@ -8307,7 +8574,14 @@ impl Harness {
                 position,
             } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?;
+                if matches!(search, Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.includes must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = search.as_string();
                 let len = value.chars().count() as i64;
                 let mut position = position
                     .as_ref()
@@ -8328,7 +8602,14 @@ impl Harness {
                 position,
             } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?;
+                if matches!(search, Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.startsWith must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = search.as_string();
                 let len = value.chars().count() as i64;
                 let mut position = position
                     .as_ref()
@@ -8349,7 +8630,14 @@ impl Harness {
                 length,
             } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?;
+                if matches!(search, Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.endsWith must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = search.as_string();
                 let len = value.chars().count();
                 let end = length
                     .as_ref()
@@ -8411,29 +8699,44 @@ impl Harness {
                 };
                 Ok(Value::String(Self::substring_chars(&value, start, end)))
             }
+            Expr::StringMatch { value, pattern } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let pattern = self.eval_expr(pattern, env, event_param, event)?;
+                self.eval_string_match(&value, pattern)
+            }
             Expr::StringSplit {
                 value,
                 separator,
                 limit,
             } => {
-                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let text = self.eval_expr(value, env, event_param, event)?.as_string();
                 let separator = separator
                     .as_ref()
                     .map(|value| self.eval_expr(value, env, event_param, event))
-                    .transpose()?
-                    .map(|value| value.as_string());
+                    .transpose()?;
                 let limit = limit
                     .as_ref()
                     .map(|value| self.eval_expr(value, env, event_param, event))
                     .transpose()?
                     .map(|value| Self::value_to_i64(&value));
-                Ok(Self::new_array_value(Self::split_string(&value, separator, limit)))
+                let parts = match separator {
+                    None => Self::split_string(&text, None, limit),
+                    Some(Value::RegExp(regex)) => {
+                        Self::split_string_with_regex(&text, &regex, limit)
+                    }
+                    Some(value) => Self::split_string(&text, Some(value.as_string()), limit),
+                };
+                Ok(Self::new_array_value(parts))
             }
             Expr::StringReplace { value, from, to } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                let from = self.eval_expr(from, env, event_param, event)?.as_string();
                 let to = self.eval_expr(to, env, event_param, event)?.as_string();
-                Ok(Value::String(value.replacen(&from, &to, 1)))
+                let from = self.eval_expr(from, env, event_param, event)?;
+                let replaced = match from {
+                    Value::RegExp(regex) => Self::replace_string_with_regex(&value, &regex, &to),
+                    other => value.replacen(&other.as_string(), &to, 1),
+                };
+                Ok(Value::String(replaced))
             }
             Expr::StringIndexOf {
                 value,
@@ -8767,6 +9070,11 @@ impl Harness {
             }
             Expr::Neg(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
+                if matches!(value, Value::Symbol(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot convert a Symbol value to a number".into(),
+                    ));
+                }
                 match value {
                     Value::Number(v) => Ok(Value::Number(-v)),
                     Value::Float(v) => Ok(Value::Float(-v)),
@@ -8781,10 +9089,20 @@ impl Harness {
                         "unary plus is not supported for BigInt values".into(),
                     ));
                 }
+                if matches!(value, Value::Symbol(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot convert a Symbol value to a number".into(),
+                    ));
+                }
                 Ok(Value::Float(self.numeric_value(&value)))
             }
             Expr::BitNot(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
+                if matches!(value, Value::Symbol(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot convert a Symbol value to a number".into(),
+                    ));
+                }
                 if let Value::BigInt(v) = value {
                     return Ok(Value::BigInt(!v));
                 }
@@ -8812,6 +9130,7 @@ impl Harness {
                         Value::Bool(_) => "boolean",
                         Value::Number(_) | Value::Float(_) => "number",
                         Value::BigInt(_) => "bigint",
+                        Value::Symbol(_) => "symbol",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
                         Value::TypedArrayConstructor(_)
@@ -8819,6 +9138,8 @@ impl Harness {
                         | Value::PromiseConstructor
                         | Value::MapConstructor
                         | Value::SetConstructor
+                        | Value::SymbolConstructor
+                        | Value::RegExpConstructor
                         | Value::PromiseCapability(_) => {
                             "function"
                         }
@@ -8843,6 +9164,7 @@ impl Harness {
                             Value::Bool(_) => "boolean",
                             Value::Number(_) | Value::Float(_) => "number",
                             Value::BigInt(_) => "bigint",
+                            Value::Symbol(_) => "symbol",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
                             Value::TypedArrayConstructor(_)
@@ -8850,6 +9172,8 @@ impl Harness {
                             | Value::PromiseConstructor
                             | Value::MapConstructor
                             | Value::SetConstructor
+                            | Value::SymbolConstructor
+                            | Value::RegExpConstructor
                             | Value::PromiseCapability(_) => {
                                 "function"
                             }
@@ -8902,6 +9226,30 @@ impl Harness {
     }
 
     fn eval_binary(&self, op: &BinaryOp, left: &Value, right: &Value) -> Result<Value> {
+        if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
+            if matches!(
+                op,
+                BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::BitAnd
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight
+                    | BinaryOp::UnsignedShiftRight
+                    | BinaryOp::Pow
+                    | BinaryOp::Lt
+                    | BinaryOp::Gt
+                    | BinaryOp::Le
+                    | BinaryOp::Ge
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Mod
+                    | BinaryOp::Div
+            ) {
+                return Err(Error::ScriptRuntime(
+                    "Cannot convert a Symbol value to a number".into(),
+                ));
+            }
+        }
         let out = match op {
             BinaryOp::Or => Value::Bool(left.truthy() || right.truthy()),
             BinaryOp::And => Value::Bool(left.truthy() && right.truthy()),
@@ -9096,11 +9444,11 @@ impl Harness {
                 self.loose_equal(left, &coerced)
             }
             _ if Self::is_loose_primitive(left) && Self::is_loose_object(right) => {
-                let prim = Self::to_primitive_for_loose(right);
+                let prim = self.to_primitive_for_loose(right);
                 self.loose_equal(left, &prim)
             }
             _ if Self::is_loose_object(left) && Self::is_loose_primitive(right) => {
-                let prim = Self::to_primitive_for_loose(left);
+                let prim = self.to_primitive_for_loose(left);
                 self.loose_equal(&prim, right)
             }
             _ => false,
@@ -9115,6 +9463,7 @@ impl Harness {
                 | Value::Number(_)
                 | Value::Float(_)
                 | Value::BigInt(_)
+                | Value::Symbol(_)
                 | Value::Null
                 | Value::Undefined
         )
@@ -9135,6 +9484,8 @@ impl Harness {
                 | Value::PromiseConstructor
                 | Value::MapConstructor
                 | Value::SetConstructor
+                | Value::SymbolConstructor
+                | Value::RegExpConstructor
                 | Value::PromiseCapability(_)
                 | Value::RegExp(_)
                 | Value::Date(_)
@@ -9145,10 +9496,17 @@ impl Harness {
         )
     }
 
-    fn to_primitive_for_loose(value: &Value) -> Value {
+    fn to_primitive_for_loose(&self, value: &Value) -> Value {
         match value {
+            Value::Object(entries) => {
+                if let Some(id) = Self::symbol_wrapper_id_from_object(&entries.borrow()) {
+                    if let Some(symbol) = self.symbols_by_id.get(&id) {
+                        return Value::Symbol(symbol.clone());
+                    }
+                }
+                Value::String(value.as_string())
+            }
             Value::Array(_)
-            | Value::Object(_)
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
@@ -9159,6 +9517,8 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
             | Value::RegExp(_)
             | Value::Date(_)
@@ -9182,7 +9542,7 @@ impl Harness {
                 .value_as_index(left)
                 .is_some_and(|index| index < values.borrow().observed_length()),
             Value::Object(entries) => {
-                let key = left.as_string();
+                let key = self.property_key_to_storage_key(left);
                 entries.borrow().iter().any(|(name, _)| name == &key)
             }
             Value::FormData(entries) => {
@@ -9205,6 +9565,7 @@ impl Harness {
             (Value::ArrayBuffer(left), Value::ArrayBuffer(right)) => Rc::ptr_eq(left, right),
             (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
             (Value::RegExp(left), Value::RegExp(right)) => Rc::ptr_eq(left, right),
+            (Value::Symbol(left), Value::Symbol(right)) => left.id == right.id,
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
             _ => false,
@@ -9247,6 +9608,7 @@ impl Harness {
             (Value::Number(l), Value::Float(r)) => (*l as f64) == *r,
             (Value::Float(l), Value::Number(r)) => *l == (*r as f64),
             (Value::BigInt(l), Value::BigInt(r)) => l == r,
+            (Value::Symbol(l), Value::Symbol(r)) => l.id == r.id,
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
@@ -9260,6 +9622,8 @@ impl Harness {
             (Value::PromiseConstructor, Value::PromiseConstructor) => true,
             (Value::MapConstructor, Value::MapConstructor) => true,
             (Value::SetConstructor, Value::SetConstructor) => true,
+            (Value::SymbolConstructor, Value::SymbolConstructor) => true,
+            (Value::RegExpConstructor, Value::RegExpConstructor) => true,
             (Value::PromiseCapability(l), Value::PromiseCapability(r)) => Rc::ptr_eq(l, r),
             (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
             (Value::RegExp(l), Value::RegExp(r)) => Rc::ptr_eq(l, r),
@@ -9396,6 +9760,11 @@ impl Harness {
     }
 
     fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
+        if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
+            return Err(Error::ScriptRuntime(
+                "Cannot convert a Symbol value to a string".into(),
+            ));
+        }
         if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
             return Ok(Value::String(format!("{}{}", left.as_string(), right.as_string())));
         }
@@ -9862,6 +10231,9 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
+            | Value::Symbol(_)
             | Value::PromiseCapability(_)
             | Value::Function(_) => Ok(None),
             Value::RegExp(_) => Ok(Some("{}".to_string())),
@@ -9913,6 +10285,9 @@ impl Harness {
                 let mut out = String::from("{");
                 let mut wrote = false;
                 for (key, value) in entries.iter() {
+                    if Self::is_internal_object_key(key) {
+                        continue;
+                    }
                     let Some(serialized) =
                         Self::json_stringify_value(value, array_stack, object_stack)?
                     else {
@@ -9971,7 +10346,16 @@ impl Harness {
             Value::Date(v) => Ok(Value::Date(Rc::new(RefCell::new(*v.borrow())))),
             Value::RegExp(v) => {
                 let v = v.borrow();
-                Self::new_regex_value(v.source.clone(), v.flags.clone())
+                let cloned = Self::new_regex_value(v.source.clone(), v.flags.clone())?;
+                let Value::RegExp(cloned_regex) = &cloned else {
+                    unreachable!("RegExp clone must produce RegExp value");
+                };
+                {
+                    let mut cloned_regex = cloned_regex.borrow_mut();
+                    cloned_regex.last_index = v.last_index;
+                    cloned_regex.properties = v.properties.clone();
+                }
+                Ok(cloned)
             }
             Value::ArrayBuffer(buffer) => {
                 let buffer = buffer.borrow();
@@ -10051,11 +10435,14 @@ impl Harness {
             | Value::NodeList(_)
             | Value::FormData(_)
             | Value::Promise(_)
+            | Value::Symbol(_)
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
             | Value::Function(_) => Err(Error::ScriptRuntime(
                 "structuredClone value is not cloneable".into(),
@@ -10070,6 +10457,8 @@ impl Harness {
             multiline: false,
             dot_all: false,
             sticky: false,
+            has_indices: false,
+            unicode: false,
         };
         let mut seen = HashSet::new();
         for ch in flags.chars() {
@@ -10082,7 +10471,8 @@ impl Harness {
                 'm' => info.multiline = true,
                 's' => info.dot_all = true,
                 'y' => info.sticky = true,
-                'd' | 'u' => {}
+                'd' => info.has_indices = true,
+                'u' => info.unicode = true,
                 'v' => {
                     return Err(
                         "invalid regular expression flags: v flag is not supported".into(),
@@ -10114,9 +10504,15 @@ impl Harness {
             source: pattern,
             flags,
             global: info.global,
+            ignore_case: info.ignore_case,
+            multiline: info.multiline,
+            dot_all: info.dot_all,
             sticky: info.sticky,
+            has_indices: info.has_indices,
+            unicode: info.unicode,
             compiled,
             last_index: 0,
+            properties: Vec::new(),
         }))))
     }
 
@@ -10381,6 +10777,25 @@ impl Harness {
             };
         }
 
+        if let Value::Symbol(symbol) = &value {
+            return match method {
+                NumberInstanceMethod::ValueOf => Ok(Value::Symbol(symbol.clone())),
+                NumberInstanceMethod::ToString | NumberInstanceMethod::ToLocaleString => {
+                    if !args_value.is_empty() {
+                        return Err(Error::ScriptRuntime(
+                            "Symbol.toString does not take arguments".into(),
+                        ));
+                    }
+                    Ok(Value::String(Value::Symbol(symbol.clone()).as_string()))
+                }
+                NumberInstanceMethod::ToExponential
+                | NumberInstanceMethod::ToFixed
+                | NumberInstanceMethod::ToPrecision => Err(Error::ScriptRuntime(
+                    "Cannot convert a Symbol value to a number".into(),
+                )),
+            };
+        }
+
         let numeric = Self::coerce_number_for_number_constructor(&value);
 
         match method {
@@ -10584,7 +10999,10 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
+            | Value::Symbol(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10621,7 +11039,10 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
+            | Value::Symbol(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10782,7 +11203,10 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
+            | Value::Symbol(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -12443,6 +12867,225 @@ impl Harness {
         }
     }
 
+    fn new_symbol_value(
+        &mut self,
+        description: Option<String>,
+        registry_key: Option<String>,
+    ) -> Value {
+        let id = self.next_symbol_id;
+        self.next_symbol_id = self.next_symbol_id.saturating_add(1);
+        let symbol = Rc::new(SymbolValue {
+            id,
+            description,
+            registry_key,
+        });
+        self.symbols_by_id.insert(id, symbol.clone());
+        Value::Symbol(symbol)
+    }
+
+    fn symbol_storage_key(id: usize) -> String {
+        format!("{INTERNAL_SYMBOL_KEY_PREFIX}{id}")
+    }
+
+    fn symbol_id_from_storage_key(key: &str) -> Option<usize> {
+        key.strip_prefix(INTERNAL_SYMBOL_KEY_PREFIX)
+            .and_then(|value| value.parse::<usize>().ok())
+    }
+
+    fn is_symbol_storage_key(key: &str) -> bool {
+        key.starts_with(INTERNAL_SYMBOL_KEY_PREFIX)
+    }
+
+    fn is_internal_object_key(key: &str) -> bool {
+        Self::is_symbol_storage_key(key) || key == INTERNAL_SYMBOL_WRAPPER_KEY
+    }
+
+    fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
+        let value = Self::object_get_entry(entries, INTERNAL_SYMBOL_WRAPPER_KEY)?;
+        match value {
+            Value::Number(value) if value >= 0 => Some(value as usize),
+            _ => None,
+        }
+    }
+
+    fn symbol_id_from_property_key(&self, value: &Value) -> Option<usize> {
+        match value {
+            Value::Symbol(symbol) => Some(symbol.id),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Self::symbol_wrapper_id_from_object(&entries)
+            }
+            _ => None,
+        }
+    }
+
+    fn property_key_to_storage_key(&self, value: &Value) -> String {
+        if let Some(symbol_id) = self.symbol_id_from_property_key(value) {
+            Self::symbol_storage_key(symbol_id)
+        } else {
+            value.as_string()
+        }
+    }
+
+    fn eval_symbol_construct(
+        &mut self,
+        description: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if called_with_new {
+            return Err(Error::ScriptRuntime("Symbol is not a constructor".into()));
+        }
+        let description = if let Some(description) = description {
+            let value = self.eval_expr(description, env, event_param, event)?;
+            if matches!(value, Value::Undefined) {
+                None
+            } else {
+                Some(value.as_string())
+            }
+        } else {
+            None
+        };
+        Ok(self.new_symbol_value(description, None))
+    }
+
+    fn eval_symbol_static_method(
+        &mut self,
+        method: SymbolStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            SymbolStaticMethod::For => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Symbol.for requires exactly one argument".into(),
+                    ));
+                }
+                let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                if let Some(symbol) = self.symbol_registry.get(&key) {
+                    return Ok(Value::Symbol(symbol.clone()));
+                }
+                let symbol = match self.new_symbol_value(Some(key.clone()), Some(key.clone())) {
+                    Value::Symbol(symbol) => symbol,
+                    _ => unreachable!("new_symbol_value must create Symbol"),
+                };
+                self.symbol_registry.insert(key, symbol.clone());
+                Ok(Value::Symbol(symbol))
+            }
+            SymbolStaticMethod::KeyFor => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Symbol.keyFor requires exactly one argument".into(),
+                    ));
+                }
+                let symbol = self.eval_expr(&args[0], env, event_param, event)?;
+                let Value::Symbol(symbol) = symbol else {
+                    return Err(Error::ScriptRuntime(
+                        "Symbol.keyFor argument must be a Symbol".into(),
+                    ));
+                };
+                if let Some(key) = &symbol.registry_key {
+                    Ok(Value::String(key.clone()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+        }
+    }
+
+    fn symbol_static_property_name(property: SymbolStaticProperty) -> &'static str {
+        match property {
+            SymbolStaticProperty::AsyncDispose => "Symbol.asyncDispose",
+            SymbolStaticProperty::AsyncIterator => "Symbol.asyncIterator",
+            SymbolStaticProperty::Dispose => "Symbol.dispose",
+            SymbolStaticProperty::HasInstance => "Symbol.hasInstance",
+            SymbolStaticProperty::IsConcatSpreadable => "Symbol.isConcatSpreadable",
+            SymbolStaticProperty::Iterator => "Symbol.iterator",
+            SymbolStaticProperty::Match => "Symbol.match",
+            SymbolStaticProperty::MatchAll => "Symbol.matchAll",
+            SymbolStaticProperty::Replace => "Symbol.replace",
+            SymbolStaticProperty::Search => "Symbol.search",
+            SymbolStaticProperty::Species => "Symbol.species",
+            SymbolStaticProperty::Split => "Symbol.split",
+            SymbolStaticProperty::ToPrimitive => "Symbol.toPrimitive",
+            SymbolStaticProperty::ToStringTag => "Symbol.toStringTag",
+            SymbolStaticProperty::Unscopables => "Symbol.unscopables",
+        }
+    }
+
+    fn eval_symbol_static_property(&mut self, property: SymbolStaticProperty) -> Value {
+        let name = Self::symbol_static_property_name(property).to_string();
+        if let Some(symbol) = self.well_known_symbols.get(&name) {
+            return Value::Symbol(symbol.clone());
+        }
+        let symbol = match self.new_symbol_value(Some(name.clone()), None) {
+            Value::Symbol(symbol) => symbol,
+            _ => unreachable!("new_symbol_value must create Symbol"),
+        };
+        self.well_known_symbols.insert(name, symbol.clone());
+        Value::Symbol(symbol)
+    }
+
+    fn eval_regexp_static_method(
+        &mut self,
+        method: RegExpStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            RegExpStaticMethod::Escape => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp.escape requires exactly one argument".into(),
+                    ));
+                }
+                let value = self.eval_expr(&args[0], env, event_param, event)?;
+                Ok(Value::String(regex::escape(&value.as_string())))
+            }
+        }
+    }
+
+    fn eval_string_match(&mut self, value: &str, pattern: Value) -> Result<Value> {
+        let regex = if let Value::RegExp(regex) = pattern {
+            regex
+        } else {
+            let compiled = Self::new_regex_from_values(&pattern, None)?;
+            match compiled {
+                Value::RegExp(regex) => regex,
+                _ => unreachable!("RegExp constructor must return a RegExp"),
+            }
+        };
+
+        let global = regex.borrow().global;
+        if global {
+            let compiled = regex.borrow().compiled.clone();
+            let matches = compiled
+                .find_iter(value)
+                .map(|m| Value::String(m.as_str().to_string()))
+                .collect::<Vec<_>>();
+            regex.borrow_mut().last_index = 0;
+            if matches.is_empty() {
+                Ok(Value::Null)
+            } else {
+                Ok(Self::new_array_value(matches))
+            }
+        } else {
+            let Some(captures) = Self::regex_exec(&regex, value)? else {
+                return Ok(Value::Null);
+            };
+            Ok(Self::new_array_value(
+                captures.into_iter().map(Value::String).collect::<Vec<_>>(),
+            ))
+        }
+    }
+
     fn promise_error_reason(err: Error) -> Value {
         Value::String(format!("{err}"))
     }
@@ -13966,6 +14609,121 @@ impl Harness {
         parts
     }
 
+    fn split_string_with_regex(
+        value: &str,
+        regex: &Rc<RefCell<RegexValue>>,
+        limit: Option<i64>,
+    ) -> Vec<Value> {
+        let compiled = regex.borrow().compiled.clone();
+        let mut parts = compiled
+            .split(value)
+            .map(|part| Value::String(part.to_string()))
+            .collect::<Vec<_>>();
+        if let Some(limit) = limit {
+            if limit == 0 {
+                parts.clear();
+            } else if limit > 0 {
+                parts.truncate(limit as usize);
+            }
+        }
+        parts
+    }
+
+    fn expand_regex_replacement(template: &str, captures: &Captures<'_>) -> String {
+        let chars = template.chars().collect::<Vec<_>>();
+        let mut i = 0usize;
+        let mut out = String::new();
+        while i < chars.len() {
+            if chars[i] != '$' {
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            if i + 1 >= chars.len() {
+                out.push('$');
+                i += 1;
+                continue;
+            }
+            let next = chars[i + 1];
+            match next {
+                '$' => {
+                    out.push('$');
+                    i += 2;
+                }
+                '&' => {
+                    if let Some(full) = captures.get(0) {
+                        out.push_str(full.as_str());
+                    }
+                    i += 2;
+                }
+                '0'..='9' => {
+                    let mut idx = (next as u8 - b'0') as usize;
+                    let mut consumed = 2usize;
+                    if i + 2 < chars.len() && chars[i + 2].is_ascii_digit() {
+                        let candidate = idx * 10 + (chars[i + 2] as u8 - b'0') as usize;
+                        if captures.get(candidate).is_some() {
+                            idx = candidate;
+                            consumed = 3;
+                        }
+                    }
+                    if idx > 0 {
+                        if let Some(group) = captures.get(idx) {
+                            out.push_str(group.as_str());
+                        }
+                    } else {
+                        out.push('$');
+                        out.push('0');
+                    }
+                    i += consumed;
+                }
+                _ => {
+                    out.push('$');
+                    out.push(next);
+                    i += 2;
+                }
+            }
+        }
+        out
+    }
+
+    fn replace_string_with_regex(
+        value: &str,
+        regex: &Rc<RefCell<RegexValue>>,
+        replacement: &str,
+    ) -> String {
+        let (compiled, global) = {
+            let regex = regex.borrow();
+            (regex.compiled.clone(), regex.global)
+        };
+
+        if global {
+            let mut out = String::new();
+            let mut last_end = 0usize;
+            for captures in compiled.captures_iter(value) {
+                let Some(full) = captures.get(0) else {
+                    continue;
+                };
+                out.push_str(&value[last_end..full.start()]);
+                out.push_str(&Self::expand_regex_replacement(replacement, &captures));
+                last_end = full.end();
+            }
+            out.push_str(&value[last_end..]);
+            out
+        } else if let Some(captures) = compiled.captures(value) {
+            if let Some(full) = captures.get(0) {
+                let mut out = String::new();
+                out.push_str(&value[..full.start()]);
+                out.push_str(&Self::expand_regex_replacement(replacement, &captures));
+                out.push_str(&value[full.end()..]);
+                out
+            } else {
+                value.to_string()
+            }
+        } else {
+            value.to_string()
+        }
+    }
+
     fn string_index_of(value: &str, search: &str, start_char_idx: usize) -> Option<usize> {
         let start_byte = Self::char_index_to_byte(value, start_char_idx);
         let pos = value.get(start_byte..)?.find(search)?;
@@ -14269,7 +15027,10 @@ impl Harness {
             | Value::PromiseConstructor
             | Value::MapConstructor
             | Value::SetConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
             | Value::PromiseCapability(_)
+            | Value::Symbol(_)
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -14633,7 +15394,10 @@ impl Harness {
             Value::PromiseConstructor => 0,
             Value::MapConstructor => 0,
             Value::SetConstructor => 0,
+            Value::SymbolConstructor => 0,
+            Value::RegExpConstructor => 0,
             Value::PromiseCapability(_) => 0,
+            Value::Symbol(_) => 0,
             Value::RegExp(_) => 0,
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
@@ -16402,11 +17166,8 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
             return Ok(None);
         };
         Expr::String(prop)
-    } else if cursor.consume_byte(b'[') {
-        cursor.skip_ws();
-        let key_src = cursor.read_until_byte(b']')?;
-        cursor.skip_ws();
-        cursor.expect_byte(b']')?;
+    } else if cursor.peek() == Some(b'[') {
+        let key_src = cursor.read_balanced_block(b'[', b']')?;
         let key_src = key_src.trim();
         if key_src.is_empty() {
             return Err(Error::ScriptParse("object assignment key cannot be empty".into()));
@@ -17422,6 +18183,10 @@ fn parse_expr(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_regexp_static_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(handler_expr) = parse_function_expr(src)? {
         return Ok(handler_expr);
     }
@@ -17826,7 +18591,11 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
 }
 
 fn parse_mul_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     if let Some(expr) = parse_regex_method_expr(src)? {
         return Ok(expr);
     }
@@ -18009,7 +18778,11 @@ fn parse_pow_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_unary_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     if let Some(rest) = strip_keyword_operator(src, "typeof") {
         let inner = parse_unary_expr(rest)?;
         return Ok(Expr::TypeOf(Box::new(inner)));
@@ -18158,6 +18931,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_set_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_symbol_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_regexp_static_expr(src)? {
         return Ok(expr);
     }
 
@@ -18549,7 +19330,10 @@ fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
         Err(_) => return Ok(None),
     };
     cursor.skip_ws();
-    if cursor.eof() && matches!(target, DomQuery::Var(_)) {
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    if matches!(target, DomQuery::Var(_)) {
         return Ok(None);
     }
     Ok(Some(target))
@@ -18779,16 +19563,15 @@ fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
 fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
     let start = cursor.i;
     cursor.skip_ws();
-    if !cursor.consume_ascii("new") {
-        return Ok(None);
-    }
-    if let Some(next) = cursor.peek() {
-        if is_ident_char(next) {
-            cursor.i = start;
-            return Ok(None);
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                cursor.i = start;
+                return Ok(None);
+            }
         }
+        cursor.skip_ws();
     }
-    cursor.skip_ws();
 
     if cursor.consume_ascii("window") {
         cursor.skip_ws();
@@ -18810,6 +19593,10 @@ fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<E
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        cursor.i = start;
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let raw_args = split_top_level_by_char(&args_src, b',');
     let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
@@ -18818,23 +19605,27 @@ fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<E
         raw_args
     };
 
-    if args.is_empty() || args.len() > 2 {
+    if args.len() > 2 {
         return Err(Error::ScriptParse(
-            "new RegExp requires one or two arguments".into(),
+            "RegExp supports up to two arguments".into(),
         ));
     }
-    if args[0].trim().is_empty() {
+    if !args.is_empty() && args[0].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "new RegExp pattern argument cannot be empty".into(),
+            "RegExp pattern argument cannot be empty".into(),
         ));
     }
     if args.len() == 2 && args[1].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "new RegExp flags argument cannot be empty".into(),
+            "RegExp flags argument cannot be empty".into(),
         ));
     }
 
-    let pattern = Box::new(parse_expr(args[0].trim())?);
+    let pattern = if args.is_empty() {
+        Box::new(Expr::String(String::new()))
+    } else {
+        Box::new(parse_expr(args[0].trim())?)
+    };
     let flags = if args.len() == 2 {
         Some(Box::new(parse_expr(args[1].trim())?))
     } else {
@@ -18842,6 +19633,66 @@ fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<E
     };
 
     Ok(Some(Expr::RegexNew { pattern, flags }))
+}
+
+fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("RegExp") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if member != "escape" {
+            return Ok(None);
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() != 1 || args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "RegExp.escape requires exactly one argument".into(),
+            ));
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::RegExpStaticMethod {
+            method: RegExpStaticMethod::Escape,
+            args: vec![parse_expr(args[0].trim())?],
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::RegExpConstructor))
 }
 
 fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
@@ -18912,12 +19763,13 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
-    let receiver = if let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? {
-        Expr::RegexLiteral { pattern, flags }
+    let (receiver, receiver_is_identifier) =
+        if let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? {
+            (Expr::RegexLiteral { pattern, flags }, false)
     } else if let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? {
-        expr
+        (expr, false)
     } else if let Some(name) = cursor.parse_identifier() {
-        Expr::Var(name)
+        (Expr::Var(name), true)
     } else {
         return Ok(None);
     };
@@ -18930,19 +19782,33 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let Some(method) = cursor.parse_identifier() else {
         return Ok(None);
     };
-    if !matches!(method.as_str(), "test" | "exec") {
+    if !matches!(method.as_str(), "test" | "exec" | "toString") {
         return Ok(None);
     }
     cursor.skip_ws();
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 || args[0].trim().is_empty() {
-        return Err(Error::ScriptParse(format!(
-            "RegExp.{} requires exactly one argument",
-            method
-        )));
-    }
-    let input = Box::new(parse_expr(args[0].trim())?);
+    let input = match method.as_str() {
+        "test" | "exec" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "RegExp.{} requires exactly one argument",
+                    method
+                )));
+            }
+            Some(Box::new(parse_expr(args[0].trim())?))
+        }
+        "toString" => {
+            if !(args.len() == 1 && args[0].trim().is_empty()) {
+                if receiver_is_identifier {
+                    return Ok(None);
+                }
+                return Err(Error::ScriptParse("RegExp.toString does not take arguments".into()));
+            }
+            None
+        }
+        _ => return Ok(None),
+    };
 
     cursor.skip_ws();
     if !cursor.eof() {
@@ -18950,10 +19816,17 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     let regex = Box::new(receiver);
-    if method == "test" {
-        Ok(Some(Expr::RegexTest { regex, input }))
-    } else {
-        Ok(Some(Expr::RegexExec { regex, input }))
+    match method.as_str() {
+        "test" => Ok(Some(Expr::RegexTest {
+            regex,
+            input: input.expect("validated"),
+        })),
+        "exec" => Ok(Some(Expr::RegexExec {
+            regex,
+            input: input.expect("validated"),
+        })),
+        "toString" => Ok(Some(Expr::RegexToString { regex })),
+        _ => Ok(None),
     }
 }
 
@@ -19014,6 +19887,7 @@ fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<Str
         }
     }
     cursor.skip_ws();
+
     if !cursor.consume_byte(b'.') {
         return Ok(None);
     }
@@ -20218,6 +21092,162 @@ fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::SetConstructor))
 }
 
+fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Symbol") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "Symbol supports zero or one argument".into(),
+            ));
+        }
+        if args.len() == 1 && args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "Symbol description argument cannot be empty".into(),
+            ));
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::SymbolConstruct {
+            description: if args.is_empty() {
+                None
+            } else {
+                Some(Box::new(parse_expr(args[0].trim())?))
+            },
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::SymbolConstruct {
+                description: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+
+        if cursor.peek() == Some(b'(') {
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            let method = match member.as_str() {
+                "for" => {
+                    if args.len() != 1 || args[0].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "Symbol.for requires exactly one argument".into(),
+                        ));
+                    }
+                    SymbolStaticMethod::For
+                }
+                "keyFor" => {
+                    if args.len() != 1 || args[0].trim().is_empty() {
+                        return Err(Error::ScriptParse(
+                            "Symbol.keyFor requires exactly one argument".into(),
+                        ));
+                    }
+                    SymbolStaticMethod::KeyFor
+                }
+                _ => return Ok(None),
+            };
+
+            let mut parsed = Vec::with_capacity(args.len());
+            for arg in args {
+                parsed.push(parse_expr(arg.trim())?);
+            }
+            cursor.skip_ws();
+            if !cursor.eof() {
+                return Ok(None);
+            }
+            return Ok(Some(Expr::SymbolStaticMethod {
+                method,
+                args: parsed,
+            }));
+        }
+
+        let property = match member.as_str() {
+            "asyncDispose" => SymbolStaticProperty::AsyncDispose,
+            "asyncIterator" => SymbolStaticProperty::AsyncIterator,
+            "dispose" => SymbolStaticProperty::Dispose,
+            "hasInstance" => SymbolStaticProperty::HasInstance,
+            "isConcatSpreadable" => SymbolStaticProperty::IsConcatSpreadable,
+            "iterator" => SymbolStaticProperty::Iterator,
+            "match" => SymbolStaticProperty::Match,
+            "matchAll" => SymbolStaticProperty::MatchAll,
+            "replace" => SymbolStaticProperty::Replace,
+            "search" => SymbolStaticProperty::Search,
+            "species" => SymbolStaticProperty::Species,
+            "split" => SymbolStaticProperty::Split,
+            "toPrimitive" => SymbolStaticProperty::ToPrimitive,
+            "toStringTag" => SymbolStaticProperty::ToStringTag,
+            "unscopables" => SymbolStaticProperty::Unscopables,
+            _ => return Ok(None),
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::SymbolStaticProperty(property)));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::SymbolConstructor))
+}
+
 fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -21008,6 +22038,7 @@ fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
     cursor.skip_ws();
+
     if !cursor.consume_byte(b'.') {
         return Ok(None);
     }
@@ -21089,7 +22120,7 @@ fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(String, Expr)>>> {
+fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(ObjectLiteralKey, Expr)>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'{') {
@@ -21130,15 +22161,23 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<(String, Expr)>>> {
             ));
         }
 
-        let key = if (key_src.starts_with('\'') && key_src.ends_with('\''))
+        let key = if key_src.starts_with('[') && key_src.ends_with(']') && key_src.len() >= 2 {
+            let computed_src = key_src[1..key_src.len() - 1].trim();
+            if computed_src.is_empty() {
+                return Err(Error::ScriptParse(
+                    "object literal computed key cannot be empty".into(),
+                ));
+            }
+            ObjectLiteralKey::Computed(Box::new(parse_expr(computed_src)?))
+        } else if (key_src.starts_with('\'') && key_src.ends_with('\''))
             || (key_src.starts_with('"') && key_src.ends_with('"'))
         {
-            parse_string_literal_exact(key_src)?
+            ObjectLiteralKey::Static(parse_string_literal_exact(key_src)?)
         } else if is_ident(key_src) {
-            key_src.to_string()
+            ObjectLiteralKey::Static(key_src.to_string())
         } else {
             return Err(Error::ScriptParse(
-                "object literal key must be identifier or string literal".into(),
+                "object literal key must be identifier, string literal, or computed key".into(),
             ));
         };
 
@@ -21230,6 +22269,38 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
     cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "Object supports zero or one argument".into(),
+            ));
+        }
+        if args.len() == 1 && args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "Object argument cannot be empty".into(),
+            ));
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ObjectConstruct {
+            value: if args.is_empty() {
+                None
+            } else {
+                Some(Box::new(parse_expr(args[0].trim())?))
+            },
+        }));
+    }
+
     if !cursor.consume_byte(b'.') {
         return Ok(None);
     }
@@ -21248,6 +22319,14 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     };
 
     let expr = match method.as_str() {
+        "getOwnPropertySymbols" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.getOwnPropertySymbols requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectGetOwnPropertySymbols(Box::new(parse_expr(args[0].trim())?))
+        }
         "keys" => {
             if args.len() != 1 || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
@@ -21565,11 +22644,8 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     };
     cursor.skip_ws();
 
-    if cursor.consume_byte(b'[') {
-        cursor.skip_ws();
-        let index_src = cursor.read_until_byte(b']')?;
-        cursor.skip_ws();
-        cursor.expect_byte(b']')?;
+    if cursor.peek() == Some(b'[') {
+        let index_src = cursor.read_balanced_block(b'[', b']')?;
         cursor.skip_ws();
         if !cursor.eof() {
             return Ok(None);
@@ -22106,6 +23182,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 | "endsWith"
                 | "slice"
                 | "substring"
+                | "match"
                 | "split"
                 | "replace"
                 | "indexOf"
@@ -22283,6 +23360,17 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                     value: base,
                     start,
                     end,
+                }
+            }
+            "match" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "match requires exactly one argument".into(),
+                    ));
+                }
+                Expr::StringMatch {
+                    value: base,
+                    pattern: Box::new(parse_expr(args[0].trim())?),
                 }
             }
             "split" => {
@@ -32371,6 +33459,276 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn regexp_constructor_properties_and_escape_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = RegExp('a.', 'gimsydu');
+            re.lastIndex = 3.8;
+            const info =
+              re.source + ':' + re.flags + ':' +
+              re.global + ':' + re.ignoreCase + ':' + re.multiline + ':' +
+              re.dotAll + ':' + re.sticky + ':' + re.hasIndices + ':' +
+              re.unicode + ':' + re.unicodeSets + ':' +
+              re.lastIndex + ':' + (re.constructor === RegExp) + ':' + typeof RegExp;
+            const escaped = RegExp.escape('a+b*c?');
+            const escapedWindow = window.RegExp.escape('x.y');
+            document.getElementById('result').textContent =
+              info + '|' + escaped + '|' + escapedWindow;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "a.:gimsydu:true:true:true:true:true:true:true:false:3:true:function|a\\+b\\*c\\?|x\\.y",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn regexp_string_match_split_and_replace_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = /(\w+)\s(\w+)/;
+            const changed = 'Maria Cruz'.replace(re, '$2, $1');
+            const text = 'Some text\nAnd some more\r\nAnd yet\nThis is the end';
+            const lines = text.split(/\r?\n/);
+            const multi = 'Please yes\nmake my day!';
+            const noDotAll = multi.match(/yes.*day/) === null;
+            const withDotAll = multi.match(/yes.*day/s);
+            const withDotAllOk = withDotAll[0] === 'yes\nmake my day';
+            const order = 'Let me get some bacon and eggs, please';
+            const picks = order.match(new RegExp('\\b(bacon|eggs)\\b', 'g'));
+
+            document.getElementById('result').textContent =
+              changed + '|' +
+              lines[0] + ':' + lines[1] + ':' + lines[2] + ':' + lines[3] + '|' +
+              noDotAll + ':' + withDotAllOk + '|' +
+              picks[0] + ':' + picks[1];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "Cruz, Maria|Some text:And some more:And yet:This is the end|true:true|bacon:eggs",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn regexp_constructor_call_without_new_and_to_string_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = RegExp(/ab+c/, 'i');
+            const text = re.toString();
+            const ok = re.test('xxABBCyy');
+            const hit = re.exec('xxABBCyy');
+            document.getElementById('result').textContent = text + ':' + ok + ':' + hit[0];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "/ab+c/i:true:ABBC")?;
+        Ok(())
+    }
+
+    #[test]
+    fn string_ends_with_rejects_regexp_argument() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            'foobar'.endsWith(/bar/);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("endsWith should reject RegExp arguments");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(
+                msg.contains("must not be a regular expression"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected endsWith error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_constructor_and_typeof_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sym1 = Symbol();
+            const sym2 = Symbol('foo');
+            const sym3 = Symbol('foo');
+            document.getElementById('result').textContent =
+              (typeof sym1) + ':' +
+              (typeof sym2) + ':' +
+              (typeof Symbol.iterator) + ':' +
+              (sym2 === sym3) + ':' +
+              (sym1.description === undefined) + ':' +
+              sym2.description + ':' +
+              (Symbol.iterator === Symbol.iterator);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "symbol:symbol:symbol:false:true:foo:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_for_and_key_for_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const reg1 = Symbol.for('tokenString');
+            const reg2 = Symbol.for('tokenString');
+            const local = Symbol('tokenString');
+            document.getElementById('result').textContent =
+              (reg1 === reg2) + ':' +
+              (reg1 === local) + ':' +
+              Symbol.keyFor(reg1) + ':' +
+              (Symbol.keyFor(local) === undefined) + ':' +
+              (Symbol.keyFor(Symbol.for('tokenString')) === 'tokenString') + ':' +
+              (Symbol.keyFor(Symbol.iterator) === undefined);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:false:tokenString:true:true:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_properties_and_get_own_property_symbols_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = {};
+            obj[Symbol('a')] = 'a';
+            obj[Symbol.for('b')] = 'b';
+            obj['c'] = 'c';
+            obj.d = 'd';
+
+            const keys = Object.keys(obj);
+            const values = Object.values(obj);
+            const entries = Object.entries(obj);
+            const symbols = Object.getOwnPropertySymbols(obj);
+            const first = obj[symbols[0]];
+            const second = obj[symbols[1]];
+
+            document.getElementById('result').textContent =
+              keys.join(',') + '|' +
+              values.join(',') + '|' +
+              entries.length + '|' +
+              symbols.length + '|' +
+              first + ':' + second + '|' +
+              JSON.stringify(obj);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "c,d|c,d|2|2|a:b|{\"c\":\"c\",\"d\":\"d\"}")?;
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_wrapper_objects_can_be_used_as_property_keys() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sym = Symbol('foo');
+            const obj = { [sym]: 1 };
+            document.getElementById('result').textContent =
+              (typeof sym) + ':' +
+              (typeof Object(sym)) + ':' +
+              obj[sym] + ':' +
+              obj[Object(sym)] + ':' +
+              (Object(sym) == sym);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "symbol:object:1:1:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_constructor_and_key_for_errors_are_reported() -> Result<()> {
+        let err = Harness::from_html("<script>new Symbol();</script>")
+            .expect_err("new Symbol should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("Symbol is not a constructor")),
+            other => panic!("unexpected new Symbol error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>Symbol.keyFor('x');</script>")
+            .expect_err("Symbol.keyFor non-symbol should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("Symbol.keyFor argument must be a Symbol")),
+            other => panic!("unexpected Symbol.keyFor error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbol_implicit_conversion_errors_are_reported() {
+        let err = Harness::from_html("<script>const sym = Symbol('foo'); sym + 'bar';</script>")
+            .expect_err("symbol string concatenation should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Cannot convert a Symbol value to a string"))
+            }
+            other => panic!("unexpected symbol concat error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const sym = Symbol('foo'); +sym;</script>")
+            .expect_err("unary plus on symbol should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Cannot convert a Symbol value to a number"))
+            }
+            other => panic!("unexpected unary plus symbol error: {other:?}"),
+        }
     }
 
     #[test]
