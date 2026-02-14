@@ -3140,6 +3140,107 @@ fn parse_selector_attr_value(src: &str, start: usize) -> Result<(String, usize)>
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct ArrayBufferValue {
+    bytes: Vec<u8>,
+    max_byte_length: Option<usize>,
+}
+
+impl ArrayBufferValue {
+    fn byte_length(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypedArrayKind {
+    Int8,
+    Uint8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float16,
+    Float32,
+    Float64,
+    BigInt64,
+    BigUint64,
+}
+
+impl TypedArrayKind {
+    fn bytes_per_element(&self) -> usize {
+        match self {
+            Self::Int8 | Self::Uint8 | Self::Uint8Clamped => 1,
+            Self::Int16 | Self::Uint16 | Self::Float16 => 2,
+            Self::Int32 | Self::Uint32 | Self::Float32 => 4,
+            Self::Float64 | Self::BigInt64 | Self::BigUint64 => 8,
+        }
+    }
+
+    fn is_bigint(&self) -> bool {
+        matches!(self, Self::BigInt64 | Self::BigUint64)
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Int8 => "Int8Array",
+            Self::Uint8 => "Uint8Array",
+            Self::Uint8Clamped => "Uint8ClampedArray",
+            Self::Int16 => "Int16Array",
+            Self::Uint16 => "Uint16Array",
+            Self::Int32 => "Int32Array",
+            Self::Uint32 => "Uint32Array",
+            Self::Float16 => "Float16Array",
+            Self::Float32 => "Float32Array",
+            Self::Float64 => "Float64Array",
+            Self::BigInt64 => "BigInt64Array",
+            Self::BigUint64 => "BigUint64Array",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypedArrayConstructorKind {
+    Concrete(TypedArrayKind),
+    Abstract,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TypedArrayValue {
+    kind: TypedArrayKind,
+    buffer: Rc<RefCell<ArrayBufferValue>>,
+    byte_offset: usize,
+    fixed_length: Option<usize>,
+}
+
+impl TypedArrayValue {
+    fn observed_length(&self) -> usize {
+        let buffer_len = self.buffer.borrow().byte_length();
+        let bytes_per = self.kind.bytes_per_element();
+        if self.byte_offset >= buffer_len {
+            return 0;
+        }
+
+        let available_bytes = buffer_len - self.byte_offset;
+        if let Some(fixed_length) = self.fixed_length {
+            let fixed_bytes = fixed_length.saturating_mul(bytes_per);
+            if available_bytes < fixed_bytes {
+                0
+            } else {
+                fixed_length
+            }
+        } else {
+            available_bytes / bytes_per
+        }
+    }
+
+    fn observed_byte_length(&self) -> usize {
+        self.observed_length()
+            .saturating_mul(self.kind.bytes_per_element())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum Value {
     String(String),
     Bool(bool),
@@ -3148,6 +3249,10 @@ enum Value {
     BigInt(JsBigInt),
     Array(Rc<RefCell<Vec<Value>>>),
     Object(Rc<RefCell<Vec<(String, Value)>>>),
+    ArrayBuffer(Rc<RefCell<ArrayBufferValue>>),
+    TypedArray(Rc<RefCell<TypedArrayValue>>),
+    TypedArrayConstructor(TypedArrayConstructorKind),
+    ArrayBufferConstructor,
     RegExp(Rc<RefCell<RegexValue>>),
     Date(Rc<RefCell<i64>>),
     Null,
@@ -3210,6 +3315,10 @@ impl Value {
             Self::BigInt(v) => !v.is_zero(),
             Self::Array(_) => true,
             Self::Object(_) => true,
+            Self::ArrayBuffer(_) => true,
+            Self::TypedArray(_) => true,
+            Self::TypedArrayConstructor(_) => true,
+            Self::ArrayBufferConstructor => true,
             Self::RegExp(_) => true,
             Self::Date(_) => true,
             Self::Null => false,
@@ -3249,6 +3358,16 @@ impl Value {
                 out
             }
             Self::Object(_) => "[object Object]".into(),
+            Self::ArrayBuffer(_) => "[object ArrayBuffer]".into(),
+            Self::TypedArray(value) => {
+                let value = value.borrow();
+                format!("[object {}]", value.kind.name())
+            }
+            Self::TypedArrayConstructor(kind) => match kind {
+                TypedArrayConstructorKind::Concrete(kind) => kind.name().to_string(),
+                TypedArrayConstructorKind::Abstract => "TypedArray".to_string(),
+            },
+            Self::ArrayBufferConstructor => "ArrayBuffer".to_string(),
             Self::RegExp(value) => {
                 let value = value.borrow();
                 format!("/{}/{}", value.source, value.flags)
@@ -3538,6 +3657,42 @@ enum Expr {
         method: BigIntInstanceMethod,
         args: Vec<Expr>,
     },
+    ArrayBufferConstruct {
+        byte_length: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    ArrayBufferConstructor,
+    ArrayBufferResize {
+        target: String,
+        new_byte_length: Box<Expr>,
+    },
+    TypedArrayConstructorRef(TypedArrayConstructorKind),
+    TypedArrayConstruct {
+        kind: TypedArrayKind,
+        args: Vec<Expr>,
+        called_with_new: bool,
+    },
+    TypedArrayConstructWithCallee {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+        called_with_new: bool,
+    },
+    TypedArrayStaticBytesPerElement(TypedArrayKind),
+    TypedArrayStaticMethod {
+        kind: TypedArrayKind,
+        method: TypedArrayStaticMethod,
+        args: Vec<Expr>,
+    },
+    TypedArrayByteLength(String),
+    TypedArrayByteOffset(String),
+    TypedArrayBuffer(String),
+    TypedArrayBytesPerElement(String),
+    TypedArrayMethod {
+        target: String,
+        method: TypedArrayInstanceMethod,
+        args: Vec<Expr>,
+    },
     EncodeUri(Box<Expr>),
     EncodeUriComponent(Box<Expr>),
     DecodeUri(Box<Expr>),
@@ -3567,6 +3722,8 @@ enum Expr {
         object: Box<Expr>,
         key: Box<Expr>,
     },
+    ObjectGetPrototypeOf(Box<Expr>),
+    ObjectFreeze(Box<Expr>),
     ObjectHasOwnProperty {
         target: String,
         key: Box<Expr>,
@@ -3893,6 +4050,35 @@ enum NumberInstanceMethod {
     ToPrecision,
     ToString,
     ValueOf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypedArrayStaticMethod {
+    From,
+    Of,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypedArrayInstanceMethod {
+    At,
+    CopyWithin,
+    Entries,
+    Fill,
+    FindIndex,
+    FindLast,
+    FindLastIndex,
+    IndexOf,
+    Keys,
+    LastIndexOf,
+    ReduceRight,
+    Reverse,
+    Set,
+    Sort,
+    Subarray,
+    ToReversed,
+    ToSorted,
+    Values,
+    With,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5741,10 +5927,42 @@ impl Harness {
                     env.insert(name.clone(), next);
                 }
                 Stmt::ObjectAssign { target, key, expr } => {
-                    let object = self.resolve_object_from_env(env, target)?;
-                    let key = self.eval_expr(key, env, event_param, event)?.as_string();
                     let value = self.eval_expr(expr, env, event_param, event)?;
-                    Self::object_set_entry(&mut object.borrow_mut(), key, value);
+                    let key = self.eval_expr(key, env, event_param, event)?;
+                    match env.get(target) {
+                        Some(Value::Object(object)) => {
+                            let key = key.as_string();
+                            Self::object_set_entry(&mut object.borrow_mut(), key, value);
+                        }
+                        Some(Value::Array(values)) => {
+                            let Some(index) = self.value_as_index(&key) else {
+                                continue;
+                            };
+                            let mut values = values.borrow_mut();
+                            if index >= values.len() {
+                                values.resize(index + 1, Value::Undefined);
+                            }
+                            values[index] = value;
+                        }
+                        Some(Value::TypedArray(values)) => {
+                            let Some(index) = self.value_as_index(&key) else {
+                                continue;
+                            };
+                            self.typed_array_set_index(values, index, value)?;
+                        }
+                        Some(_) => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not an object",
+                                target
+                            )))
+                        }
+                        None => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {}",
+                                target
+                            )))
+                        }
+                    }
                 }
                 Stmt::FormDataAppend {
                     target_var,
@@ -6607,6 +6825,91 @@ impl Harness {
                 method,
                 args,
             } => self.eval_bigint_instance_method(*method, value, args, env, event_param, event),
+            Expr::ArrayBufferConstruct {
+                byte_length,
+                options,
+                called_with_new,
+            } => self.eval_array_buffer_construct(
+                byte_length,
+                options,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::ArrayBufferConstructor => Ok(Value::ArrayBufferConstructor),
+            Expr::ArrayBufferResize {
+                target,
+                new_byte_length,
+            } => {
+                let new_byte_length = self.eval_expr(new_byte_length, env, event_param, event)?;
+                let new_byte_length = Self::value_to_i64(&new_byte_length);
+                self.resize_array_buffer_in_env(env, target, new_byte_length)?;
+                Ok(Value::Undefined)
+            }
+            Expr::TypedArrayConstructorRef(kind) => Ok(Value::TypedArrayConstructor(kind.clone())),
+            Expr::TypedArrayConstruct {
+                kind,
+                args,
+                called_with_new,
+            } => self.eval_typed_array_construct(*kind, args, *called_with_new, env, event_param, event),
+            Expr::TypedArrayConstructWithCallee {
+                callee,
+                args,
+                called_with_new,
+            } => self.eval_typed_array_construct_with_callee(
+                callee,
+                args,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::TypedArrayStaticBytesPerElement(kind) => {
+                Ok(Value::Number(kind.bytes_per_element() as i64))
+            }
+            Expr::TypedArrayStaticMethod { kind, method, args } => {
+                self.eval_typed_array_static_method(*kind, *method, args, env, event_param, event)
+            }
+            Expr::TypedArrayByteLength(target) => {
+                match env.get(target) {
+                    Some(Value::TypedArray(array)) => {
+                        Ok(Value::Number(array.borrow().observed_byte_length() as i64))
+                    }
+                    Some(Value::ArrayBuffer(buffer)) => {
+                        Ok(Value::Number(buffer.borrow().byte_length() as i64))
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                }
+            }
+            Expr::TypedArrayByteOffset(target) => {
+                let array = self.resolve_typed_array_from_env(env, target)?;
+                let byte_offset = if array.borrow().observed_length() == 0
+                    && array.borrow().byte_offset >= array.borrow().buffer.borrow().byte_length()
+                {
+                    0
+                } else {
+                    array.borrow().byte_offset
+                };
+                Ok(Value::Number(byte_offset as i64))
+            }
+            Expr::TypedArrayBuffer(target) => {
+                let array = self.resolve_typed_array_from_env(env, target)?;
+                Ok(Value::ArrayBuffer(array.borrow().buffer.clone()))
+            }
+            Expr::TypedArrayBytesPerElement(target) => {
+                let array = self.resolve_typed_array_from_env(env, target)?;
+                Ok(Value::Number(array.borrow().kind.bytes_per_element() as i64))
+            }
+            Expr::TypedArrayMethod {
+                target,
+                method,
+                args,
+            } => self.eval_typed_array_method(target, *method, args, env, event_param, event),
             Expr::EncodeUri(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::String(encode_uri_like(&value.as_string(), false)))
@@ -6757,6 +7060,34 @@ impl Harness {
                     )),
                 }
             }
+            Expr::ObjectGetPrototypeOf(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                match value {
+                    Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) => {
+                        Ok(Value::TypedArrayConstructor(
+                            TypedArrayConstructorKind::Abstract,
+                        ))
+                    }
+                    Value::TypedArray(_) => Ok(Value::TypedArrayConstructor(
+                        TypedArrayConstructorKind::Abstract,
+                    )),
+                    _ => Ok(Value::Object(Rc::new(RefCell::new(Vec::new())))),
+                }
+            }
+            Expr::ObjectFreeze(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                match value {
+                    Value::TypedArray(array) => {
+                        if array.borrow().observed_length() > 0 {
+                            return Err(Error::ScriptRuntime(
+                                "Cannot freeze array buffer views with elements".into(),
+                            ));
+                        }
+                        Ok(Value::TypedArray(array))
+                    }
+                    other => Ok(other),
+                }
+            }
             Expr::ObjectHasOwnProperty { target, key } => {
                 let key = self.eval_expr(key, env, event_param, event)?.as_string();
                 match env.get(target) {
@@ -6784,6 +7115,9 @@ impl Harness {
             Expr::ArrayLength(target) => {
                 match env.get(target) {
                     Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
+                    Some(Value::TypedArray(values)) => {
+                        Ok(Value::Number(values.borrow().observed_length() as i64))
+                    }
                     Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                     Some(_) => Err(Error::ScriptRuntime(format!(
@@ -6804,6 +7138,9 @@ impl Harness {
                         .get(index)
                         .cloned()
                         .unwrap_or(Value::Undefined)),
+                    Some(Value::TypedArray(values)) => {
+                        self.typed_array_get_index(values, index)
+                    }
                     Some(Value::NodeList(nodes)) => Ok(nodes
                         .get(index)
                         .copied()
@@ -6857,155 +7194,353 @@ impl Harness {
                 Ok(Value::Number(values.len() as i64))
             }
             Expr::ArrayMap { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                let mut out = Vec::with_capacity(input.len());
-                for (idx, item) in input.into_iter().enumerate() {
-                    let mapped = self.execute_array_callback(
-                        callback,
-                        &[
-                            item,
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
-                    out.push(mapped);
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        let mut out = Vec::with_capacity(input.len());
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let mapped = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            out.push(mapped);
+                        }
+                        Ok(Self::new_array_value(out))
+                    }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        let kind = values.borrow().kind;
+                        let mut out = Vec::with_capacity(input.len());
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let mapped = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            out.push(mapped);
+                        }
+                        self.new_typed_array_from_values(kind, &out)
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Self::new_array_value(out))
             }
             Expr::ArrayFilter { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                let mut out = Vec::new();
-                for (idx, item) in input.into_iter().enumerate() {
-                    let keep = self.execute_array_callback(
-                        callback,
-                        &[
-                            item.clone(),
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
-                    if keep.truthy() {
-                        out.push(item);
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        let mut out = Vec::new();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let keep = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item.clone(),
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if keep.truthy() {
+                                out.push(item);
+                            }
+                        }
+                        Ok(Self::new_array_value(out))
                     }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        let kind = values.borrow().kind;
+                        let mut out = Vec::new();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let keep = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item.clone(),
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if keep.truthy() {
+                                out.push(item);
+                            }
+                        }
+                        self.new_typed_array_from_values(kind, &out)
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Self::new_array_value(out))
             }
             Expr::ArrayReduce {
                 target,
                 callback,
                 initial,
             } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                let mut start_index = 0usize;
-                let mut acc = if let Some(initial) = initial {
-                    self.eval_expr(initial, env, event_param, event)?
-                } else {
-                    let Some(first) = input.first().cloned() else {
-                        return Err(Error::ScriptRuntime(
-                            "reduce of empty array with no initial value".into(),
-                        ));
-                    };
-                    start_index = 1;
-                    first
-                };
-                for (idx, item) in input.into_iter().enumerate().skip(start_index) {
-                    acc = self.execute_array_callback(
-                        callback,
-                        &[
-                            acc,
-                            item,
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        let mut start_index = 0usize;
+                        let mut acc = if let Some(initial) = initial {
+                            self.eval_expr(initial, env, event_param, event)?
+                        } else {
+                            let Some(first) = input.first().cloned() else {
+                                return Err(Error::ScriptRuntime(
+                                    "reduce of empty array with no initial value".into(),
+                                ));
+                            };
+                            start_index = 1;
+                            first
+                        };
+                        for (idx, item) in input.into_iter().enumerate().skip(start_index) {
+                            acc = self.execute_array_callback(
+                                callback,
+                                &[
+                                    acc,
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                        }
+                        Ok(acc)
+                    }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        let mut start_index = 0usize;
+                        let mut acc = if let Some(initial) = initial {
+                            self.eval_expr(initial, env, event_param, event)?
+                        } else {
+                            let Some(first) = input.first().cloned() else {
+                                return Err(Error::ScriptRuntime(
+                                    "reduce of empty array with no initial value".into(),
+                                ));
+                            };
+                            start_index = 1;
+                            first
+                        };
+                        for (idx, item) in input.into_iter().enumerate().skip(start_index) {
+                            acc = self.execute_array_callback(
+                                callback,
+                                &[
+                                    acc,
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                        }
+                        Ok(acc)
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(acc)
             }
             Expr::ArrayForEach { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                for (idx, item) in input.into_iter().enumerate() {
-                    let _ = self.execute_array_callback(
-                        callback,
-                        &[
-                            item,
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let _ = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let _ = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Value::Undefined)
             }
             Expr::ArrayFind { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                for (idx, item) in input.into_iter().enumerate() {
-                    let matched = self.execute_array_callback(
-                        callback,
-                        &[
-                            item.clone(),
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
-                    if matched.truthy() {
-                        return Ok(item);
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item.clone(),
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if matched.truthy() {
+                                return Ok(item);
+                            }
+                        }
+                        Ok(Value::Undefined)
                     }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item.clone(),
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if matched.truthy() {
+                                return Ok(item);
+                            }
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Value::Undefined)
             }
             Expr::ArraySome { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                for (idx, item) in input.into_iter().enumerate() {
-                    let matched = self.execute_array_callback(
-                        callback,
-                        &[
-                            item,
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
-                    if matched.truthy() {
-                        return Ok(Value::Bool(true));
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if matched.truthy() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
                     }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if matched.truthy() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Value::Bool(false))
             }
             Expr::ArrayEvery { target, callback } => {
-                let values = self.resolve_array_from_env(env, target)?;
-                let input = values.borrow().clone();
-                for (idx, item) in input.into_iter().enumerate() {
-                    let matched = self.execute_array_callback(
-                        callback,
-                        &[
-                            item,
-                            Value::Number(idx as i64),
-                            Value::Array(values.clone()),
-                        ],
-                        env,
-                        event,
-                    )?;
-                    if !matched.truthy() {
-                        return Ok(Value::Bool(false));
+                match env.get(target) {
+                    Some(Value::Array(values)) => {
+                        let input = values.borrow().clone();
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if !matched.truthy() {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                        Ok(Value::Bool(true))
                     }
+                    Some(Value::TypedArray(values)) => {
+                        let input = self.typed_array_snapshot(values)?;
+                        for (idx, item) in input.into_iter().enumerate() {
+                            let matched = self.execute_array_callback(
+                                callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::TypedArray(values.clone()),
+                                ],
+                                env,
+                                event,
+                            )?;
+                            if !matched.truthy() {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                        Ok(Value::Bool(true))
+                    }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
                 }
-                Ok(Value::Bool(true))
             }
             Expr::ArrayIncludes {
                 target,
@@ -7028,6 +7563,26 @@ impl Harness {
                         }
                         let start = start.min(len) as usize;
                         for value in values.iter().skip(start) {
+                            if self.strict_equal(value, &search) {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    Some(Value::TypedArray(values)) => {
+                        let values_vec = self.typed_array_snapshot(values)?;
+                        let len = values_vec.len() as i64;
+                        let mut start = from_index
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .unwrap_or(0);
+                        if start < 0 {
+                            start = (len + start).max(0);
+                        }
+                        let start = start.min(len) as usize;
+                        for value in values_vec.iter().skip(start) {
                             if self.strict_equal(value, &search) {
                                 return Ok(Value::Bool(true));
                             }
@@ -7078,6 +7633,27 @@ impl Harness {
                             .unwrap_or(len);
                         let end = end.max(start);
                         Ok(Self::new_array_value(values[start..end].to_vec()))
+                    }
+                    Some(Value::TypedArray(values)) => {
+                        let snapshot = self.typed_array_snapshot(values)?;
+                        let kind = values.borrow().kind;
+                        let len = snapshot.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        self.new_typed_array_from_values(kind, &snapshot[start..end])
                     }
                     Some(Value::String(value)) => {
                         let len = value.chars().count();
@@ -7140,14 +7716,28 @@ impl Harness {
                 Ok(Self::new_array_value(removed))
             }
             Expr::ArrayJoin { target, separator } => {
-                let values = self.resolve_array_from_env(env, target)?;
                 let separator = separator
                     .as_ref()
                     .map(|value| self.eval_expr(value, env, event_param, event))
                     .transpose()?
                     .map(|value| value.as_string())
                     .unwrap_or_else(|| ",".to_string());
-                let values = values.borrow();
+                let values = match env.get(target) {
+                    Some(Value::Array(values)) => values.borrow().clone(),
+                    Some(Value::TypedArray(values)) => self.typed_array_snapshot(values)?,
+                    Some(_) => {
+                        return Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        )))
+                    }
+                    None => {
+                        return Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        )))
+                    }
+                };
                 let mut out = String::new();
                 for (idx, value) in values.iter().enumerate() {
                     if idx > 0 {
@@ -7691,12 +8281,17 @@ impl Harness {
                         Value::BigInt(_) => "bigint",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
+                        Value::TypedArrayConstructor(_) | Value::ArrayBufferConstructor => {
+                            "function"
+                        }
                         Value::Function(_) => "function",
                         Value::Node(_)
                         | Value::NodeList(_)
                         | Value::FormData(_)
                         | Value::Array(_)
                         | Value::Object(_)
+                        | Value::ArrayBuffer(_)
+                        | Value::TypedArray(_)
                         | Value::RegExp(_)
                         | Value::Date(_) => "object",
                     }),
@@ -7709,12 +8304,17 @@ impl Harness {
                             Value::BigInt(_) => "bigint",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
+                            Value::TypedArrayConstructor(_) | Value::ArrayBufferConstructor => {
+                                "function"
+                            }
                             Value::Function(_) => "function",
                             Value::Node(_)
                             | Value::NodeList(_)
                             | Value::FormData(_)
                             | Value::Array(_)
                             | Value::Object(_)
+                            | Value::ArrayBuffer(_)
+                            | Value::TypedArray(_)
                             | Value::RegExp(_)
                             | Value::Date(_) => "object",
                         }
@@ -7976,6 +8576,10 @@ impl Harness {
             value,
             Value::Array(_)
                 | Value::Object(_)
+                | Value::ArrayBuffer(_)
+                | Value::TypedArray(_)
+                | Value::TypedArrayConstructor(_)
+                | Value::ArrayBufferConstructor
                 | Value::RegExp(_)
                 | Value::Date(_)
                 | Value::Node(_)
@@ -7989,6 +8593,10 @@ impl Harness {
         match value {
             Value::Array(_)
             | Value::Object(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::RegExp(_)
             | Value::Date(_)
             | Value::Node(_)
@@ -8007,6 +8615,9 @@ impl Harness {
             Value::Array(values) => self
                 .value_as_index(left)
                 .is_some_and(|index| index < values.borrow().len()),
+            Value::TypedArray(values) => self
+                .value_as_index(left)
+                .is_some_and(|index| index < values.borrow().observed_length()),
             Value::Object(entries) => {
                 let key = left.as_string();
                 entries.borrow().iter().any(|(name, _)| name == &key)
@@ -8024,6 +8635,8 @@ impl Harness {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
+            (Value::TypedArray(left), Value::TypedArray(right)) => Rc::ptr_eq(left, right),
+            (Value::ArrayBuffer(left), Value::ArrayBuffer(right)) => Rc::ptr_eq(left, right),
             (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
             (Value::RegExp(left), Value::RegExp(right)) => Rc::ptr_eq(left, right),
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
@@ -8071,6 +8684,10 @@ impl Harness {
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
+            (Value::TypedArray(l), Value::TypedArray(r)) => Rc::ptr_eq(l, r),
+            (Value::ArrayBuffer(l), Value::ArrayBuffer(r)) => Rc::ptr_eq(l, r),
+            (Value::TypedArrayConstructor(l), Value::TypedArrayConstructor(r)) => l == r,
+            (Value::ArrayBufferConstructor, Value::ArrayBufferConstructor) => true,
             (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
             (Value::RegExp(l), Value::RegExp(r)) => Rc::ptr_eq(l, r),
             (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
@@ -8667,12 +9284,15 @@ impl Harness {
             | Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::Function(_) => Ok(None),
             Value::RegExp(_) => Ok(Some("{}".to_string())),
             Value::Date(v) => Ok(Some(format!(
                 "\"{}\"",
                 Self::json_escape_string(&Self::format_iso_8601_utc(*v.borrow()))
             ))),
+            Value::ArrayBuffer(_) | Value::TypedArray(_) => Ok(Some("{}".to_string())),
             Value::Array(values) => {
                 let ptr = Rc::as_ptr(values) as usize;
                 if array_stack.contains(&ptr) {
@@ -8770,6 +9390,27 @@ impl Harness {
                 let v = v.borrow();
                 Self::new_regex_value(v.source.clone(), v.flags.clone())
             }
+            Value::ArrayBuffer(buffer) => {
+                let buffer = buffer.borrow();
+                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+                    bytes: buffer.bytes.clone(),
+                    max_byte_length: buffer.max_byte_length,
+                }))))
+            }
+            Value::TypedArray(array) => {
+                let array = array.borrow();
+                let buffer = array.buffer.borrow();
+                let cloned_buffer = Rc::new(RefCell::new(ArrayBufferValue {
+                    bytes: buffer.bytes.clone(),
+                    max_byte_length: buffer.max_byte_length,
+                }));
+                Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
+                    kind: array.kind,
+                    buffer: cloned_buffer,
+                    byte_offset: array.byte_offset,
+                    fixed_length: array.fixed_length,
+                }))))
+            }
             Value::Array(values) => {
                 let ptr = Rc::as_ptr(values) as usize;
                 if array_stack.contains(&ptr) {
@@ -8810,6 +9451,8 @@ impl Harness {
             Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::Function(_) => Err(Error::ScriptRuntime(
                 "structuredClone value is not cloneable".into(),
             )),
@@ -9327,6 +9970,10 @@ impl Harness {
                 Self::parse_js_bigint_from_string(&rendered)
             }
             Value::Object(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -9353,6 +10000,10 @@ impl Harness {
             | Value::Float(_)
             | Value::Date(_)
             | Value::Object(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -9503,6 +10154,10 @@ impl Harness {
             Value::String(v) => Self::parse_js_number_from_string(v),
             Value::Date(v) => *v.borrow() as f64,
             Value::Object(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -9907,21 +10562,6 @@ impl Harness {
         }
     }
 
-    fn resolve_object_from_env(
-        &self,
-        env: &HashMap<String, Value>,
-        target: &str,
-    ) -> Result<Rc<RefCell<Vec<(String, Value)>>>> {
-        match env.get(target) {
-            Some(Value::Object(entries)) => Ok(entries.clone()),
-            Some(_) => Err(Error::ScriptRuntime(format!(
-                "variable '{}' is not an object",
-                target
-            ))),
-            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
-        }
-    }
-
     fn resolve_array_from_env(
         &self,
         env: &HashMap<String, Value>,
@@ -9937,6 +10577,1173 @@ impl Harness {
                 "unknown variable: {}",
                 target
             ))),
+        }
+    }
+
+    fn resolve_array_buffer_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<ArrayBufferValue>>> {
+        match env.get(target) {
+            Some(Value::ArrayBuffer(buffer)) => Ok(buffer.clone()),
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not an ArrayBuffer",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+        }
+    }
+
+    fn resolve_typed_array_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<TypedArrayValue>>> {
+        match env.get(target) {
+            Some(Value::TypedArray(array)) => Ok(array.clone()),
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a TypedArray",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+        }
+    }
+
+    fn to_non_negative_usize(value: &Value, label: &str) -> Result<usize> {
+        let n = Self::value_to_i64(value);
+        if n < 0 {
+            return Err(Error::ScriptRuntime(format!(
+                "{label} must be a non-negative integer"
+            )));
+        }
+        usize::try_from(n).map_err(|_| Error::ScriptRuntime(format!("{label} is too large")))
+    }
+
+    fn array_like_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
+        match value {
+            Value::Array(values) => Ok(values.borrow().clone()),
+            Value::TypedArray(values) => self.typed_array_snapshot(values),
+            Value::String(text) => Ok(text
+                .chars()
+                .map(|ch| Value::String(ch.to_string()))
+                .collect::<Vec<_>>()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                let length_value = Self::object_get_entry(&entries, "length")
+                    .unwrap_or(Value::Number(0));
+                let length = Self::to_non_negative_usize(&length_value, "array-like length")?;
+                let mut out = Vec::with_capacity(length);
+                for index in 0..length {
+                    let key = index.to_string();
+                    out.push(Self::object_get_entry(&entries, &key).unwrap_or(Value::Undefined));
+                }
+                Ok(out)
+            }
+            _ => Err(Error::ScriptRuntime(
+                "expected an array-like or iterable source".into(),
+            )),
+        }
+    }
+
+    fn new_array_buffer_value(byte_length: usize, max_byte_length: Option<usize>) -> Value {
+        Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+            bytes: vec![0; byte_length],
+            max_byte_length,
+        })))
+    }
+
+    fn new_typed_array_with_length(&mut self, kind: TypedArrayKind, length: usize) -> Result<Value> {
+        let byte_length = length.saturating_mul(kind.bytes_per_element());
+        let buffer = Rc::new(RefCell::new(ArrayBufferValue {
+            bytes: vec![0; byte_length],
+            max_byte_length: None,
+        }));
+        Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
+            kind,
+            buffer,
+            byte_offset: 0,
+            fixed_length: Some(length),
+        }))))
+    }
+
+    fn new_typed_array_view(
+        &self,
+        kind: TypedArrayKind,
+        buffer: Rc<RefCell<ArrayBufferValue>>,
+        byte_offset: usize,
+        length: Option<usize>,
+    ) -> Result<Value> {
+        let bytes_per_element = kind.bytes_per_element();
+        if byte_offset % bytes_per_element != 0 {
+            return Err(Error::ScriptRuntime(format!(
+                "start offset of {} should be a multiple of {}",
+                kind.name(),
+                bytes_per_element
+            )));
+        }
+
+        let buffer_len = buffer.borrow().byte_length();
+        if byte_offset > buffer_len {
+            return Err(Error::ScriptRuntime(
+                "typed array view bounds are outside the buffer".into(),
+            ));
+        }
+
+        if let Some(length) = length {
+            let required = byte_offset.saturating_add(length.saturating_mul(bytes_per_element));
+            if required > buffer_len {
+                return Err(Error::ScriptRuntime(
+                    "typed array view bounds are outside the buffer".into(),
+                ));
+            }
+        } else {
+            let remaining = buffer_len.saturating_sub(byte_offset);
+            if remaining % bytes_per_element != 0 {
+                return Err(Error::ScriptRuntime(format!(
+                    "byte length of {} should be a multiple of {}",
+                    kind.name(),
+                    bytes_per_element
+                )));
+            }
+        }
+
+        Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
+            kind,
+            buffer,
+            byte_offset,
+            fixed_length: length,
+        }))))
+    }
+
+    fn new_typed_array_from_values(
+        &mut self,
+        kind: TypedArrayKind,
+        values: &[Value],
+    ) -> Result<Value> {
+        let array = self.new_typed_array_with_length(kind, values.len())?;
+        let Value::TypedArray(array) = array else {
+            unreachable!();
+        };
+        for (index, value) in values.iter().enumerate() {
+            self.typed_array_set_index(&array, index, value.clone())?;
+        }
+        Ok(Value::TypedArray(array))
+    }
+
+    fn typed_array_snapshot(&self, array: &Rc<RefCell<TypedArrayValue>>) -> Result<Vec<Value>> {
+        let length = array.borrow().observed_length();
+        let mut out = Vec::with_capacity(length);
+        for index in 0..length {
+            out.push(self.typed_array_get_index(array, index)?);
+        }
+        Ok(out)
+    }
+
+    fn typed_array_get_index(
+        &self,
+        array: &Rc<RefCell<TypedArrayValue>>,
+        index: usize,
+    ) -> Result<Value> {
+        let (kind, buffer, byte_offset, length) = {
+            let array = array.borrow();
+            (
+                array.kind,
+                array.buffer.clone(),
+                array.byte_offset,
+                array.observed_length(),
+            )
+        };
+        if index >= length {
+            return Ok(Value::Undefined);
+        }
+
+        let bytes_per_element = kind.bytes_per_element();
+        let start = byte_offset.saturating_add(index.saturating_mul(bytes_per_element));
+        let buffer = buffer.borrow();
+        if start.saturating_add(bytes_per_element) > buffer.byte_length() {
+            return Ok(Value::Undefined);
+        }
+        let bytes = &buffer.bytes[start..start + bytes_per_element];
+        let value = match kind {
+            TypedArrayKind::Int8 => Value::Number(i64::from(i8::from_le_bytes([bytes[0]]))),
+            TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
+                Value::Number(i64::from(u8::from_le_bytes([bytes[0]])))
+            }
+            TypedArrayKind::Int16 => {
+                Value::Number(i64::from(i16::from_le_bytes([bytes[0], bytes[1]])))
+            }
+            TypedArrayKind::Uint16 => {
+                Value::Number(i64::from(u16::from_le_bytes([bytes[0], bytes[1]])))
+            }
+            TypedArrayKind::Int32 => Value::Number(i64::from(i32::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))),
+            TypedArrayKind::Uint32 => {
+                Value::Number(i64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])))
+            }
+            TypedArrayKind::Float16 => {
+                let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                Self::number_value(Self::f16_bits_to_f32(bits) as f64)
+            }
+            TypedArrayKind::Float32 => {
+                Self::number_value(f64::from(f32::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                ])))
+            }
+            TypedArrayKind::Float64 => {
+                Self::number_value(f64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ]))
+            }
+            TypedArrayKind::BigInt64 => Value::BigInt(JsBigInt::from(i64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]))),
+            TypedArrayKind::BigUint64 => Value::BigInt(JsBigInt::from(u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]))),
+        };
+        Ok(value)
+    }
+
+    fn typed_array_number_to_i128(value: f64) -> i128 {
+        if !value.is_finite() {
+            return 0;
+        }
+        let value = value.trunc();
+        if value >= i128::MAX as f64 {
+            i128::MAX
+        } else if value <= i128::MIN as f64 {
+            i128::MIN
+        } else {
+            value as i128
+        }
+    }
+
+    fn typed_array_round_half_even(value: f64) -> f64 {
+        let floor = value.floor();
+        let frac = value - floor;
+        if frac < 0.5 {
+            floor
+        } else if frac > 0.5 {
+            floor + 1.0
+        } else if (floor as i64) % 2 == 0 {
+            floor
+        } else {
+            floor + 1.0
+        }
+    }
+
+    fn typed_array_bytes_for_value(kind: TypedArrayKind, value: &Value) -> Result<Vec<u8>> {
+        if kind.is_bigint() {
+            let Value::BigInt(value) = value else {
+                return Err(Error::ScriptRuntime(
+                    "Cannot convert number to BigInt typed array element".into(),
+                ));
+            };
+            let modulus = JsBigInt::one() << 64usize;
+            let mut unsigned = value % &modulus;
+            if unsigned.sign() == Sign::Minus {
+                unsigned += &modulus;
+            }
+            return match kind {
+                TypedArrayKind::BigInt64 => {
+                    let cutoff = JsBigInt::one() << 63usize;
+                    let signed = if unsigned >= cutoff {
+                        unsigned - &modulus
+                    } else {
+                        unsigned
+                    };
+                    let value = signed.to_i64().unwrap_or(0);
+                    Ok(value.to_le_bytes().to_vec())
+                }
+                TypedArrayKind::BigUint64 => {
+                    let value = unsigned.to_u64().unwrap_or(0);
+                    Ok(value.to_le_bytes().to_vec())
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        if matches!(value, Value::BigInt(_)) {
+            return Err(Error::ScriptRuntime(
+                "Cannot convert a BigInt value to a number".into(),
+            ));
+        }
+
+        let number = Self::coerce_number_for_global(value);
+        let bytes = match kind {
+            TypedArrayKind::Int8 => {
+                let modulus = 1i128 << 8;
+                let mut out = Self::typed_array_number_to_i128(number).rem_euclid(modulus);
+                if out >= (1i128 << 7) {
+                    out -= modulus;
+                }
+                (out as i8).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Uint8 => {
+                let out = Self::typed_array_number_to_i128(number).rem_euclid(1i128 << 8);
+                (out as u8).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Uint8Clamped => {
+                let clamped = if number.is_nan() {
+                    0.0
+                } else {
+                    number.clamp(0.0, 255.0)
+                };
+                let rounded = Self::typed_array_round_half_even(clamped);
+                (rounded as u8).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Int16 => {
+                let modulus = 1i128 << 16;
+                let mut out = Self::typed_array_number_to_i128(number).rem_euclid(modulus);
+                if out >= (1i128 << 15) {
+                    out -= modulus;
+                }
+                (out as i16).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Uint16 => {
+                let out = Self::typed_array_number_to_i128(number).rem_euclid(1i128 << 16);
+                (out as u16).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Int32 => {
+                let modulus = 1i128 << 32;
+                let mut out = Self::typed_array_number_to_i128(number).rem_euclid(modulus);
+                if out >= (1i128 << 31) {
+                    out -= modulus;
+                }
+                (out as i32).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Uint32 => {
+                let out = Self::typed_array_number_to_i128(number).rem_euclid(1i128 << 32);
+                (out as u32).to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Float16 => {
+                let rounded = Self::math_f16round(number);
+                let bits = Self::f32_to_f16_bits(rounded as f32);
+                bits.to_le_bytes().to_vec()
+            }
+            TypedArrayKind::Float32 => (number as f32).to_le_bytes().to_vec(),
+            TypedArrayKind::Float64 => number.to_le_bytes().to_vec(),
+            TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => unreachable!(),
+        };
+        Ok(bytes)
+    }
+
+    fn typed_array_set_index(
+        &mut self,
+        array: &Rc<RefCell<TypedArrayValue>>,
+        index: usize,
+        value: Value,
+    ) -> Result<()> {
+        let (kind, buffer, byte_offset, length) = {
+            let array = array.borrow();
+            (
+                array.kind,
+                array.buffer.clone(),
+                array.byte_offset,
+                array.observed_length(),
+            )
+        };
+        if index >= length {
+            return Ok(());
+        }
+        let bytes_per_element = kind.bytes_per_element();
+        let start = byte_offset.saturating_add(index.saturating_mul(bytes_per_element));
+        let bytes = Self::typed_array_bytes_for_value(kind, &value)?;
+        if bytes.len() != bytes_per_element {
+            return Err(Error::ScriptRuntime(
+                "typed array element size mismatch".into(),
+            ));
+        }
+        let mut buffer = buffer.borrow_mut();
+        if start.saturating_add(bytes_per_element) > buffer.byte_length() {
+            return Ok(());
+        }
+        buffer.bytes[start..start + bytes_per_element].copy_from_slice(&bytes);
+        Ok(())
+    }
+
+    fn eval_array_buffer_construct(
+        &mut self,
+        byte_length: &Option<Box<Expr>>,
+        options: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime("ArrayBuffer constructor must be called with new".into()));
+        }
+        let byte_length = if let Some(byte_length) = byte_length {
+            let value = self.eval_expr(byte_length, env, event_param, event)?;
+            Self::to_non_negative_usize(&value, "ArrayBuffer byteLength")?
+        } else {
+            0
+        };
+        let max_byte_length = if let Some(options) = options {
+            let options = self.eval_expr(options, env, event_param, event)?;
+            match options {
+                Value::Undefined | Value::Null => None,
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::object_get_entry(&entries, "maxByteLength") {
+                        Some(Self::to_non_negative_usize(
+                            &value,
+                            "ArrayBuffer maxByteLength",
+                        )?)
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer options must be an object".into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        if max_byte_length.is_some_and(|max| byte_length > max) {
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer byteLength exceeds maxByteLength".into(),
+            ));
+        }
+        Ok(Self::new_array_buffer_value(byte_length, max_byte_length))
+    }
+
+    fn resize_array_buffer(
+        &mut self,
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        new_byte_length: i64,
+    ) -> Result<()> {
+        if new_byte_length < 0 {
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer resize length must be non-negative".into(),
+            ));
+        }
+        let new_byte_length = usize::try_from(new_byte_length)
+            .map_err(|_| Error::ScriptRuntime("ArrayBuffer resize length is too large".into()))?;
+        let max_byte_length = buffer.borrow().max_byte_length;
+        let Some(max_byte_length) = max_byte_length else {
+            return Err(Error::ScriptRuntime("ArrayBuffer is not resizable".into()));
+        };
+        if new_byte_length > max_byte_length {
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer resize exceeds maxByteLength".into(),
+            ));
+        }
+        buffer.borrow_mut().bytes.resize(new_byte_length, 0);
+        Ok(())
+    }
+
+    fn resize_array_buffer_in_env(
+        &mut self,
+        env: &HashMap<String, Value>,
+        target: &str,
+        new_byte_length: i64,
+    ) -> Result<()> {
+        let buffer = self.resolve_array_buffer_from_env(env, target)?;
+        self.resize_array_buffer(&buffer, new_byte_length)
+    }
+
+    fn eval_typed_array_construct(
+        &mut self,
+        kind: TypedArrayKind,
+        args: &[Expr],
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(format!(
+                "{} constructor must be called with new",
+                kind.name()
+            )));
+        }
+        if args.len() > 3 {
+            return Err(Error::ScriptRuntime(format!(
+                "{} supports up to three arguments",
+                kind.name()
+            )));
+        }
+
+        if args.is_empty() {
+            return self.new_typed_array_with_length(kind, 0);
+        }
+
+        let first = self.eval_expr(&args[0], env, event_param, event)?;
+        match (&first, args.len()) {
+            (Value::ArrayBuffer(buffer), 1) => self.new_typed_array_view(kind, buffer.clone(), 0, None),
+            (Value::TypedArray(source), 1) => {
+                let source_kind = source.borrow().kind;
+                if kind.is_bigint() != source_kind.is_bigint() {
+                    return Err(Error::ScriptRuntime(
+                        "cannot mix BigInt and Number typed arrays".into(),
+                    ));
+                }
+                let values = self.typed_array_snapshot(source)?;
+                self.new_typed_array_from_values(kind, &values)
+            }
+            (Value::Array(_), 1) | (Value::Object(_), 1) | (Value::String(_), 1) => {
+                let values = self.array_like_values_from_value(&first)?;
+                self.new_typed_array_from_values(kind, &values)
+            }
+            (Value::ArrayBuffer(buffer), _) => {
+                let byte_offset = if args.len() >= 2 {
+                    let offset = self.eval_expr(&args[1], env, event_param, event)?;
+                    Self::to_non_negative_usize(&offset, "typed array byteOffset")?
+                } else {
+                    0
+                };
+                let length = if args.len() == 3 {
+                    let length = self.eval_expr(&args[2], env, event_param, event)?;
+                    if matches!(length, Value::Undefined) {
+                        None
+                    } else {
+                        Some(Self::to_non_negative_usize(&length, "typed array length")?)
+                    }
+                } else {
+                    None
+                };
+                self.new_typed_array_view(kind, buffer.clone(), byte_offset, length)
+            }
+            _ => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "typed array buffer view requires an ArrayBuffer first argument".into(),
+                    ));
+                }
+                let length = Self::to_non_negative_usize(&first, "typed array length")?;
+                self.new_typed_array_with_length(kind, length)
+            }
+        }
+    }
+
+    fn eval_typed_array_construct_with_callee(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime("constructor must be called with new".into()));
+        }
+        let callee = self.eval_expr(callee, env, event_param, event)?;
+        match callee {
+            Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(kind)) => {
+                self.eval_typed_array_construct(kind, args, true, env, event_param, event)
+            }
+            Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract) => Err(
+                Error::ScriptRuntime("Abstract class TypedArray not directly constructable".into()),
+            ),
+            _ => Err(Error::ScriptRuntime("value is not a constructor".into())),
+        }
+    }
+
+    fn eval_typed_array_static_method(
+        &mut self,
+        kind: TypedArrayKind,
+        method: TypedArrayStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            TypedArrayStaticMethod::From => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{}.from requires exactly one argument",
+                        kind.name()
+                    )));
+                }
+                let source = self.eval_expr(&args[0], env, event_param, event)?;
+                if let Value::TypedArray(source_array) = &source {
+                    if kind.is_bigint() != source_array.borrow().kind.is_bigint() {
+                        return Err(Error::ScriptRuntime(
+                            "cannot mix BigInt and Number typed arrays".into(),
+                        ));
+                    }
+                }
+                let values = self.array_like_values_from_value(&source)?;
+                self.new_typed_array_from_values(kind, &values)
+            }
+            TypedArrayStaticMethod::Of => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                self.new_typed_array_from_values(kind, &values)
+            }
+        }
+    }
+
+    fn execute_callback_value(
+        &mut self,
+        callback: &Value,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
+        let Value::Function(function) = callback else {
+            return Err(Error::ScriptRuntime("callback is not a function".into()));
+        };
+        self.execute_function_call(function.as_ref(), args, event)
+    }
+
+    fn eval_typed_array_method(
+        &mut self,
+        target: &str,
+        method: TypedArrayInstanceMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !matches!(env.get(target), Some(Value::TypedArray(_))) {
+            let Some(target_value) = env.get(target) else {
+                return Err(Error::ScriptRuntime(format!("unknown variable: {}", target)));
+            };
+
+            if matches!(
+                method,
+                TypedArrayInstanceMethod::IndexOf | TypedArrayInstanceMethod::LastIndexOf
+            ) {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "indexOf requires one or two arguments".into(),
+                    ));
+                }
+                let search = self.eval_expr(&args[0], env, event_param, event)?;
+
+                return match target_value {
+                    Value::String(value) => {
+                        let len = value.chars().count() as i64;
+                        if matches!(method, TypedArrayInstanceMethod::IndexOf) {
+                            let mut start = if args.len() == 2 {
+                                Self::value_to_i64(&self.eval_expr(
+                                    &args[1],
+                                    env,
+                                    event_param,
+                                    event,
+                                )?)
+                            } else {
+                                0
+                            };
+                            if start < 0 {
+                                start = 0;
+                            }
+                            if start > len {
+                                start = len;
+                            }
+                            let index =
+                                Self::string_index_of(value, &search.as_string(), start as usize)
+                                    .map(|idx| idx as i64)
+                                    .unwrap_or(-1);
+                            Ok(Value::Number(index))
+                        } else {
+                            let mut from = if args.len() == 2 {
+                                Self::value_to_i64(&self.eval_expr(
+                                    &args[1],
+                                    env,
+                                    event_param,
+                                    event,
+                                )?)
+                            } else {
+                                len
+                            };
+                            if from < 0 {
+                                from = 0;
+                            }
+                            if from > len {
+                                from = len;
+                            }
+                            let from = from as usize;
+                            let search = search.as_string();
+                            if search.is_empty() {
+                                return Ok(Value::Number(from as i64));
+                            }
+                            for idx in (0..=from).rev() {
+                                let byte_idx = Self::char_index_to_byte(value, idx);
+                                if value[byte_idx..].starts_with(&search) {
+                                    return Ok(Value::Number(idx as i64));
+                                }
+                            }
+                            Ok(Value::Number(-1))
+                        }
+                    }
+                    Value::Array(values) => {
+                        let from = if matches!(method, TypedArrayInstanceMethod::IndexOf) {
+                            let len = values.borrow().len() as i64;
+                            let mut from = if args.len() == 2 {
+                                Self::value_to_i64(&self.eval_expr(
+                                    &args[1],
+                                    env,
+                                    event_param,
+                                    event,
+                                )?)
+                            } else {
+                                0
+                            };
+                            if from < 0 {
+                                from = (len + from).max(0);
+                            }
+                            if from > len {
+                                from = len;
+                            }
+                            from
+                        } else {
+                            let len = values.borrow().len() as i64;
+                            let from = if args.len() == 2 {
+                                Self::value_to_i64(&self.eval_expr(
+                                    &args[1],
+                                    env,
+                                    event_param,
+                                    event,
+                                )?)
+                            } else {
+                                len - 1
+                            };
+                            if from < 0 {
+                                (len + from).max(-1)
+                            } else {
+                                from.min(len - 1)
+                            }
+                        };
+
+                        let values = values.borrow();
+                        if matches!(method, TypedArrayInstanceMethod::IndexOf) {
+                            for (index, value) in values.iter().enumerate().skip(from as usize) {
+                                if self.strict_equal(value, &search) {
+                                    return Ok(Value::Number(index as i64));
+                                }
+                            }
+                            Ok(Value::Number(-1))
+                        } else {
+                            if from < 0 {
+                                return Ok(Value::Number(-1));
+                            }
+                            for index in (0..=from as usize).rev() {
+                                if self.strict_equal(&values[index], &search) {
+                                    return Ok(Value::Number(index as i64));
+                                }
+                            }
+                            Ok(Value::Number(-1))
+                        }
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
+
+            return Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a TypedArray",
+                target
+            )));
+        }
+
+        let array = self.resolve_typed_array_from_env(env, target)?;
+        let kind = array.borrow().kind;
+        let len = array.borrow().observed_length();
+        let this_value = Value::TypedArray(array.clone());
+
+        match method {
+            TypedArrayInstanceMethod::At => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime("TypedArray.at requires exactly one argument".into()));
+                }
+                let index = self.eval_expr(&args[0], env, event_param, event)?;
+                let mut index = Self::value_to_i64(&index);
+                let len_i64 = len as i64;
+                if index < 0 {
+                    index += len_i64;
+                }
+                if index < 0 || index >= len_i64 {
+                    return Ok(Value::Undefined);
+                }
+                self.typed_array_get_index(&array, index as usize)
+            }
+            TypedArrayInstanceMethod::CopyWithin => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.copyWithin requires 2 or 3 arguments".into(),
+                    ));
+                }
+                let target_index = Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
+                let start_index = Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?);
+                let end_index = if args.len() == 3 {
+                    Self::value_to_i64(&self.eval_expr(&args[2], env, event_param, event)?)
+                } else {
+                    len as i64
+                };
+                let target_index = Self::normalize_slice_index(len, target_index);
+                let start_index = Self::normalize_slice_index(len, start_index);
+                let end_index = Self::normalize_slice_index(len, end_index);
+                let end_index = end_index.max(start_index);
+                let count = end_index.saturating_sub(start_index).min(len.saturating_sub(target_index));
+                let snapshot = self.typed_array_snapshot(&array)?;
+                for offset in 0..count {
+                    self.typed_array_set_index(
+                        &array,
+                        target_index + offset,
+                        snapshot[start_index + offset].clone(),
+                    )?;
+                }
+                Ok(this_value)
+            }
+            TypedArrayInstanceMethod::Entries => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime("TypedArray.entries does not take arguments".into()));
+                }
+                let snapshot = self.typed_array_snapshot(&array)?;
+                let out = snapshot
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        Self::new_array_value(vec![Value::Number(index as i64), value])
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Self::new_array_value(out))
+            }
+            TypedArrayInstanceMethod::Fill => {
+                if args.is_empty() || args.len() > 3 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.fill requires 1 to 3 arguments".into(),
+                    ));
+                }
+                let value = self.eval_expr(&args[0], env, event_param, event)?;
+                let start = if args.len() >= 2 {
+                    Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?)
+                } else {
+                    0
+                };
+                let end = if args.len() == 3 {
+                    Self::value_to_i64(&self.eval_expr(&args[2], env, event_param, event)?)
+                } else {
+                    len as i64
+                };
+                let start = Self::normalize_slice_index(len, start);
+                let end = Self::normalize_slice_index(len, end).max(start);
+                for index in start..end {
+                    self.typed_array_set_index(&array, index, value.clone())?;
+                }
+                Ok(this_value)
+            }
+            TypedArrayInstanceMethod::FindIndex
+            | TypedArrayInstanceMethod::FindLast
+            | TypedArrayInstanceMethod::FindLastIndex => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray find callback methods require exactly one argument".into(),
+                    ));
+                }
+                let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                let snapshot = self.typed_array_snapshot(&array)?;
+                let iter: Box<dyn Iterator<Item = (usize, Value)>> = match method {
+                    TypedArrayInstanceMethod::FindLast | TypedArrayInstanceMethod::FindLastIndex => {
+                        Box::new(snapshot.into_iter().enumerate().rev())
+                    }
+                    _ => Box::new(snapshot.into_iter().enumerate()),
+                };
+                for (index, value) in iter {
+                    let matched = self.execute_callback_value(
+                        &callback,
+                        &[value.clone(), Value::Number(index as i64), this_value.clone()],
+                        event,
+                    )?;
+                    if matched.truthy() {
+                        return if matches!(method, TypedArrayInstanceMethod::FindLastIndex | TypedArrayInstanceMethod::FindIndex) {
+                            Ok(Value::Number(index as i64))
+                        } else {
+                            Ok(value)
+                        };
+                    }
+                }
+                if matches!(method, TypedArrayInstanceMethod::FindLastIndex | TypedArrayInstanceMethod::FindIndex) {
+                    Ok(Value::Number(-1))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            TypedArrayInstanceMethod::IndexOf | TypedArrayInstanceMethod::LastIndexOf => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray indexOf methods require one or two arguments".into(),
+                    ));
+                }
+                let search = self.eval_expr(&args[0], env, event_param, event)?;
+                let snapshot = self.typed_array_snapshot(&array)?;
+                if matches!(method, TypedArrayInstanceMethod::IndexOf) {
+                    let from = if args.len() == 2 {
+                        Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?)
+                    } else {
+                        0
+                    };
+                    let mut from = if from < 0 {
+                        (len as i64 + from).max(0)
+                    } else {
+                        from
+                    };
+                    if from > len as i64 {
+                        from = len as i64;
+                    }
+                    for (index, value) in snapshot.iter().enumerate().skip(from as usize) {
+                        if self.strict_equal(value, &search) {
+                            return Ok(Value::Number(index as i64));
+                        }
+                    }
+                    Ok(Value::Number(-1))
+                } else {
+                    let from = if args.len() == 2 {
+                        Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?)
+                    } else {
+                        (len as i64) - 1
+                    };
+                    let from = if from < 0 {
+                        (len as i64 + from).max(-1)
+                    } else {
+                        from.min((len as i64) - 1)
+                    };
+                    if from < 0 {
+                        return Ok(Value::Number(-1));
+                    }
+                    for index in (0..=from as usize).rev() {
+                        if self.strict_equal(&snapshot[index], &search) {
+                            return Ok(Value::Number(index as i64));
+                        }
+                    }
+                    Ok(Value::Number(-1))
+                }
+            }
+            TypedArrayInstanceMethod::Keys => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime("TypedArray.keys does not take arguments".into()));
+                }
+                Ok(Self::new_array_value(
+                    (0..len).map(|index| Value::Number(index as i64)).collect(),
+                ))
+            }
+            TypedArrayInstanceMethod::ReduceRight => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.reduceRight requires callback and optional initial value".into(),
+                    ));
+                }
+                let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                let snapshot = self.typed_array_snapshot(&array)?;
+                let mut iter = snapshot.into_iter().enumerate().rev();
+                let mut acc = if args.len() == 2 {
+                    self.eval_expr(&args[1], env, event_param, event)?
+                } else {
+                    let Some((_, first)) = iter.next() else {
+                        return Err(Error::ScriptRuntime(
+                            "reduce of empty array with no initial value".into(),
+                        ));
+                    };
+                    first
+                };
+                for (index, value) in iter {
+                    acc = self.execute_callback_value(
+                        &callback,
+                        &[acc, value, Value::Number(index as i64), this_value.clone()],
+                        event,
+                    )?;
+                }
+                Ok(acc)
+            }
+            TypedArrayInstanceMethod::Reverse => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime("TypedArray.reverse does not take arguments".into()));
+                }
+                let mut snapshot = self.typed_array_snapshot(&array)?;
+                snapshot.reverse();
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    self.typed_array_set_index(&array, index, value)?;
+                }
+                Ok(this_value)
+            }
+            TypedArrayInstanceMethod::Set => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.set requires source and optional offset".into(),
+                    ));
+                }
+                let source = self.eval_expr(&args[0], env, event_param, event)?;
+                let source_values = self.array_like_values_from_value(&source)?;
+                let offset = if args.len() == 2 {
+                    Self::to_non_negative_usize(
+                        &self.eval_expr(&args[1], env, event_param, event)?,
+                        "TypedArray.set offset",
+                    )?
+                } else {
+                    0
+                };
+                if offset > len || source_values.len() > len.saturating_sub(offset) {
+                    return Err(Error::ScriptRuntime(
+                        "source array is too large for target TypedArray".into(),
+                    ));
+                }
+                for (index, value) in source_values.into_iter().enumerate() {
+                    self.typed_array_set_index(&array, offset + index, value)?;
+                }
+                Ok(Value::Undefined)
+            }
+            TypedArrayInstanceMethod::Sort => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.sort supports at most one argument".into(),
+                    ));
+                }
+                if args.len() == 1 {
+                    return Err(Error::ScriptRuntime(
+                        "custom comparator for TypedArray.sort is not supported".into(),
+                    ));
+                }
+                let mut snapshot = self.typed_array_snapshot(&array)?;
+                if kind.is_bigint() {
+                    snapshot.sort_by(|left, right| {
+                        let left = match left {
+                            Value::BigInt(value) => value.clone(),
+                            _ => JsBigInt::zero(),
+                        };
+                        let right = match right {
+                            Value::BigInt(value) => value.clone(),
+                            _ => JsBigInt::zero(),
+                        };
+                        left.cmp(&right)
+                    });
+                } else {
+                    snapshot.sort_by(|left, right| {
+                        let left = Self::coerce_number_for_global(left);
+                        let right = Self::coerce_number_for_global(right);
+                        match (left.is_nan(), right.is_nan()) {
+                            (true, true) => std::cmp::Ordering::Equal,
+                            (true, false) => std::cmp::Ordering::Greater,
+                            (false, true) => std::cmp::Ordering::Less,
+                            (false, false) => left
+                                .partial_cmp(&right)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        }
+                    });
+                }
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    self.typed_array_set_index(&array, index, value)?;
+                }
+                Ok(this_value)
+            }
+            TypedArrayInstanceMethod::Subarray => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.subarray supports at most two arguments".into(),
+                    ));
+                }
+                let begin = if !args.is_empty() {
+                    Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?)
+                } else {
+                    0
+                };
+                let end = if args.len() == 2 {
+                    Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?)
+                } else {
+                    len as i64
+                };
+                let begin = Self::normalize_slice_index(len, begin);
+                let end = Self::normalize_slice_index(len, end).max(begin);
+                let byte_offset = array
+                    .borrow()
+                    .byte_offset
+                    .saturating_add(begin.saturating_mul(kind.bytes_per_element()));
+                self.new_typed_array_view(
+                    kind,
+                    array.borrow().buffer.clone(),
+                    byte_offset,
+                    Some(end.saturating_sub(begin)),
+                )
+            }
+            TypedArrayInstanceMethod::ToReversed => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.toReversed does not take arguments".into(),
+                    ));
+                }
+                let mut snapshot = self.typed_array_snapshot(&array)?;
+                snapshot.reverse();
+                self.new_typed_array_from_values(kind, &snapshot)
+            }
+            TypedArrayInstanceMethod::ToSorted => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.toSorted supports at most one argument".into(),
+                    ));
+                }
+                if args.len() == 1 {
+                    return Err(Error::ScriptRuntime(
+                        "custom comparator for TypedArray.toSorted is not supported".into(),
+                    ));
+                }
+                let mut snapshot = self.typed_array_snapshot(&array)?;
+                if kind.is_bigint() {
+                    snapshot.sort_by(|left, right| {
+                        let left = match left {
+                            Value::BigInt(value) => value.clone(),
+                            _ => JsBigInt::zero(),
+                        };
+                        let right = match right {
+                            Value::BigInt(value) => value.clone(),
+                            _ => JsBigInt::zero(),
+                        };
+                        left.cmp(&right)
+                    });
+                } else {
+                    snapshot.sort_by(|left, right| {
+                        let left = Self::coerce_number_for_global(left);
+                        let right = Self::coerce_number_for_global(right);
+                        match (left.is_nan(), right.is_nan()) {
+                            (true, true) => std::cmp::Ordering::Equal,
+                            (true, false) => std::cmp::Ordering::Greater,
+                            (false, true) => std::cmp::Ordering::Less,
+                            (false, false) => left
+                                .partial_cmp(&right)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        }
+                    });
+                }
+                self.new_typed_array_from_values(kind, &snapshot)
+            }
+            TypedArrayInstanceMethod::Values => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime("TypedArray.values does not take arguments".into()));
+                }
+                Ok(Self::new_array_value(self.typed_array_snapshot(&array)?))
+            }
+            TypedArrayInstanceMethod::With => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.with requires exactly two arguments".into(),
+                    ));
+                }
+                let index = Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
+                let value = self.eval_expr(&args[1], env, event_param, event)?;
+                let index = if index < 0 {
+                    (len as i64) + index
+                } else {
+                    index
+                };
+                if index < 0 || index >= len as i64 {
+                    return Err(Error::ScriptRuntime("TypedArray.with index out of range".into()));
+                }
+                let mut snapshot = self.typed_array_snapshot(&array)?;
+                snapshot[index as usize] = value;
+                self.new_typed_array_from_values(kind, &snapshot)
+            }
         }
     }
 
@@ -10380,6 +12187,10 @@ impl Harness {
             Value::String(v) => Self::parse_js_number_from_string(v),
             Value::Date(v) => *v.borrow() as f64,
             Value::Object(_)
+            | Value::ArrayBuffer(_)
+            | Value::TypedArray(_)
+            | Value::TypedArrayConstructor(_)
+            | Value::ArrayBufferConstructor
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
@@ -10733,6 +12544,10 @@ impl Harness {
                 .unwrap_or(0),
             Value::Date(value) => *value.borrow(),
             Value::Object(_) => 0,
+            Value::ArrayBuffer(_) => 0,
+            Value::TypedArray(_) => 0,
+            Value::TypedArrayConstructor(_) => 0,
+            Value::ArrayBufferConstructor => 0,
             Value::RegExp(_) => 0,
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
@@ -14188,6 +16003,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_new_callee_expr(src)? {
+        return Ok(expr);
+    }
+
     if parse_date_now_expr(src)? {
         return Ok(Expr::DateNow);
     }
@@ -14209,6 +16028,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_bigint_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_array_buffer_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_typed_array_expr(src)? {
         return Ok(expr);
     }
 
@@ -14311,6 +16138,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_array_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_array_buffer_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_typed_array_access_expr(src)? {
         return Ok(expr);
     }
 
@@ -15625,6 +17460,428 @@ fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
     }
 }
 
+fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
+    match name {
+        "Int8Array" => Some(TypedArrayKind::Int8),
+        "Uint8Array" => Some(TypedArrayKind::Uint8),
+        "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
+        "Int16Array" => Some(TypedArrayKind::Int16),
+        "Uint16Array" => Some(TypedArrayKind::Uint16),
+        "Int32Array" => Some(TypedArrayKind::Int32),
+        "Uint32Array" => Some(TypedArrayKind::Uint32),
+        "Float16Array" => Some(TypedArrayKind::Float16),
+        "Float32Array" => Some(TypedArrayKind::Float32),
+        "Float64Array" => Some(TypedArrayKind::Float64),
+        "BigInt64Array" => Some(TypedArrayKind::BigInt64),
+        "BigUint64Array" => Some(TypedArrayKind::BigUint64),
+        _ => None,
+    }
+}
+
+fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    let Some(constructor_name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let Some(kind) = parse_typed_array_kind_name(&constructor_name) else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "{} argument cannot be empty",
+                    constructor_name
+                )));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::TypedArrayConstruct {
+            kind,
+            args: parsed,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::TypedArrayConstruct {
+                kind,
+                args: Vec::new(),
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+
+        if member == "BYTES_PER_ELEMENT" {
+            if !cursor.eof() {
+                return Ok(None);
+            }
+            return Ok(Some(Expr::TypedArrayStaticBytesPerElement(kind)));
+        }
+
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        let method = match member.as_str() {
+            "from" => TypedArrayStaticMethod::From,
+            "of" => TypedArrayStaticMethod::Of,
+            _ => return Ok(None),
+        };
+        if matches!(method, TypedArrayStaticMethod::From)
+            && (args.len() != 1 || args[0].trim().is_empty())
+        {
+            return Err(Error::ScriptParse(format!(
+                "{}.from requires exactly one argument",
+                constructor_name
+            )));
+        }
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "{}.{} argument cannot be empty",
+                    constructor_name, member
+                )));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::TypedArrayStaticMethod {
+            kind,
+            method,
+            args: parsed,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::TypedArrayConstructorRef(
+        TypedArrayConstructorKind::Concrete(kind),
+    )))
+}
+
+fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("ArrayBuffer") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "ArrayBuffer supports up to two arguments".into(),
+            ));
+        }
+        if args.len() >= 1 && args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "ArrayBuffer byteLength argument cannot be empty".into(),
+            ));
+        }
+        if args.len() == 2 && args[1].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "ArrayBuffer options argument cannot be empty".into(),
+            ));
+        }
+        let byte_length = if let Some(first) = args.first() {
+            Some(Box::new(parse_expr(first.trim())?))
+        } else {
+            None
+        };
+        let options = if args.len() == 2 {
+            Some(Box::new(parse_expr(args[1].trim())?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ArrayBufferConstruct {
+            byte_length,
+            options,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::ArrayBufferConstruct {
+                byte_length: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::ArrayBufferConstructor))
+}
+
+fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let callee_src = cursor.read_balanced_block(b'(', b')')?;
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(
+                "constructor argument cannot be empty".into(),
+            ));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    let callee = parse_expr(callee_src.trim())?;
+    Ok(Some(Expr::TypedArrayConstructWithCallee {
+        callee: Box::new(callee),
+        args: parsed,
+        called_with_new: true,
+    }))
+}
+
+fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    if member != "resize" {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "ArrayBuffer.resize requires exactly one argument".into(),
+        ));
+    }
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::ArrayBufferResize {
+        target,
+        new_byte_length: Box::new(parse_expr(args[0].trim())?),
+    }))
+}
+
+fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    let property_expr = match member.as_str() {
+        "byteLength" => Some(Expr::TypedArrayByteLength(target.clone())),
+        "byteOffset" => Some(Expr::TypedArrayByteOffset(target.clone())),
+        "buffer" => Some(Expr::TypedArrayBuffer(target.clone())),
+        "BYTES_PER_ELEMENT" => Some(Expr::TypedArrayBytesPerElement(target.clone())),
+        _ => None,
+    };
+    if let Some(expr) = property_expr {
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(expr));
+    }
+
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    let method = match member.as_str() {
+        "at" => TypedArrayInstanceMethod::At,
+        "copyWithin" => TypedArrayInstanceMethod::CopyWithin,
+        "entries" => TypedArrayInstanceMethod::Entries,
+        "fill" => TypedArrayInstanceMethod::Fill,
+        "findIndex" => TypedArrayInstanceMethod::FindIndex,
+        "findLast" => TypedArrayInstanceMethod::FindLast,
+        "findLastIndex" => TypedArrayInstanceMethod::FindLastIndex,
+        "indexOf" => TypedArrayInstanceMethod::IndexOf,
+        "keys" => TypedArrayInstanceMethod::Keys,
+        "lastIndexOf" => TypedArrayInstanceMethod::LastIndexOf,
+        "reduceRight" => TypedArrayInstanceMethod::ReduceRight,
+        "reverse" => TypedArrayInstanceMethod::Reverse,
+        "set" => TypedArrayInstanceMethod::Set,
+        "sort" => TypedArrayInstanceMethod::Sort,
+        "subarray" => TypedArrayInstanceMethod::Subarray,
+        "toReversed" => TypedArrayInstanceMethod::ToReversed,
+        "toSorted" => TypedArrayInstanceMethod::ToSorted,
+        "values" => TypedArrayInstanceMethod::Values,
+        "with" => TypedArrayInstanceMethod::With,
+        _ => return Ok(None),
+    };
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "{} argument cannot be empty",
+                member
+            )));
+        }
+        parsed.push(parse_expr(arg)?);
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::TypedArrayMethod {
+        target,
+        method,
+        args: parsed,
+    }))
+}
+
 fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "isNaN", "isNaN requires exactly one argument")
 }
@@ -16099,6 +18356,22 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
                 object: Box::new(parse_expr(args[0].trim())?),
                 key: Box::new(parse_expr(args[1].trim())?),
             }
+        }
+        "getPrototypeOf" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.getPrototypeOf requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectGetPrototypeOf(Box::new(parse_expr(args[0].trim())?))
+        }
+        "freeze" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.freeze requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectFreeze(Box::new(parse_expr(args[0].trim())?))
         }
         _ => return Ok(None),
     };
@@ -28069,6 +30342,194 @@ mod tests {
                     msg.contains(expected),
                     "expected '{expected}' in '{msg}'"
                 ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn typed_array_constructors_and_properties_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const i8 = new Int8Array([257, -129, 1.9]);
+            const u8c = new Uint8ClampedArray([300, -1, 1.5, 2.5, 0.5]);
+            const bi = new BigInt64Array([1n, -1n]);
+            document.getElementById('result').textContent =
+              i8.length + ':' +
+              i8[0] + ':' +
+              i8[1] + ':' +
+              i8[2] + ':' +
+              u8c.join(',') + ':' +
+              Int8Array.BYTES_PER_ELEMENT + ':' +
+              i8.BYTES_PER_ELEMENT + ':' +
+              typeof Int8Array + ':' +
+              typeof TypedArray + ':' +
+              bi[1];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "3:1:127:1:255,0,2,2,0:1:1:function:undefined:-1",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn typed_array_static_from_of_and_constructor_errors_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = Int16Array.of(1, 2, 3);
+            const b = Int16Array.from(a);
+            document.getElementById('result').textContent = a.join(',') + ':' + b.join(',');
+          });
+        </script>
+        "#;
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1,2,3:1,2,3")?;
+
+        let err = Harness::from_html("<script>Int8Array(2);</script>")
+            .expect_err("calling typed array constructor without new should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("must be called with new")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>new BigInt64Array(new Int8Array([1]));</script>")
+            .expect_err("mixing bigint and number typed arrays should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("cannot mix BigInt and Number typed arrays"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn typed_array_resizable_array_buffer_view_behavior_works() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const buffer = new ArrayBuffer(8, { maxByteLength: 16 });
+          const tracking = new Float32Array(buffer);
+          const fixed = new Float32Array(buffer, 0, 2);
+
+          document.getElementById('btn').addEventListener('click', () => {
+            let out =
+              tracking.byteLength + ':' + tracking.length + ':' +
+              fixed.byteLength + ':' + fixed.length;
+
+            buffer.resize(12);
+            out = out + ':' +
+              tracking.byteLength + ':' + tracking.length + ':' +
+              fixed.byteLength + ':' + fixed.length;
+
+            buffer.resize(7);
+            out = out + ':' +
+              tracking.byteLength + ':' + tracking.length + ':' +
+              fixed.byteLength + ':' + fixed.length + ':' + fixed[0];
+
+            buffer.resize(8);
+            out = out + ':' + fixed.byteLength + ':' + fixed.length + ':' + fixed[0];
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "8:2:8:2:12:3:8:2:4:1:0:0:undefined:8:2:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn typed_array_methods_set_subarray_copy_within_and_with_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const ta = new Uint8Array([1, 2, 3, 4]);
+            ta.copyWithin(1, 2);
+            const sub = ta.subarray(1, 3);
+            ta.set([9, 8], 2);
+            const withOne = ta.with(0, 7);
+            const rev = ta.toReversed();
+            const src = new Uint8Array([3, 1, 2]);
+            const sorted = src.toSorted();
+            document.getElementById('result').textContent =
+              ta.join(',') + ':' +
+              sub.join(',') + ':' +
+              withOne.join(',') + ':' +
+              rev.join(',') + ':' +
+              sorted.join(',') + ':' +
+              ta.at(-1);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1,3,9,8:3,9:7,3,9,8:8,9,3,1:1,2,3:8")?;
+        Ok(())
+    }
+
+    #[test]
+    fn typed_array_abstract_constructor_and_freeze_errors_work() {
+        let err = Harness::from_html("<script>new (Object.getPrototypeOf(Int8Array))();</script>")
+            .expect_err("abstract TypedArray constructor should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Abstract class TypedArray not directly constructable"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = Harness::from_html("<script>const i8 = Int8Array.of(1,2,3); Object.freeze(i8);</script>")
+            .expect_err("freezing non-empty typed array should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Cannot freeze array buffer views with elements"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typed_array_alignment_and_array_buffer_constructor_errors_work() {
+        let cases = [
+            (
+                "<script>new Int32Array(new ArrayBuffer(3));</script>",
+                "byte length of Int32Array should be a multiple of 4",
+            ),
+            (
+                "<script>new Int32Array(new ArrayBuffer(4), 1);</script>",
+                "start offset of Int32Array should be a multiple of 4",
+            ),
+            (
+                "<script>ArrayBuffer(8);</script>",
+                "ArrayBuffer constructor must be called with new",
+            ),
+        ];
+
+        for (html, expected) in cases {
+            let err = Harness::from_html(html).expect_err("script should fail");
+            match err {
+                Error::ScriptRuntime(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}', got '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
