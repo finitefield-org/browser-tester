@@ -320,7 +320,7 @@ impl Dom {
 
         let children = fragment.nodes[fragment.root.0].children.clone();
         for child in children {
-            let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id))?;
+            let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id), true)?;
         }
 
         self.rebuild_id_index();
@@ -341,8 +341,9 @@ impl Dom {
         }
 
         for child in children {
-            let node = self.clone_subtree_from_dom(&fragment, child, None)?;
-            self.insert_adjacent_node(target, position, node)?;
+            if let Some(node) = self.clone_subtree_from_dom(&fragment, child, None, true)? {
+                self.insert_adjacent_node(target, position, node)?;
+            }
         }
         Ok(())
     }
@@ -352,22 +353,32 @@ impl Dom {
         source: &Dom,
         source_node: NodeId,
         parent: Option<NodeId>,
-    ) -> Result<NodeId> {
+        sanitize: bool,
+    ) -> Result<Option<NodeId>> {
         let node_type = match &source.nodes[source_node.0].node_type {
             NodeType::Document => {
                 return Err(Error::ScriptRuntime(
                     "cannot clone document node into innerHTML target".into(),
                 ));
             }
-            NodeType::Element(element) => NodeType::Element(element.clone()),
+            NodeType::Element(element) => {
+                if sanitize && should_strip_inner_html_element(&element.tag_name) {
+                    return Ok(None);
+                }
+                let mut clone = element.clone();
+                if sanitize {
+                    sanitize_inner_html_element_attrs(&mut clone);
+                }
+                NodeType::Element(clone)
+            }
             NodeType::Text(text) => NodeType::Text(text.clone()),
         };
 
         let node = self.create_node(parent, node_type);
         for child in &source.nodes[source_node.0].children {
-            let _ = self.clone_subtree_from_dom(source, *child, Some(node))?;
+            let _ = self.clone_subtree_from_dom(source, *child, Some(node), sanitize)?;
         }
-        Ok(node)
+        Ok(Some(node))
     }
 
     fn value(&self, node_id: NodeId) -> Result<String> {
@@ -1326,11 +1337,9 @@ impl Dom {
                 SelectorPseudoClass::NthLastOfType(selector) => {
                     self.is_nth_last_element_of_type(node_id, selector)
                 }
-                SelectorPseudoClass::Is(inners) | SelectorPseudoClass::Where(inners) => {
-                    inners
-                        .iter()
-                        .any(|inner| self.matches_selector_chain(node_id, inner))
-                }
+                SelectorPseudoClass::Is(inners) | SelectorPseudoClass::Where(inners) => inners
+                    .iter()
+                    .any(|inner| self.matches_selector_chain(node_id, inner)),
                 SelectorPseudoClass::Has(inners) => {
                     let mut descendants = Vec::new();
                     self.collect_elements_descendants_dfs(node_id, &mut descendants);
@@ -1601,21 +1610,35 @@ impl Dom {
                 }
                 out
             }
-            NodeType::Text(text) => text.clone(),
+            NodeType::Text(text) => escape_html_text_for_serialization(text),
             NodeType::Element(element) => {
                 let mut out = String::new();
                 out.push('<');
                 out.push_str(&element.tag_name);
-                for (k, v) in &element.attrs {
+                let mut attrs = element.attrs.iter().collect::<Vec<_>>();
+                attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                for (k, v) in attrs {
                     out.push(' ');
                     out.push_str(k);
                     out.push_str("=\"");
-                    out.push_str(v);
+                    out.push_str(&escape_html_attr_for_serialization(v));
                     out.push('"');
                 }
                 out.push('>');
+                if is_void_tag(&element.tag_name) {
+                    return out;
+                }
+                let raw_text_container = element.tag_name.eq_ignore_ascii_case("script")
+                    || element.tag_name.eq_ignore_ascii_case("style");
                 for child in &self.nodes[node_id.0].children {
-                    out.push_str(&self.dump_node(*child));
+                    if raw_text_container {
+                        match &self.nodes[child.0].node_type {
+                            NodeType::Text(text) => out.push_str(text),
+                            _ => out.push_str(&self.dump_node(*child)),
+                        }
+                    } else {
+                        out.push_str(&self.dump_node(*child));
+                    }
                 }
                 out.push_str("</");
                 out.push_str(&element.tag_name);
@@ -1632,6 +1655,72 @@ fn has_class(element: &Element, class_name: &str) -> bool {
         .get("class")
         .map(|classes| classes.split_whitespace().any(|c| c == class_name))
         .unwrap_or(false)
+}
+
+fn should_strip_inner_html_element(tag_name: &str) -> bool {
+    tag_name.eq_ignore_ascii_case("script")
+}
+
+fn sanitize_inner_html_element_attrs(element: &mut Element) {
+    element.attrs.retain(|name, value| {
+        if name.starts_with("on") {
+            return false;
+        }
+        if is_javascript_url_attr(name) && is_javascript_scheme(value) {
+            return false;
+        }
+        true
+    });
+    element.checked = element.attrs.contains_key("checked");
+    element.disabled = element.attrs.contains_key("disabled");
+    element.readonly = element.attrs.contains_key("readonly");
+    element.required = element.attrs.contains_key("required");
+    element.value = element.attrs.get("value").cloned().unwrap_or_default();
+}
+
+fn is_javascript_url_attr(name: &str) -> bool {
+    matches!(
+        name,
+        "href" | "src" | "xlink:href" | "action" | "formaction"
+    )
+}
+
+fn is_javascript_scheme(value: &str) -> bool {
+    let mut normalized = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_whitespace() || ch.is_ascii_control() {
+            continue;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    normalized.starts_with("javascript:")
+}
+
+fn escape_html_text_for_serialization(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_html_attr_for_serialization(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn class_tokens(class_attr: Option<&str>) -> Vec<String> {
@@ -1970,10 +2059,7 @@ fn encode_binary_string_to_base64(src: &str) -> Result<String> {
 }
 
 fn decode_base64_to_binary_string(src: &str) -> Result<String> {
-    let mut bytes: Vec<u8> = src
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let mut bytes: Vec<u8> = src.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if bytes.is_empty() {
         return Ok(String::new());
     }
@@ -2059,9 +2145,10 @@ fn decode_uri_like(src: &str, component: bool) -> Result<String> {
 
     while i < bytes.len() {
         if bytes[i] != b'%' {
-            let ch = src[i..].chars().next().ok_or_else(|| {
-                Error::ScriptRuntime("malformed URI sequence".into())
-            })?;
+            let ch = src[i..]
+                .chars()
+                .next()
+                .ok_or_else(|| Error::ScriptRuntime("malformed URI sequence".into()))?;
             out.push(ch);
             i += ch.len_utf8();
             continue;
@@ -2179,17 +2266,28 @@ fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
     if b.is_ascii_alphanumeric() {
         return true;
     }
-    if matches!(b, b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')') {
+    if matches!(
+        b,
+        b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+    ) {
         return true;
     }
-    if !component && matches!(b, b';' | b',' | b'/' | b'?' | b':' | b'@' | b'&' | b'=' | b'+' | b'$' | b'#') {
+    if !component
+        && matches!(
+            b,
+            b';' | b',' | b'/' | b'?' | b':' | b'@' | b'&' | b'=' | b'+' | b'$' | b'#'
+        )
+    {
         return true;
     }
     false
 }
 
 fn is_decode_uri_reserved_char(ch: char) -> bool {
-    matches!(ch, ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#')
+    matches!(
+        ch,
+        ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#'
+    )
 }
 
 fn is_unescaped_legacy_escape_byte(b: u8) -> bool {
@@ -3157,11 +3255,7 @@ struct ArrayBufferValue {
 
 impl ArrayBufferValue {
     fn byte_length(&self) -> usize {
-        if self.detached {
-            0
-        } else {
-            self.bytes.len()
-        }
+        if self.detached { 0 } else { self.bytes.len() }
     }
 
     fn max_byte_length(&self) -> usize {
@@ -5590,8 +5684,13 @@ impl Harness {
         self.running_timer_canceled = false;
         let mut event = EventState::new("timeout", self.dom.root, self.now_ms);
         self.run_in_task_context(|this| {
-            this.execute_timer_task_callback(&task.callback, &task.callback_args, &mut event, &mut task.env)
-                .map(|_| ())
+            this.execute_timer_task_callback(
+                &task.callback,
+                &task.callback_args,
+                &mut event,
+                &mut task.env,
+            )
+            .map(|_| ())
         })?;
         let canceled = self.running_timer_canceled;
         self.running_timer_id = None;
@@ -6137,10 +6236,12 @@ impl Harness {
         env.remove(INTERNAL_RETURN_SLOT);
         match flow {
             ExecFlow::Continue => Ok(()),
-            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
-            ExecFlow::ContinueLoop => {
-                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
-            }
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
             ExecFlow::Return => Ok(()),
         }
     }
@@ -6176,10 +6277,12 @@ impl Harness {
         env.remove(INTERNAL_RETURN_SLOT);
         match flow {
             ExecFlow::Continue => Ok(()),
-            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
-            ExecFlow::ContinueLoop => {
-                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
-            }
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
             ExecFlow::Return => Ok(()),
         }
     }
@@ -6257,13 +6360,20 @@ impl Harness {
         call_env.remove(INTERNAL_RETURN_SLOT);
         function.handler.bind_event_params(args, &mut call_env);
         let mut call_event = event.clone();
-        let flow = self.execute_stmts(&function.handler.stmts, &None, &mut call_event, &mut call_env)?;
+        let flow = self.execute_stmts(
+            &function.handler.stmts,
+            &None,
+            &mut call_event,
+            &mut call_env,
+        )?;
         match flow {
             ExecFlow::Continue => Ok(Value::Undefined),
-            ExecFlow::Break => Err(Error::ScriptRuntime("break statement outside of loop".into())),
-            ExecFlow::ContinueLoop => {
-                Err(Error::ScriptRuntime("continue statement outside of loop".into()))
-            }
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
             ExecFlow::Return => Ok(call_env
                 .remove(INTERNAL_RETURN_SLOT)
                 .unwrap_or(Value::Undefined)),
@@ -6320,9 +6430,15 @@ impl Harness {
                         VarAssignOp::Sub => self.eval_binary(&BinaryOp::Sub, &previous, &value)?,
                         VarAssignOp::Mul => self.eval_binary(&BinaryOp::Mul, &previous, &value)?,
                         VarAssignOp::Pow => self.eval_binary(&BinaryOp::Pow, &previous, &value)?,
-                        VarAssignOp::BitOr => self.eval_binary(&BinaryOp::BitOr, &previous, &value)?,
-                        VarAssignOp::BitXor => self.eval_binary(&BinaryOp::BitXor, &previous, &value)?,
-                        VarAssignOp::BitAnd => self.eval_binary(&BinaryOp::BitAnd, &previous, &value)?,
+                        VarAssignOp::BitOr => {
+                            self.eval_binary(&BinaryOp::BitOr, &previous, &value)?
+                        }
+                        VarAssignOp::BitXor => {
+                            self.eval_binary(&BinaryOp::BitXor, &previous, &value)?
+                        }
+                        VarAssignOp::BitAnd => {
+                            self.eval_binary(&BinaryOp::BitAnd, &previous, &value)?
+                        }
                         VarAssignOp::ShiftLeft => {
                             self.eval_binary(&BinaryOp::ShiftLeft, &previous, &value)?
                         }
@@ -6357,7 +6473,7 @@ impl Harness {
                             return Err(Error::ScriptRuntime(format!(
                                 "cannot apply update operator to '{}'",
                                 name
-                            )))
+                            )));
                         }
                     };
                     env.insert(name.clone(), next);
@@ -6412,13 +6528,13 @@ impl Harness {
                             return Err(Error::ScriptRuntime(format!(
                                 "variable '{}' is not an object",
                                 target
-                            )))
+                            )));
                         }
                         None => {
                             return Err(Error::ScriptRuntime(format!(
                                 "unknown variable: {}",
                                 target
-                            )))
+                            )));
                         }
                     }
                 }
@@ -6841,20 +6957,23 @@ impl Harness {
                     body,
                 } => {
                     if let Some(init) = init.as_deref() {
-                        match self
-                            .execute_stmts(std::slice::from_ref(init), event_param, event, env)?
-                        {
+                        match self.execute_stmts(
+                            std::slice::from_ref(init),
+                            event_param,
+                            event,
+                            env,
+                        )? {
                             ExecFlow::Continue => {}
                             ExecFlow::Return => return Ok(ExecFlow::Return),
                             ExecFlow::Break => {
                                 return Err(Error::ScriptRuntime(
                                     "break statement outside of loop".into(),
-                                ))
+                                ));
                             }
                             ExecFlow::ContinueLoop => {
                                 return Err(Error::ScriptRuntime(
                                     "continue statement outside of loop".into(),
-                                ))
+                                ));
                             }
                         }
                     }
@@ -6894,13 +7013,18 @@ impl Harness {
                             ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                         if let Some(post) = post.as_deref() {
-                            match self.execute_stmts(std::slice::from_ref(post), event_param, event, env)? {
+                            match self.execute_stmts(
+                                std::slice::from_ref(post),
+                                event_param,
+                                event,
+                                env,
+                            )? {
                                 ExecFlow::Continue => {}
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                                 ExecFlow::Break | ExecFlow::ContinueLoop => {
                                     return Err(Error::ScriptRuntime(
                                         "invalid loop control in post expression".into(),
-                                    ))
+                                    ));
                                 }
                             }
                         }
@@ -6949,10 +7073,9 @@ impl Harness {
                 } => {
                     let iterable = self.eval_expr(iterable, env, event_param, event)?;
                     let nodes = match iterable {
-                        Value::NodeList(nodes) => nodes
-                            .into_iter()
-                            .map(Value::Node)
-                            .collect::<Vec<_>>(),
+                        Value::NodeList(nodes) => {
+                            nodes.into_iter().map(Value::Node).collect::<Vec<_>>()
+                        }
                         Value::Array(values) => values.borrow().clone(),
                         Value::Map(map) => self.map_entries_array(&map),
                         Value::Set(set) => set.borrow().values.clone(),
@@ -6990,19 +7113,17 @@ impl Harness {
                         }
                     }
                 }
-                Stmt::DoWhile { cond, body } => {
-                    loop {
-                        match self.execute_stmts(body, event_param, event, env)? {
-                            ExecFlow::Continue => {}
-                            ExecFlow::ContinueLoop => {}
-                            ExecFlow::Break => break,
-                            ExecFlow::Return => return Ok(ExecFlow::Return),
-                        }
-                        if !self.eval_expr(cond, env, event_param, event)?.truthy() {
-                            break;
-                        }
+                Stmt::DoWhile { cond, body } => loop {
+                    match self.execute_stmts(body, event_param, event, env)? {
+                        ExecFlow::Continue => {}
+                        ExecFlow::ContinueLoop => {}
+                        ExecFlow::Break => break,
+                        ExecFlow::Return => return Ok(ExecFlow::Return),
                     }
-                }
+                    if !self.eval_expr(cond, env, event_param, event)?.truthy() {
+                        break;
+                    }
+                },
                 Stmt::If {
                     cond,
                     then_stmts,
@@ -7086,7 +7207,9 @@ impl Harness {
                         DomMethod::Click => self.click_node_with_env(node, env)?,
                         DomMethod::Submit => self.submit_form_with_env(node, env)?,
                         DomMethod::Reset => self.reset_form_with_env(node, env)?,
-                        DomMethod::ScrollIntoView => self.scroll_into_view_node_with_env(node, env)?,
+                        DomMethod::ScrollIntoView => {
+                            self.scroll_into_view_node_with_env(node, env)?
+                        }
                     }
                 }
                 Stmt::DispatchEvent { target, event_type } => {
@@ -7257,10 +7380,7 @@ impl Harness {
                     return Ok(Value::Null);
                 };
                 Ok(Self::new_array_value(
-                    captures
-                        .into_iter()
-                        .map(Value::String)
-                        .collect::<Vec<_>>(),
+                    captures.into_iter().map(Value::String).collect::<Vec<_>>(),
                 ))
             }
             Expr::RegexToString { regex } => {
@@ -7292,9 +7412,9 @@ impl Harness {
                     .map(|value| self.eval_expr(value, env, event_param, event))
                     .transpose()?
                     .unwrap_or(Value::Number(0));
-                Ok(Self::number_value(Self::coerce_number_for_number_constructor(
-                    &value,
-                )))
+                Ok(Self::number_value(
+                    Self::coerce_number_for_number_constructor(&value),
+                ))
             }
             Expr::NumberConst(constant) => match constant {
                 NumberConst::Epsilon => Ok(Value::Float(f64::EPSILON)),
@@ -7393,11 +7513,13 @@ impl Harness {
                 };
                 let end = end.max(start);
                 let bytes = source.bytes[start..end].to_vec();
-                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
-                    bytes,
-                    max_byte_length: None,
-                    detached: false,
-                }))))
+                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+                    ArrayBufferValue {
+                        bytes,
+                        max_byte_length: None,
+                        detached: false,
+                    },
+                ))))
             }
             Expr::ArrayBufferTransfer {
                 target,
@@ -7411,7 +7533,14 @@ impl Harness {
                 kind,
                 args,
                 called_with_new,
-            } => self.eval_typed_array_construct(*kind, args, *called_with_new, env, event_param, event),
+            } => self.eval_typed_array_construct(
+                *kind,
+                args,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
             Expr::TypedArrayConstructWithCallee {
                 callee,
                 args,
@@ -7427,13 +7556,7 @@ impl Harness {
             Expr::PromiseConstruct {
                 executor,
                 called_with_new,
-            } => self.eval_promise_construct(
-                executor,
-                *called_with_new,
-                env,
-                event_param,
-                event,
-            ),
+            } => self.eval_promise_construct(executor, *called_with_new, env, event_param, event),
             Expr::PromiseConstructor => Ok(Value::PromiseConstructor),
             Expr::PromiseStaticMethod { method, args } => {
                 self.eval_promise_static_method(*method, args, env, event_param, event)
@@ -7446,13 +7569,7 @@ impl Harness {
             Expr::MapConstruct {
                 iterable,
                 called_with_new,
-            } => self.eval_map_construct(
-                iterable,
-                *called_with_new,
-                env,
-                event_param,
-                event,
-            ),
+            } => self.eval_map_construct(iterable, *called_with_new, env, event_param, event),
             Expr::MapConstructor => Ok(Value::MapConstructor),
             Expr::MapStaticMethod { method, args } => {
                 self.eval_map_static_method(*method, args, env, event_param, event)
@@ -7465,13 +7582,7 @@ impl Harness {
             Expr::SetConstruct {
                 iterable,
                 called_with_new,
-            } => self.eval_set_construct(
-                iterable,
-                *called_with_new,
-                env,
-                event_param,
-                event,
-            ),
+            } => self.eval_set_construct(iterable, *called_with_new, env, event_param, event),
             Expr::SetConstructor => Ok(Value::SetConstructor),
             Expr::SetMethod {
                 target,
@@ -7481,41 +7592,34 @@ impl Harness {
             Expr::SymbolConstruct {
                 description,
                 called_with_new,
-            } => self.eval_symbol_construct(
-                description,
-                *called_with_new,
-                env,
-                event_param,
-                event,
-            ),
+            } => self.eval_symbol_construct(description, *called_with_new, env, event_param, event),
             Expr::SymbolConstructor => Ok(Value::SymbolConstructor),
             Expr::SymbolStaticMethod { method, args } => {
                 self.eval_symbol_static_method(*method, args, env, event_param, event)
             }
-            Expr::SymbolStaticProperty(property) => {
-                Ok(self.eval_symbol_static_property(*property))
-            }
+            Expr::SymbolStaticProperty(property) => Ok(self.eval_symbol_static_property(*property)),
             Expr::TypedArrayStaticBytesPerElement(kind) => {
                 Ok(Value::Number(kind.bytes_per_element() as i64))
             }
             Expr::TypedArrayStaticMethod { kind, method, args } => {
                 self.eval_typed_array_static_method(*kind, *method, args, env, event_param, event)
             }
-            Expr::TypedArrayByteLength(target) => {
-                match env.get(target) {
-                    Some(Value::TypedArray(array)) => {
-                        Ok(Value::Number(array.borrow().observed_byte_length() as i64))
-                    }
-                    Some(Value::ArrayBuffer(buffer)) => {
-                        Ok(Value::Number(buffer.borrow().byte_length() as i64))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not a TypedArray",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+            Expr::TypedArrayByteLength(target) => match env.get(target) {
+                Some(Value::TypedArray(array)) => {
+                    Ok(Value::Number(array.borrow().observed_byte_length() as i64))
                 }
-            }
+                Some(Value::ArrayBuffer(buffer)) => {
+                    Ok(Value::Number(buffer.borrow().byte_length() as i64))
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not a TypedArray",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
             Expr::TypedArrayByteOffset(target) => {
                 let array = self.resolve_typed_array_from_env(env, target)?;
                 let byte_offset = if array.borrow().observed_length() == 0
@@ -7570,7 +7674,9 @@ impl Harness {
             }
             Expr::IsFinite(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
-                Ok(Value::Bool(Self::coerce_number_for_global(&value).is_finite()))
+                Ok(Value::Bool(
+                    Self::coerce_number_for_global(&value).is_finite(),
+                ))
             }
             Expr::Atob(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
@@ -7650,91 +7756,100 @@ impl Harness {
                 }
                 Ok(Self::new_object_value(object_entries))
             }
-            Expr::ObjectGet { target, key } => match env.get(target) {
-                Some(Value::Object(entries)) => Ok(Self::object_get_entry(&entries.borrow(), key)
-                    .unwrap_or(Value::Undefined)),
-                Some(Value::Promise(promise)) => {
-                    if key == "constructor" {
-                        Ok(Value::PromiseConstructor)
-                    } else {
-                        let promise = promise.borrow();
-                        if key == "status" {
-                            let status = match &promise.state {
-                                PromiseState::Pending => "pending",
-                                PromiseState::Fulfilled(_) => "fulfilled",
-                                PromiseState::Rejected(_) => "rejected",
-                            };
-                            Ok(Value::String(status.to_string()))
+            Expr::ObjectGet { target, key } => {
+                match env.get(target) {
+                    Some(Value::Object(entries)) => {
+                        Ok(Self::object_get_entry(&entries.borrow(), key)
+                            .unwrap_or(Value::Undefined))
+                    }
+                    Some(Value::Promise(promise)) => {
+                        if key == "constructor" {
+                            Ok(Value::PromiseConstructor)
+                        } else {
+                            let promise = promise.borrow();
+                            if key == "status" {
+                                let status = match &promise.state {
+                                    PromiseState::Pending => "pending",
+                                    PromiseState::Fulfilled(_) => "fulfilled",
+                                    PromiseState::Rejected(_) => "rejected",
+                                };
+                                Ok(Value::String(status.to_string()))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
+                        }
+                    }
+                    Some(Value::Map(map)) => {
+                        let map = map.borrow();
+                        if key == "size" {
+                            Ok(Value::Number(map.entries.len() as i64))
+                        } else if key == "constructor" {
+                            Ok(Value::MapConstructor)
+                        } else {
+                            Ok(Self::object_get_entry(&map.properties, key)
+                                .unwrap_or(Value::Undefined))
+                        }
+                    }
+                    Some(Value::Set(set)) => {
+                        let set = set.borrow();
+                        if key == "size" {
+                            Ok(Value::Number(set.values.len() as i64))
+                        } else if key == "constructor" {
+                            Ok(Value::SetConstructor)
+                        } else {
+                            Ok(Self::object_get_entry(&set.properties, key)
+                                .unwrap_or(Value::Undefined))
+                        }
+                    }
+                    Some(Value::ArrayBuffer(_)) => {
+                        if key == "constructor" {
+                            Ok(Value::ArrayBufferConstructor)
                         } else {
                             Ok(Value::Undefined)
                         }
                     }
-                }
-                Some(Value::Map(map)) => {
-                    let map = map.borrow();
-                    if key == "size" {
-                        Ok(Value::Number(map.entries.len() as i64))
-                    } else if key == "constructor" {
-                        Ok(Value::MapConstructor)
-                    } else {
-                        Ok(Self::object_get_entry(&map.properties, key).unwrap_or(Value::Undefined))
+                    Some(Value::Symbol(symbol)) => {
+                        let value = match key.as_str() {
+                            "description" => symbol
+                                .description
+                                .as_ref()
+                                .map(|value| Value::String(value.clone()))
+                                .unwrap_or(Value::Undefined),
+                            "constructor" => Value::SymbolConstructor,
+                            _ => Value::Undefined,
+                        };
+                        Ok(value)
                     }
-                }
-                Some(Value::Set(set)) => {
-                    let set = set.borrow();
-                    if key == "size" {
-                        Ok(Value::Number(set.values.len() as i64))
-                    } else if key == "constructor" {
-                        Ok(Value::SetConstructor)
-                    } else {
-                        Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
+                    Some(Value::RegExp(regex)) => {
+                        let regex = regex.borrow();
+                        let value = match key.as_str() {
+                            "source" => Value::String(regex.source.clone()),
+                            "flags" => Value::String(regex.flags.clone()),
+                            "global" => Value::Bool(regex.global),
+                            "ignoreCase" => Value::Bool(regex.ignore_case),
+                            "multiline" => Value::Bool(regex.multiline),
+                            "dotAll" => Value::Bool(regex.dot_all),
+                            "sticky" => Value::Bool(regex.sticky),
+                            "hasIndices" => Value::Bool(regex.has_indices),
+                            "unicode" => Value::Bool(regex.unicode),
+                            "unicodeSets" => Value::Bool(false),
+                            "lastIndex" => Value::Number(regex.last_index as i64),
+                            "constructor" => Value::RegExpConstructor,
+                            _ => Self::object_get_entry(&regex.properties, key)
+                                .unwrap_or(Value::Undefined),
+                        };
+                        Ok(value)
                     }
+                    Some(_) => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an object",
+                        target
+                    ))),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
                 }
-                Some(Value::ArrayBuffer(_)) => {
-                    if key == "constructor" {
-                        Ok(Value::ArrayBufferConstructor)
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                }
-                Some(Value::Symbol(symbol)) => {
-                    let value = match key.as_str() {
-                        "description" => symbol
-                            .description
-                            .as_ref()
-                            .map(|value| Value::String(value.clone()))
-                            .unwrap_or(Value::Undefined),
-                        "constructor" => Value::SymbolConstructor,
-                        _ => Value::Undefined,
-                    };
-                    Ok(value)
-                }
-                Some(Value::RegExp(regex)) => {
-                    let regex = regex.borrow();
-                    let value = match key.as_str() {
-                        "source" => Value::String(regex.source.clone()),
-                        "flags" => Value::String(regex.flags.clone()),
-                        "global" => Value::Bool(regex.global),
-                        "ignoreCase" => Value::Bool(regex.ignore_case),
-                        "multiline" => Value::Bool(regex.multiline),
-                        "dotAll" => Value::Bool(regex.dot_all),
-                        "sticky" => Value::Bool(regex.sticky),
-                        "hasIndices" => Value::Bool(regex.has_indices),
-                        "unicode" => Value::Bool(regex.unicode),
-                        "unicodeSets" => Value::Bool(false),
-                        "lastIndex" => Value::Number(regex.last_index as i64),
-                        "constructor" => Value::RegExpConstructor,
-                        _ => Self::object_get_entry(&regex.properties, key)
-                            .unwrap_or(Value::Undefined),
-                    };
-                    Ok(value)
-                }
-                Some(_) => Err(Error::ScriptRuntime(format!(
-                    "variable '{}' is not an object",
-                    target
-                ))),
-                None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
-            },
+            }
             Expr::ObjectGetOwnPropertySymbols(object) => {
                 let object = self.eval_expr(object, env, event_param, event)?;
                 match object {
@@ -7826,11 +7941,9 @@ impl Harness {
             Expr::ObjectGetPrototypeOf(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 match value {
-                    Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) => {
-                        Ok(Value::TypedArrayConstructor(
-                            TypedArrayConstructorKind::Abstract,
-                        ))
-                    }
+                    Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) => Ok(
+                        Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract),
+                    ),
                     Value::TypedArray(_) => Ok(Value::TypedArrayConstructor(
                         TypedArrayConstructorKind::Abstract,
                     )),
@@ -7862,7 +7975,10 @@ impl Harness {
                         "variable '{}' is not an object",
                         target
                     ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
                 }
             }
             Expr::ArrayLiteral(values) => {
@@ -7876,27 +7992,29 @@ impl Harness {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::Bool(matches!(value, Value::Array(_))))
             }
-            Expr::ArrayLength(target) => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
-                    Some(Value::TypedArray(values)) => {
-                        Ok(Value::Number(values.borrow().observed_length() as i64))
-                    }
-                    Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
-                    Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+            Expr::ArrayLength(target) => match env.get(target) {
+                Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
+                Some(Value::TypedArray(values)) => {
+                    Ok(Value::Number(values.borrow().observed_length() as i64))
                 }
-            }
+                Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
+                Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
             Expr::ArrayIndex { target, index } => {
                 let index = self.eval_expr(index, env, event_param, event)?;
                 match env.get(target) {
                     Some(Value::Object(entries)) => {
                         let key = self.property_key_to_storage_key(&index);
-                        Ok(Self::object_get_entry(&entries.borrow(), &key).unwrap_or(Value::Undefined))
+                        Ok(Self::object_get_entry(&entries.borrow(), &key)
+                            .unwrap_or(Value::Undefined))
                     }
                     Some(Value::Array(values)) => {
                         let Some(index) = self.value_as_index(&index) else {
@@ -7938,7 +8056,10 @@ impl Harness {
                         "variable '{}' is not an array",
                         target
                     ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
                 }
             }
             Expr::ArrayPush { target, args } => {
@@ -7976,355 +8097,362 @@ impl Harness {
                 }
                 Ok(Value::Number(values.len() as i64))
             }
-            Expr::ArrayMap { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        let mut out = Vec::with_capacity(input.len());
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let mapped = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            out.push(mapped);
-                        }
-                        Ok(Self::new_array_value(out))
+            Expr::ArrayMap { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    let mut out = Vec::with_capacity(input.len());
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let mapped = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        out.push(mapped);
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        let kind = values.borrow().kind;
-                        let mut out = Vec::with_capacity(input.len());
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let mapped = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            out.push(mapped);
-                        }
-                        self.new_typed_array_from_values(kind, &out)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(Self::new_array_value(out))
                 }
-            }
-            Expr::ArrayFilter { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        let mut out = Vec::new();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let keep = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if keep.truthy() {
-                                out.push(item);
-                            }
-                        }
-                        Ok(Self::new_array_value(out))
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    let kind = values.borrow().kind;
+                    let mut out = Vec::with_capacity(input.len());
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let mapped = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        out.push(mapped);
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        let kind = values.borrow().kind;
-                        let mut out = Vec::new();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let keep = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if keep.truthy() {
-                                out.push(item);
-                            }
-                        }
-                        self.new_typed_array_from_values(kind, &out)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    self.new_typed_array_from_values(kind, &out)
                 }
-            }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArrayFilter { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    let mut out = Vec::new();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let keep = self.execute_array_callback(
+                            callback,
+                            &[
+                                item.clone(),
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if keep.truthy() {
+                            out.push(item);
+                        }
+                    }
+                    Ok(Self::new_array_value(out))
+                }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    let kind = values.borrow().kind;
+                    let mut out = Vec::new();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let keep = self.execute_array_callback(
+                            callback,
+                            &[
+                                item.clone(),
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if keep.truthy() {
+                            out.push(item);
+                        }
+                    }
+                    self.new_typed_array_from_values(kind, &out)
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
             Expr::ArrayReduce {
                 target,
                 callback,
                 initial,
-            } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        let mut start_index = 0usize;
-                        let mut acc = if let Some(initial) = initial {
-                            self.eval_expr(initial, env, event_param, event)?
-                        } else {
-                            let Some(first) = input.first().cloned() else {
-                                return Err(Error::ScriptRuntime(
-                                    "reduce of empty array with no initial value".into(),
-                                ));
-                            };
-                            start_index = 1;
-                            first
+            } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    let mut start_index = 0usize;
+                    let mut acc = if let Some(initial) = initial {
+                        self.eval_expr(initial, env, event_param, event)?
+                    } else {
+                        let Some(first) = input.first().cloned() else {
+                            return Err(Error::ScriptRuntime(
+                                "reduce of empty array with no initial value".into(),
+                            ));
                         };
-                        for (idx, item) in input.into_iter().enumerate().skip(start_index) {
-                            acc = self.execute_array_callback(
-                                callback,
-                                &[
-                                    acc,
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                        }
-                        Ok(acc)
+                        start_index = 1;
+                        first
+                    };
+                    for (idx, item) in input.into_iter().enumerate().skip(start_index) {
+                        acc = self.execute_array_callback(
+                            callback,
+                            &[
+                                acc,
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        let mut start_index = 0usize;
-                        let mut acc = if let Some(initial) = initial {
-                            self.eval_expr(initial, env, event_param, event)?
-                        } else {
-                            let Some(first) = input.first().cloned() else {
-                                return Err(Error::ScriptRuntime(
-                                    "reduce of empty array with no initial value".into(),
-                                ));
-                            };
-                            start_index = 1;
-                            first
+                    Ok(acc)
+                }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    let mut start_index = 0usize;
+                    let mut acc = if let Some(initial) = initial {
+                        self.eval_expr(initial, env, event_param, event)?
+                    } else {
+                        let Some(first) = input.first().cloned() else {
+                            return Err(Error::ScriptRuntime(
+                                "reduce of empty array with no initial value".into(),
+                            ));
                         };
-                        for (idx, item) in input.into_iter().enumerate().skip(start_index) {
-                            acc = self.execute_array_callback(
-                                callback,
-                                &[
-                                    acc,
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                        }
-                        Ok(acc)
+                        start_index = 1;
+                        first
+                    };
+                    for (idx, item) in input.into_iter().enumerate().skip(start_index) {
+                        acc = self.execute_array_callback(
+                            callback,
+                            &[
+                                acc,
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
                     }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(acc)
                 }
-            }
-            Expr::ArrayForEach { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let _ = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                        }
-                        Ok(Value::Undefined)
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArrayForEach { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let _ = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let _ = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                        }
-                        Ok(Value::Undefined)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(Value::Undefined)
                 }
-            }
-            Expr::ArrayFind { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(item);
-                            }
-                        }
-                        Ok(Value::Undefined)
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let _ = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(item);
-                            }
-                        }
-                        Ok(Value::Undefined)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(Value::Undefined)
                 }
-            }
-            Expr::ArraySome { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Bool(true));
-                            }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArrayFind { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item.clone(),
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(item);
                         }
-                        Ok(Value::Bool(false))
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Bool(true));
-                            }
-                        }
-                        Ok(Value::Bool(false))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(Value::Undefined)
                 }
-            }
-            Expr::ArrayEvery { target, callback } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if !matched.truthy() {
-                                return Ok(Value::Bool(false));
-                            }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item.clone(),
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(item);
                         }
-                        Ok(Value::Bool(true))
                     }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if !matched.truthy() {
-                                return Ok(Value::Bool(false));
-                            }
-                        }
-                        Ok(Value::Bool(true))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    Ok(Value::Undefined)
                 }
-            }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArraySome { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(Value::Bool(true));
+                        }
+                    }
+                    Ok(Value::Bool(false))
+                }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(Value::Bool(true));
+                        }
+                    }
+                    Ok(Value::Bool(false))
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArrayEvery { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if !matched.truthy() {
+                            return Ok(Value::Bool(false));
+                        }
+                    }
+                    Ok(Value::Bool(true))
+                }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if !matched.truthy() {
+                            return Ok(Value::Bool(false));
+                        }
+                    }
+                    Ok(Value::Bool(true))
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
             Expr::ArrayIncludes {
                 target,
                 search,
@@ -8392,103 +8520,109 @@ impl Harness {
                         "variable '{}' is not an array",
                         target
                     ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
                 }
             }
-            Expr::ArraySlice { target, start, end } => {
-                match env.get(target) {
-                    Some(Value::Array(values)) => {
-                        let values = values.borrow();
-                        let len = values.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Self::new_array_value(values[start..end].to_vec()))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let snapshot = self.typed_array_snapshot(values)?;
-                        let kind = values.borrow().kind;
-                        let len = snapshot.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        self.new_typed_array_from_values(kind, &snapshot[start..end])
-                    }
-                    Some(Value::ArrayBuffer(buffer)) => {
-                        Self::ensure_array_buffer_not_detached(buffer, "slice")?;
-                        let source = buffer.borrow();
-                        let len = source.bytes.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+            Expr::ArraySlice { target, start, end } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let values = values.borrow();
+                    let len = values.len();
+                    let start = start
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(0);
+                    let end = end
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(len);
+                    let end = end.max(start);
+                    Ok(Self::new_array_value(values[start..end].to_vec()))
+                }
+                Some(Value::TypedArray(values)) => {
+                    let snapshot = self.typed_array_snapshot(values)?;
+                    let kind = values.borrow().kind;
+                    let len = snapshot.len();
+                    let start = start
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(0);
+                    let end = end
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(len);
+                    let end = end.max(start);
+                    self.new_typed_array_from_values(kind, &snapshot[start..end])
+                }
+                Some(Value::ArrayBuffer(buffer)) => {
+                    Self::ensure_array_buffer_not_detached(buffer, "slice")?;
+                    let source = buffer.borrow();
+                    let len = source.bytes.len();
+                    let start = start
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(0);
+                    let end = end
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(len);
+                    let end = end.max(start);
+                    Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+                        ArrayBufferValue {
                             bytes: source.bytes[start..end].to_vec(),
                             max_byte_length: None,
                             detached: false,
-                        }))))
-                    }
-                    Some(Value::String(value)) => {
-                        let len = value.chars().count();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Value::String(Self::substring_chars(value, start, end)))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+                        },
+                    ))))
                 }
-            }
+                Some(Value::String(value)) => {
+                    let len = value.chars().count();
+                    let start = start
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(0);
+                    let end = end
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(len);
+                    let end = end.max(start);
+                    Ok(Value::String(Self::substring_chars(value, start, end)))
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
             Expr::ArraySplice {
                 target,
                 start,
@@ -8537,13 +8671,13 @@ impl Harness {
                         return Err(Error::ScriptRuntime(format!(
                             "variable '{}' is not an array",
                             target
-                        )))
+                        )));
                     }
                     None => {
                         return Err(Error::ScriptRuntime(format!(
                             "unknown variable: {}",
                             target
-                        )))
+                        )));
                     }
                 };
                 let mut out = String::new();
@@ -8774,7 +8908,9 @@ impl Harness {
                 Self::structured_clone_value(&value, &mut Vec::new(), &mut Vec::new())
             }
             Expr::Fetch(request) => {
-                let request = self.eval_expr(request, env, event_param, event)?.as_string();
+                let request = self
+                    .eval_expr(request, env, event_param, event)?
+                    .as_string();
                 self.fetch_calls.push(request.clone());
                 let response = self.fetch_mocks.get(&request).cloned().ok_or_else(|| {
                     Error::ScriptRuntime(format!("fetch mock not found for request: {request}"))
@@ -8782,7 +8918,9 @@ impl Harness {
                 Ok(Value::String(response))
             }
             Expr::Alert(message) => {
-                let message = self.eval_expr(message, env, event_param, event)?.as_string();
+                let message = self
+                    .eval_expr(message, env, event_param, event)?
+                    .as_string();
                 self.alert_messages.push(message);
                 Ok(Value::Undefined)
             }
@@ -8823,10 +8961,9 @@ impl Harness {
                     parts.push(part);
                 }
 
-                let body_src = parts
-                    .last()
-                    .cloned()
-                    .ok_or_else(|| Error::ScriptRuntime("new Function requires body argument".into()))?;
+                let body_src = parts.last().cloned().ok_or_else(|| {
+                    Error::ScriptRuntime("new Function requires body argument".into())
+                })?;
                 let mut params = Vec::new();
                 for part in parts.iter().take(parts.len().saturating_sub(1)) {
                     params.extend(Self::parse_function_constructor_param_names(part)?);
@@ -8835,11 +8972,7 @@ impl Harness {
                 let stmts = parse_block_statements(&body_src).map_err(|err| {
                     Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
                 })?;
-                Ok(self.make_function_value(
-                    ScriptHandler { params, stmts },
-                    env,
-                    true,
-                ))
+                Ok(self.make_function_value(ScriptHandler { params, stmts }, env, true))
             }
             Expr::FunctionCall { target, args } => {
                 let callee = env
@@ -8905,13 +9038,15 @@ impl Harness {
                     .iter()
                     .map(|arg| self.eval_expr(arg, env, event_param, event))
                     .collect::<Result<Vec<_>>>()?;
-                let id = self.schedule_interval(handler.callback.clone(), interval, callback_args, env);
+                let id =
+                    self.schedule_interval(handler.callback.clone(), interval, callback_args, env);
                 Ok(Value::Number(id))
             }
             Expr::RequestAnimationFrame { callback } => {
                 const FRAME_DELAY_MS: i64 = 16;
                 let callback_args = vec![Value::Number(self.now_ms.saturating_add(FRAME_DELAY_MS))];
-                let id = self.schedule_timeout(callback.clone(), FRAME_DELAY_MS, callback_args, env);
+                let id =
+                    self.schedule_timeout(callback.clone(), FRAME_DELAY_MS, callback_args, env);
                 Ok(Value::Number(id))
             }
             Expr::QueueMicrotask { handler } => {
@@ -8927,10 +9062,8 @@ impl Harness {
                 if let DomQuery::Var(name) = target {
                     if let Some(Value::Object(entries)) = env.get(name) {
                         if let Some(key) = Self::object_key_from_dom_prop(prop) {
-                            return Ok(
-                                Self::object_get_entry(&entries.borrow(), key)
-                                    .unwrap_or(Value::Undefined),
-                            );
+                            return Ok(Self::object_get_entry(&entries.borrow(), key)
+                                .unwrap_or(Value::Undefined));
                         }
                     }
                 }
@@ -9130,7 +9263,7 @@ impl Harness {
                     Ok(Value::Bool(true))
                 }
             },
-                    Expr::TypeOf(inner) => {
+            Expr::TypeOf(inner) => {
                 let js_type = match inner.as_ref() {
                     Expr::Var(name) => env.get(name).map_or("undefined", |value| match value {
                         Value::Null => "object",
@@ -9147,22 +9280,20 @@ impl Harness {
                         | Value::SetConstructor
                         | Value::SymbolConstructor
                         | Value::RegExpConstructor
-                        | Value::PromiseCapability(_) => {
-                            "function"
-                        }
+                        | Value::PromiseCapability(_) => "function",
                         Value::Function(_) => "function",
                         Value::Node(_)
                         | Value::NodeList(_)
                         | Value::FormData(_)
                         | Value::Array(_)
                         | Value::Object(_)
-                            | Value::Map(_)
-                            | Value::Set(_)
-                            | Value::Promise(_)
-                            | Value::ArrayBuffer(_)
-                            | Value::TypedArray(_)
-                            | Value::RegExp(_)
-                            | Value::Date(_) => "object",
+                        | Value::Map(_)
+                        | Value::Set(_)
+                        | Value::Promise(_)
+                        | Value::ArrayBuffer(_)
+                        | Value::TypedArray(_)
+                        | Value::RegExp(_)
+                        | Value::Date(_) => "object",
                     }),
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
@@ -9181,9 +9312,7 @@ impl Harness {
                             | Value::SetConstructor
                             | Value::SymbolConstructor
                             | Value::RegExpConstructor
-                            | Value::PromiseCapability(_) => {
-                                "function"
-                            }
+                            | Value::PromiseCapability(_) => "function",
                             Value::Function(_) => "function",
                             Value::Node(_)
                             | Value::NodeList(_)
@@ -9275,7 +9404,9 @@ impl Harness {
                         "cannot mix BigInt and other types in bitwise operations".into(),
                     ));
                 }
-                Value::Number(i64::from(self.to_i32_for_bitwise(left) | self.to_i32_for_bitwise(right)))
+                Value::Number(i64::from(
+                    self.to_i32_for_bitwise(left) | self.to_i32_for_bitwise(right),
+                ))
             }
             BinaryOp::BitXor => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
@@ -9773,7 +9904,11 @@ impl Harness {
             ));
         }
         if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
-            return Ok(Value::String(format!("{}{}", left.as_string(), right.as_string())));
+            return Ok(Value::String(format!(
+                "{}{}",
+                left.as_string(),
+                right.as_string()
+            )));
         }
 
         if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
@@ -9793,7 +9928,9 @@ impl Harness {
                     Ok(Value::Float((*l as f64) + (*r as f64)))
                 }
             }
-            _ => Ok(Value::Float(self.numeric_value(left) + self.numeric_value(right))),
+            _ => Ok(Value::Float(
+                self.numeric_value(left) + self.numeric_value(right),
+            )),
         }
     }
 
@@ -10180,9 +10317,9 @@ impl Harness {
                 return Ok(Value::Number(n));
             }
         }
-        let n = token.parse::<f64>().map_err(|_| {
-            Error::ScriptRuntime("JSON.parse invalid JSON: invalid number".into())
-        })?;
+        let n = token
+            .parse::<f64>()
+            .map_err(|_| Error::ScriptRuntime("JSON.parse invalid JSON: invalid number".into()))?;
         Ok(Value::Float(n))
     }
 
@@ -10252,9 +10389,7 @@ impl Harness {
             | Value::Map(_)
             | Value::Set(_)
             | Value::ArrayBuffer(_)
-            | Value::TypedArray(_) => {
-                Ok(Some("{}".to_string()))
-            }
+            | Value::TypedArray(_) => Ok(Some("{}".to_string())),
             Value::Array(values) => {
                 let ptr = Rc::as_ptr(values) as usize;
                 if array_stack.contains(&ptr) {
@@ -10366,11 +10501,13 @@ impl Harness {
             }
             Value::ArrayBuffer(buffer) => {
                 let buffer = buffer.borrow();
-                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
-                    bytes: buffer.bytes.clone(),
-                    max_byte_length: buffer.max_byte_length,
-                    detached: buffer.detached,
-                }))))
+                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+                    ArrayBufferValue {
+                        bytes: buffer.bytes.clone(),
+                        max_byte_length: buffer.max_byte_length,
+                        detached: buffer.detached,
+                    },
+                ))))
             }
             Value::TypedArray(array) => {
                 let array = array.borrow();
@@ -10413,7 +10550,11 @@ impl Harness {
                 let items = values.borrow();
                 let mut cloned = Vec::with_capacity(items.len());
                 for item in items.iter() {
-                    cloned.push(Self::structured_clone_value(item, array_stack, object_stack)?);
+                    cloned.push(Self::structured_clone_value(
+                        item,
+                        array_stack,
+                        object_stack,
+                    )?);
                 }
                 array_stack.pop();
 
@@ -10481,9 +10622,7 @@ impl Harness {
                 'd' => info.has_indices = true,
                 'u' => info.unicode = true,
                 'v' => {
-                    return Err(
-                        "invalid regular expression flags: v flag is not supported".into(),
-                    )
+                    return Err("invalid regular expression flags: v flag is not supported".into());
                 }
                 _ => return Err(format!("invalid regular expression flags: {flags}")),
             }
@@ -10500,8 +10639,7 @@ impl Harness {
     }
 
     fn new_regex_value(pattern: String, flags: String) -> Result<Value> {
-        let info = Self::analyze_regex_flags(&flags)
-            .map_err(Error::ScriptRuntime)?;
+        let info = Self::analyze_regex_flags(&flags).map_err(Error::ScriptRuntime)?;
         let compiled = Self::compile_regex(&pattern, info).map_err(|err| {
             Error::ScriptRuntime(format!(
                 "invalid regular expression: /{pattern}/{flags}: {err}"
@@ -10634,9 +10772,9 @@ impl Harness {
             MathMethod::Atanh => Ok(Value::Float(single(&values).atanh())),
             MathMethod::Cbrt => Ok(Value::Float(single(&values).cbrt())),
             MathMethod::Ceil => Ok(Value::Float(single(&values).ceil())),
-            MathMethod::Clz32 => Ok(Value::Number(
-                i64::from(Self::to_u32_for_math(&values[0]).leading_zeros()),
-            )),
+            MathMethod::Clz32 => Ok(Value::Number(i64::from(
+                Self::to_u32_for_math(&values[0]).leading_zeros(),
+            ))),
             MathMethod::Cos => Ok(Value::Float(single(&values).cos())),
             MathMethod::Cosh => Ok(Value::Float(single(&values).cosh())),
             MathMethod::Exp => Ok(Value::Float(single(&values).exp())),
@@ -10738,7 +10876,10 @@ impl Harness {
                 } else {
                     None
                 };
-                Ok(Value::Float(parse_js_parse_int(&values[0].as_string(), radix)))
+                Ok(Value::Float(parse_js_parse_int(
+                    &values[0].as_string(),
+                    radix,
+                )))
             }
         }
     }
@@ -10895,9 +11036,8 @@ impl Harness {
                 "BigInt bit width must be a non-negative integer".into(),
             ));
         }
-        let bits = usize::try_from(bits_i64).map_err(|_| {
-            Error::ScriptRuntime("BigInt bit width is too large".into())
-        })?;
+        let bits = usize::try_from(bits_i64)
+            .map_err(|_| Error::ScriptRuntime("BigInt bit width is too large".into()))?;
         let value = Self::coerce_bigint_for_builtin_op(&values[1])?;
         let out = match method {
             BigIntMethod::AsIntN => Self::bigint_as_int_n(bits, &value),
@@ -11103,9 +11243,8 @@ impl Harness {
                 original
             )));
         }
-        JsBigInt::parse_bytes(src.as_bytes(), radix).ok_or_else(|| {
-            Error::ScriptRuntime(format!("cannot convert {} to a BigInt", original))
-        })
+        JsBigInt::parse_bytes(src.as_bytes(), radix)
+            .ok_or_else(|| Error::ScriptRuntime(format!("cannot convert {} to a BigInt", original)))
     }
 
     fn parse_signed_decimal_bigint(src: &str, negative: bool) -> Result<JsBigInt> {
@@ -11117,10 +11256,7 @@ impl Harness {
             )));
         }
         let mut value = JsBigInt::parse_bytes(src.as_bytes(), 10).ok_or_else(|| {
-            Error::ScriptRuntime(format!(
-                "cannot convert {} to a BigInt",
-                original
-            ))
+            Error::ScriptRuntime(format!("cannot convert {} to a BigInt", original))
         })?;
         if negative {
             value = -value;
@@ -11168,7 +11304,11 @@ impl Harness {
         if value == 0.0 && value.is_sign_negative() {
             return Value::Float(-0.0);
         }
-        if value.is_finite() && value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        if value.is_finite()
+            && value.fract() == 0.0
+            && value >= i64::MIN as f64
+            && value <= i64::MAX as f64
+        {
             let integer = value as i64;
             if (integer as f64) == value {
                 return Value::Number(integer);
@@ -11318,7 +11458,11 @@ impl Harness {
         }
 
         let out = if let Some(fraction_digits) = fraction_digits {
-            format!("{:.*e}", fraction_digits, if value == 0.0 { 0.0 } else { value })
+            format!(
+                "{:.*e}",
+                fraction_digits,
+                if value == 0.0 { 0.0 } else { value }
+            )
         } else {
             format!("{:e}", if value == 0.0 { 0.0 } else { value })
         };
@@ -11349,7 +11493,11 @@ impl Harness {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
-        format!("{:.*}", fraction_digits, if value == 0.0 { 0.0 } else { value })
+        format!(
+            "{:.*}",
+            fraction_digits,
+            if value == 0.0 { 0.0 } else { value }
+        )
     }
 
     fn number_to_precision(value: f64, precision: usize) -> String {
@@ -11464,11 +11612,7 @@ impl Harness {
         }
         let floor = value.floor();
         let frac = value - floor;
-        if frac < 0.5 {
-            floor
-        } else {
-            floor + 1.0
-        }
+        if frac < 0.5 { floor } else { floor + 1.0 }
     }
 
     fn js_math_sign(value: f64) -> f64 {
@@ -11647,7 +11791,10 @@ impl Harness {
                 "variable '{}' is not an ArrayBuffer",
                 target
             ))),
-            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+            None => Err(Error::ScriptRuntime(format!(
+                "unknown variable: {}",
+                target
+            ))),
         }
     }
 
@@ -11662,7 +11809,10 @@ impl Harness {
                 "variable '{}' is not a TypedArray",
                 target
             ))),
-            None => Err(Error::ScriptRuntime(format!("unknown variable: {}", target))),
+            None => Err(Error::ScriptRuntime(format!(
+                "unknown variable: {}",
+                target
+            ))),
         }
     }
 
@@ -11695,8 +11845,8 @@ impl Harness {
                 .collect::<Vec<_>>()),
             Value::Object(entries) => {
                 let entries = entries.borrow();
-                let length_value = Self::object_get_entry(&entries, "length")
-                    .unwrap_or(Value::Number(0));
+                let length_value =
+                    Self::object_get_entry(&entries, "length").unwrap_or(Value::Number(0));
                 let length = Self::to_non_negative_usize(&length_value, "array-like length")?;
                 let mut out = Vec::with_capacity(length);
                 for index in 0..length {
@@ -11719,7 +11869,11 @@ impl Harness {
         })))
     }
 
-    fn new_typed_array_with_length(&mut self, kind: TypedArrayKind, length: usize) -> Result<Value> {
+    fn new_typed_array_with_length(
+        &mut self,
+        kind: TypedArrayKind,
+        length: usize,
+    ) -> Result<Value> {
         let byte_length = length.saturating_mul(kind.bytes_per_element());
         let buffer = Rc::new(RefCell::new(ArrayBufferValue {
             bytes: vec![0; byte_length],
@@ -11846,23 +12000,19 @@ impl Harness {
             TypedArrayKind::Int32 => Value::Number(i64::from(i32::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3],
             ]))),
-            TypedArrayKind::Uint32 => {
-                Value::Number(i64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])))
-            }
+            TypedArrayKind::Uint32 => Value::Number(i64::from(u32::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))),
             TypedArrayKind::Float16 => {
                 let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
                 Self::number_value(Self::f16_bits_to_f32(bits) as f64)
             }
-            TypedArrayKind::Float32 => {
-                Self::number_value(f64::from(f32::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                ])))
-            }
-            TypedArrayKind::Float64 => {
-                Self::number_value(f64::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-                ]))
-            }
+            TypedArrayKind::Float32 => Self::number_value(f64::from(f32::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))),
+            TypedArrayKind::Float64 => Self::number_value(f64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ])),
             TypedArrayKind::BigInt64 => Value::BigInt(JsBigInt::from(i64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             ]))),
@@ -12041,7 +12191,9 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         if !called_with_new {
-            return Err(Error::ScriptRuntime("ArrayBuffer constructor must be called with new".into()));
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer constructor must be called with new".into(),
+            ));
         }
         let byte_length = if let Some(byte_length) = byte_length {
             let value = self.eval_expr(byte_length, env, event_param, event)?;
@@ -12067,7 +12219,7 @@ impl Harness {
                 _ => {
                     return Err(Error::ScriptRuntime(
                         "ArrayBuffer options must be an object".into(),
-                    ))
+                    ));
                 }
             }
         } else {
@@ -12124,11 +12276,14 @@ impl Harness {
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         to_fixed_length: bool,
     ) -> Result<Value> {
-        Self::ensure_array_buffer_not_detached(buffer, if to_fixed_length {
-            "transferToFixedLength"
-        } else {
-            "transfer"
-        })?;
+        Self::ensure_array_buffer_not_detached(
+            buffer,
+            if to_fixed_length {
+                "transferToFixedLength"
+            } else {
+                "transfer"
+            },
+        )?;
         let mut source = buffer.borrow_mut();
         let bytes = source.bytes.clone();
         let max_byte_length = if to_fixed_length {
@@ -12140,11 +12295,13 @@ impl Harness {
         source.max_byte_length = None;
         source.detached = true;
         drop(source);
-        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
-            bytes,
-            max_byte_length,
-            detached: false,
-        }))))
+        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+            ArrayBufferValue {
+                bytes,
+                max_byte_length,
+                detached: false,
+            },
+        ))))
     }
 
     fn resize_array_buffer_in_env(
@@ -12185,7 +12342,9 @@ impl Harness {
 
         let first = self.eval_expr(&args[0], env, event_param, event)?;
         match (&first, args.len()) {
-            (Value::ArrayBuffer(buffer), 1) => self.new_typed_array_view(kind, buffer.clone(), 0, None),
+            (Value::ArrayBuffer(buffer), 1) => {
+                self.new_typed_array_view(kind, buffer.clone(), 0, None)
+            }
             (Value::TypedArray(source), 1) => {
                 let source_kind = source.borrow().kind;
                 if kind.is_bigint() != source_kind.is_bigint() {
@@ -12241,7 +12400,9 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         if !called_with_new {
-            return Err(Error::ScriptRuntime("constructor must be called with new".into()));
+            return Err(Error::ScriptRuntime(
+                "constructor must be called with new".into(),
+            ));
         }
         let callee = self.eval_expr(callee, env, event_param, event)?;
         match callee {
@@ -12294,9 +12455,10 @@ impl Harness {
     }
 
     fn same_value_zero(&self, left: &Value, right: &Value) -> bool {
-        if let (Some(left_num), Some(right_num)) =
-            (Self::number_primitive_value(left), Self::number_primitive_value(right))
-        {
+        if let (Some(left_num), Some(right_num)) = (
+            Self::number_primitive_value(left),
+            Self::number_primitive_value(right),
+        ) {
             if left_num.is_nan() && right_num.is_nan() {
                 return true;
             }
@@ -12384,7 +12546,9 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         if !called_with_new {
-            return Err(Error::ScriptRuntime("Map constructor must be called with new".into()));
+            return Err(Error::ScriptRuntime(
+                "Map constructor must be called with new".into(),
+            ));
         }
 
         let map = Rc::new(RefCell::new(MapValue {
@@ -12460,8 +12624,7 @@ impl Harness {
                         match &mut map_ref.entries[entry_index].1 {
                             Value::Array(group_values) => group_values.borrow_mut().push(item),
                             _ => {
-                                map_ref.entries[entry_index].1 =
-                                    Self::new_array_value(vec![item]);
+                                map_ref.entries[entry_index].1 = Self::new_array_value(vec![item]);
                             }
                         }
                     } else {
@@ -12493,10 +12656,14 @@ impl Harness {
             return match method {
                 MapInstanceMethod::Has => {
                     if args.len() != 1 {
-                        return Err(Error::ScriptRuntime("Map.has requires exactly one argument".into()));
+                        return Err(Error::ScriptRuntime(
+                            "Map.has requires exactly one argument".into(),
+                        ));
                     }
                     let key = self.eval_expr(&args[0], env, event_param, event)?;
-                    Ok(Value::Bool(self.set_value_index(&set.borrow(), &key).is_some()))
+                    Ok(Value::Bool(
+                        self.set_value_index(&set.borrow(), &key).is_some(),
+                    ))
                 }
                 MapInstanceMethod::Delete => {
                     if args.len() != 1 {
@@ -12515,7 +12682,9 @@ impl Harness {
                 }
                 MapInstanceMethod::Clear => {
                     if !args.is_empty() {
-                        return Err(Error::ScriptRuntime("Map.clear does not take arguments".into()));
+                        return Err(Error::ScriptRuntime(
+                            "Map.clear does not take arguments".into(),
+                        ));
                     }
                     set.borrow_mut().values.clear();
                     Ok(Value::Undefined)
@@ -12556,7 +12725,9 @@ impl Harness {
                             "Map.get requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                    let key = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
                     let value = entries
                         .iter()
                         .find_map(|(entry_name, value)| (entry_name == &key).then(|| value.clone()))
@@ -12569,7 +12740,9 @@ impl Harness {
                             "Map.has requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                    let key = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
                     let has = entries.iter().any(|(entry_name, _)| entry_name == &key);
                     Ok(Value::Bool(has))
                 }
@@ -12596,7 +12769,9 @@ impl Harness {
         match method {
             MapInstanceMethod::Get => {
                 if args.len() != 1 {
-                    return Err(Error::ScriptRuntime("Map.get requires exactly one argument".into()));
+                    return Err(Error::ScriptRuntime(
+                        "Map.get requires exactly one argument".into(),
+                    ));
                 }
                 let key = self.eval_expr(&args[0], env, event_param, event)?;
                 let map_ref = map.borrow();
@@ -12608,7 +12783,9 @@ impl Harness {
             }
             MapInstanceMethod::Has => {
                 if args.len() != 1 {
-                    return Err(Error::ScriptRuntime("Map.has requires exactly one argument".into()));
+                    return Err(Error::ScriptRuntime(
+                        "Map.has requires exactly one argument".into(),
+                    ));
                 }
                 let key = self.eval_expr(&args[0], env, event_param, event)?;
                 let has = self.map_entry_index(&map.borrow(), &key).is_some();
@@ -12631,7 +12808,9 @@ impl Harness {
             }
             MapInstanceMethod::Clear => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptRuntime("Map.clear does not take arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "Map.clear does not take arguments".into(),
+                    ));
                 }
                 map.borrow_mut().entries.clear();
                 Ok(Value::Undefined)
@@ -12686,7 +12865,8 @@ impl Harness {
                     }
                 }
                 let callback = self.eval_expr(&args[1], env, event_param, event)?;
-                let computed = self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
+                let computed =
+                    self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
                 map.borrow_mut().entries.push((key, computed.clone()));
                 Ok(computed)
             }
@@ -12702,7 +12882,9 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         if !called_with_new {
-            return Err(Error::ScriptRuntime("Set constructor must be called with new".into()));
+            return Err(Error::ScriptRuntime(
+                "Set constructor must be called with new".into(),
+            ));
         }
 
         let set = Rc::new(RefCell::new(SetValue {
@@ -12749,7 +12931,9 @@ impl Harness {
         match method {
             SetInstanceMethod::Add => {
                 if args.len() != 1 {
-                    return Err(Error::ScriptRuntime("Set.add requires exactly one argument".into()));
+                    return Err(Error::ScriptRuntime(
+                        "Set.add requires exactly one argument".into(),
+                    ));
                 }
                 let value = self.eval_expr(&args[0], env, event_param, event)?;
                 self.set_add_value(&mut set.borrow_mut(), value);
@@ -12757,7 +12941,9 @@ impl Harness {
             }
             SetInstanceMethod::Union => {
                 if args.len() != 1 {
-                    return Err(Error::ScriptRuntime("Set.union requires exactly one argument".into()));
+                    return Err(Error::ScriptRuntime(
+                        "Set.union requires exactly one argument".into(),
+                    ));
                 }
                 let other = self.eval_expr(&args[0], env, event_param, event)?;
                 let other_keys = self.set_like_keys_snapshot(&other)?;
@@ -12973,7 +13159,9 @@ impl Harness {
                         "Symbol.for requires exactly one argument".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                let key = self
+                    .eval_expr(&args[0], env, event_param, event)?
+                    .as_string();
                 if let Some(symbol) = self.symbol_registry.get(&key) {
                     return Ok(Value::Symbol(symbol.clone()));
                 }
@@ -13178,11 +13366,7 @@ impl Harness {
         }
     }
 
-    fn promise_resolve(
-        &mut self,
-        promise: &Rc<RefCell<PromiseValue>>,
-        value: Value,
-    ) -> Result<()> {
+    fn promise_resolve(&mut self, promise: &Rc<RefCell<PromiseValue>>, value: Value) -> Result<()> {
         if !matches!(promise.borrow().state, PromiseState::Pending) {
             return Ok(());
         }
@@ -13233,8 +13417,7 @@ impl Harness {
 
             if let Some(then) = then {
                 if self.is_callable_value(&then) {
-                    let (resolve, reject) =
-                        self.new_promise_capability_functions(promise.clone());
+                    let (resolve, reject) = self.new_promise_capability_functions(promise.clone());
                     let event = EventState::new("microtask", self.dom.root, self.now_ms);
                     match self.execute_callable_value(&then, &[resolve, reject], &event) {
                         Ok(_) => {}
@@ -13473,9 +13656,11 @@ impl Harness {
                     None
                 };
 
-                Ok(Value::Promise(
-                    self.promise_then_internal(&promise, on_fulfilled, on_rejected),
-                ))
+                Ok(Value::Promise(self.promise_then_internal(
+                    &promise,
+                    on_fulfilled,
+                    on_rejected,
+                )))
             }
             PromiseInstanceMethod::Catch => {
                 if args.len() > 1 {
@@ -13494,9 +13679,11 @@ impl Harness {
                     None
                 };
 
-                Ok(Value::Promise(
-                    self.promise_then_internal(&promise, None, on_rejected),
-                ))
+                Ok(Value::Promise(self.promise_then_internal(
+                    &promise,
+                    None,
+                    on_rejected,
+                )))
             }
             PromiseInstanceMethod::Finally => {
                 if args.len() > 1 {
@@ -13663,9 +13850,15 @@ impl Harness {
             } => match settled {
                 PromiseSettledValue::Fulfilled(value) => {
                     if let Some(callback) = on_fulfilled {
-                        match self.execute_callable_value(&callback, std::slice::from_ref(&value), &event) {
+                        match self.execute_callable_value(
+                            &callback,
+                            std::slice::from_ref(&value),
+                            &event,
+                        ) {
                             Ok(next) => self.promise_resolve(&result, next)?,
-                            Err(err) => self.promise_reject(&result, Self::promise_error_reason(err)),
+                            Err(err) => {
+                                self.promise_reject(&result, Self::promise_error_reason(err))
+                            }
                         }
                     } else {
                         self.promise_fulfill(&result, value);
@@ -13673,9 +13866,15 @@ impl Harness {
                 }
                 PromiseSettledValue::Rejected(reason) => {
                     if let Some(callback) = on_rejected {
-                        match self.execute_callable_value(&callback, std::slice::from_ref(&reason), &event) {
+                        match self.execute_callable_value(
+                            &callback,
+                            std::slice::from_ref(&reason),
+                            &event,
+                        ) {
                             Ok(next) => self.promise_resolve(&result, next)?,
-                            Err(err) => self.promise_reject(&result, Self::promise_error_reason(err)),
+                            Err(err) => {
+                                self.promise_reject(&result, Self::promise_error_reason(err))
+                            }
                         }
                     } else {
                         self.promise_reject(&result, reason);
@@ -13699,8 +13898,12 @@ impl Harness {
                     }
                 } else {
                     match settled {
-                        PromiseSettledValue::Fulfilled(value) => self.promise_fulfill(&result, value),
-                        PromiseSettledValue::Rejected(reason) => self.promise_reject(&result, reason),
+                        PromiseSettledValue::Fulfilled(value) => {
+                            self.promise_fulfill(&result, value)
+                        }
+                        PromiseSettledValue::Rejected(reason) => {
+                            self.promise_reject(&result, reason)
+                        }
                     }
                 }
             }
@@ -13844,7 +14047,10 @@ impl Harness {
     ) -> Result<Value> {
         if !matches!(env.get(target), Some(Value::TypedArray(_))) {
             let Some(target_value) = env.get(target) else {
-                return Err(Error::ScriptRuntime(format!("unknown variable: {}", target)));
+                return Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                )));
             };
 
             if let Value::Map(map) = target_value {
@@ -14080,7 +14286,9 @@ impl Harness {
         match method {
             TypedArrayInstanceMethod::At => {
                 if args.len() != 1 {
-                    return Err(Error::ScriptRuntime("TypedArray.at requires exactly one argument".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.at requires exactly one argument".into(),
+                    ));
                 }
                 let index = self.eval_expr(&args[0], env, event_param, event)?;
                 let mut index = Self::value_to_i64(&index);
@@ -14099,8 +14307,10 @@ impl Harness {
                         "TypedArray.copyWithin requires 2 or 3 arguments".into(),
                     ));
                 }
-                let target_index = Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
-                let start_index = Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?);
+                let target_index =
+                    Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
+                let start_index =
+                    Self::value_to_i64(&self.eval_expr(&args[1], env, event_param, event)?);
                 let end_index = if args.len() == 3 {
                     Self::value_to_i64(&self.eval_expr(&args[2], env, event_param, event)?)
                 } else {
@@ -14110,7 +14320,9 @@ impl Harness {
                 let start_index = Self::normalize_slice_index(len, start_index);
                 let end_index = Self::normalize_slice_index(len, end_index);
                 let end_index = end_index.max(start_index);
-                let count = end_index.saturating_sub(start_index).min(len.saturating_sub(target_index));
+                let count = end_index
+                    .saturating_sub(start_index)
+                    .min(len.saturating_sub(target_index));
                 let snapshot = self.typed_array_snapshot(&array)?;
                 for offset in 0..count {
                     self.typed_array_set_index(
@@ -14123,7 +14335,9 @@ impl Harness {
             }
             TypedArrayInstanceMethod::Entries => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptRuntime("TypedArray.entries does not take arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.entries does not take arguments".into(),
+                    ));
                 }
                 let snapshot = self.typed_array_snapshot(&array)?;
                 let out = snapshot
@@ -14170,7 +14384,8 @@ impl Harness {
                 let callback = self.eval_expr(&args[0], env, event_param, event)?;
                 let snapshot = self.typed_array_snapshot(&array)?;
                 let iter: Box<dyn Iterator<Item = (usize, Value)>> = match method {
-                    TypedArrayInstanceMethod::FindLast | TypedArrayInstanceMethod::FindLastIndex => {
+                    TypedArrayInstanceMethod::FindLast
+                    | TypedArrayInstanceMethod::FindLastIndex => {
                         Box::new(snapshot.into_iter().enumerate().rev())
                     }
                     _ => Box::new(snapshot.into_iter().enumerate()),
@@ -14178,18 +14393,29 @@ impl Harness {
                 for (index, value) in iter {
                     let matched = self.execute_callback_value(
                         &callback,
-                        &[value.clone(), Value::Number(index as i64), this_value.clone()],
+                        &[
+                            value.clone(),
+                            Value::Number(index as i64),
+                            this_value.clone(),
+                        ],
                         event,
                     )?;
                     if matched.truthy() {
-                        return if matches!(method, TypedArrayInstanceMethod::FindLastIndex | TypedArrayInstanceMethod::FindIndex) {
+                        return if matches!(
+                            method,
+                            TypedArrayInstanceMethod::FindLastIndex
+                                | TypedArrayInstanceMethod::FindIndex
+                        ) {
                             Ok(Value::Number(index as i64))
                         } else {
                             Ok(value)
                         };
                     }
                 }
-                if matches!(method, TypedArrayInstanceMethod::FindLastIndex | TypedArrayInstanceMethod::FindIndex) {
+                if matches!(
+                    method,
+                    TypedArrayInstanceMethod::FindLastIndex | TypedArrayInstanceMethod::FindIndex
+                ) {
                     Ok(Value::Number(-1))
                 } else {
                     Ok(Value::Undefined)
@@ -14247,7 +14473,9 @@ impl Harness {
             }
             TypedArrayInstanceMethod::Keys => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptRuntime("TypedArray.keys does not take arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.keys does not take arguments".into(),
+                    ));
                 }
                 Ok(Self::new_array_value(
                     (0..len).map(|index| Value::Number(index as i64)).collect(),
@@ -14256,7 +14484,8 @@ impl Harness {
             TypedArrayInstanceMethod::ReduceRight => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(Error::ScriptRuntime(
-                        "TypedArray.reduceRight requires callback and optional initial value".into(),
+                        "TypedArray.reduceRight requires callback and optional initial value"
+                            .into(),
                     ));
                 }
                 let callback = self.eval_expr(&args[0], env, event_param, event)?;
@@ -14283,7 +14512,9 @@ impl Harness {
             }
             TypedArrayInstanceMethod::Reverse => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptRuntime("TypedArray.reverse does not take arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.reverse does not take arguments".into(),
+                    ));
                 }
                 let mut snapshot = self.typed_array_snapshot(&array)?;
                 snapshot.reverse();
@@ -14442,7 +14673,9 @@ impl Harness {
             }
             TypedArrayInstanceMethod::Values => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptRuntime("TypedArray.values does not take arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.values does not take arguments".into(),
+                    ));
                 }
                 Ok(Self::new_array_value(self.typed_array_snapshot(&array)?))
             }
@@ -14452,7 +14685,8 @@ impl Harness {
                         "TypedArray.with requires exactly two arguments".into(),
                     ));
                 }
-                let index = Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
+                let index =
+                    Self::value_to_i64(&self.eval_expr(&args[0], env, event_param, event)?);
                 let value = self.eval_expr(&args[1], env, event_param, event)?;
                 let index = if index < 0 {
                     (len as i64) + index
@@ -14460,7 +14694,9 @@ impl Harness {
                     index
                 };
                 if index < 0 || index >= len as i64 {
-                    return Err(Error::ScriptRuntime("TypedArray.with index out of range".into()));
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.with index out of range".into(),
+                    ));
                 }
                 let mut snapshot = self.typed_array_snapshot(&array)?;
                 snapshot[index as usize] = value;
@@ -14521,12 +14757,7 @@ impl Harness {
 
         let mut callback_event = event.clone();
         let event_param = None;
-        let result = self.execute_stmts(
-            &callback.stmts,
-            &event_param,
-            &mut callback_event,
-            env,
-        );
+        let result = self.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env);
         env.remove(INTERNAL_RETURN_SLOT);
 
         for (name, previous) in previous_values {
@@ -15042,9 +15273,7 @@ impl Harness {
             | Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
-            | Value::Function(_) => {
-                f64::NAN
-            }
+            | Value::Function(_) => f64::NAN,
             Value::Array(values) => {
                 let rendered = Value::Array(values.clone()).as_string();
                 Self::parse_js_number_from_string(&rendered)
@@ -15094,9 +15323,9 @@ impl Harness {
                 Ok(list.get(index).copied().map(|node| vec![node]))
             }
             DomQuery::BySelectorAllIndex { selector, index } => {
-                let index = index
-                    .static_index()
-                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
+                let index = index.static_index().ok_or_else(|| {
+                    Error::ScriptRuntime("dynamic index in static context".into())
+                })?;
                 Ok(self
                     .dom
                     .query_selector_all(selector)?
@@ -15112,9 +15341,9 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
-                let index = index
-                    .static_index()
-                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
+                let index = index.static_index().ok_or_else(|| {
+                    Error::ScriptRuntime("dynamic index in static context".into())
+                })?;
                 let list = self.dom.query_selector_all_from(&target_node, selector)?;
                 Ok(list.get(index).copied().map(|node| vec![node]))
             }
@@ -15159,9 +15388,9 @@ impl Harness {
                 "cannot use querySelectorAll result as single element".into(),
             )),
             DomQuery::BySelectorAllIndex { selector, index } => {
-                let index = index
-                    .static_index()
-                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
+                let index = index.static_index().ok_or_else(|| {
+                    Error::ScriptRuntime("dynamic index in static context".into())
+                })?;
                 let all = self.dom.query_selector_all(selector)?;
                 Ok(all.get(index).copied())
             }
@@ -15189,9 +15418,9 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
-                let index = index
-                    .static_index()
-                    .ok_or_else(|| Error::ScriptRuntime("dynamic index in static context".into()))?;
+                let index = index.static_index().ok_or_else(|| {
+                    Error::ScriptRuntime("dynamic index in static context".into())
+                })?;
                 let all = self.dom.query_selector_all_from(&target_node, selector)?;
                 Ok(all.get(index).copied())
             }
@@ -15294,9 +15523,14 @@ impl Harness {
             DomIndex::Dynamic(expr_src) => {
                 let expr = parse_expr(expr_src)?;
                 let event = EventState::new("script", self.dom.root, self.now_ms);
-                let value = self.eval_expr(&expr, env.ok_or_else(|| {
-                    Error::ScriptRuntime("dynamic index requires runtime context".into())
-                })?, &None, &event)?;
+                let value = self.eval_expr(
+                    &expr,
+                    env.ok_or_else(|| {
+                        Error::ScriptRuntime("dynamic index requires runtime context".into())
+                    })?,
+                    &None,
+                    &event,
+                )?;
                 self.value_as_index(&value).ok_or_else(|| {
                     Error::ScriptRuntime(format!("invalid index expression: {expr_src}"))
                 })
@@ -15600,7 +15834,9 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         cursor.expect_byte(b']')?;
         let index = parse_dom_query_index(&index_src)?;
         target = match target {
-            DomQuery::BySelectorAll { selector } => DomQuery::BySelectorAllIndex { selector, index },
+            DomQuery::BySelectorAll { selector } => {
+                DomQuery::BySelectorAllIndex { selector, index }
+            }
             DomQuery::QuerySelectorAll { target, selector } => DomQuery::QuerySelectorAllIndex {
                 target,
                 selector,
@@ -15648,21 +15884,21 @@ fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
 
 fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let form = parse_form_elements_base(cursor)?;
-        cursor.skip_ws();
-        cursor.expect_byte(b'.')?;
-        cursor.skip_ws();
-        cursor.expect_ascii("elements")?;
-        cursor.skip_ws();
-        cursor.expect_byte(b'[')?;
-        cursor.skip_ws();
-        let index_src = cursor.read_until_byte(b']')?;
-        cursor.skip_ws();
-        cursor.expect_byte(b']')?;
-        let index = parse_dom_query_index(&index_src)?;
-        Ok(DomQuery::FormElementsIndex {
-            form: Box::new(form),
-            index,
-        })
+    cursor.skip_ws();
+    cursor.expect_byte(b'.')?;
+    cursor.skip_ws();
+    cursor.expect_ascii("elements")?;
+    cursor.skip_ws();
+    cursor.expect_byte(b'[')?;
+    cursor.skip_ws();
+    let index_src = cursor.read_until_byte(b']')?;
+    cursor.skip_ws();
+    cursor.expect_byte(b']')?;
+    let index = parse_dom_query_index(&index_src)?;
+    Ok(DomQuery::FormElementsIndex {
+        form: Box::new(form),
+        index,
+    })
 }
 
 fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
@@ -15783,20 +16019,14 @@ fn normalize_get_elements_by_name(name: &str) -> Result<String> {
     Ok(format!("[name='{}']", escaped))
 }
 
-fn parse_callback_parameter_list(
-    src: &str,
-    max_params: usize,
-    label: &str,
-) -> Result<Vec<String>> {
+fn parse_callback_parameter_list(src: &str, max_params: usize, label: &str) -> Result<Vec<String>> {
     let parts = split_top_level_by_char(src.trim(), b',');
     if parts.len() == 1 && parts[0].trim().is_empty() {
         return Ok(Vec::new());
     }
 
     if parts.len() > max_params {
-        return Err(Error::ScriptParse(format!(
-            "unsupported {label}: {src}"
-        )));
+        return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
     }
 
     let mut params = Vec::new();
@@ -15824,7 +16054,9 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
     let mut end = src.len();
 
     while end > 0 {
-        let raw = src.get(0..end).ok_or_else(|| Error::ScriptParse("invalid callback body".into()))?;
+        let raw = src
+            .get(0..end)
+            .ok_or_else(|| Error::ScriptParse("invalid callback body".into()))?;
         let expr_src = raw.trim();
         if expr_src.is_empty() {
             break;
@@ -15876,10 +16108,7 @@ fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
         parse_block_statements(&body)?
     };
     Ok(Some(Expr::Function {
-        handler: ScriptHandler {
-            params,
-            stmts,
-        },
+        handler: ScriptHandler { params, stmts },
     }))
 }
 
@@ -15934,10 +16163,7 @@ fn parse_callback(
     Ok((params, body, concise_body))
 }
 
-fn parse_timer_callback(
-    timer_name: &str,
-    src: &str,
-) -> Result<TimerCallback> {
+fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
     let mut cursor = Cursor::new(src);
     if let Ok((params, body, _)) =
         parse_callback(&mut cursor, usize::MAX, "timer callback parameters")
@@ -16382,11 +16608,15 @@ fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     if !cursor.consume_ascii("while") {
-        return Err(Error::ScriptParse(format!("unsupported do statement: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "unsupported do statement: {stmt}"
+        )));
     }
     if let Some(next) = cursor.peek() {
         if is_ident_char(next) {
-            return Err(Error::ScriptParse(format!("unsupported do statement: {stmt}")));
+            return Err(Error::ScriptParse(format!(
+                "unsupported do statement: {stmt}"
+            )));
         }
     }
 
@@ -16398,7 +16628,9 @@ fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.consume_byte(b';');
     cursor.skip_ws();
     if !cursor.eof() {
-        return Err(Error::ScriptParse(format!("unsupported do while statement tail: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "unsupported do while statement tail: {stmt}"
+        )));
     }
 
     Ok(Some(Stmt::DoWhile { cond, body }))
@@ -16445,7 +16677,9 @@ fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.consume_byte(b';');
     cursor.skip_ws();
     if !cursor.eof() {
-        return Err(Error::ScriptParse(format!("unsupported break statement: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "unsupported break statement: {stmt}"
+        )));
     }
     Ok(Some(Stmt::Break))
 }
@@ -16519,7 +16753,9 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     let header_parts = split_top_level_by_char(header_src.trim(), b';');
     if header_parts.len() != 3 {
-        return Err(Error::ScriptParse(format!("unsupported for statement: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "unsupported for statement: {stmt}"
+        )));
     }
 
     let init = parse_for_clause_stmt(header_parts[0])?;
@@ -16538,7 +16774,9 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.consume_byte(b';');
     cursor.skip_ws();
     if !cursor.eof() {
-        return Err(Error::ScriptParse(format!("unsupported for statement tail: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "unsupported for statement tail: {stmt}"
+        )));
     }
 
     Ok(Some(Stmt::For {
@@ -16608,15 +16846,15 @@ fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize
                 b'}' => brace -= 1,
                 _ => {
                     if paren == 0 && bracket == 0 && brace == 0 {
-                        if i + keyword.len() <= bytes.len()
-                            && &src[i..i + keyword.len()] == keyword
+                        if i + keyword.len() <= bytes.len() && &src[i..i + keyword.len()] == keyword
                         {
                             let prev_ok = i == 0
-                                || !is_ident_char(src
-                                    .as_bytes()
-                                    .get(i.wrapping_sub(1))
-                                    .copied()
-                                    .unwrap_or_default());
+                                || !is_ident_char(
+                                    src.as_bytes()
+                                        .get(i.wrapping_sub(1))
+                                        .copied()
+                                        .unwrap_or_default(),
+                                );
                             let next = src.as_bytes().get(i + keyword.len()).copied();
                             let next_ok = next.is_none() || !is_ident_char(next.unwrap());
                             if prev_ok && next_ok {
@@ -16704,9 +16942,8 @@ fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
         return Ok(Some(Box::new(parsed)));
     }
 
-    let expr = parse_expr(src).map_err(|_| {
-        Error::ScriptParse(format!("unsupported for-loop clause: {src}"))
-    })?;
+    let expr = parse_expr(src)
+        .map_err(|_| Error::ScriptParse(format!("unsupported for-loop clause: {src}")))?;
     Ok(Some(Box::new(Stmt::Expr(expr))))
 }
 
@@ -16998,7 +17235,7 @@ fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
         _ => {
             return Err(Error::ScriptParse(format!(
                 "unsupported assignment operator: {stmt}"
-            )))
+            )));
         }
     };
 
@@ -17177,7 +17414,9 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
         let key_src = cursor.read_balanced_block(b'[', b']')?;
         let key_src = key_src.trim();
         if key_src.is_empty() {
-            return Err(Error::ScriptParse("object assignment key cannot be empty".into()));
+            return Err(Error::ScriptParse(
+                "object assignment key cannot be empty".into(),
+            ));
         }
         parse_expr(key_src)?
     } else {
@@ -17830,7 +18069,13 @@ fn parse_set_timer_call(
         extra_args.push(parse_expr(arg_src.trim())?);
     }
 
-    Ok(Some((TimerInvocation { callback, args: extra_args }, delay_ms)))
+    Ok(Some((
+        TimerInvocation {
+            callback,
+            args: extra_args,
+        },
+        delay_ms,
+    )))
 }
 
 fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
@@ -19231,7 +19476,9 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
             .parse()
             .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
         if !n.is_finite() {
-            return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+            return Err(Error::ScriptParse(format!(
+                "invalid numeric literal: {src}"
+            )));
         }
         return Ok(Some(Expr::Float(n)));
     }
@@ -19278,21 +19525,26 @@ fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
-    let (digits, radix) = if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-        (hex, 16u32)
-    } else if let Some(octal) = raw.strip_prefix("0o").or_else(|| raw.strip_prefix("0O")) {
-        (octal, 8u32)
-    } else if let Some(binary) = raw.strip_prefix("0b").or_else(|| raw.strip_prefix("0B")) {
-        (binary, 2u32)
-    } else {
-        if raw.len() > 1 && raw.starts_with('0') {
-            return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
-        }
-        (raw, 10u32)
-    };
+    let (digits, radix) =
+        if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            (hex, 16u32)
+        } else if let Some(octal) = raw.strip_prefix("0o").or_else(|| raw.strip_prefix("0O")) {
+            (octal, 8u32)
+        } else if let Some(binary) = raw.strip_prefix("0b").or_else(|| raw.strip_prefix("0B")) {
+            (binary, 2u32)
+        } else {
+            if raw.len() > 1 && raw.starts_with('0') {
+                return Err(Error::ScriptParse(format!(
+                    "invalid numeric literal: {src}"
+                )));
+            }
+            (raw, 10u32)
+        };
 
     if digits.is_empty() {
-        return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
+        return Err(Error::ScriptParse(format!(
+            "invalid numeric literal: {src}"
+        )));
     }
 
     let value = JsBigInt::parse_bytes(digits.as_bytes(), radix)
@@ -19308,8 +19560,10 @@ fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result
 
     let digits = &src[prefix.len()..];
     if digits.is_empty() {
-        return Err(Error::ScriptParse(format!("invalid numeric literal: {src}")));
-        }
+        return Err(Error::ScriptParse(format!(
+            "invalid numeric literal: {src}"
+        )));
+    }
 
     let n = i64::from_str_radix(digits, radix)
         .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
@@ -19773,13 +20027,13 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let (receiver, receiver_is_identifier) =
         if let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? {
             (Expr::RegexLiteral { pattern, flags }, false)
-    } else if let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? {
-        (expr, false)
-    } else if let Some(name) = cursor.parse_identifier() {
-        (Expr::Var(name), true)
-    } else {
-        return Ok(None);
-    };
+        } else if let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? {
+            (expr, false)
+        } else if let Some(name) = cursor.parse_identifier() {
+            (Expr::Var(name), true)
+        } else {
+            return Ok(None);
+        };
 
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
@@ -19810,7 +20064,9 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
                 if receiver_is_identifier {
                     return Ok(None);
                 }
-                return Err(Error::ScriptParse("RegExp.toString does not take arguments".into()));
+                return Err(Error::ScriptParse(
+                    "RegExp.toString does not take arguments".into(),
+                ));
             }
             None
         }
@@ -20949,7 +21205,9 @@ fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
             raw_args
         };
         if args.len() > 1 {
-            return Err(Error::ScriptParse("Map supports zero or one argument".into()));
+            return Err(Error::ScriptParse(
+                "Map supports zero or one argument".into(),
+            ));
         }
         let iterable = if let Some(first) = args.first() {
             let first = first.trim();
@@ -21061,7 +21319,9 @@ fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
             raw_args
         };
         if args.len() > 1 {
-            return Err(Error::ScriptParse("Set supports zero or one argument".into()));
+            return Err(Error::ScriptParse(
+                "Set supports zero or one argument".into(),
+            ));
         }
         let iterable = if let Some(first) = args.first() {
             let first = first.trim();
@@ -21655,25 +21915,33 @@ fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     let method = match member.as_str() {
         "get" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse("Map.get requires exactly one argument".into()));
+                return Err(Error::ScriptParse(
+                    "Map.get requires exactly one argument".into(),
+                ));
             }
             MapInstanceMethod::Get
         }
         "has" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse("Map.has requires exactly one argument".into()));
+                return Err(Error::ScriptParse(
+                    "Map.has requires exactly one argument".into(),
+                ));
             }
             MapInstanceMethod::Has
         }
         "delete" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse("Map.delete requires exactly one argument".into()));
+                return Err(Error::ScriptParse(
+                    "Map.delete requires exactly one argument".into(),
+                ));
             }
             MapInstanceMethod::Delete
         }
         "clear" => {
             if !args.is_empty() {
-                return Err(Error::ScriptParse("Map.clear does not take arguments".into()));
+                return Err(Error::ScriptParse(
+                    "Map.clear does not take arguments".into(),
+                ));
             }
             MapInstanceMethod::Clear
         }
@@ -21761,13 +22029,17 @@ fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     let method = match member.as_str() {
         "add" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse("Set.add requires exactly one argument".into()));
+                return Err(Error::ScriptParse(
+                    "Set.add requires exactly one argument".into(),
+                ));
             }
             SetInstanceMethod::Add
         }
         "union" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse("Set.union requires exactly one argument".into()));
+                return Err(Error::ScriptParse(
+                    "Set.union requires exactly one argument".into(),
+                ));
             }
             SetInstanceMethod::Union
         }
@@ -21850,11 +22122,7 @@ fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
 }
 
 fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
-    parse_global_single_arg_expr(
-        src,
-        "encodeURI",
-        "encodeURI requires exactly one argument",
-    )
+    parse_global_single_arg_expr(src, "encodeURI", "encodeURI requires exactly one argument")
 }
 
 fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
@@ -21866,11 +22134,7 @@ fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
 }
 
 fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
-    parse_global_single_arg_expr(
-        src,
-        "decodeURI",
-        "decodeURI requires exactly one argument",
-    )
+    parse_global_single_arg_expr(src, "decodeURI", "decodeURI requires exactly one argument")
 }
 
 fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
@@ -21901,7 +22165,11 @@ fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "btoa", "btoa requires exactly one argument")
 }
 
-fn parse_global_single_arg_expr(src: &str, function_name: &str, arg_error: &str) -> Result<Option<Expr>> {
+fn parse_global_single_arg_expr(
+    src: &str,
+    function_name: &str,
+    arg_error: &str,
+) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -22291,9 +22559,7 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
             ));
         }
         if args.len() == 1 && args[0].trim().is_empty() {
-            return Err(Error::ScriptParse(
-                "Object argument cannot be empty".into(),
-            ));
+            return Err(Error::ScriptParse("Object argument cannot be empty".into()));
         }
         cursor.skip_ws();
         if !cursor.eof() {
@@ -22725,7 +22991,9 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
             let mut parsed = Vec::with_capacity(args.len());
             for arg in args {
                 if arg.trim().is_empty() {
-                    return Err(Error::ScriptParse("unshift argument cannot be empty".into()));
+                    return Err(Error::ScriptParse(
+                        "unshift argument cannot be empty".into(),
+                    ));
                 }
                 parsed.push(parse_expr(arg.trim())?);
             }
@@ -23111,7 +23379,9 @@ fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
                     ));
                 }
                 if args.len() == 1 && args[0].trim().is_empty() {
-                    return Err(Error::ScriptParse("toString argument cannot be empty".into()));
+                    return Err(Error::ScriptParse(
+                        "toString argument cannot be empty".into(),
+                    ));
                 }
                 if args.len() == 1 {
                     vec![parse_expr(args[0].trim())?]
@@ -23210,7 +23480,9 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
             }
             "trimStart" => {
                 if !args.is_empty() {
-                    return Err(Error::ScriptParse("trimStart does not take arguments".into()));
+                    return Err(Error::ScriptParse(
+                        "trimStart does not take arguments".into(),
+                    ));
                 }
                 Expr::StringTrim {
                     value: base,
@@ -23345,9 +23617,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 }
                 let start = if !args.is_empty() {
                     if args[0].trim().is_empty() {
-                        return Err(Error::ScriptParse(
-                            "substring start cannot be empty".into(),
-                        ));
+                        return Err(Error::ScriptParse("substring start cannot be empty".into()));
                     }
                     Some(Box::new(parse_expr(args[0].trim())?))
                 } else {
@@ -23355,9 +23625,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 };
                 let end = if args.len() == 2 {
                     if args[1].trim().is_empty() {
-                        return Err(Error::ScriptParse(
-                            "substring end cannot be empty".into(),
-                        ));
+                        return Err(Error::ScriptParse("substring end cannot be empty".into()));
                     }
                     Some(Box::new(parse_expr(args[1].trim())?))
                 } else {
@@ -23398,9 +23666,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 };
                 let limit = if args.len() == 2 {
                     if args[1].trim().is_empty() {
-                        return Err(Error::ScriptParse(
-                            "split limit cannot be empty".into(),
-                        ));
+                        return Err(Error::ScriptParse("split limit cannot be empty".into()));
                     }
                     Some(Box::new(parse_expr(args[1].trim())?))
                 } else {
@@ -23517,7 +23783,9 @@ fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
         }
         "getMonth" => {
             if !args.is_empty() {
-                return Err(Error::ScriptParse("getMonth does not take arguments".into()));
+                return Err(Error::ScriptParse(
+                    "getMonth does not take arguments".into(),
+                ));
             }
             Expr::DateGetMonth(target)
         }
@@ -23529,7 +23797,9 @@ fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
         }
         "getHours" => {
             if !args.is_empty() {
-                return Err(Error::ScriptParse("getHours does not take arguments".into()));
+                return Err(Error::ScriptParse(
+                    "getHours does not take arguments".into(),
+                ));
             }
             Expr::DateGetHours(target)
         }
@@ -23652,11 +23922,7 @@ fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() {
-        Ok(callback)
-    } else {
-        Ok(None)
-    }
+    if cursor.eof() { Ok(callback) } else { Ok(None) }
 }
 
 fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<TimerCallback>> {
@@ -23696,11 +23962,7 @@ fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
     let mut cursor = Cursor::new(src);
     let handler = parse_queue_microtask_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() {
-        Ok(handler)
-    } else {
-        Ok(None)
-    }
+    if cursor.eof() { Ok(handler) } else { Ok(None) }
 }
 
 fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -24404,11 +24666,12 @@ fn decode_html_character_references(src: &str) -> String {
     }
 
     fn decode_numeric(value: &str) -> Option<char> {
-        let codepoint = if let Some(hex) = value.strip_prefix("x").or_else(|| value.strip_prefix("X")) {
-            u32::from_str_radix(hex, 16).ok()?
-        } else {
-            u32::from_str_radix(value, 10).ok()?
-        };
+        let codepoint =
+            if let Some(hex) = value.strip_prefix("x").or_else(|| value.strip_prefix("X")) {
+                u32::from_str_radix(hex, 16).ok()?
+            } else {
+                u32::from_str_radix(value, 10).ok()?
+            };
         char::from_u32(codepoint)
     }
 
@@ -24485,7 +24748,13 @@ fn decode_html_character_references(src: &str) -> String {
         let Some(end_offset) = semicolon_end else {
             let entity_end = tail
                 .char_indices()
-                .find_map(|(idx, ch)| if is_entity_token_char(ch) { None } else { Some(idx) })
+                .find_map(|(idx, ch)| {
+                    if is_entity_token_char(ch) {
+                        None
+                    } else {
+                        Some(idx)
+                    }
+                })
                 .unwrap_or(tail.len());
 
             if entity_end == 0 {
@@ -24706,14 +24975,14 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
                             } else {
                                 i += 1;
                             }
-                            } else if i >= 2 && &bytes[i - 2..=i] == b"**=" {
-                                return Some((i - 2, 3));
-                            } else if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
-                                return Some((i - 3, 4));
-                            } else if i >= 2 && &bytes[i - 2..=i] == b"<<=" {
-                                return Some((i - 2, 3));
-                            } else if i >= 2 && &bytes[i - 2..=i] == b">>=" {
-                                return Some((i - 2, 3));
+                        } else if i >= 2 && &bytes[i - 2..=i] == b"**=" {
+                            return Some((i - 2, 3));
+                        } else if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
+                            return Some((i - 3, 4));
+                        } else if i >= 2 && &bytes[i - 2..=i] == b"<<=" {
+                            return Some((i - 2, 3));
+                        } else if i >= 2 && &bytes[i - 2..=i] == b">>=" {
+                            return Some((i - 2, 3));
                         } else if i > 0
                             && matches!(
                                 bytes[i - 1],
@@ -24952,11 +25221,7 @@ fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, V
                                         continue;
                                     }
                                 } else if op.len() == 1 && (op == &"<" || op == &">") {
-                                    let prev = if i == 0 {
-                                        None
-                                    } else {
-                                        Some(bytes[i - 1])
-                                    };
+                                    let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
                                     let next = bytes.get(i + 1).copied();
                                     if prev == Some(b'<')
                                         || prev == Some(b'>')
@@ -25131,7 +25396,7 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
 
             if tag.eq_ignore_ascii_case("script") {
                 let close = find_case_insensitive_end_tag(bytes, i, b"script")
-                .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
+                    .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
                 if let Some(script_body) = html.get(i..close) {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
@@ -25934,8 +26199,7 @@ mod tests {
 
     #[test]
     fn html_entities_without_trailing_semicolon_are_decoded() -> Result<()> {
-        let html =
-            "<p id='result'>&lt;A &amp B &gt C&copy D&thinsp;E&ensp;F&emsp;G&frac12;H</p>";
+        let html = "<p id='result'>&lt;A &amp B &gt C&copy D&thinsp;E&ensp;F&emsp;G&frac12;H</p>";
 
         let h = Harness::from_html(html)?;
         h.assert_text("#result", "<A & B > C© D\u{2009}E\u{2002}F\u{2003}G½H")?;
@@ -27275,7 +27539,10 @@ mod tests {
         assert_eq!(item_var, "item");
         assert!(index_var.is_none());
         assert_eq!(body.len(), 1);
-        match body.first().expect("callback body should include one statement") {
+        match body
+            .first()
+            .expect("callback body should include one statement")
+        {
             Stmt::Expr(Expr::Number(value)) => assert_eq!(*value, 1),
             other => panic!("unexpected callback body stmt: {other:?}"),
         }
@@ -28639,10 +28906,7 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text(
-            "#result",
-            "\"a:b;c\":blue:content: \"a:b;c\"; color: blue;",
-        )?;
+        h.assert_text("#result", "\"a:b;c\":blue:content: \"a:b;c\"; color: blue;")?;
         Ok(())
     }
 
@@ -29798,10 +30062,9 @@ mod tests {
         for (html, expected) in cases {
             let err = Harness::from_html(html).expect_err("script should fail to parse");
             match err {
-                Error::ScriptParse(msg) => assert!(
-                    msg.contains(expected),
-                    "expected '{expected}' in '{msg}'"
-                ),
+                Error::ScriptParse(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}' in '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -29957,10 +30220,9 @@ mod tests {
         for (html, expected) in cases {
             let err = Harness::from_html(html).expect_err("script should fail to parse");
             match err {
-                Error::ScriptParse(msg) => assert!(
-                    msg.contains(expected),
-                    "expected '{expected}' in '{msg}'"
-                ),
+                Error::ScriptParse(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}' in '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -30083,7 +30345,10 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text("#result", "true:false:true:false:true:false:true:false:3.5:2:16")?;
+        h.assert_text(
+            "#result",
+            "true:false:true:false:true:false:true:false:3.5:2:16",
+        )?;
         Ok(())
     }
 
@@ -30147,16 +30412,18 @@ mod tests {
                 "<script>(1).toLocaleString(1);</script>",
                 "toLocaleString does not take arguments",
             ),
-            ("<script>(1).valueOf(1);</script>", "valueOf does not take arguments"),
+            (
+                "<script>(1).valueOf(1);</script>",
+                "valueOf does not take arguments",
+            ),
         ];
 
         for (html, expected) in cases {
             let err = Harness::from_html(html).expect_err("script should fail to parse");
             match err {
-                Error::ScriptParse(msg) => assert!(
-                    msg.contains(expected),
-                    "expected '{expected}' in '{msg}'"
-                ),
+                Error::ScriptParse(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}' in '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -30183,9 +30450,9 @@ mod tests {
             .click("#fixed")
             .expect_err("toFixed should reject out-of-range fractionDigits");
         match fixed_err {
-            Error::ScriptRuntime(msg) => assert!(
-                msg.contains("toFixed fractionDigits must be between 0 and 100")
-            ),
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("toFixed fractionDigits must be between 0 and 100"))
+            }
             other => panic!("unexpected toFixed error: {other:?}"),
         }
 
@@ -30415,9 +30682,7 @@ mod tests {
             other => panic!("unexpected BigInt conversion error: {other:?}"),
         }
 
-        let new_ctor_err = h
-            .click("#newctor")
-            .expect_err("new BigInt should fail");
+        let new_ctor_err = h.click("#newctor").expect_err("new BigInt should fail");
         match new_ctor_err {
             Error::ScriptRuntime(msg) => assert!(msg.contains("BigInt is not a constructor")),
             other => panic!("unexpected new BigInt error: {other:?}"),
@@ -31276,7 +31541,9 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         let err = h.click("#btn").expect_err("invalid position should fail");
         match err {
-            Error::ScriptRuntime(msg) => assert!(msg.contains("unsupported insertAdjacentHTML position")),
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("unsupported insertAdjacentHTML position"))
+            }
             other => panic!("unexpected error: {other:?}"),
         }
         Ok(())
@@ -31327,6 +31594,58 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "A<i id=\"x\">X</i>C:X")?;
+        Ok(())
+    }
+
+    #[test]
+    fn inner_html_set_sanitizes_scripts_and_dangerous_attrs() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.innerHTML =
+              '<script id="evil">document.getElementById("result").textContent = "pwned";</script>' +
+              '<a id="link" href="javascript:alert(1)" onclick="alert(1)">safe</a>';
+            document.getElementById('result').textContent =
+              document.querySelectorAll('#evil').length + ':' +
+              document.getElementById('link').hasAttribute('onclick') + ':' +
+              document.getElementById('link').hasAttribute('href') + ':' +
+              box.innerHTML;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "0:false:false:<a id=\"link\">safe</a>")?;
+        Ok(())
+    }
+
+    #[test]
+    fn inner_html_getter_escapes_text_and_attr_and_keeps_void_tags() -> Result<()> {
+        let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.innerHTML = '<span id="x" title="a&b"></span><br>';
+            document.getElementById('x').textContent = '1 < 2 & 3 > 0';
+            document.getElementById('result').textContent = box.innerHTML;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "<span id=\"x\" title=\"a&amp;b\">1 &lt; 2 &amp; 3 &gt; 0</span><br>",
+        )?;
         Ok(())
     }
 
@@ -32607,14 +32926,16 @@ mod tests {
 
     #[test]
     fn selector_parse_supports_where_is_and_has() {
-        let where_step = parse_selector_step("span:where(.a, #b, :not(.skip))")
-            .expect("parse should succeed");
-        let is_step = parse_selector_step("span:is(.a, #b, :not(.skip))")
-            .expect("parse should succeed");
-        let has_step = parse_selector_step("section:has(.c, #d)")
-            .expect("parse should succeed");
+        let where_step =
+            parse_selector_step("span:where(.a, #b, :not(.skip))").expect("parse should succeed");
+        let is_step =
+            parse_selector_step("span:is(.a, #b, :not(.skip))").expect("parse should succeed");
+        let has_step = parse_selector_step("section:has(.c, #d)").expect("parse should succeed");
 
-        assert!(matches!(where_step.pseudo_classes[0], SelectorPseudoClass::Where(_)));
+        assert!(matches!(
+            where_step.pseudo_classes[0],
+            SelectorPseudoClass::Where(_)
+        ));
         if let SelectorPseudoClass::Where(inners) = &where_step.pseudo_classes[0] {
             assert_eq!(inners.len(), 3);
             assert_eq!(inners[0].len(), 1);
@@ -32622,8 +32943,14 @@ mod tests {
             assert_eq!(inners[2].len(), 1);
         }
 
-        assert!(matches!(is_step.pseudo_classes[0], SelectorPseudoClass::Is(_)));
-        assert!(matches!(has_step.pseudo_classes[0], SelectorPseudoClass::Has(_)));
+        assert!(matches!(
+            is_step.pseudo_classes[0],
+            SelectorPseudoClass::Is(_)
+        ));
+        assert!(matches!(
+            has_step.pseudo_classes[0],
+            SelectorPseudoClass::Has(_)
+        ));
     }
 
     #[test]
@@ -33331,7 +33658,10 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text("#result", "undefined:undefined:number:number:true:false:true:false")?;
+        h.assert_text(
+            "#result",
+            "undefined:undefined:number:number:true:false:true:false",
+        )?;
         Ok(())
     }
 
@@ -33570,7 +33900,9 @@ mod tests {
         "#;
 
         let mut h = Harness::from_html(html)?;
-        let err = h.click("#btn").expect_err("endsWith should reject RegExp arguments");
+        let err = h
+            .click("#btn")
+            .expect_err("endsWith should reject RegExp arguments");
         match err {
             Error::ScriptRuntime(msg) => assert!(
                 msg.contains("must not be a regular expression"),
@@ -33710,7 +34042,9 @@ mod tests {
         let err = Harness::from_html("<script>Symbol.keyFor('x');</script>")
             .expect_err("Symbol.keyFor non-symbol should fail");
         match err {
-            Error::ScriptRuntime(msg) => assert!(msg.contains("Symbol.keyFor argument must be a Symbol")),
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Symbol.keyFor argument must be a Symbol"))
+            }
             other => panic!("unexpected Symbol.keyFor error: {other:?}"),
         }
 
@@ -33801,7 +34135,9 @@ mod tests {
         "#;
 
         let mut h = Harness::from_html(html)?;
-        let err = h.click("#btn").expect_err("decodeURIComponent should fail for malformed input");
+        let err = h
+            .click("#btn")
+            .expect_err("decodeURIComponent should fail for malformed input");
         match err {
             Error::ScriptRuntime(msg) => assert!(msg.contains("malformed URI sequence")),
             other => panic!("unexpected decode URI error: {other:?}"),
@@ -33858,7 +34194,10 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text("#result", "a%20b?x=1|a%20b?x=1|a b+c|a b+c|A B|ok|true|true|3|2.5")?;
+        h.assert_text(
+            "#result",
+            "a%20b?x=1|a%20b?x=1|a b+c|a b+c|A B|ok|true|true|3|2.5",
+        )?;
         Ok(())
     }
 
@@ -34196,10 +34535,9 @@ mod tests {
         for (html, expected) in cases {
             let err = Harness::from_html(html).expect_err("script should fail to parse");
             match err {
-                Error::ScriptParse(msg) => assert!(
-                    msg.contains(expected),
-                    "expected '{expected}' in '{msg}'"
-                ),
+                Error::ScriptParse(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}' in '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -34266,7 +34604,9 @@ mod tests {
         "#;
 
         let mut h = Harness::from_html(html)?;
-        let err = h.click("#btn").expect_err("decodeURI should fail for malformed input");
+        let err = h
+            .click("#btn")
+            .expect_err("decodeURI should fail for malformed input");
         match err {
             Error::ScriptRuntime(msg) => assert!(msg.contains("malformed URI sequence")),
             other => panic!("unexpected decode URI error: {other:?}"),
@@ -34335,7 +34675,9 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
 
-        let atob_err = h.click("#atob").expect_err("atob should reject invalid base64");
+        let atob_err = h
+            .click("#atob")
+            .expect_err("atob should reject invalid base64");
         match atob_err {
             Error::ScriptRuntime(msg) => assert!(msg.contains("invalid base64")),
             other => panic!("unexpected atob error: {other:?}"),
@@ -34786,7 +35128,10 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text("#result", "true:false:true:true:true:true:true:true:4:7:-1:2")?;
+        h.assert_text(
+            "#result",
+            "true:false:true:true:true:true:true:true:4:7:-1:2",
+        )?;
         Ok(())
     }
 
@@ -34821,14 +35166,20 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text("#result", "123:45:0:123:123:01:a-b-c:a|b|c:a:b:1:bar foo:-abc")?;
+        h.assert_text(
+            "#result",
+            "123:45:0:123:123:01:a-b-c:a|b|c:a:b:1:bar foo:-abc",
+        )?;
         Ok(())
     }
 
     #[test]
     fn string_method_arity_errors_have_stable_messages() {
         let cases = [
-            ("<script>'x'.trim(1);</script>", "trim does not take arguments"),
+            (
+                "<script>'x'.trim(1);</script>",
+                "trim does not take arguments",
+            ),
             (
                 "<script>'x'.toUpperCase(1);</script>",
                 "toUpperCase does not take arguments",
@@ -34870,10 +35221,9 @@ mod tests {
         for (html, expected) in cases {
             let err = Harness::from_html(html).expect_err("script should fail to parse");
             match err {
-                Error::ScriptParse(msg) => assert!(
-                    msg.contains(expected),
-                    "expected '{expected}' in '{msg}'"
-                ),
+                Error::ScriptParse(msg) => {
+                    assert!(msg.contains(expected), "expected '{expected}' in '{msg}'")
+                }
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -34906,10 +35256,7 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text(
-            "#result",
-            "3:1:127:1:255,0,2,2,0:1:1:function:undefined:-1",
-        )?;
+        h.assert_text("#result", "3:1:127:1:255,0,2,2,0:1:1:function:undefined:-1")?;
         Ok(())
     }
 
@@ -35029,8 +35376,10 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
 
-        let err = Harness::from_html("<script>const i8 = Int8Array.of(1,2,3); Object.freeze(i8);</script>")
-            .expect_err("freezing non-empty typed array should fail");
+        let err = Harness::from_html(
+            "<script>const i8 = Int8Array.of(1,2,3); Object.freeze(i8);</script>",
+        )
+        .expect_err("freezing non-empty typed array should fail");
         match err {
             Error::ScriptRuntime(msg) => {
                 assert!(msg.contains("Cannot freeze array buffer views with elements"))
@@ -35388,8 +35737,9 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
 
-        let err = Harness::from_html("<script>const set = new Set([1]); set.union([1,2]);</script>")
-            .expect_err("Set.union requires a set-like argument");
+        let err =
+            Harness::from_html("<script>const set = new Set([1]); set.union([1,2]);</script>")
+                .expect_err("Set.union requires a set-like argument");
         match err {
             Error::ScriptRuntime(msg) => assert!(msg.contains("set-like")),
             other => panic!("unexpected error: {other:?}"),
@@ -35434,10 +35784,7 @@ mod tests {
 
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
-        h.assert_text(
-            "#result",
-            "8:true:16:false:true:false:2:false:2:true:20,30",
-        )?;
+        h.assert_text("#result", "8:true:16:false:true:false:2:false:2:true:20,30")?;
         Ok(())
     }
 
@@ -35523,8 +35870,9 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
 
-        let err = Harness::from_html("<script>const b = new ArrayBuffer(4); b.transfer(1);</script>")
-            .expect_err("ArrayBuffer.transfer with args should fail");
+        let err =
+            Harness::from_html("<script>const b = new ArrayBuffer(4); b.transfer(1);</script>")
+                .expect_err("ArrayBuffer.transfer with args should fail");
         match err {
             Error::ScriptParse(msg) => {
                 assert!(msg.contains("ArrayBuffer.transfer does not take arguments"))

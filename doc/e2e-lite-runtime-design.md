@@ -391,13 +391,6 @@ fn submit_updates_result() -> anyhow::Result<()> {
 3. イベント順序のズレ
 - 対策: 仕様テストを先に固定し、変更時にCIで検出
 
-## 18. 受け入れ基準（DoD）
-
-1. 単一HTML fixtureで主要ユースケースが3件以上通る
-2. 失敗時ログにセレクタ・期待値・実値・DOM断片が出る
-3. `cargo test`で安定再現（連続実行でflakyなし）
-4. 新規fixture追加が容易（10分以内で1ケース追加可能）
-
 ---
 
 この設計は、ブラウザ完全互換ではなく、**フォーム中心UIのロジック検証を最短で高速化するための実用設計**として定義している。
@@ -628,44 +621,7 @@ AssertionFailed: assert_text
 - 1回の失敗で原因特定できる情報量を確保
 - セレクタ未解決と値不一致は必ず区別
 
-## 25. API契約テスト
-
-最低限追加するべき契約テスト:
-1. `querySelector("#id")` が先頭一致要素を返す
-2. `addEventListener(capture=true)` がcapture順で呼ばれる
-3. `stopPropagation` が親への伝播を止める
-4. checkbox `click` で `checked` が反転する
-5. `preventDefault` でsubmit既定動作が抑止される
-6. `disabled` 要素の `click` が無視される
-
-## 26. 実装順（タスク分解）
-
-1. `dom_core`: Arena/Node/selector/id_index
-2. `event_system`: listener登録とdispatch
-3. `script_runtime`: parser/evaluator と `document`, `Element` 操作
-4. `runtime_core`: parse -> build -> script実行
-5. `test_harness`: action/assert API
-6. 仕様テスト整備
-7. エラー文言とtrace改善
-
 ## 27. 将来拡張ポイント
 
-- `innerHTML` の仕様拡張（サニタイズ/DOMParser互換性の向上）
-- タイマー相当の安全制御（`flush` ステップ上限や診断情報の改善）
 - `radio` グループ排他
 - `FormData` の追加メソッド（`append`, `getAll` など）
-
-拡張時も「必要なユースケース起点でAPIを足す」方針を維持する。
-
-## 28. 提案する最初のマイルストーン
-
-2週間想定:
-- Day 1-2: DOM + selector MVP
-- Day 3-4: イベントdispatch MVP
-- Day 5-6: script parser/evaluator（`getElementById`, `addEventListener`）
-- Day 7-8: Harness action/assert
-- Day 9-10: 契約テスト + 失敗表示改善
-
-完了条件:
-- サンプル3シナリオが `cargo test` で安定通過
-- 主要APIでpanicなし、すべて `Result` 返却
