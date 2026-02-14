@@ -1,3 +1,4 @@
+use regex::{Regex, RegexBuilder};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
@@ -3131,6 +3132,7 @@ enum Value {
     Float(f64),
     Array(Rc<RefCell<Vec<Value>>>),
     Object(Rc<RefCell<Vec<(String, Value)>>>),
+    RegExp(Rc<RefCell<RegexValue>>),
     Date(Rc<RefCell<i64>>),
     Null,
     Undefined,
@@ -3138,6 +3140,35 @@ enum Value {
     NodeList(Vec<NodeId>),
     FormData(Vec<(String, String)>),
     Function(ScriptHandler),
+}
+
+#[derive(Debug, Clone)]
+struct RegexValue {
+    source: String,
+    flags: String,
+    global: bool,
+    sticky: bool,
+    compiled: Regex,
+    last_index: usize,
+}
+
+impl PartialEq for RegexValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.flags == other.flags
+            && self.global == other.global
+            && self.sticky == other.sticky
+            && self.last_index == other.last_index
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegexFlags {
+    global: bool,
+    ignore_case: bool,
+    multiline: bool,
+    dot_all: bool,
+    sticky: bool,
 }
 
 impl Value {
@@ -3149,6 +3180,7 @@ impl Value {
             Self::Float(v) => *v != 0.0,
             Self::Array(_) => true,
             Self::Object(_) => true,
+            Self::RegExp(_) => true,
             Self::Date(_) => true,
             Self::Null => false,
             Self::Undefined => false,
@@ -3186,6 +3218,10 @@ impl Value {
                 out
             }
             Self::Object(_) => "[object Object]".into(),
+            Self::RegExp(value) => {
+                let value = value.borrow();
+                format!("/{}/{}", value.source, value.flags)
+            }
             Self::Date(_) => "[object Date]".into(),
             Self::Null => "null".into(),
             Self::Undefined => "undefined".into(),
@@ -3338,6 +3374,8 @@ enum ClassListMethod {
 enum BinaryOp {
     Or,
     And,
+    Eq,
+    Ne,
     StrictEq,
     StrictNe,
     BitOr,
@@ -3421,7 +3459,27 @@ enum Expr {
     DateGetHours(String),
     DateGetMinutes(String),
     DateGetSeconds(String),
-    MathRandom,
+    RegexLiteral {
+        pattern: String,
+        flags: String,
+    },
+    RegexNew {
+        pattern: Box<Expr>,
+        flags: Option<Box<Expr>>,
+    },
+    RegexTest {
+        regex: Box<Expr>,
+        input: Box<Expr>,
+    },
+    RegexExec {
+        regex: Box<Expr>,
+        input: Box<Expr>,
+    },
+    MathConst(MathConst),
+    MathMethod {
+        method: MathMethod,
+        args: Vec<Expr>,
+    },
     EncodeUri(Box<Expr>),
     EncodeUriComponent(Box<Expr>),
     DecodeUri(Box<Expr>),
@@ -3567,6 +3625,7 @@ enum Expr {
         search: Box<Expr>,
         position: Option<Box<Expr>>,
     },
+    StructuredClone(Box<Expr>),
     Fetch(Box<Expr>),
     Alert(Box<Expr>),
     Confirm(Box<Expr>),
@@ -3585,6 +3644,9 @@ enum Expr {
     SetInterval {
         handler: TimerInvocation,
         delay_ms: Box<Expr>,
+    },
+    RequestAnimationFrame {
+        callback: TimerCallback,
     },
     Function {
         handler: ScriptHandler,
@@ -3680,6 +3742,60 @@ enum StringTrimMode {
     Both,
     Start,
     End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MathConst {
+    E,
+    Ln10,
+    Ln2,
+    Log10E,
+    Log2E,
+    Pi,
+    Sqrt1_2,
+    Sqrt2,
+    ToStringTag,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MathMethod {
+    Abs,
+    Acos,
+    Acosh,
+    Asin,
+    Asinh,
+    Atan,
+    Atan2,
+    Atanh,
+    Cbrt,
+    Ceil,
+    Clz32,
+    Cos,
+    Cosh,
+    Exp,
+    Expm1,
+    Floor,
+    F16Round,
+    FRound,
+    Hypot,
+    Imul,
+    Log,
+    Log10,
+    Log1p,
+    Log2,
+    Max,
+    Min,
+    Pow,
+    Random,
+    Round,
+    Sign,
+    Sin,
+    Sinh,
+    Sqrt,
+    SumPrecise,
+    Tan,
+    Tanh,
+    Trunc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6083,7 +6199,10 @@ impl Harness {
     }
 
     fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
-        if !matches!(expr, Expr::SetTimeout { .. } | Expr::SetInterval { .. }) {
+        if !matches!(
+            expr,
+            Expr::SetTimeout { .. } | Expr::SetInterval { .. } | Expr::RequestAnimationFrame { .. }
+        ) {
             return;
         }
         let Value::Number(timer_id) = value else {
@@ -6196,7 +6315,51 @@ impl Harness {
                 let (_, _, _, _, _, second, _) = Self::date_components_utc(*date.borrow());
                 Ok(Value::Number(second as i64))
             }
-            Expr::MathRandom => Ok(Value::Float(self.next_random_f64())),
+            Expr::RegexLiteral { pattern, flags } => {
+                Self::new_regex_value(pattern.clone(), flags.clone())
+            }
+            Expr::RegexNew { pattern, flags } => {
+                let pattern = self.eval_expr(pattern, env, event_param, event)?;
+                let flags = flags
+                    .as_ref()
+                    .map(|flags| self.eval_expr(flags, env, event_param, event))
+                    .transpose()?;
+                Self::new_regex_from_values(&pattern, flags.as_ref())
+            }
+            Expr::RegexTest { regex, input } => {
+                let regex = self.eval_expr(regex, env, event_param, event)?;
+                let input = self.eval_expr(input, env, event_param, event)?.as_string();
+                let regex = Self::resolve_regex_from_value(&regex)?;
+                Ok(Value::Bool(Self::regex_test(&regex, &input)?))
+            }
+            Expr::RegexExec { regex, input } => {
+                let regex = self.eval_expr(regex, env, event_param, event)?;
+                let input = self.eval_expr(input, env, event_param, event)?.as_string();
+                let regex = Self::resolve_regex_from_value(&regex)?;
+                let Some(captures) = Self::regex_exec(&regex, &input)? else {
+                    return Ok(Value::Null);
+                };
+                Ok(Self::new_array_value(
+                    captures
+                        .into_iter()
+                        .map(Value::String)
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            Expr::MathConst(constant) => match constant {
+                MathConst::E => Ok(Value::Float(std::f64::consts::E)),
+                MathConst::Ln10 => Ok(Value::Float(std::f64::consts::LN_10)),
+                MathConst::Ln2 => Ok(Value::Float(std::f64::consts::LN_2)),
+                MathConst::Log10E => Ok(Value::Float(std::f64::consts::LOG10_E)),
+                MathConst::Log2E => Ok(Value::Float(std::f64::consts::LOG2_E)),
+                MathConst::Pi => Ok(Value::Float(std::f64::consts::PI)),
+                MathConst::Sqrt1_2 => Ok(Value::Float(std::f64::consts::FRAC_1_SQRT_2)),
+                MathConst::Sqrt2 => Ok(Value::Float(std::f64::consts::SQRT_2)),
+                MathConst::ToStringTag => Ok(Value::String("Math".to_string())),
+            },
+            Expr::MathMethod { method, args } => {
+                self.eval_math_method(*method, args, env, event_param, event)
+            }
             Expr::EncodeUri(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::String(encode_uri_like(&value.as_string(), false)))
@@ -6925,6 +7088,10 @@ impl Harness {
                         .unwrap_or(-1),
                 ))
             }
+            Expr::StructuredClone(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                Self::structured_clone_value(&value, &mut Vec::new(), &mut Vec::new())
+            }
             Expr::Fetch(request) => {
                 let request = self.eval_expr(request, env, event_param, event)?.as_string();
                 self.fetch_calls.push(request.clone());
@@ -7010,6 +7177,12 @@ impl Harness {
                     .map(|arg| self.eval_expr(arg, env, event_param, event))
                     .collect::<Result<Vec<_>>>()?;
                 let id = self.schedule_interval(handler.callback.clone(), interval, callback_args, env);
+                Ok(Value::Number(id))
+            }
+            Expr::RequestAnimationFrame { callback } => {
+                const FRAME_DELAY_MS: i64 = 16;
+                let callback_args = vec![Value::Number(self.now_ms.saturating_add(FRAME_DELAY_MS))];
+                let id = self.schedule_timeout(callback.clone(), FRAME_DELAY_MS, callback_args, env);
                 Ok(Value::Number(id))
             }
             Expr::QueueMicrotask { handler } => {
@@ -7222,6 +7395,7 @@ impl Harness {
                         | Value::FormData(_)
                         | Value::Array(_)
                         | Value::Object(_)
+                        | Value::RegExp(_)
                         | Value::Date(_) => "object",
                     }),
                     _ => {
@@ -7238,6 +7412,7 @@ impl Harness {
                             | Value::FormData(_)
                             | Value::Array(_)
                             | Value::Object(_)
+                            | Value::RegExp(_)
                             | Value::Date(_) => "object",
                         }
                     }
@@ -7278,6 +7453,8 @@ impl Harness {
         let out = match op {
             BinaryOp::Or => Value::Bool(left.truthy() || right.truthy()),
             BinaryOp::And => Value::Bool(left.truthy() && right.truthy()),
+            BinaryOp::Eq => Value::Bool(self.loose_equal(left, right)),
+            BinaryOp::Ne => Value::Bool(!self.loose_equal(left, right)),
             BinaryOp::StrictEq => Value::Bool(self.strict_equal(left, right)),
             BinaryOp::StrictNe => Value::Bool(!self.strict_equal(left, right)),
             BinaryOp::In => Value::Bool(self.value_in(left, right)),
@@ -7334,6 +7511,77 @@ impl Harness {
         Ok(out)
     }
 
+    fn loose_equal(&self, left: &Value, right: &Value) -> bool {
+        if self.strict_equal(left, right) {
+            return true;
+        }
+
+        match (left, right) {
+            (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
+            (Value::Number(_) | Value::Float(_), Value::String(_))
+            | (Value::String(_), Value::Number(_) | Value::Float(_)) => {
+                Self::coerce_number_for_global(left) == Self::coerce_number_for_global(right)
+            }
+            (Value::Bool(_), _) => {
+                let coerced = Value::Float(Self::coerce_number_for_global(left));
+                self.loose_equal(&coerced, right)
+            }
+            (_, Value::Bool(_)) => {
+                let coerced = Value::Float(Self::coerce_number_for_global(right));
+                self.loose_equal(left, &coerced)
+            }
+            _ if Self::is_loose_primitive(left) && Self::is_loose_object(right) => {
+                let prim = Self::to_primitive_for_loose(right);
+                self.loose_equal(left, &prim)
+            }
+            _ if Self::is_loose_object(left) && Self::is_loose_primitive(right) => {
+                let prim = Self::to_primitive_for_loose(left);
+                self.loose_equal(&prim, right)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_loose_primitive(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::String(_)
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::Float(_)
+                | Value::Null
+                | Value::Undefined
+        )
+    }
+
+    fn is_loose_object(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Array(_)
+                | Value::Object(_)
+                | Value::RegExp(_)
+                | Value::Date(_)
+                | Value::Node(_)
+                | Value::NodeList(_)
+                | Value::FormData(_)
+                | Value::Function(_)
+        )
+    }
+
+    fn to_primitive_for_loose(value: &Value) -> Value {
+        match value {
+            Value::Array(_)
+            | Value::Object(_)
+            | Value::RegExp(_)
+            | Value::Date(_)
+            | Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_) => Value::String(value.as_string()),
+            _ => value.clone(),
+        }
+    }
+
     fn value_in(&self, left: &Value, right: &Value) -> bool {
         match right {
             Value::NodeList(nodes) => self
@@ -7360,6 +7608,7 @@ impl Harness {
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
             (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
+            (Value::RegExp(left), Value::RegExp(right)) => Rc::ptr_eq(left, right),
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
             _ => false,
@@ -7404,6 +7653,7 @@ impl Harness {
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
             (Value::Object(l), Value::Object(r)) => Rc::ptr_eq(l, r),
+            (Value::RegExp(l), Value::RegExp(r)) => Rc::ptr_eq(l, r),
             (Value::Date(l), Value::Date(r)) => Rc::ptr_eq(l, r),
             (Value::FormData(l), Value::FormData(r)) => l == r,
             (Value::Null, Value::Null) => true,
@@ -7872,6 +8122,7 @@ impl Harness {
             | Value::NodeList(_)
             | Value::FormData(_)
             | Value::Function(_) => Ok(None),
+            Value::RegExp(_) => Ok(Some("{}".to_string())),
             Value::Date(v) => Ok(Some(format!(
                 "\"{}\"",
                 Self::json_escape_string(&Self::format_iso_8601_utc(*v.borrow()))
@@ -7953,6 +8204,446 @@ impl Harness {
             }
         }
         out
+    }
+
+    fn structured_clone_value(
+        value: &Value,
+        array_stack: &mut Vec<usize>,
+        object_stack: &mut Vec<usize>,
+    ) -> Result<Value> {
+        match value {
+            Value::String(v) => Ok(Value::String(v.clone())),
+            Value::Bool(v) => Ok(Value::Bool(*v)),
+            Value::Number(v) => Ok(Value::Number(*v)),
+            Value::Float(v) => Ok(Value::Float(*v)),
+            Value::Null => Ok(Value::Null),
+            Value::Undefined => Ok(Value::Undefined),
+            Value::Date(v) => Ok(Value::Date(Rc::new(RefCell::new(*v.borrow())))),
+            Value::RegExp(v) => {
+                let v = v.borrow();
+                Self::new_regex_value(v.source.clone(), v.flags.clone())
+            }
+            Value::Array(values) => {
+                let ptr = Rc::as_ptr(values) as usize;
+                if array_stack.contains(&ptr) {
+                    return Err(Error::ScriptRuntime(
+                        "structuredClone does not support circular values".into(),
+                    ));
+                }
+                array_stack.push(ptr);
+
+                let items = values.borrow();
+                let mut cloned = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    cloned.push(Self::structured_clone_value(item, array_stack, object_stack)?);
+                }
+                array_stack.pop();
+
+                Ok(Self::new_array_value(cloned))
+            }
+            Value::Object(entries) => {
+                let ptr = Rc::as_ptr(entries) as usize;
+                if object_stack.contains(&ptr) {
+                    return Err(Error::ScriptRuntime(
+                        "structuredClone does not support circular values".into(),
+                    ));
+                }
+                object_stack.push(ptr);
+
+                let entries = entries.borrow();
+                let mut cloned = Vec::with_capacity(entries.len());
+                for (key, value) in entries.iter() {
+                    let value = Self::structured_clone_value(value, array_stack, object_stack)?;
+                    cloned.push((key.clone(), value));
+                }
+                object_stack.pop();
+
+                Ok(Self::new_object_value(cloned))
+            }
+            Value::Node(_)
+            | Value::NodeList(_)
+            | Value::FormData(_)
+            | Value::Function(_) => Err(Error::ScriptRuntime(
+                "structuredClone value is not cloneable".into(),
+            )),
+        }
+    }
+
+    fn analyze_regex_flags(flags: &str) -> std::result::Result<RegexFlags, String> {
+        let mut info = RegexFlags {
+            global: false,
+            ignore_case: false,
+            multiline: false,
+            dot_all: false,
+            sticky: false,
+        };
+        let mut seen = HashSet::new();
+        for ch in flags.chars() {
+            if !seen.insert(ch) {
+                return Err(format!("invalid regular expression flags: {flags}"));
+            }
+            match ch {
+                'g' => info.global = true,
+                'i' => info.ignore_case = true,
+                'm' => info.multiline = true,
+                's' => info.dot_all = true,
+                'y' => info.sticky = true,
+                'd' | 'u' => {}
+                'v' => {
+                    return Err(
+                        "invalid regular expression flags: v flag is not supported".into(),
+                    )
+                }
+                _ => return Err(format!("invalid regular expression flags: {flags}")),
+            }
+        }
+        Ok(info)
+    }
+
+    fn compile_regex(pattern: &str, info: RegexFlags) -> std::result::Result<Regex, regex::Error> {
+        let mut builder = RegexBuilder::new(pattern);
+        builder.case_insensitive(info.ignore_case);
+        builder.multi_line(info.multiline);
+        builder.dot_matches_new_line(info.dot_all);
+        builder.build()
+    }
+
+    fn new_regex_value(pattern: String, flags: String) -> Result<Value> {
+        let info = Self::analyze_regex_flags(&flags)
+            .map_err(Error::ScriptRuntime)?;
+        let compiled = Self::compile_regex(&pattern, info).map_err(|err| {
+            Error::ScriptRuntime(format!(
+                "invalid regular expression: /{pattern}/{flags}: {err}"
+            ))
+        })?;
+        Ok(Value::RegExp(Rc::new(RefCell::new(RegexValue {
+            source: pattern,
+            flags,
+            global: info.global,
+            sticky: info.sticky,
+            compiled,
+            last_index: 0,
+        }))))
+    }
+
+    fn new_regex_from_values(pattern: &Value, flags: Option<&Value>) -> Result<Value> {
+        let pattern_text = match pattern {
+            Value::RegExp(value) => value.borrow().source.clone(),
+            _ => pattern.as_string(),
+        };
+        let flags_text = if let Some(flags) = flags {
+            flags.as_string()
+        } else if let Value::RegExp(value) = pattern {
+            value.borrow().flags.clone()
+        } else {
+            String::new()
+        };
+        Self::new_regex_value(pattern_text, flags_text)
+    }
+
+    fn resolve_regex_from_value(value: &Value) -> Result<Rc<RefCell<RegexValue>>> {
+        match value {
+            Value::RegExp(regex) => Ok(regex.clone()),
+            _ => Err(Error::ScriptRuntime("value is not a RegExp".into())),
+        }
+    }
+
+    fn regex_test(regex: &Rc<RefCell<RegexValue>>, input: &str) -> Result<bool> {
+        Ok(Self::regex_exec_internal(regex, input)?.is_some())
+    }
+
+    fn regex_exec(regex: &Rc<RefCell<RegexValue>>, input: &str) -> Result<Option<Vec<String>>> {
+        Self::regex_exec_internal(regex, input)
+    }
+
+    fn regex_exec_internal(
+        regex: &Rc<RefCell<RegexValue>>,
+        input: &str,
+    ) -> Result<Option<Vec<String>>> {
+        let mut regex = regex.borrow_mut();
+        let start = if regex.global || regex.sticky {
+            regex.last_index
+        } else {
+            0
+        };
+        if start > input.len() {
+            regex.last_index = 0;
+            return Ok(None);
+        }
+
+        let captures = regex.compiled.captures_at(input, start);
+
+        let Some(captures) = captures else {
+            if regex.global || regex.sticky {
+                regex.last_index = 0;
+            }
+            return Ok(None);
+        };
+
+        let Some(full_match) = captures.get(0) else {
+            if regex.global || regex.sticky {
+                regex.last_index = 0;
+            }
+            return Ok(None);
+        };
+
+        if regex.sticky && full_match.start() != start {
+            regex.last_index = 0;
+            return Ok(None);
+        }
+
+        if regex.global || regex.sticky {
+            regex.last_index = full_match.end();
+        }
+
+        let mut out = Vec::with_capacity(captures.len());
+        for idx in 0..captures.len() {
+            out.push(
+                captures
+                    .get(idx)
+                    .map(|capture| capture.as_str().to_string())
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(Some(out))
+    }
+
+    fn eval_math_method(
+        &mut self,
+        method: MathMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+
+        let single = |values: &[Value]| Self::coerce_number_for_global(&values[0]);
+
+        match method {
+            MathMethod::Abs => Ok(Value::Float(single(&values).abs())),
+            MathMethod::Acos => Ok(Value::Float(single(&values).acos())),
+            MathMethod::Acosh => Ok(Value::Float(single(&values).acosh())),
+            MathMethod::Asin => Ok(Value::Float(single(&values).asin())),
+            MathMethod::Asinh => Ok(Value::Float(single(&values).asinh())),
+            MathMethod::Atan => Ok(Value::Float(single(&values).atan())),
+            MathMethod::Atan2 => Ok(Value::Float(
+                Self::coerce_number_for_global(&values[0])
+                    .atan2(Self::coerce_number_for_global(&values[1])),
+            )),
+            MathMethod::Atanh => Ok(Value::Float(single(&values).atanh())),
+            MathMethod::Cbrt => Ok(Value::Float(single(&values).cbrt())),
+            MathMethod::Ceil => Ok(Value::Float(single(&values).ceil())),
+            MathMethod::Clz32 => Ok(Value::Number(
+                i64::from(Self::to_u32_for_math(&values[0]).leading_zeros()),
+            )),
+            MathMethod::Cos => Ok(Value::Float(single(&values).cos())),
+            MathMethod::Cosh => Ok(Value::Float(single(&values).cosh())),
+            MathMethod::Exp => Ok(Value::Float(single(&values).exp())),
+            MathMethod::Expm1 => Ok(Value::Float(single(&values).exp_m1())),
+            MathMethod::Floor => Ok(Value::Float(single(&values).floor())),
+            MathMethod::F16Round => Ok(Value::Float(Self::math_f16round(single(&values)))),
+            MathMethod::FRound => Ok(Value::Float((single(&values) as f32) as f64)),
+            MathMethod::Hypot => {
+                let mut sum = 0.0f64;
+                for value in values {
+                    let value = Self::coerce_number_for_global(&value);
+                    sum += value * value;
+                }
+                Ok(Value::Float(sum.sqrt()))
+            }
+            MathMethod::Imul => {
+                let left = Self::to_i32_for_math(&values[0]);
+                let right = Self::to_i32_for_math(&values[1]);
+                Ok(Value::Number(i64::from(left.wrapping_mul(right))))
+            }
+            MathMethod::Log => Ok(Value::Float(single(&values).ln())),
+            MathMethod::Log10 => Ok(Value::Float(single(&values).log10())),
+            MathMethod::Log1p => Ok(Value::Float(single(&values).ln_1p())),
+            MathMethod::Log2 => Ok(Value::Float(single(&values).log2())),
+            MathMethod::Max => {
+                let mut out = f64::NEG_INFINITY;
+                for value in values {
+                    out = out.max(Self::coerce_number_for_global(&value));
+                }
+                Ok(Value::Float(out))
+            }
+            MathMethod::Min => {
+                let mut out = f64::INFINITY;
+                for value in values {
+                    out = out.min(Self::coerce_number_for_global(&value));
+                }
+                Ok(Value::Float(out))
+            }
+            MathMethod::Pow => Ok(Value::Float(
+                Self::coerce_number_for_global(&values[0])
+                    .powf(Self::coerce_number_for_global(&values[1])),
+            )),
+            MathMethod::Random => Ok(Value::Float(self.next_random_f64())),
+            MathMethod::Round => Ok(Value::Float(Self::js_math_round(single(&values)))),
+            MathMethod::Sign => Ok(Value::Float(Self::js_math_sign(single(&values)))),
+            MathMethod::Sin => Ok(Value::Float(single(&values).sin())),
+            MathMethod::Sinh => Ok(Value::Float(single(&values).sinh())),
+            MathMethod::Sqrt => Ok(Value::Float(single(&values).sqrt())),
+            MathMethod::SumPrecise => match &values[0] {
+                Value::Array(values) => Ok(Value::Float(Self::sum_precise(&values.borrow()))),
+                _ => Err(Error::ScriptRuntime(
+                    "Math.sumPrecise argument must be an array".into(),
+                )),
+            },
+            MathMethod::Tan => Ok(Value::Float(single(&values).tan())),
+            MathMethod::Tanh => Ok(Value::Float(single(&values).tanh())),
+            MathMethod::Trunc => Ok(Value::Float(single(&values).trunc())),
+        }
+    }
+
+    fn sum_precise(values: &[Value]) -> f64 {
+        let mut sum = 0.0f64;
+        let mut compensation = 0.0f64;
+        for value in values {
+            let value = Self::coerce_number_for_global(value);
+            let adjusted = value - compensation;
+            let next = sum + adjusted;
+            compensation = (next - sum) - adjusted;
+            sum = next;
+        }
+        sum
+    }
+
+    fn js_math_round(value: f64) -> f64 {
+        if !value.is_finite() || value == 0.0 {
+            return value;
+        }
+        if (-0.5..0.0).contains(&value) {
+            return -0.0;
+        }
+        let floor = value.floor();
+        let frac = value - floor;
+        if frac < 0.5 {
+            floor
+        } else {
+            floor + 1.0
+        }
+    }
+
+    fn js_math_sign(value: f64) -> f64 {
+        if value.is_nan() {
+            f64::NAN
+        } else if value == 0.0 {
+            value
+        } else if value > 0.0 {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
+    fn to_i32_for_math(value: &Value) -> i32 {
+        let numeric = Self::coerce_number_for_global(value);
+        if !numeric.is_finite() {
+            return 0;
+        }
+        let unsigned = numeric.trunc().rem_euclid(4_294_967_296.0);
+        if unsigned >= 2_147_483_648.0 {
+            (unsigned - 4_294_967_296.0) as i32
+        } else {
+            unsigned as i32
+        }
+    }
+
+    fn to_u32_for_math(value: &Value) -> u32 {
+        let numeric = Self::coerce_number_for_global(value);
+        if !numeric.is_finite() {
+            return 0;
+        }
+        numeric.trunc().rem_euclid(4_294_967_296.0) as u32
+    }
+
+    fn math_f16round(value: f64) -> f64 {
+        let half = Self::f32_to_f16_bits(value as f32);
+        Self::f16_bits_to_f32(half) as f64
+    }
+
+    fn f32_to_f16_bits(value: f32) -> u16 {
+        let bits = value.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exp = ((bits >> 23) & 0xff) as i32;
+        let mant = bits & 0x007f_ffff;
+
+        if exp == 0xff {
+            if mant == 0 {
+                return sign | 0x7c00;
+            }
+            return sign | 0x7e00;
+        }
+
+        let exp16 = exp - 127 + 15;
+        if exp16 >= 0x1f {
+            return sign | 0x7c00;
+        }
+
+        if exp16 <= 0 {
+            if exp16 < -10 {
+                return sign;
+            }
+            let mantissa = mant | 0x0080_0000;
+            let shift = (14 - exp16) as u32;
+            let mut half_mant = mantissa >> shift;
+            let round_bit = 1u32 << (shift - 1);
+            if (mantissa & round_bit) != 0
+                && ((mantissa & (round_bit - 1)) != 0 || (half_mant & 1) != 0)
+            {
+                half_mant += 1;
+            }
+            return sign | (half_mant as u16);
+        }
+
+        let mut half_exp = (exp16 as u16) << 10;
+        let mut half_mant = (mant >> 13) as u16;
+        let round_bits = mant & 0x1fff;
+        if round_bits > 0x1000 || (round_bits == 0x1000 && (half_mant & 1) != 0) {
+            half_mant = half_mant.wrapping_add(1);
+            if half_mant == 0x0400 {
+                half_mant = 0;
+                half_exp = half_exp.wrapping_add(0x0400);
+                if half_exp >= 0x7c00 {
+                    return sign | 0x7c00;
+                }
+            }
+        }
+        sign | half_exp | half_mant
+    }
+
+    fn f16_bits_to_f32(bits: u16) -> f32 {
+        let sign = ((bits & 0x8000) as u32) << 16;
+        let exp = ((bits >> 10) & 0x1f) as u32;
+        let mant = (bits & 0x03ff) as u32;
+
+        let out_bits = if exp == 0 {
+            if mant == 0 {
+                sign
+            } else {
+                let mut mantissa = mant;
+                let mut exp_val = -14i32;
+                while (mantissa & 0x0400) == 0 {
+                    mantissa <<= 1;
+                    exp_val -= 1;
+                }
+                mantissa &= 0x03ff;
+                let exp32 = ((exp_val + 127) as u32) << 23;
+                sign | exp32 | (mantissa << 13)
+            }
+        } else if exp == 0x1f {
+            sign | 0x7f80_0000 | (mant << 13)
+        } else {
+            let exp32 = (((exp as i32) - 15 + 127) as u32) << 23;
+            sign | exp32 | (mant << 13)
+        };
+
+        f32::from_bits(out_bits)
     }
 
     fn new_date_value(timestamp_ms: i64) -> Value {
@@ -8451,6 +9142,7 @@ impl Harness {
             }
             Value::Date(v) => *v.borrow() as f64,
             Value::Object(_)
+            | Value::RegExp(_)
             | Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
@@ -8801,6 +9493,7 @@ impl Harness {
                 .unwrap_or(0),
             Value::Date(value) => *value.borrow(),
             Value::Object(_) => 0,
+            Value::RegExp(_) => 0,
             Value::Node(_) => 0,
             Value::NodeList(_) => 0,
             Value::FormData(_) => 0,
@@ -11113,8 +11806,21 @@ fn parse_set_timer_call(
     timer_name: &str,
 ) -> Result<Option<(TimerInvocation, Expr)>> {
     cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
     if !cursor.consume_ascii(timer_name) {
         return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
     }
     cursor.skip_ws();
 
@@ -11202,10 +11908,19 @@ fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
     let method = if cursor.consume_ascii("clearTimeout") {
         "clearTimeout"
     } else if cursor.consume_ascii("clearInterval") {
         "clearInterval"
+    } else if cursor.consume_ascii("cancelAnimationFrame") {
+        "cancelAnimationFrame"
     } else {
         return Ok(None);
     };
@@ -11213,7 +11928,7 @@ fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 {
+    if args.len() != 1 || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(format!(
             "{method} requires 1 argument: {stmt}"
         )));
@@ -11488,6 +12203,18 @@ fn parse_expr(src: &str) -> Result<Expr> {
         return Err(Error::ScriptParse("empty expression".into()));
     }
 
+    if let Some(expr) = parse_regex_method_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some((pattern, flags)) = parse_regex_literal_expr(src)? {
+        return Ok(Expr::RegexLiteral { pattern, flags });
+    }
+
+    if let Some(expr) = parse_new_regexp_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(handler_expr) = parse_function_expr(src)? {
         return Ok(handler_expr);
     }
@@ -11705,8 +12432,8 @@ fn parse_equality_expr(src: &str) -> Result<Expr> {
     fold_binary(parts, ops, parse_relational_expr, |op| match op {
         "===" => BinaryOp::StrictEq,
         "!==" => BinaryOp::StrictNe,
-        "==" => BinaryOp::StrictEq,
-        "!=" => BinaryOp::StrictNe,
+        "==" => BinaryOp::Eq,
+        "!=" => BinaryOp::Ne,
         _ => unreachable!(),
     })
 }
@@ -11893,6 +12620,12 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
 
 fn parse_mul_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
+    if let Some(expr) = parse_regex_method_expr(src)? {
+        return Ok(expr);
+    }
+    if let Some((pattern, flags)) = parse_regex_literal_expr(src)? {
+        return Ok(Expr::RegexLiteral { pattern, flags });
+    }
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut ops: Vec<u8> = Vec::new();
@@ -12157,7 +12890,15 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::String(value));
     }
 
+    if let Some((pattern, flags)) = parse_regex_literal_expr(src)? {
+        return Ok(Expr::RegexLiteral { pattern, flags });
+    }
+
     if let Some(expr) = parse_new_date_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_new_regexp_expr(src)? {
         return Ok(expr);
     }
 
@@ -12173,8 +12914,8 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DateUtc { args });
     }
 
-    if parse_math_random_expr(src)? {
-        return Ok(Expr::MathRandom);
+    if let Some(expr) = parse_math_expr(src)? {
+        return Ok(expr);
     }
 
     if let Some(value) = parse_encode_uri_component_expr(src)? {
@@ -12244,6 +12985,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(value) = parse_structured_clone_expr(src)? {
+        return Ok(Expr::StructuredClone(Box::new(value)));
+    }
+
     if let Some(value) = parse_fetch_expr(src)? {
         return Ok(Expr::Fetch(Box::new(value)));
     }
@@ -12283,6 +13028,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_regex_method_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(tag_name) = parse_document_create_element_expr(src)? {
         return Ok(Expr::CreateElement(tag_name));
     }
@@ -12307,6 +13056,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
             handler,
             delay_ms: Box::new(delay_ms),
         });
+    }
+
+    if let Some(callback) = parse_request_animation_frame_expr(src)? {
+        return Ok(Expr::RequestAnimationFrame { callback });
     }
 
     if let Some(handler) = parse_queue_microtask_expr(src)? {
@@ -12619,6 +13372,222 @@ fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::DateNew { value }))
 }
 
+fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((pattern, flags)))
+}
+
+fn parse_regex_literal_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<(String, String)>> {
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'/') {
+        return Ok(None);
+    }
+    let start = cursor.i;
+    let bytes = cursor.bytes();
+    let mut i = cursor.i + 1;
+    let mut escaped = false;
+    let mut in_class = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if b == b'[' && !in_class {
+            in_class = true;
+            i += 1;
+            continue;
+        }
+        if b == b']' && in_class {
+            in_class = false;
+            i += 1;
+            continue;
+        }
+        if b == b'/' && !in_class {
+            break;
+        }
+        if b == b'\n' || b == b'\r' {
+            return Err(Error::ScriptParse("unterminated regex literal".into()));
+        }
+        i += 1;
+    }
+
+    if i >= bytes.len() || bytes[i] != b'/' {
+        return Err(Error::ScriptParse("unterminated regex literal".into()));
+    }
+
+    let pattern = cursor
+        .src
+        .get(start + 1..i)
+        .ok_or_else(|| Error::ScriptParse("invalid regex literal".into()))?
+        .to_string();
+    i += 1;
+    let flags_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    let flags = cursor
+        .src
+        .get(flags_start..i)
+        .ok_or_else(|| Error::ScriptParse("invalid regex flags".into()))?
+        .to_string();
+
+    let info = Harness::analyze_regex_flags(&flags).map_err(Error::ScriptParse)?;
+    Harness::compile_regex(&pattern, info).map_err(|err| {
+        Error::ScriptParse(format!(
+            "invalid regular expression: /{pattern}/{flags}: {err}"
+        ))
+    })?;
+
+    cursor.i = i;
+    Ok(Some((pattern, flags)))
+}
+
+fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(expr))
+}
+
+fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
+    let start = cursor.i;
+    cursor.skip_ws();
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            cursor.i = start;
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.i = start;
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("RegExp") {
+        cursor.i = start;
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            cursor.i = start;
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+
+    if args.is_empty() || args.len() > 2 {
+        return Err(Error::ScriptParse(
+            "new RegExp requires one or two arguments".into(),
+        ));
+    }
+    if args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "new RegExp pattern argument cannot be empty".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "new RegExp flags argument cannot be empty".into(),
+        ));
+    }
+
+    let pattern = Box::new(parse_expr(args[0].trim())?);
+    let flags = if args.len() == 2 {
+        Some(Box::new(parse_expr(args[1].trim())?))
+    } else {
+        None
+    };
+
+    Ok(Some(Expr::RegexNew { pattern, flags }))
+}
+
+fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let receiver = if let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? {
+        Expr::RegexLiteral { pattern, flags }
+    } else if let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? {
+        expr
+    } else if let Some(name) = cursor.parse_identifier() {
+        Expr::Var(name)
+    } else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if !matches!(method.as_str(), "test" | "exec") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "RegExp.{} requires exactly one argument",
+            method
+        )));
+    }
+    let input = Box::new(parse_expr(args[0].trim())?);
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let regex = Box::new(receiver);
+    if method == "test" {
+        Ok(Some(Expr::RegexTest { regex, input }))
+    } else {
+        Ok(Some(Expr::RegexExec { regex, input }))
+    }
+}
+
 fn parse_date_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -12737,26 +13706,228 @@ fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     Ok(Some(out))
 }
 
-fn parse_math_random_expr(src: &str) -> Result<bool> {
+fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
     if !cursor.consume_ascii("Math") {
-        return Ok(false);
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
     }
     cursor.skip_ws();
+
+    if cursor.consume_byte(b'[') {
+        cursor.skip_ws();
+        if !cursor.consume_ascii("Symbol") {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+        if !cursor.consume_ascii("toStringTag") {
+            return Ok(None);
+        }
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        cursor.skip_ws();
+        cursor.expect_byte(b']')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::MathConst(MathConst::ToStringTag)));
+    }
+
     if !cursor.consume_byte(b'.') {
-        return Ok(false);
+        return Ok(None);
     }
     cursor.skip_ws();
-    if !cursor.consume_ascii("random") {
-        return Ok(false);
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let Some(method) = parse_math_method_name(&member) else {
+            return Ok(None);
+        };
+        validate_math_arity(method, args.len())?;
+
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "Math.{} argument cannot be empty",
+                    member
+                )));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::MathMethod {
+            method,
+            args: parsed,
+        }));
     }
+
+    let Some(constant) = parse_math_const_name(&member) else {
+        return Ok(None);
+    };
+
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
-    cursor.skip_ws();
-    Ok(cursor.eof())
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::MathConst(constant)))
+}
+
+fn parse_math_const_name(name: &str) -> Option<MathConst> {
+    match name {
+        "E" => Some(MathConst::E),
+        "LN10" => Some(MathConst::Ln10),
+        "LN2" => Some(MathConst::Ln2),
+        "LOG10E" => Some(MathConst::Log10E),
+        "LOG2E" => Some(MathConst::Log2E),
+        "PI" => Some(MathConst::Pi),
+        "SQRT1_2" => Some(MathConst::Sqrt1_2),
+        "SQRT2" => Some(MathConst::Sqrt2),
+        _ => None,
+    }
+}
+
+fn parse_math_method_name(name: &str) -> Option<MathMethod> {
+    match name {
+        "abs" => Some(MathMethod::Abs),
+        "acos" => Some(MathMethod::Acos),
+        "acosh" => Some(MathMethod::Acosh),
+        "asin" => Some(MathMethod::Asin),
+        "asinh" => Some(MathMethod::Asinh),
+        "atan" => Some(MathMethod::Atan),
+        "atan2" => Some(MathMethod::Atan2),
+        "atanh" => Some(MathMethod::Atanh),
+        "cbrt" => Some(MathMethod::Cbrt),
+        "ceil" => Some(MathMethod::Ceil),
+        "clz32" => Some(MathMethod::Clz32),
+        "cos" => Some(MathMethod::Cos),
+        "cosh" => Some(MathMethod::Cosh),
+        "exp" => Some(MathMethod::Exp),
+        "expm1" => Some(MathMethod::Expm1),
+        "floor" => Some(MathMethod::Floor),
+        "f16round" => Some(MathMethod::F16Round),
+        "fround" => Some(MathMethod::FRound),
+        "hypot" => Some(MathMethod::Hypot),
+        "imul" => Some(MathMethod::Imul),
+        "log" => Some(MathMethod::Log),
+        "log10" => Some(MathMethod::Log10),
+        "log1p" => Some(MathMethod::Log1p),
+        "log2" => Some(MathMethod::Log2),
+        "max" => Some(MathMethod::Max),
+        "min" => Some(MathMethod::Min),
+        "pow" => Some(MathMethod::Pow),
+        "random" => Some(MathMethod::Random),
+        "round" => Some(MathMethod::Round),
+        "sign" => Some(MathMethod::Sign),
+        "sin" => Some(MathMethod::Sin),
+        "sinh" => Some(MathMethod::Sinh),
+        "sqrt" => Some(MathMethod::Sqrt),
+        "sumPrecise" => Some(MathMethod::SumPrecise),
+        "tan" => Some(MathMethod::Tan),
+        "tanh" => Some(MathMethod::Tanh),
+        "trunc" => Some(MathMethod::Trunc),
+        _ => None,
+    }
+}
+
+fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
+    let method_name = match method {
+        MathMethod::Abs => "abs",
+        MathMethod::Acos => "acos",
+        MathMethod::Acosh => "acosh",
+        MathMethod::Asin => "asin",
+        MathMethod::Asinh => "asinh",
+        MathMethod::Atan => "atan",
+        MathMethod::Atan2 => "atan2",
+        MathMethod::Atanh => "atanh",
+        MathMethod::Cbrt => "cbrt",
+        MathMethod::Ceil => "ceil",
+        MathMethod::Clz32 => "clz32",
+        MathMethod::Cos => "cos",
+        MathMethod::Cosh => "cosh",
+        MathMethod::Exp => "exp",
+        MathMethod::Expm1 => "expm1",
+        MathMethod::Floor => "floor",
+        MathMethod::F16Round => "f16round",
+        MathMethod::FRound => "fround",
+        MathMethod::Hypot => "hypot",
+        MathMethod::Imul => "imul",
+        MathMethod::Log => "log",
+        MathMethod::Log10 => "log10",
+        MathMethod::Log1p => "log1p",
+        MathMethod::Log2 => "log2",
+        MathMethod::Max => "max",
+        MathMethod::Min => "min",
+        MathMethod::Pow => "pow",
+        MathMethod::Random => "random",
+        MathMethod::Round => "round",
+        MathMethod::Sign => "sign",
+        MathMethod::Sin => "sin",
+        MathMethod::Sinh => "sinh",
+        MathMethod::Sqrt => "sqrt",
+        MathMethod::SumPrecise => "sumPrecise",
+        MathMethod::Tan => "tan",
+        MathMethod::Tanh => "tanh",
+        MathMethod::Trunc => "trunc",
+    };
+
+    let valid = match method {
+        MathMethod::Random => count == 0,
+        MathMethod::Atan2 | MathMethod::Imul | MathMethod::Pow => count == 2,
+        MathMethod::Hypot | MathMethod::Max | MathMethod::Min => true,
+        MathMethod::SumPrecise => count == 1,
+        _ => count == 1,
+    };
+
+    if valid {
+        return Ok(());
+    }
+
+    let message = match method {
+        MathMethod::Random => format!("Math.{method_name} does not take arguments"),
+        MathMethod::Atan2 | MathMethod::Imul | MathMethod::Pow => {
+            format!("Math.{method_name} requires exactly two arguments")
+        }
+        MathMethod::SumPrecise => format!("Math.{method_name} requires exactly one argument"),
+        _ => format!("Math.{method_name} requires exactly one argument"),
+    };
+    Err(Error::ScriptParse(message))
 }
 
 fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
@@ -13308,6 +14479,14 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
 
 fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "fetch", "fetch requires exactly one argument")
+}
+
+fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
+    parse_global_single_arg_expr(
+        src,
+        "structuredClone",
+        "structuredClone requires exactly one argument",
+    )
 }
 
 fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
@@ -14231,6 +15410,50 @@ fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>>
         return Ok(None);
     }
     Ok(Some((handler, delay_ms)))
+}
+
+fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
+    let mut cursor = Cursor::new(src);
+    let callback = parse_request_animation_frame_call(&mut cursor)?;
+    cursor.skip_ws();
+    if cursor.eof() {
+        Ok(callback)
+    } else {
+        Ok(None)
+    }
+}
+
+fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<TimerCallback>> {
+    cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("requestAnimationFrame") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "requestAnimationFrame requires exactly one argument".into(),
+        ));
+    }
+
+    let callback_arg = strip_js_comments(args[0]);
+    let callback = parse_timer_callback("requestAnimationFrame", callback_arg.as_str().trim())?;
+    Ok(Some(callback))
 }
 
 fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
@@ -20110,6 +21333,165 @@ mod tests {
     }
 
     #[test]
+    fn math_constants_and_symbol_to_string_tag_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              Math.round(Math.E * 1000) + ':' +
+              Math.round(Math.LN10 * 1000) + ':' +
+              Math.round(Math.LN2 * 1000) + ':' +
+              Math.round(Math.LOG10E * 1000) + ':' +
+              Math.round(Math.LOG2E * 1000) + ':' +
+              Math.round(Math.PI * 1000) + ':' +
+              Math.round(Math.SQRT1_2 * 1000) + ':' +
+              Math.round(Math.SQRT2 * 1000) + ':' +
+              (window.Math.PI === Math.PI) + ':' +
+              Math[Symbol.toStringTag];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "2718:2303:693:434:1443:3142:707:1414:true:Math")?;
+        Ok(())
+    }
+
+    #[test]
+    fn math_static_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              Math.abs(-3.5) + ':' +
+              Math.acos(1) + ':' +
+              Math.acosh(1) + ':' +
+              Math.round(Math.asin(1) * 1000) + ':' +
+              Math.asinh(0) + ':' +
+              Math.round(Math.atan(1) * 1000) + ':' +
+              Math.round(Math.atan2(1, 1) * 1000) + ':' +
+              Math.round(Math.atanh(0.5) * 1000000) + ':' +
+              Math.cbrt(27) + ':' +
+              Math.ceil(1.2) + ':' +
+              Math.clz32(1) + ':' +
+              Math.cos(0) + ':' +
+              Math.cosh(0) + ':' +
+              Math.round(Math.exp(1) * 1000) + ':' +
+              Math.round(Math.expm1(1) * 1000) + ':' +
+              Math.floor(1.8) + ':' +
+              Math.round(Math.f16round(1.337) * 1000000) + ':' +
+              Math.round(Math.fround(1.337) * 1000000) + ':' +
+              Math.hypot(3, 4) + ':' +
+              Math.imul(2147483647, 2) + ':' +
+              Math.round(Math.log(Math.E) * 1000) + ':' +
+              Math.log10(1000) + ':' +
+              Math.round(Math.log1p(1) * 1000) + ':' +
+              Math.log2(8) + ':' +
+              Math.max(1, 5, 3) + ':' +
+              Math.min(1, 5, 3) + ':' +
+              Math.pow(2, 8) + ':' +
+              Math.round(1.5) + ':' +
+              Math.round(-1.5) + ':' +
+              Math.sign(-3) + ':' +
+              Math.round(Math.sin(Math.PI / 2) * 1000) + ':' +
+              Math.sinh(0) + ':' +
+              Math.sqrt(9) + ':' +
+              Math.sumPrecise([1, 2, 3]) + ':' +
+              Math.tan(0) + ':' +
+              Math.tanh(0) + ':' +
+              Math.trunc(-1.9) + ':' +
+              isNaN(Math.sign(NaN)) + ':' +
+              Math.hypot() + ':' +
+              isFinite(Math.max()) + ':' +
+              isFinite(Math.min());
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "3.5:0:0:1571:0:785:785:549306:3:2:31:1:1:2718:1718:1:1336914:1337000:5:-2:1000:3:693:3:5:1:256:2:-1:-1:1000:0:3:6:0:0:-1:true:0:false:false",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn math_sum_precise_requires_array_argument() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Math.sumPrecise(1);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("Math.sumPrecise should reject non-array argument");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("Math.sumPrecise argument must be an array"))
+            }
+            other => panic!("unexpected Math.sumPrecise error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn math_method_arity_errors_have_stable_messages() {
+        let cases = [
+            (
+                "<script>Math.abs();</script>",
+                "Math.abs requires exactly one argument",
+            ),
+            (
+                "<script>Math.random(1);</script>",
+                "Math.random does not take arguments",
+            ),
+            (
+                "<script>Math.atan2(1);</script>",
+                "Math.atan2 requires exactly two arguments",
+            ),
+            (
+                "<script>Math.imul(1);</script>",
+                "Math.imul requires exactly two arguments",
+            ),
+            (
+                "<script>Math.pow(2);</script>",
+                "Math.pow requires exactly two arguments",
+            ),
+            (
+                "<script>Math.sumPrecise();</script>",
+                "Math.sumPrecise requires exactly one argument",
+            ),
+            (
+                "<script>Math.max(1, , 2);</script>",
+                "Math.max argument cannot be empty",
+            ),
+        ];
+
+        for (html, expected) in cases {
+            let err = Harness::from_html(html).expect_err("script should fail to parse");
+            match err {
+                Error::ScriptParse(msg) => assert!(
+                    msg.contains(expected),
+                    "expected '{expected}' in '{msg}'"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn math_random_is_deterministic_with_seed() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -22838,6 +24220,50 @@ mod tests {
     }
 
     #[test]
+    fn loose_equality_and_inequality_follow_js_coercion_rules() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 0 == false;
+            const b = 1 == true;
+            const c = '' == 0;
+            const d = ' \t ' == 0;
+            const e = '1' == 1;
+            const f = null == undefined;
+            const g = null == 0;
+            const h = undefined == 0;
+            const i = [1] == 1;
+            const j = [] == '';
+            const k = ({ a: 1 }) == '[object Object]';
+            const l = '1' != 1;
+            const m = '2' != 1;
+            const n = 0 === false;
+            const o = 0 !== false;
+            const p = NaN == NaN;
+            const q = NaN != NaN;
+            const arr = [1];
+            const r = arr == arr;
+            const s = arr != arr;
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g + ':' + h + ':' +
+              i + ':' + j + ':' + k + ':' + l + ':' + m + ':' + n + ':' + o + ':' + p + ':' +
+              q + ':' + r + ':' + s;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "true:true:true:true:true:true:false:false:true:true:true:false:true:false:true:false:true:true:false",
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn unary_plus_works_as_numeric_expression() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -23064,6 +24490,88 @@ mod tests {
     }
 
     #[test]
+    fn regex_literal_test_and_exec_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = /ab+c/i;
+            const ok1 = re.test('xxABBCyy');
+            const ok2 = /foo.bar/s.test('foo\nbar');
+            const hit = /(ab)(cd)/.exec('xabcdz');
+            document.getElementById('result').textContent =
+              ok1 + ':' + ok2 + ':' + hit[0] + ':' + hit[1] + ':' + hit[2];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:abcd:ab:cd")?;
+        Ok(())
+    }
+
+    #[test]
+    fn regexp_constructor_and_global_sticky_exec_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = new RegExp('a.', 'g');
+            const m1 = re.exec('a1a2');
+            const m2 = re.exec('a1a2');
+            const m3 = re.exec('a1a2');
+
+            const sticky = /a./y;
+            const y1 = sticky.exec('a1xa2');
+            const y2 = sticky.exec('a1xa2');
+            const y3 = sticky.exec('a1xa2');
+
+            document.getElementById('result').textContent =
+              m1[0] + ':' + m2[0] + ':' + m3 + ':' +
+              y1[0] + ':' + y2 + ':' + y3[0];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "a1:a2:null:a1:null:a1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn regex_parse_and_runtime_errors_are_reported() -> Result<()> {
+        let parse_err = Harness::from_html("<script>const re = /a/gg;</script>")
+            .expect_err("duplicate regex flags should fail during parse");
+        match parse_err {
+            Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression flags")),
+            other => panic!("unexpected regex parse error: {other:?}"),
+        }
+
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            new RegExp('(', 'g');
+          });
+        </script>
+        "#;
+        let mut h = Harness::from_html(html)?;
+        let runtime_err = h
+            .click("#btn")
+            .expect_err("invalid RegExp constructor pattern should fail");
+        match runtime_err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("invalid regular expression")),
+            other => panic!("unexpected regex runtime error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn numeric_literals_support_hex_octal_binary_and_scientific_notation() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -23235,6 +24743,95 @@ mod tests {
     }
 
     #[test]
+    fn structured_clone_deep_copies_objects_arrays_and_dates() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = { nested: { value: 1 }, items: [1, 2] };
+            const clone = structuredClone(source);
+            const sourceNested = source.nested;
+            const cloneNested = clone.nested;
+            const sourceItems = source.items;
+            const cloneItems = clone.items;
+
+            cloneNested.value = 9;
+            cloneItems.push(3);
+
+            const date = new Date('2020-01-02T03:04:05Z');
+            const dateClone = structuredClone(date);
+            dateClone.setTime(0);
+
+            document.getElementById('result').textContent =
+              sourceNested.value + ':' + cloneNested.value + ':' +
+              sourceItems.length + ':' + cloneItems.length + ':' +
+              (source === clone) + ':' + (sourceNested === cloneNested) + ':' +
+              (sourceItems === cloneItems) + ':' +
+              (date.getTime() != dateClone.getTime()) + ':' + (date === dateClone);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "1:9:2:3:false:false:false:true:false")?;
+        Ok(())
+    }
+
+    #[test]
+    fn structured_clone_rejects_non_cloneable_values() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fn = () => {};
+            structuredClone(fn);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h
+            .click("#btn")
+            .expect_err("structuredClone should reject functions");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("not cloneable")),
+            other => panic!("unexpected structuredClone error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn request_animation_frame_and_cancel_animation_frame_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const canceled = requestAnimationFrame((ts) => {
+              out.textContent = out.textContent + 'C' + ts;
+            });
+            window.cancelAnimationFrame(canceled);
+            window.requestAnimationFrame((ts) => {
+              out.textContent = out.textContent + 'R' + ts;
+            });
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "")?;
+        h.advance_time(15)?;
+        h.assert_text("#result", "")?;
+        h.advance_time(1)?;
+        h.assert_text("#result", "R16")?;
+        Ok(())
+    }
+
+    #[test]
     fn alert_confirm_prompt_support_mocked_responses() -> Result<()> {
         let html = r#"
         <button id='btn'>run</button>
@@ -23341,6 +24938,10 @@ mod tests {
                 "fetch requires exactly one argument",
             ),
             (
+                "<script>structuredClone();</script>",
+                "structuredClone requires exactly one argument",
+            ),
+            (
                 "<script>alert();</script>",
                 "alert requires exactly one argument",
             ),
@@ -23355,6 +24956,14 @@ mod tests {
             (
                 "<script>window.prompt('x', );</script>",
                 "prompt default argument cannot be empty",
+            ),
+            (
+                "<script>requestAnimationFrame();</script>",
+                "requestAnimationFrame requires exactly one argument",
+            ),
+            (
+                "<script>cancelAnimationFrame();</script>",
+                "cancelAnimationFrame requires 1 argument",
             ),
             (
                 "<script>Array.isArray();</script>",

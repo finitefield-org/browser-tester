@@ -20,9 +20,9 @@
 
 ## 2. 追加のブラウザグローバル関数 (実装 / テスト)
 
-- [ ] `requestAnimationFrame` / `cancelAnimationFrame` をサポートする
+- [x] `requestAnimationFrame` / `cancelAnimationFrame` をサポートする
 - [x] `fetch` をサポートする（テスト用途向けにモックへ差し替え可能な設計）
-- [ ] `structuredClone` をサポートする
+- [x] `structuredClone` をサポートする
 - [ ] `matchMedia` をサポートする
 - [x] `alert` / `confirm` / `prompt` をサポートする（`confirm`/`prompt` の返り値モックを含む）
 - [x] `JSON.parse` / `JSON.stringify` をサポートする
@@ -60,3 +60,19 @@
 - [x] プロパティ参照 (`obj.key`) と代入 (`obj.key = ...`, `obj['key'] = ...`) をサポートする
 - [x] `Object.keys` / `Object.values` / `Object.entries` をサポートする
 - [x] `Object.hasOwn` / `obj.hasOwnProperty` をサポートする
+
+## 7. `Math` 定数・静的メソッド (実装 / テスト)
+
+- [x] `Math.E` / `LN10` / `LN2` / `LOG10E` / `LOG2E` / `PI` / `SQRT1_2` / `SQRT2` をサポートする
+- [x] `Math[Symbol.toStringTag]` をサポートする
+- [x] 主要静的メソッド（`abs` / `acos` / `acosh` / `asin` / `asinh` / `atan` / `atan2` / `atanh` / `cbrt` / `ceil` / `clz32` / `cos` / `cosh` / `exp` / `expm1` / `floor` / `f16round` / `fround` / `hypot` / `imul` / `log` / `log10` / `log1p` / `log2` / `max` / `min` / `pow` / `random` / `round` / `sign` / `sin` / `sinh` / `sqrt` / `sumPrecise` / `tan` / `tanh` / `trunc`）をサポートする
+
+## 8. JavaScript演算子の未実装項目 (実装 / テスト)
+
+- [ ] `await` 演算子をサポートする
+- [ ] `??` (nullish coalescing) をサポートする
+- [ ] `&&=` / `||=` / `??=` をサポートする
+- [ ] 分割代入 (`[a, b] = arr`, `{ a, b } = obj`) をサポートする
+- [ ] `yield` / `yield*` をサポートする
+- [ ] spread syntax (`...obj`) をサポートする
+- [ ] comma operator (`,`) をサポートする
