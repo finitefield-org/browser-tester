@@ -2,7 +2,8 @@
 
 Rustだけで実装された、決定論的なブラウザライクテスト用クレートです。
 
-- 設計ドキュメント: `doc/e2e-lite-runtime-design.md`
+- English README: [README.md](../../README.md)
+- Developed by [Finite Field, K.K.](https://finitefield.org)
 
 ## 目的
 
