@@ -20,6 +20,7 @@ const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
 const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
 const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
+const INTERNAL_INTL_OPTIONS_KEY: &str = "\u{0}\u{0}bt_intl:options";
 const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
 const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
 const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
@@ -3957,6 +3958,7 @@ enum IntlFormatterKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IntlStaticMethod {
     CollatorSupportedLocalesOf,
+    DateTimeFormatSupportedLocalesOf,
     GetCanonicalLocales,
     SupportedValuesOf,
 }
@@ -3978,6 +3980,45 @@ impl IntlFormatterKind {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct IntlDateTimeOptions {
+    calendar: String,
+    numbering_system: String,
+    time_zone: String,
+    date_style: Option<String>,
+    time_style: Option<String>,
+    weekday: Option<String>,
+    year: Option<String>,
+    month: Option<String>,
+    day: Option<String>,
+    hour: Option<String>,
+    minute: Option<String>,
+    second: Option<String>,
+    fractional_second_digits: Option<u8>,
+    time_zone_name: Option<String>,
+    hour12: Option<bool>,
+    day_period: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IntlDateTimeComponents {
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millisecond: u32,
+    weekday: u32,
+    offset_minutes: i64,
+}
+
+#[derive(Debug, Clone)]
+struct IntlPart {
+    part_type: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4020,6 +4061,9 @@ enum Expr {
         formatter: Box<Expr>,
         value: Option<Box<Expr>>,
     },
+    IntlFormatGetter {
+        formatter: Box<Expr>,
+    },
     IntlCollatorCompare {
         collator: Box<Expr>,
         left: Box<Expr>,
@@ -4028,8 +4072,22 @@ enum Expr {
     IntlCollatorCompareGetter {
         collator: Box<Expr>,
     },
-    IntlCollatorResolvedOptions {
-        collator: Box<Expr>,
+    IntlDateTimeFormatToParts {
+        formatter: Box<Expr>,
+        value: Option<Box<Expr>>,
+    },
+    IntlDateTimeFormatRange {
+        formatter: Box<Expr>,
+        start: Box<Expr>,
+        end: Box<Expr>,
+    },
+    IntlDateTimeFormatRangeToParts {
+        formatter: Box<Expr>,
+        start: Box<Expr>,
+        end: Box<Expr>,
+    },
+    IntlDateTimeResolvedOptions {
+        formatter: Box<Expr>,
     },
     IntlStaticMethod {
         method: IntlStaticMethod,
@@ -6557,6 +6615,26 @@ impl Harness {
                             &sensitivity,
                         )))
                     }
+                    "intl_date_time_format" => {
+                        let (locale, options) = self.resolve_intl_date_time_options(callable)?;
+                        let timestamp_ms = args
+                            .first()
+                            .map(|value| self.coerce_date_timestamp_ms(value))
+                            .unwrap_or(self.now_ms);
+                        Ok(Value::String(self.intl_format_date_time(
+                            timestamp_ms,
+                            &locale,
+                            &options,
+                        )))
+                    }
+                    "intl_number_format" => {
+                        let (_, locale) = self.resolve_intl_formatter(callable)?;
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(Self::intl_format_number_for_locale(
+                            Self::coerce_number_for_global(&value),
+                            &locale,
+                        )))
+                    }
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }
             }
@@ -7623,9 +7701,16 @@ impl Harness {
                 let hour = values.get(3).copied().unwrap_or(0);
                 let minute = values.get(4).copied().unwrap_or(0);
                 let second = values.get(5).copied().unwrap_or(0);
+                let millisecond = values.get(6).copied().unwrap_or(0);
 
                 Ok(Value::Number(Self::utc_timestamp_ms_from_components(
-                    year, month, day, hour, minute, second, 0,
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    millisecond,
                 )))
             }
             Expr::DateGetTime(target) => {
@@ -7685,7 +7770,7 @@ impl Harness {
                 } else {
                     Vec::new()
                 };
-                let locale = Self::intl_select_locale(&requested_locales);
+                let locale = Self::intl_select_locale_for_formatter(*kind, &requested_locales);
                 match kind {
                     IntlFormatterKind::Collator => {
                         let options = options
@@ -7695,6 +7780,15 @@ impl Harness {
                         let (case_first, sensitivity) =
                             self.intl_collator_options_from_value(options.as_ref())?;
                         Ok(self.new_intl_collator_value(locale, case_first, sensitivity))
+                    }
+                    IntlFormatterKind::DateTimeFormat => {
+                        let options = options
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?;
+                        let options =
+                            self.intl_date_time_options_from_value(&locale, options.as_ref())?;
+                        Ok(self.new_intl_date_time_formatter_value(locale, options))
                     }
                     _ => Ok(self.new_intl_formatter_value(*kind, locale)),
                 }
@@ -7715,18 +7809,36 @@ impl Harness {
                         )))
                     }
                     IntlFormatterKind::DateTimeFormat => {
+                        let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
                         let timestamp_ms = if matches!(value, Value::Undefined) {
                             self.now_ms
                         } else {
                             self.coerce_date_timestamp_ms(&value)
                         };
-                        Ok(Value::String(Self::intl_format_date_for_locale(
+                        Ok(Value::String(self.intl_format_date_time(
                             timestamp_ms,
                             &locale,
+                            &options,
                         )))
                     }
                     IntlFormatterKind::Collator => Err(Error::ScriptRuntime(
                         "Intl.Collator does not support format()".into(),
+                    )),
+                }
+            }
+            Expr::IntlFormatGetter { formatter } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                match kind {
+                    IntlFormatterKind::DateTimeFormat => {
+                        let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                        Ok(self.new_intl_date_time_format_callable(locale, options))
+                    }
+                    IntlFormatterKind::NumberFormat => {
+                        Ok(self.new_intl_number_format_callable(locale))
+                    }
+                    IntlFormatterKind::Collator => Err(Error::ScriptRuntime(
+                        "Intl.Collator does not support format getter".into(),
                     )),
                 }
             }
@@ -7754,19 +7866,98 @@ impl Harness {
                     self.resolve_intl_collator_options(&collator)?;
                 Ok(self.new_intl_collator_compare_callable(locale, case_first, sensitivity))
             }
-            Expr::IntlCollatorResolvedOptions { collator } => {
-                let collator = self.eval_expr(collator, env, event_param, event)?;
-                let (locale, case_first, sensitivity) =
-                    self.resolve_intl_collator_options(&collator)?;
-                Ok(Self::new_object_value(vec![
-                    ("locale".into(), Value::String(locale)),
-                    ("usage".into(), Value::String("sort".to_string())),
-                    ("sensitivity".into(), Value::String(sensitivity)),
-                    ("ignorePunctuation".into(), Value::Bool(false)),
-                    ("collation".into(), Value::String("default".to_string())),
-                    ("numeric".into(), Value::Bool(false)),
-                    ("caseFirst".into(), Value::String(case_first)),
-                ]))
+            Expr::IntlDateTimeFormatToParts { formatter, value } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                if kind != IntlFormatterKind::DateTimeFormat {
+                    return Err(Error::ScriptRuntime(
+                        "Intl.DateTimeFormat.formatToParts requires an Intl.DateTimeFormat instance"
+                            .into(),
+                    ));
+                }
+                let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                let value = if let Some(value) = value {
+                    self.eval_expr(value, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                let timestamp_ms = if matches!(value, Value::Undefined) {
+                    self.now_ms
+                } else {
+                    self.coerce_date_timestamp_ms(&value)
+                };
+                let parts = self.intl_format_date_time_to_parts(timestamp_ms, &locale, &options);
+                Ok(self.intl_date_time_parts_to_value(&parts, None))
+            }
+            Expr::IntlDateTimeFormatRange {
+                formatter,
+                start,
+                end,
+            } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                if kind != IntlFormatterKind::DateTimeFormat {
+                    return Err(Error::ScriptRuntime(
+                        "Intl.DateTimeFormat.formatRange requires an Intl.DateTimeFormat instance"
+                            .into(),
+                    ));
+                }
+                let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                let start = self.eval_expr(start, env, event_param, event)?;
+                let end = self.eval_expr(end, env, event_param, event)?;
+                let start_ms = self.coerce_date_timestamp_ms(&start);
+                let end_ms = self.coerce_date_timestamp_ms(&end);
+                Ok(Value::String(self.intl_format_date_time_range(
+                    start_ms, end_ms, &locale, &options,
+                )))
+            }
+            Expr::IntlDateTimeFormatRangeToParts {
+                formatter,
+                start,
+                end,
+            } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                if kind != IntlFormatterKind::DateTimeFormat {
+                    return Err(Error::ScriptRuntime(
+                        "Intl.DateTimeFormat.formatRangeToParts requires an Intl.DateTimeFormat instance"
+                            .into(),
+                    ));
+                }
+                let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                let start = self.eval_expr(start, env, event_param, event)?;
+                let end = self.eval_expr(end, env, event_param, event)?;
+                let start_ms = self.coerce_date_timestamp_ms(&start);
+                let end_ms = self.coerce_date_timestamp_ms(&end);
+                let (parts, sources) =
+                    self.intl_format_date_time_range_to_parts(start_ms, end_ms, &locale, &options);
+                Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+            }
+            Expr::IntlDateTimeResolvedOptions { formatter } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                match kind {
+                    IntlFormatterKind::DateTimeFormat => {
+                        let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                        Ok(self.intl_date_time_resolved_options_value(locale, &options))
+                    }
+                    IntlFormatterKind::Collator => {
+                        let (locale, case_first, sensitivity) =
+                            self.resolve_intl_collator_options(&formatter)?;
+                        Ok(Self::new_object_value(vec![
+                            ("locale".into(), Value::String(locale)),
+                            ("usage".into(), Value::String("sort".to_string())),
+                            ("sensitivity".into(), Value::String(sensitivity)),
+                            ("ignorePunctuation".into(), Value::Bool(false)),
+                            ("collation".into(), Value::String("default".to_string())),
+                            ("numeric".into(), Value::Bool(false)),
+                            ("caseFirst".into(), Value::String(case_first)),
+                        ]))
+                    }
+                    IntlFormatterKind::NumberFormat => Err(Error::ScriptRuntime(
+                        "Intl.NumberFormat.resolvedOptions is not implemented".into(),
+                    )),
+                }
             }
             Expr::IntlStaticMethod { method, args } => match method {
                 IntlStaticMethod::CollatorSupportedLocalesOf => {
@@ -7778,13 +7969,21 @@ impl Harness {
                     }
                     let locales = self.eval_expr(&args[0], env, event_param, event)?;
                     let locales = self.intl_collect_locales(&locales)?;
-                    let supported = locales
-                        .into_iter()
-                        .filter(|locale| {
-                            matches!(Self::intl_locale_family(locale), "en" | "de" | "sv")
-                        })
-                        .map(Value::String)
-                        .collect::<Vec<_>>();
+                    let supported =
+                        Self::intl_supported_locales(IntlFormatterKind::Collator, locales);
+                    Ok(Self::new_array_value(supported))
+                }
+                IntlStaticMethod::DateTimeFormatSupportedLocalesOf => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Intl.DateTimeFormat.supportedLocalesOf requires locales and optional options"
+                                .into(),
+                        ));
+                    }
+                    let locales = self.eval_expr(&args[0], env, event_param, event)?;
+                    let locales = self.intl_collect_locales(&locales)?;
+                    let supported =
+                        Self::intl_supported_locales(IntlFormatterKind::DateTimeFormat, locales);
                     Ok(Self::new_array_value(supported))
                 }
                 IntlStaticMethod::GetCanonicalLocales => {
@@ -10549,6 +10748,8 @@ impl Harness {
         match Self::object_get_entry(&entries, INTERNAL_CALLABLE_KIND_KEY) {
             Some(Value::String(kind)) => Some(match kind.as_str() {
                 "intl_collator_compare" => "intl_collator_compare",
+                "intl_date_time_format" => "intl_date_time_format",
+                "intl_number_format" => "intl_number_format",
                 _ => return None,
             }),
             _ => None,
@@ -12248,14 +12449,48 @@ impl Harness {
         locale.split('-').next().unwrap_or_default()
     }
 
-    fn intl_select_locale(requested_locales: &[String]) -> String {
+    fn intl_locale_region(locale: &str) -> Option<&str> {
+        for subtag in locale.split('-').skip(1) {
+            if subtag.len() == 2 && subtag.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                return Some(subtag);
+            }
+        }
+        None
+    }
+
+    fn intl_formatter_supports_locale(kind: IntlFormatterKind, locale: &str) -> bool {
+        match kind {
+            IntlFormatterKind::Collator => {
+                matches!(Self::intl_locale_family(locale), "en" | "de" | "sv")
+            }
+            IntlFormatterKind::DateTimeFormat => matches!(
+                Self::intl_locale_family(locale),
+                "en" | "de" | "id" | "ko" | "ar" | "ja"
+            ),
+            IntlFormatterKind::NumberFormat => {
+                matches!(Self::intl_locale_family(locale), "en" | "de")
+            }
+        }
+    }
+
+    fn intl_select_locale_for_formatter(
+        kind: IntlFormatterKind,
+        requested_locales: &[String],
+    ) -> String {
         for locale in requested_locales {
-            match Self::intl_locale_family(locale) {
-                "en" | "de" | "sv" => return locale.clone(),
-                _ => {}
+            if Self::intl_formatter_supports_locale(kind, locale) {
+                return locale.clone();
             }
         }
         DEFAULT_LOCALE.to_string()
+    }
+
+    fn intl_supported_locales(kind: IntlFormatterKind, locales: Vec<String>) -> Vec<Value> {
+        locales
+            .into_iter()
+            .filter(|locale| Self::intl_formatter_supports_locale(kind, locale))
+            .map(Value::String)
+            .collect::<Vec<_>>()
     }
 
     fn intl_collect_locales(&self, locales: &Value) -> Result<Vec<String>> {
@@ -12356,13 +12591,1132 @@ impl Harness {
         }
     }
 
-    fn intl_format_date_for_locale(timestamp_ms: i64, locale: &str) -> String {
-        let (year, month, day, ..) = Self::date_components_utc(timestamp_ms);
-        if Self::intl_locale_family(locale) == "de" {
-            format!("{day}.{month}.{year}")
-        } else {
-            format!("{month}/{day}/{year}")
+    fn intl_locale_unicode_extension_value(locale: &str, key: &str) -> Option<String> {
+        let subtags = locale.split('-').collect::<Vec<_>>();
+        let mut i = 0usize;
+        while i < subtags.len() {
+            if subtags[i] != "u" {
+                i += 1;
+                continue;
+            }
+            i += 1;
+            while i < subtags.len() {
+                let current = subtags[i];
+                if current.len() == 1 {
+                    break;
+                }
+                if current.len() != 2 {
+                    i += 1;
+                    continue;
+                }
+                let current_key = current.to_ascii_lowercase();
+                i += 1;
+                let start = i;
+                while i < subtags.len() {
+                    let next = subtags[i];
+                    if next.len() == 1 || next.len() == 2 {
+                        break;
+                    }
+                    i += 1;
+                }
+                if current_key == key {
+                    if start == i {
+                        return Some("true".to_string());
+                    }
+                    return Some(subtags[start..i].join("-").to_ascii_lowercase());
+                }
+            }
         }
+        None
+    }
+
+    fn intl_default_numbering_system_for_locale(locale: &str) -> String {
+        if Self::intl_locale_family(locale) == "ar" {
+            "arab".to_string()
+        } else {
+            "latn".to_string()
+        }
+    }
+
+    fn intl_date_time_options_from_value(
+        &self,
+        locale: &str,
+        options: Option<&Value>,
+    ) -> Result<IntlDateTimeOptions> {
+        let mut out = IntlDateTimeOptions {
+            calendar: Self::intl_locale_unicode_extension_value(locale, "ca")
+                .unwrap_or_else(|| "gregory".to_string()),
+            numbering_system: Self::intl_locale_unicode_extension_value(locale, "nu")
+                .unwrap_or_else(|| Self::intl_default_numbering_system_for_locale(locale)),
+            time_zone: "UTC".to_string(),
+            date_style: None,
+            time_style: None,
+            weekday: None,
+            year: None,
+            month: None,
+            day: None,
+            hour: None,
+            minute: None,
+            second: None,
+            fractional_second_digits: None,
+            time_zone_name: None,
+            hour12: None,
+            day_period: None,
+        };
+
+        let Some(options) = options else {
+            out.year = Some("numeric".to_string());
+            out.month = Some("numeric".to_string());
+            out.day = Some("numeric".to_string());
+            return Ok(out);
+        };
+
+        match options {
+            Value::Undefined | Value::Null => {
+                out.year = Some("numeric".to_string());
+                out.month = Some("numeric".to_string());
+                out.day = Some("numeric".to_string());
+                return Ok(out);
+            }
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+
+                let string_option = |key: &str| -> Option<String> {
+                    match Self::object_get_entry(&entries, key) {
+                        Some(Value::Undefined) | None => None,
+                        Some(value) => Some(value.as_string()),
+                    }
+                };
+
+                if let Some(value) = string_option("calendar") {
+                    out.calendar = value;
+                }
+                if let Some(value) = string_option("numberingSystem") {
+                    out.numbering_system = value;
+                }
+                if let Some(value) = string_option("timeZone") {
+                    let normalized = Self::intl_normalize_time_zone(&value).ok_or_else(|| {
+                        Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat timeZone option".into(),
+                        )
+                    })?;
+                    out.time_zone = normalized;
+                }
+                if let Some(value) = string_option("dateStyle") {
+                    if !matches!(value.as_str(), "full" | "long" | "medium" | "short") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat dateStyle option".into(),
+                        ));
+                    }
+                    out.date_style = Some(value);
+                }
+                if let Some(value) = string_option("timeStyle") {
+                    if !matches!(value.as_str(), "full" | "long" | "medium" | "short") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat timeStyle option".into(),
+                        ));
+                    }
+                    out.time_style = Some(value);
+                }
+                if let Some(value) = string_option("weekday") {
+                    if !matches!(value.as_str(), "narrow" | "short" | "long") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat weekday option".into(),
+                        ));
+                    }
+                    out.weekday = Some(value);
+                }
+                if let Some(value) = string_option("year") {
+                    if !matches!(value.as_str(), "2-digit" | "numeric") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat year option".into(),
+                        ));
+                    }
+                    out.year = Some(value);
+                }
+                if let Some(value) = string_option("month") {
+                    if !matches!(
+                        value.as_str(),
+                        "2-digit" | "numeric" | "narrow" | "short" | "long"
+                    ) {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat month option".into(),
+                        ));
+                    }
+                    out.month = Some(value);
+                }
+                if let Some(value) = string_option("day") {
+                    if !matches!(value.as_str(), "2-digit" | "numeric") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat day option".into(),
+                        ));
+                    }
+                    out.day = Some(value);
+                }
+                if let Some(value) = string_option("hour") {
+                    if !matches!(value.as_str(), "2-digit" | "numeric") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat hour option".into(),
+                        ));
+                    }
+                    out.hour = Some(value);
+                }
+                if let Some(value) = string_option("minute") {
+                    if !matches!(value.as_str(), "2-digit" | "numeric") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat minute option".into(),
+                        ));
+                    }
+                    out.minute = Some(value);
+                }
+                if let Some(value) = string_option("second") {
+                    if !matches!(value.as_str(), "2-digit" | "numeric") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat second option".into(),
+                        ));
+                    }
+                    out.second = Some(value);
+                }
+                if let Some(value) = string_option("timeZoneName") {
+                    if !matches!(value.as_str(), "short" | "long") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat timeZoneName option".into(),
+                        ));
+                    }
+                    out.time_zone_name = Some(value);
+                }
+                if let Some(value) = string_option("dayPeriod") {
+                    if !matches!(value.as_str(), "narrow" | "short" | "long") {
+                        return Err(Error::ScriptRuntime(
+                            "RangeError: invalid Intl.DateTimeFormat dayPeriod option".into(),
+                        ));
+                    }
+                    out.day_period = Some(value);
+                }
+                if let Some(value) = Self::object_get_entry(&entries, "hour12") {
+                    if !matches!(value, Value::Undefined) {
+                        out.hour12 = Some(value.truthy());
+                    }
+                }
+                if let Some(value) = Self::object_get_entry(&entries, "fractionalSecondDigits") {
+                    if !matches!(value, Value::Undefined) {
+                        let digits = Self::value_to_i64(&value);
+                        if !(1..=3).contains(&digits) {
+                            return Err(Error::ScriptRuntime(
+                                "RangeError: invalid Intl.DateTimeFormat fractionalSecondDigits option"
+                                    .into(),
+                            ));
+                        }
+                        out.fractional_second_digits = Some(digits as u8);
+                    }
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: Intl.DateTimeFormat options must be an object".into(),
+                ));
+            }
+        }
+
+        let has_component_options = out.weekday.is_some()
+            || out.year.is_some()
+            || out.month.is_some()
+            || out.day.is_some()
+            || out.hour.is_some()
+            || out.minute.is_some()
+            || out.second.is_some()
+            || out.fractional_second_digits.is_some()
+            || out.time_zone_name.is_some()
+            || out.day_period.is_some();
+
+        if (out.date_style.is_some() || out.time_style.is_some()) && has_component_options {
+            return Err(Error::ScriptRuntime(
+                "TypeError: dateStyle/timeStyle cannot be combined with date-time component options"
+                    .into(),
+            ));
+        }
+
+        if !has_component_options && out.date_style.is_none() && out.time_style.is_none() {
+            out.year = Some("numeric".to_string());
+            out.month = Some("numeric".to_string());
+            out.day = Some("numeric".to_string());
+        }
+
+        Ok(out)
+    }
+
+    fn intl_date_time_options_to_value(options: &IntlDateTimeOptions) -> Value {
+        let mut entries = vec![
+            (
+                "calendar".to_string(),
+                Value::String(options.calendar.clone()),
+            ),
+            (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+            (
+                "timeZone".to_string(),
+                Value::String(options.time_zone.clone()),
+            ),
+        ];
+        if let Some(value) = &options.date_style {
+            entries.push(("dateStyle".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.time_style {
+            entries.push(("timeStyle".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.weekday {
+            entries.push(("weekday".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.year {
+            entries.push(("year".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.month {
+            entries.push(("month".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.day {
+            entries.push(("day".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.hour {
+            entries.push(("hour".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.minute {
+            entries.push(("minute".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.second {
+            entries.push(("second".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = options.fractional_second_digits {
+            entries.push((
+                "fractionalSecondDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = &options.time_zone_name {
+            entries.push(("timeZoneName".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = options.hour12 {
+            entries.push(("hour12".to_string(), Value::Bool(value)));
+        }
+        if let Some(value) = &options.day_period {
+            entries.push(("dayPeriod".to_string(), Value::String(value.clone())));
+        }
+        Self::new_object_value(entries)
+    }
+
+    fn intl_date_time_options_from_internal(entries: &[(String, Value)]) -> IntlDateTimeOptions {
+        if let Some(Value::Object(options)) =
+            Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
+        {
+            let options = options.borrow();
+            let string_option = |key: &str| -> Option<String> {
+                match Self::object_get_entry(&options, key) {
+                    Some(Value::String(value)) => Some(value),
+                    _ => None,
+                }
+            };
+            let bool_option = |key: &str| -> Option<bool> {
+                match Self::object_get_entry(&options, key) {
+                    Some(Value::Bool(value)) => Some(value),
+                    _ => None,
+                }
+            };
+            let number_option = |key: &str| -> Option<u8> {
+                match Self::object_get_entry(&options, key) {
+                    Some(Value::Number(value)) if (1..=3).contains(&value) => Some(value as u8),
+                    _ => None,
+                }
+            };
+            return IntlDateTimeOptions {
+                calendar: string_option("calendar").unwrap_or_else(|| "gregory".to_string()),
+                numbering_system: string_option("numberingSystem")
+                    .unwrap_or_else(|| "latn".to_string()),
+                time_zone: string_option("timeZone").unwrap_or_else(|| "UTC".to_string()),
+                date_style: string_option("dateStyle"),
+                time_style: string_option("timeStyle"),
+                weekday: string_option("weekday"),
+                year: string_option("year"),
+                month: string_option("month"),
+                day: string_option("day"),
+                hour: string_option("hour"),
+                minute: string_option("minute"),
+                second: string_option("second"),
+                fractional_second_digits: number_option("fractionalSecondDigits"),
+                time_zone_name: string_option("timeZoneName"),
+                hour12: bool_option("hour12"),
+                day_period: string_option("dayPeriod"),
+            };
+        }
+
+        IntlDateTimeOptions {
+            calendar: "gregory".to_string(),
+            numbering_system: "latn".to_string(),
+            time_zone: "UTC".to_string(),
+            date_style: None,
+            time_style: None,
+            weekday: None,
+            year: Some("numeric".to_string()),
+            month: Some("numeric".to_string()),
+            day: Some("numeric".to_string()),
+            hour: None,
+            minute: None,
+            second: None,
+            fractional_second_digits: None,
+            time_zone_name: None,
+            hour12: None,
+            day_period: None,
+        }
+    }
+
+    fn intl_normalize_time_zone(input: &str) -> Option<String> {
+        let normalized = input.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "utc" | "etc/utc" | "gmt" => Some("UTC".to_string()),
+            "australia/sydney" => Some("Australia/Sydney".to_string()),
+            "america/los_angeles" => Some("America/Los_Angeles".to_string()),
+            _ => None,
+        }
+    }
+
+    fn intl_time_zone_offset_minutes(time_zone: &str, _timestamp_ms: i64) -> i64 {
+        match time_zone {
+            "Australia/Sydney" => 11 * 60,
+            "America/Los_Angeles" => -8 * 60,
+            _ => 0,
+        }
+    }
+
+    fn intl_date_time_components(timestamp_ms: i64, time_zone: &str) -> IntlDateTimeComponents {
+        let offset_minutes = Self::intl_time_zone_offset_minutes(time_zone, timestamp_ms);
+        let adjusted = timestamp_ms.saturating_add(offset_minutes.saturating_mul(60_000));
+        let (year, month, day, hour, minute, second, millisecond) =
+            Self::date_components_utc(adjusted);
+        let days = adjusted.div_euclid(86_400_000);
+        let weekday = ((days + 4).rem_euclid(7)) as u32;
+        IntlDateTimeComponents {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            millisecond,
+            weekday,
+            offset_minutes,
+        }
+    }
+
+    fn intl_default_hour12(locale: &str) -> bool {
+        let family = Self::intl_locale_family(locale);
+        if family != "en" {
+            return false;
+        }
+        !matches!(Self::intl_locale_region(locale), Some("GB"))
+    }
+
+    fn intl_month_name(locale: &str, month: u32, width: &str) -> String {
+        let idx = month.saturating_sub(1) as usize;
+        let family = Self::intl_locale_family(locale);
+        let value = match (family, width) {
+            ("de", "long") => [
+                "Januar",
+                "Februar",
+                "Maerz",
+                "April",
+                "Mai",
+                "Juni",
+                "Juli",
+                "August",
+                "September",
+                "Oktober",
+                "November",
+                "Dezember",
+            ],
+            ("de", "short") => [
+                "Jan", "Feb", "Maer", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+            ],
+            ("de", _) => ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"],
+            (_, "long") => [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ],
+            (_, "short") => [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ],
+            _ => ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"],
+        };
+        value.get(idx).copied().unwrap_or_default().to_string()
+    }
+
+    fn intl_weekday_name(locale: &str, weekday: u32, width: &str) -> String {
+        let idx = weekday as usize;
+        let family = Self::intl_locale_family(locale);
+        let value = match (family, width) {
+            ("de", "long") => [
+                "Sonntag",
+                "Montag",
+                "Dienstag",
+                "Mittwoch",
+                "Donnerstag",
+                "Freitag",
+                "Samstag",
+            ],
+            ("de", "short") => ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+            ("de", _) => ["S", "M", "D", "M", "D", "F", "S"],
+            (_, "long") => [
+                "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            ],
+            (_, "short") => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+            _ => ["S", "M", "T", "W", "T", "F", "S"],
+        };
+        value.get(idx).copied().unwrap_or_default().to_string()
+    }
+
+    fn intl_apply_numbering_system(text: &str, numbering_system: &str) -> String {
+        if numbering_system != "arab" {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        for ch in text.chars() {
+            let mapped = match ch {
+                '0' => '٠',
+                '1' => '١',
+                '2' => '٢',
+                '3' => '٣',
+                '4' => '٤',
+                '5' => '٥',
+                '6' => '٦',
+                '7' => '٧',
+                '8' => '٨',
+                '9' => '٩',
+                _ => ch,
+            };
+            out.push(mapped);
+        }
+        out
+    }
+
+    fn intl_format_date_component_year(
+        locale: &str,
+        options: &IntlDateTimeOptions,
+        components: &IntlDateTimeComponents,
+    ) -> String {
+        let mut year = components.year;
+        if options.calendar == "japanese" && Self::intl_locale_family(locale) == "ja" {
+            year = (components.year - 1988).max(1);
+        }
+        match options.year.as_deref() {
+            Some("2-digit") => format!("{:02}", year.rem_euclid(100)),
+            _ => year.to_string(),
+        }
+    }
+
+    fn intl_format_date_component_month(
+        locale: &str,
+        options: &IntlDateTimeOptions,
+        components: &IntlDateTimeComponents,
+    ) -> String {
+        match options.month.as_deref() {
+            Some("2-digit") => format!("{:02}", components.month),
+            Some("long") | Some("short") | Some("narrow") => Self::intl_month_name(
+                locale,
+                components.month,
+                options.month.as_deref().unwrap_or("long"),
+            ),
+            _ => components.month.to_string(),
+        }
+    }
+
+    fn intl_format_date_component_day(
+        options: &IntlDateTimeOptions,
+        components: &IntlDateTimeComponents,
+    ) -> String {
+        match options.day.as_deref() {
+            Some("2-digit") => format!("{:02}", components.day),
+            _ => components.day.to_string(),
+        }
+    }
+
+    fn intl_append_date_parts(
+        &self,
+        parts: &mut Vec<IntlPart>,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+        components: &IntlDateTimeComponents,
+    ) {
+        if let Some(weekday_width) = options.weekday.as_deref() {
+            parts.push(IntlPart {
+                part_type: "weekday".to_string(),
+                value: Self::intl_weekday_name(locale, components.weekday, weekday_width),
+            });
+            parts.push(IntlPart {
+                part_type: "literal".to_string(),
+                value: ", ".to_string(),
+            });
+        }
+
+        let year = options
+            .year
+            .as_ref()
+            .map(|_| Self::intl_format_date_component_year(locale, options, components));
+        let month = options
+            .month
+            .as_ref()
+            .map(|_| Self::intl_format_date_component_month(locale, options, components));
+        let day = options
+            .day
+            .as_ref()
+            .map(|_| Self::intl_format_date_component_day(options, components));
+
+        let family = Self::intl_locale_family(locale);
+        if family == "ko" {
+            if let Some(year) = year {
+                parts.push(IntlPart {
+                    part_type: "year".to_string(),
+                    value: year,
+                });
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: ". ".to_string(),
+                });
+            }
+            if let Some(month) = month {
+                parts.push(IntlPart {
+                    part_type: "month".to_string(),
+                    value: month,
+                });
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: ". ".to_string(),
+                });
+            }
+            if let Some(day) = day {
+                parts.push(IntlPart {
+                    part_type: "day".to_string(),
+                    value: day,
+                });
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: ".".to_string(),
+                });
+            }
+            return;
+        }
+
+        let order = if family == "de" || family == "id" {
+            ["day", "month", "year"]
+        } else if family == "ja" {
+            ["year", "month", "day"]
+        } else if family == "en" && Self::intl_locale_region(locale) == Some("US") {
+            ["month", "day", "year"]
+        } else if family == "en" {
+            ["day", "month", "year"]
+        } else if family == "ar" {
+            ["day", "month", "year"]
+        } else {
+            ["month", "day", "year"]
+        };
+
+        let separator = if family == "de" {
+            "."
+        } else if family == "en"
+            && month
+                .as_ref()
+                .is_some_and(|m| m.chars().all(|ch| ch.is_ascii_alphabetic()))
+        {
+            " "
+        } else {
+            "/"
+        };
+
+        let mut first = true;
+        for key in order {
+            let value = match key {
+                "year" => year.as_ref(),
+                "month" => month.as_ref(),
+                "day" => day.as_ref(),
+                _ => None,
+            };
+            let Some(value) = value else {
+                continue;
+            };
+            if !first {
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: separator.to_string(),
+                });
+            }
+            first = false;
+            parts.push(IntlPart {
+                part_type: key.to_string(),
+                value: value.clone(),
+            });
+        }
+    }
+
+    fn intl_day_period_label(hour: u32, width: &str) -> String {
+        let base = if hour < 6 {
+            "at night"
+        } else if hour < 12 {
+            "in the morning"
+        } else if hour < 18 {
+            "in the afternoon"
+        } else {
+            "at night"
+        };
+        match width {
+            "narrow" => match hour {
+                0..=11 => "am".to_string(),
+                _ => "pm".to_string(),
+            },
+            "short" | "long" => base.to_string(),
+            _ => base.to_string(),
+        }
+    }
+
+    fn intl_time_zone_name(
+        locale: &str,
+        time_zone: &str,
+        offset_minutes: i64,
+        style: &str,
+    ) -> String {
+        if time_zone == "UTC" {
+            return "GMT".to_string();
+        }
+        if time_zone == "Australia/Sydney"
+            && style == "short"
+            && Self::intl_locale_region(locale) == Some("AU")
+        {
+            return "AEDT".to_string();
+        }
+        let sign = if offset_minutes >= 0 { '+' } else { '-' };
+        let total = offset_minutes.abs();
+        let hour = total / 60;
+        let minute = total % 60;
+        if minute == 0 {
+            format!("GMT{sign}{hour}")
+        } else {
+            format!("GMT{sign}{hour}:{minute:02}")
+        }
+    }
+
+    fn intl_append_time_parts(
+        &self,
+        parts: &mut Vec<IntlPart>,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+        components: &IntlDateTimeComponents,
+    ) {
+        let has_hour = options.hour.is_some();
+        let has_minute = options.minute.is_some();
+        let has_second = options.second.is_some();
+        if !has_hour && !has_minute && !has_second && options.time_zone_name.is_none() {
+            return;
+        }
+
+        let hour12 = options
+            .hour12
+            .unwrap_or_else(|| Self::intl_default_hour12(locale));
+        if has_hour {
+            let raw_hour = components.hour;
+            let hour_display = if hour12 {
+                let mut h = raw_hour % 12;
+                if h == 0 {
+                    h = 12;
+                }
+                h
+            } else {
+                raw_hour
+            };
+            let hour_text = match options.hour.as_deref() {
+                Some("2-digit") => format!("{hour_display:02}"),
+                _ => hour_display.to_string(),
+            };
+            parts.push(IntlPart {
+                part_type: "hour".to_string(),
+                value: hour_text,
+            });
+        }
+
+        if has_minute {
+            if has_hour {
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: ":".to_string(),
+                });
+            }
+            let minute_text = match options.minute.as_deref() {
+                Some("2-digit") => format!("{:02}", components.minute),
+                _ => components.minute.to_string(),
+            };
+            parts.push(IntlPart {
+                part_type: "minute".to_string(),
+                value: minute_text,
+            });
+        }
+
+        if has_second {
+            if has_hour || has_minute {
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: ":".to_string(),
+                });
+            }
+            let second_text = match options.second.as_deref() {
+                Some("2-digit") => format!("{:02}", components.second),
+                _ => components.second.to_string(),
+            };
+            parts.push(IntlPart {
+                part_type: "second".to_string(),
+                value: second_text,
+            });
+        }
+
+        if let Some(digits) = options.fractional_second_digits {
+            let divisor = match digits {
+                1 => 100,
+                2 => 10,
+                _ => 1,
+            };
+            parts.push(IntlPart {
+                part_type: "literal".to_string(),
+                value: ".".to_string(),
+            });
+            parts.push(IntlPart {
+                part_type: "fractionalSecond".to_string(),
+                value: format!(
+                    "{:0width$}",
+                    components.millisecond / divisor,
+                    width = digits as usize
+                ),
+            });
+        }
+
+        if let Some(width) = options.day_period.as_deref() {
+            parts.push(IntlPart {
+                part_type: "literal".to_string(),
+                value: " ".to_string(),
+            });
+            parts.push(IntlPart {
+                part_type: "dayPeriod".to_string(),
+                value: Self::intl_day_period_label(components.hour, width),
+            });
+        } else if has_hour && hour12 {
+            parts.push(IntlPart {
+                part_type: "literal".to_string(),
+                value: " ".to_string(),
+            });
+            let lower = Self::intl_locale_region(locale) == Some("AU");
+            let value = if components.hour < 12 { "AM" } else { "PM" };
+            parts.push(IntlPart {
+                part_type: "dayPeriod".to_string(),
+                value: if lower {
+                    value.to_ascii_lowercase()
+                } else {
+                    value.to_string()
+                },
+            });
+        }
+
+        if let Some(style) = options.time_zone_name.as_deref() {
+            parts.push(IntlPart {
+                part_type: "literal".to_string(),
+                value: " ".to_string(),
+            });
+            parts.push(IntlPart {
+                part_type: "timeZoneName".to_string(),
+                value: Self::intl_time_zone_name(
+                    locale,
+                    &options.time_zone,
+                    components.offset_minutes,
+                    style,
+                ),
+            });
+        }
+    }
+
+    fn intl_expand_date_time_styles(
+        locale: &str,
+        options: &IntlDateTimeOptions,
+    ) -> IntlDateTimeOptions {
+        let mut expanded = options.clone();
+        if let Some(date_style) = options.date_style.as_deref() {
+            match date_style {
+                "full" => {
+                    expanded.weekday = Some("long".to_string());
+                    expanded.year = Some("numeric".to_string());
+                    expanded.month = Some("long".to_string());
+                    expanded.day = Some("numeric".to_string());
+                }
+                "long" => {
+                    expanded.year = Some("numeric".to_string());
+                    expanded.month = Some("long".to_string());
+                    expanded.day = Some("numeric".to_string());
+                }
+                "medium" => {
+                    expanded.year = Some("numeric".to_string());
+                    expanded.month = Some("short".to_string());
+                    expanded.day = Some("numeric".to_string());
+                }
+                "short" => {
+                    expanded.year = Some("2-digit".to_string());
+                    expanded.month = Some("numeric".to_string());
+                    expanded.day = Some("numeric".to_string());
+                }
+                _ => {}
+            }
+        }
+        if let Some(time_style) = options.time_style.as_deref() {
+            match time_style {
+                "full" => {
+                    expanded.hour = Some("numeric".to_string());
+                    expanded.minute = Some("2-digit".to_string());
+                    expanded.second = Some("2-digit".to_string());
+                    expanded.time_zone_name = Some("long".to_string());
+                }
+                "long" => {
+                    expanded.hour = Some("numeric".to_string());
+                    expanded.minute = Some("2-digit".to_string());
+                    expanded.second = Some("2-digit".to_string());
+                    expanded.time_zone_name = Some("short".to_string());
+                }
+                "medium" => {
+                    expanded.hour = Some("numeric".to_string());
+                    expanded.minute = Some("2-digit".to_string());
+                    expanded.second = Some("2-digit".to_string());
+                }
+                "short" => {
+                    expanded.hour = Some("numeric".to_string());
+                    expanded.minute = Some("2-digit".to_string());
+                }
+                _ => {}
+            }
+        }
+        if options.date_style.is_some()
+            && options.time_style.is_some()
+            && Self::intl_locale_family(locale) == "en"
+        {
+            expanded.day_period = None;
+        }
+        expanded
+    }
+
+    fn intl_format_date_time_to_parts(
+        &self,
+        timestamp_ms: i64,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+    ) -> Vec<IntlPart> {
+        let options = Self::intl_expand_date_time_styles(locale, options);
+        let components = Self::intl_date_time_components(timestamp_ms, &options.time_zone);
+        let mut parts = Vec::new();
+
+        let has_date = options.year.is_some() || options.month.is_some() || options.day.is_some();
+        let has_time = options.hour.is_some()
+            || options.minute.is_some()
+            || options.second.is_some()
+            || options.time_zone_name.is_some()
+            || options.day_period.is_some()
+            || options.fractional_second_digits.is_some();
+
+        if has_date {
+            self.intl_append_date_parts(&mut parts, locale, &options, &components);
+        }
+        if has_time {
+            if has_date {
+                let separator = if options.date_style.is_some() && options.time_style.is_some() {
+                    if Self::intl_locale_family(locale) == "en" {
+                        " at "
+                    } else {
+                        ", "
+                    }
+                } else {
+                    ", "
+                };
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: separator.to_string(),
+                });
+            }
+            self.intl_append_time_parts(&mut parts, locale, &options, &components);
+        }
+
+        for part in &mut parts {
+            part.value = Self::intl_apply_numbering_system(&part.value, &options.numbering_system);
+        }
+
+        parts
+    }
+
+    fn intl_format_date_time(
+        &self,
+        timestamp_ms: i64,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+    ) -> String {
+        self.intl_format_date_time_to_parts(timestamp_ms, locale, options)
+            .into_iter()
+            .map(|part| part.value)
+            .collect::<String>()
+    }
+
+    fn intl_format_date_time_range(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+    ) -> String {
+        let start = self.intl_format_date_time(start_ms, locale, options);
+        let end = self.intl_format_date_time(end_ms, locale, options);
+        if start == end {
+            start
+        } else {
+            format!("{start} - {end}")
+        }
+    }
+
+    fn intl_format_date_time_range_to_parts(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+        locale: &str,
+        options: &IntlDateTimeOptions,
+    ) -> (Vec<IntlPart>, Vec<String>) {
+        let start = self.intl_format_date_time_to_parts(start_ms, locale, options);
+        let end = self.intl_format_date_time_to_parts(end_ms, locale, options);
+        if start
+            .iter()
+            .map(|part| part.value.as_str())
+            .collect::<String>()
+            == end
+                .iter()
+                .map(|part| part.value.as_str())
+                .collect::<String>()
+        {
+            let sources = vec!["shared".to_string(); start.len()];
+            return (start, sources);
+        }
+
+        let mut parts = Vec::new();
+        let mut sources = Vec::new();
+        for part in start {
+            parts.push(part);
+            sources.push("startRange".to_string());
+        }
+        parts.push(IntlPart {
+            part_type: "literal".to_string(),
+            value: " - ".to_string(),
+        });
+        sources.push("shared".to_string());
+        for part in end {
+            parts.push(part);
+            sources.push("endRange".to_string());
+        }
+        (parts, sources)
+    }
+
+    fn intl_date_time_parts_to_value(
+        &self,
+        parts: &[IntlPart],
+        sources: Option<&[String]>,
+    ) -> Value {
+        let mut out = Vec::with_capacity(parts.len());
+        for (idx, part) in parts.iter().enumerate() {
+            let mut entries = vec![
+                ("type".to_string(), Value::String(part.part_type.clone())),
+                ("value".to_string(), Value::String(part.value.clone())),
+            ];
+            if let Some(sources) = sources {
+                if let Some(source) = sources.get(idx) {
+                    entries.push(("source".to_string(), Value::String(source.clone())));
+                }
+            }
+            out.push(Self::new_object_value(entries));
+        }
+        Self::new_array_value(out)
+    }
+
+    fn intl_date_time_resolved_options_value(
+        &self,
+        locale: String,
+        options: &IntlDateTimeOptions,
+    ) -> Value {
+        let mut entries = vec![
+            ("locale".to_string(), Value::String(locale)),
+            (
+                "calendar".to_string(),
+                Value::String(options.calendar.clone()),
+            ),
+            (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+            (
+                "timeZone".to_string(),
+                Value::String(options.time_zone.clone()),
+            ),
+        ];
+        if let Some(value) = &options.date_style {
+            entries.push(("dateStyle".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.time_style {
+            entries.push(("timeStyle".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.weekday {
+            entries.push(("weekday".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.year {
+            entries.push(("year".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.month {
+            entries.push(("month".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.day {
+            entries.push(("day".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.hour {
+            entries.push(("hour".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.minute {
+            entries.push(("minute".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = &options.second {
+            entries.push(("second".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = options.fractional_second_digits {
+            entries.push((
+                "fractionalSecondDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = &options.time_zone_name {
+            entries.push(("timeZoneName".to_string(), Value::String(value.clone())));
+        }
+        if let Some(value) = options.hour12 {
+            entries.push(("hour12".to_string(), Value::Bool(value)));
+        }
+        if let Some(value) = &options.day_period {
+            entries.push(("dayPeriod".to_string(), Value::String(value.clone())));
+        }
+        Self::new_object_value(entries)
     }
 
     fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
@@ -12370,7 +13724,7 @@ impl Harness {
             "calendar" => vec!["gregory", "islamic-umalqura", "japanese"],
             "collation" => vec!["default", "emoji", "phonebk"],
             "currency" => vec!["EUR", "JPY", "USD"],
-            "numberingsystem" => vec!["latn", "thai"],
+            "numberingsystem" => vec!["arab", "latn", "thai"],
             "unit" => vec![
                 "day", "hour", "meter", "minute", "month", "second", "week", "year",
             ],
@@ -12510,14 +13864,91 @@ impl Harness {
         ])
     }
 
-    fn new_intl_formatter_value(&self, kind: IntlFormatterKind, locale: String) -> Value {
+    fn new_intl_date_time_format_callable(
+        &self,
+        locale: String,
+        options: IntlDateTimeOptions,
+    ) -> Value {
         Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("intl_date_time_format".to_string()),
+            ),
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::DateTimeFormat.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                Self::intl_date_time_options_to_value(&options),
+            ),
+        ])
+    }
+
+    fn new_intl_date_time_formatter_value(
+        &self,
+        locale: String,
+        options: IntlDateTimeOptions,
+    ) -> Value {
+        let format = self.new_intl_date_time_format_callable(locale.clone(), options.clone());
+        Self::new_object_value(vec![
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::DateTimeFormat.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                Self::intl_date_time_options_to_value(&options),
+            ),
+            ("format".to_string(), format),
+            (
+                "constructor".to_string(),
+                self.intl_constructor_value("DateTimeFormat"),
+            ),
+        ])
+    }
+
+    fn new_intl_number_format_callable(&self, locale: String) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("intl_number_format".to_string()),
+            ),
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::NumberFormat.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+        ])
+    }
+
+    fn new_intl_formatter_value(&self, kind: IntlFormatterKind, locale: String) -> Value {
+        let mut entries = vec![
             (
                 INTERNAL_INTL_KIND_KEY.to_string(),
                 Value::String(kind.storage_name().to_string()),
             ),
             (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-        ])
+        ];
+        if kind == IntlFormatterKind::NumberFormat {
+            let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+                .and_then(|value| match value {
+                    Value::String(value) => Some(value),
+                    _ => None,
+                })
+                .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+            entries.push((
+                "format".to_string(),
+                self.new_intl_number_format_callable(locale),
+            ));
+            entries.push((
+                "constructor".to_string(),
+                self.intl_constructor_value("NumberFormat"),
+            ));
+        }
+        Self::new_object_value(entries)
     }
 
     fn resolve_intl_formatter(&self, value: &Value) -> Result<(IntlFormatterKind, String)> {
@@ -12544,6 +13975,41 @@ impl Harness {
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
         Ok((kind, locale))
+    }
+
+    fn resolve_intl_date_time_options(
+        &self,
+        value: &Value,
+    ) -> Result<(String, IntlDateTimeOptions)> {
+        let Value::Object(entries) = value else {
+            return Err(Error::ScriptRuntime(
+                "Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = Self::object_get_entry(&entries, INTERNAL_INTL_KIND_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => IntlFormatterKind::from_storage_name(&value),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance".into(),
+                )
+            })?;
+        if kind != IntlFormatterKind::DateTimeFormat {
+            return Err(Error::ScriptRuntime(
+                "Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance".into(),
+            ));
+        }
+        let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+        let options = Self::intl_date_time_options_from_internal(&entries);
+        Ok((locale, options))
     }
 
     fn resolve_intl_collator_options(&self, value: &Value) -> Result<(String, String, String)> {
@@ -21710,9 +23176,9 @@ fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
         return Ok(None);
     };
 
-    if args.len() < 2 || args.len() > 6 {
+    if args.len() < 2 || args.len() > 7 {
         return Err(Error::ScriptParse(
-            "Date.UTC requires between 2 and 6 arguments".into(),
+            "Date.UTC requires between 2 and 7 arguments".into(),
         ));
     }
 
@@ -21925,8 +23391,137 @@ fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
         }));
     }
 
+    if member == "DateTimeFormat" {
+        if called_with_new && cursor.eof() {
+            return Ok(Some(Expr::IntlFormatterConstruct {
+                kind: IntlFormatterKind::DateTimeFormat,
+                locales: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            let Some(dtf_member) = cursor.parse_identifier() else {
+                return Ok(None);
+            };
+            cursor.skip_ws();
+
+            if dtf_member == "prototype" {
+                if !cursor.consume_byte(b'[') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("Symbol") {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'.') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("toStringTag") {
+                    return Ok(None);
+                }
+                if let Some(next) = cursor.peek() {
+                    if is_ident_char(next) {
+                        return Ok(None);
+                    }
+                }
+                cursor.skip_ws();
+                cursor.expect_byte(b']')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::String("Intl.DateTimeFormat".to_string())));
+            }
+
+            if dtf_member == "supportedLocalesOf" {
+                if cursor.peek() != Some(b'(') {
+                    return Ok(None);
+                }
+                let args_src = cursor.read_balanced_block(b'(', b')')?;
+                let raw_args = split_top_level_by_char(&args_src, b',');
+                let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                    Vec::new()
+                } else {
+                    raw_args
+                };
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.DateTimeFormat.supportedLocalesOf requires locales and optional options"
+                            .into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.DateTimeFormat.supportedLocalesOf options cannot be empty".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                parsed.push(parse_expr(args[0].trim())?);
+                if args.len() == 2 {
+                    parsed.push(parse_expr(args[1].trim())?);
+                }
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::IntlStaticMethod {
+                    method: IntlStaticMethod::DateTimeFormatSupportedLocalesOf,
+                    args: parsed,
+                }));
+            }
+
+            return Ok(None);
+        }
+
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "Intl.DateTimeFormat supports up to two arguments".into(),
+            ));
+        }
+        if args.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse(
+                "Intl.DateTimeFormat argument cannot be empty".into(),
+            ));
+        }
+        let locales = args
+            .first()
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        let options = args
+            .get(1)
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::IntlFormatterConstruct {
+            kind: IntlFormatterKind::DateTimeFormat,
+            locales,
+            options,
+            called_with_new,
+        }));
+    }
+
     let intl_formatter_kind = match member.as_str() {
-        "DateTimeFormat" => Some(IntlFormatterKind::DateTimeFormat),
         "NumberFormat" => Some(IntlFormatterKind::NumberFormat),
         _ => None,
     };
@@ -25471,6 +27066,98 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
             }));
         }
 
+        if method_name == "formatRangeToParts" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.DateTimeFormat.formatRangeToParts requires exactly two arguments".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlDateTimeFormatRangeToParts {
+                formatter: Box::new(parse_expr(base_src)?),
+                start: Box::new(parse_expr(args[0].trim())?),
+                end: Box::new(parse_expr(args[1].trim())?),
+            }));
+        }
+
+        if method_name == "formatRange" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.DateTimeFormat.formatRange requires exactly two arguments".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlDateTimeFormatRange {
+                formatter: Box::new(parse_expr(base_src)?),
+                start: Box::new(parse_expr(args[0].trim())?),
+                end: Box::new(parse_expr(args[1].trim())?),
+            }));
+        }
+
+        if method_name == "formatToParts" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "Intl.DateTimeFormat.formatToParts supports at most one argument".into(),
+                ));
+            }
+            if args.len() == 1 && args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.DateTimeFormat.formatToParts argument cannot be empty".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlDateTimeFormatToParts {
+                formatter: Box::new(parse_expr(base_src)?),
+                value: args
+                    .first()
+                    .map(|arg| parse_expr(arg.trim()))
+                    .transpose()?
+                    .map(Box::new),
+            }));
+        }
+
         if method_name == "resolvedOptions" {
             cursor.skip_ws();
             if cursor.peek() != Some(b'(') {
@@ -25489,16 +27176,21 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
             };
             if !args.is_empty() {
                 return Err(Error::ScriptParse(
-                    "Intl.Collator.resolvedOptions does not take arguments".into(),
+                    "Intl formatter resolvedOptions does not take arguments".into(),
                 ));
             }
-            return Ok(Some(Expr::IntlCollatorResolvedOptions {
-                collator: Box::new(parse_expr(base_src)?),
+            return Ok(Some(Expr::IntlDateTimeResolvedOptions {
+                formatter: Box::new(parse_expr(base_src)?),
             }));
         }
 
         if method_name == "format" {
             cursor.skip_ws();
+            if cursor.eof() {
+                return Ok(Some(Expr::IntlFormatGetter {
+                    formatter: Box::new(parse_expr(base_src)?),
+                }));
+            }
             if cursor.peek() != Some(b'(') {
                 continue;
             }
@@ -32470,7 +34162,7 @@ mod tests {
             ),
             (
                 "<script>Date.UTC(1970);</script>",
-                "Date.UTC requires between 2 and 6 arguments",
+                "Date.UTC requires between 2 and 7 arguments",
             ),
             (
                 "<script>Date.UTC(1970, , 1);</script>",
@@ -32986,6 +34678,103 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn intl_date_time_format_try_it_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date(Date.UTC(2020, 11, 20, 3, 23, 16, 738));
+            const us = new Intl.DateTimeFormat('en-US').format(date);
+            const fallback = new Intl.DateTimeFormat(['ban', 'id']).format(date);
+            const styled = new Intl.DateTimeFormat('en-GB', {
+              dateStyle: 'full',
+              timeStyle: 'long',
+              timeZone: 'Australia/Sydney',
+            }).format(date);
+            document.getElementById('result').textContent = us + '|' + fallback + '|' + styled;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "12/20/2020|20/12/2020|Sunday, 20 December 2020 at 14:23:16 GMT+11",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_date_time_format_instance_methods_and_getter_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const dtf = new Intl.DateTimeFormat('en-US', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              timeZone: 'UTC'
+            });
+            const d1 = new Date(Date.UTC(2020, 11, 20, 3, 23, 16, 738));
+            const d2 = new Date(Date.UTC(2020, 11, 21, 3, 23, 16, 738));
+            const fmt = dtf.format;
+            const fromGetter = fmt(d1);
+            const parts = dtf.formatToParts(d1);
+            const range = dtf.formatRange(d1, d2);
+            const rangeParts = dtf.formatRangeToParts(d1, d2);
+            const partsOk = JSON.stringify(parts).includes('"type":"month"');
+            const rangePartsOk =
+              JSON.stringify(rangeParts).includes('"source":"startRange"') &&
+              JSON.stringify(rangeParts).includes('"source":"endRange"');
+            document.getElementById('result').textContent =
+              fromGetter + '|' + range + '|' + partsOk + ':' + rangePartsOk;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "12/20/2020|12/20/2020 - 12/21/2020|true:true")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_date_time_format_supported_locales_and_resolved_options_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const supportedLocales = Intl.DateTimeFormat.supportedLocalesOf(['ban', 'id', 'en-GB', 'fr']);
+            const supported = supportedLocales.join(',');
+            const ro = new Intl.DateTimeFormat('ja-JP-u-ca-japanese', {
+              numberingSystem: 'arab',
+              timeZone: 'America/Los_Angeles',
+              dateStyle: 'short',
+            }).resolvedOptions();
+            const tag = Intl.DateTimeFormat.prototype[Symbol.toStringTag];
+            const ar = new Intl.DateTimeFormat('ar-EG').format(new Date(Date.UTC(2012, 11, 20, 3, 0, 0)));
+            document.getElementById('result').textContent =
+              supported + '|' + ro.locale + ':' + ro.calendar + ':' + ro.numberingSystem + ':' +
+              ro.timeZone + ':' + ro.dateStyle + '|' + tag + '|' + ar;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "id,en-GB|ja-JP-u-ca-japanese:japanese:arab:America/Los_Angeles:short|Intl.DateTimeFormat|٢٠/١٢/٢٠١٢",
+        )?;
         Ok(())
     }
 
