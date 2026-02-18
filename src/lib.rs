@@ -12924,17 +12924,15 @@ impl Harness {
 
     fn intl_canonicalize_locale(raw: &str) -> Result<String> {
         let raw = raw.trim();
+        let invalid_language_tag =
+            || Error::ScriptRuntime(format!("RangeError: invalid language tag: \"{raw}\""));
         if raw.is_empty() {
-            return Err(Error::ScriptRuntime(
-                "RangeError: invalid locale identifier".into(),
-            ));
+            return Err(invalid_language_tag());
         }
 
         let subtags = raw.split('-').collect::<Vec<_>>();
         if subtags.iter().any(|subtag| subtag.is_empty()) {
-            return Err(Error::ScriptRuntime(format!(
-                "RangeError: invalid locale identifier: {raw}"
-            )));
+            return Err(invalid_language_tag());
         }
 
         let language = subtags[0];
@@ -12942,9 +12940,7 @@ impl Harness {
         if !(language_len == 2 || language_len == 3 || (5..=8).contains(&language_len))
             || !language.chars().all(|ch| ch.is_ascii_alphabetic())
         {
-            return Err(Error::ScriptRuntime(format!(
-                "RangeError: invalid locale identifier: {raw}"
-            )));
+            return Err(invalid_language_tag());
         }
 
         let mut canonical = Vec::with_capacity(subtags.len());
@@ -12957,9 +12953,7 @@ impl Harness {
 
         for subtag in subtags.into_iter().skip(1) {
             if !subtag.chars().all(|ch| ch.is_ascii_alphanumeric()) {
-                return Err(Error::ScriptRuntime(format!(
-                    "RangeError: invalid locale identifier: {raw}"
-                )));
+                return Err(invalid_language_tag());
             }
 
             if subtag.len() == 1 {
@@ -12972,9 +12966,7 @@ impl Harness {
 
             if in_private_use {
                 if subtag.len() > 8 {
-                    return Err(Error::ScriptRuntime(format!(
-                        "RangeError: invalid locale identifier: {raw}"
-                    )));
+                    return Err(invalid_language_tag());
                 }
                 canonical.push(subtag.to_ascii_lowercase());
                 continue;
@@ -12982,9 +12974,7 @@ impl Harness {
 
             if in_extension {
                 if !(2..=8).contains(&subtag.len()) {
-                    return Err(Error::ScriptRuntime(format!(
-                        "RangeError: invalid locale identifier: {raw}"
-                    )));
+                    return Err(invalid_language_tag());
                 }
                 canonical.push(subtag.to_ascii_lowercase());
                 continue;
@@ -13023,9 +13013,7 @@ impl Harness {
                 continue;
             }
 
-            return Err(Error::ScriptRuntime(format!(
-                "RangeError: invalid locale identifier: {raw}"
-            )));
+            return Err(invalid_language_tag());
         }
 
         Ok(canonical.join("-"))
@@ -16975,22 +16963,34 @@ impl Harness {
     }
 
     fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
-        let values = match key.trim().to_ascii_lowercase().as_str() {
+        let key = key.trim();
+        let mut values = match key.to_ascii_lowercase().as_str() {
             "calendar" => vec!["gregory", "islamic-umalqura", "japanese"],
             "collation" => vec!["default", "emoji", "phonebk"],
             "currency" => vec!["EUR", "JPY", "USD"],
             "numberingsystem" => vec!["arab", "latn", "thai"],
+            "timezone" => vec![
+                "America/Los_Angeles",
+                "America/New_York",
+                "Asia/Kolkata",
+                "UTC",
+            ],
             "unit" => vec![
                 "day", "hour", "meter", "minute", "month", "second", "week", "year",
             ],
             _ => {
                 return Err(Error::ScriptRuntime(format!(
-                    "RangeError: unsupported Intl.supportedValuesOf key: {}",
-                    key.trim()
+                    "RangeError: invalid key: \"{key}\""
                 )));
             }
         };
-        Ok(values.into_iter().map(str::to_string).collect())
+        let mut values = values
+            .drain(..)
+            .map(str::to_string)
+            .collect::<Vec<String>>();
+        values.sort();
+        values.dedup();
+        Ok(values)
     }
 
     fn new_builtin_placeholder_function() -> Value {
@@ -39448,6 +39448,99 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "en-US,de-DE|EUR,JPY,USD|Intl")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_get_canonical_locales_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const one = Intl.getCanonicalLocales('EN-US');
+            const two = Intl.getCanonicalLocales(['EN-US', 'Fr']);
+            document.getElementById('result').textContent = one.join(',') + '|' + two.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "en-US|en-US,fr")?;
+
+        let html_error = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Intl.getCanonicalLocales('EN_US');
+          });
+        </script>
+        "#;
+        let mut h = Harness::from_html(html_error)?;
+        let err = h
+            .click("#btn")
+            .expect_err("invalid language tag should throw");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert_eq!(msg, "RangeError: invalid language tag: \"EN_US\"")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn intl_supported_values_of_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const calendar = Intl.supportedValuesOf('calendar');
+            const collation = Intl.supportedValuesOf('collation');
+            const currency = Intl.supportedValuesOf('currency');
+            const numberingSystem = Intl.supportedValuesOf('numberingSystem');
+            const timeZone = Intl.supportedValuesOf('timeZone');
+            const unit = Intl.supportedValuesOf('unit');
+            document.getElementById('result').textContent =
+              calendar.join(',') + '|' +
+              collation.join(',') + '|' +
+              currency.join(',') + '|' +
+              numberingSystem.join(',') + '|' +
+              timeZone.join(',') + '|' +
+              unit.join(',');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "gregory,islamic-umalqura,japanese|default,emoji,phonebk|EUR,JPY,USD|arab,latn,thai|America/Los_Angeles,America/New_York,Asia/Kolkata,UTC|day,hour,meter,minute,month,second,week,year",
+        )?;
+
+        let html_error = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Intl.supportedValuesOf('someInvalidKey');
+          });
+        </script>
+        "#;
+        let mut h = Harness::from_html(html_error)?;
+        let err = h
+            .click("#btn")
+            .expect_err("invalid supportedValuesOf key should throw");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert_eq!(msg, "RangeError: invalid key: \"someInvalidKey\"")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
         Ok(())
     }
 
