@@ -3952,6 +3952,7 @@ enum MatchMediaProp {
 enum IntlFormatterKind {
     Collator,
     DateTimeFormat,
+    DisplayNames,
     NumberFormat,
 }
 
@@ -3959,6 +3960,7 @@ enum IntlFormatterKind {
 enum IntlStaticMethod {
     CollatorSupportedLocalesOf,
     DateTimeFormatSupportedLocalesOf,
+    DisplayNamesSupportedLocalesOf,
     GetCanonicalLocales,
     SupportedValuesOf,
 }
@@ -3968,6 +3970,7 @@ impl IntlFormatterKind {
         match self {
             Self::Collator => "Collator",
             Self::DateTimeFormat => "DateTimeFormat",
+            Self::DisplayNames => "DisplayNames",
             Self::NumberFormat => "NumberFormat",
         }
     }
@@ -3976,6 +3979,7 @@ impl IntlFormatterKind {
         match value {
             "Collator" => Some(Self::Collator),
             "DateTimeFormat" => Some(Self::DateTimeFormat),
+            "DisplayNames" => Some(Self::DisplayNames),
             "NumberFormat" => Some(Self::NumberFormat),
             _ => None,
         }
@@ -4019,6 +4023,14 @@ struct IntlDateTimeComponents {
 struct IntlPart {
     part_type: String,
     value: String,
+}
+
+#[derive(Debug, Clone)]
+struct IntlDisplayNamesOptions {
+    style: String,
+    display_type: String,
+    fallback: String,
+    language_display: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4088,6 +4100,10 @@ enum Expr {
     },
     IntlDateTimeResolvedOptions {
         formatter: Box<Expr>,
+    },
+    IntlDisplayNamesOf {
+        display_names: Box<Expr>,
+        code: Box<Expr>,
     },
     IntlStaticMethod {
         method: IntlStaticMethod,
@@ -7790,6 +7806,15 @@ impl Harness {
                             self.intl_date_time_options_from_value(&locale, options.as_ref())?;
                         Ok(self.new_intl_date_time_formatter_value(locale, options))
                     }
+                    IntlFormatterKind::DisplayNames => {
+                        let options = options
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?;
+                        let options =
+                            self.intl_display_names_options_from_value(options.as_ref())?;
+                        Ok(self.new_intl_display_names_value(locale, options))
+                    }
                     _ => Ok(self.new_intl_formatter_value(*kind, locale)),
                 }
             }
@@ -7821,6 +7846,9 @@ impl Harness {
                             &options,
                         )))
                     }
+                    IntlFormatterKind::DisplayNames => Err(Error::ScriptRuntime(
+                        "Intl.DisplayNames does not support format()".into(),
+                    )),
                     IntlFormatterKind::Collator => Err(Error::ScriptRuntime(
                         "Intl.Collator does not support format()".into(),
                     )),
@@ -7837,6 +7865,9 @@ impl Harness {
                     IntlFormatterKind::NumberFormat => {
                         Ok(self.new_intl_number_format_callable(locale))
                     }
+                    IntlFormatterKind::DisplayNames => Err(Error::ScriptRuntime(
+                        "Intl.DisplayNames does not support format getter".into(),
+                    )),
                     IntlFormatterKind::Collator => Err(Error::ScriptRuntime(
                         "Intl.Collator does not support format getter".into(),
                     )),
@@ -7954,10 +7985,23 @@ impl Harness {
                             ("caseFirst".into(), Value::String(case_first)),
                         ]))
                     }
+                    IntlFormatterKind::DisplayNames => {
+                        let (_, options) = self.resolve_intl_display_names_options(&formatter)?;
+                        Ok(self.intl_display_names_resolved_options_value(locale, &options))
+                    }
                     IntlFormatterKind::NumberFormat => Err(Error::ScriptRuntime(
                         "Intl.NumberFormat.resolvedOptions is not implemented".into(),
                     )),
                 }
+            }
+            Expr::IntlDisplayNamesOf {
+                display_names,
+                code,
+            } => {
+                let display_names = self.eval_expr(display_names, env, event_param, event)?;
+                let code = self.eval_expr(code, env, event_param, event)?.as_string();
+                let (locale, options) = self.resolve_intl_display_names_options(&display_names)?;
+                self.intl_display_names_of(&locale, &options, &code)
             }
             Expr::IntlStaticMethod { method, args } => match method {
                 IntlStaticMethod::CollatorSupportedLocalesOf => {
@@ -7984,6 +8028,19 @@ impl Harness {
                     let locales = self.intl_collect_locales(&locales)?;
                     let supported =
                         Self::intl_supported_locales(IntlFormatterKind::DateTimeFormat, locales);
+                    Ok(Self::new_array_value(supported))
+                }
+                IntlStaticMethod::DisplayNamesSupportedLocalesOf => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Intl.DisplayNames.supportedLocalesOf requires locales and optional options"
+                                .into(),
+                        ));
+                    }
+                    let locales = self.eval_expr(&args[0], env, event_param, event)?;
+                    let locales = self.intl_collect_locales(&locales)?;
+                    let supported =
+                        Self::intl_supported_locales(IntlFormatterKind::DisplayNames, locales);
                     Ok(Self::new_array_value(supported))
                 }
                 IntlStaticMethod::GetCanonicalLocales => {
@@ -12467,6 +12524,9 @@ impl Harness {
                 Self::intl_locale_family(locale),
                 "en" | "de" | "id" | "ko" | "ar" | "ja"
             ),
+            IntlFormatterKind::DisplayNames => {
+                matches!(Self::intl_locale_family(locale), "en" | "zh")
+            }
             IntlFormatterKind::NumberFormat => {
                 matches!(Self::intl_locale_family(locale), "en" | "de")
             }
@@ -13719,6 +13779,312 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
+    fn intl_display_names_options_from_value(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<IntlDisplayNamesOptions> {
+        let Some(options) = options else {
+            return Err(Error::ScriptRuntime(
+                "TypeError: Intl.DisplayNames options with a type are required".into(),
+            ));
+        };
+
+        let entries = match options {
+            Value::Object(entries) => entries.borrow(),
+            Value::Undefined | Value::Null => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: Intl.DisplayNames options with a type are required".into(),
+                ));
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: Intl.DisplayNames options must be an object".into(),
+                ));
+            }
+        };
+
+        let string_option = |key: &str| -> Option<String> {
+            match Self::object_get_entry(&entries, key) {
+                Some(Value::Undefined) | None => None,
+                Some(value) => Some(value.as_string()),
+            }
+        };
+
+        let display_type = string_option("type").ok_or_else(|| {
+            Error::ScriptRuntime("TypeError: Intl.DisplayNames requires a type option".into())
+        })?;
+        if !matches!(
+            display_type.as_str(),
+            "region" | "language" | "script" | "currency"
+        ) {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames type option".into(),
+            ));
+        }
+
+        let style = string_option("style").unwrap_or_else(|| "long".to_string());
+        if !matches!(style.as_str(), "narrow" | "short" | "long") {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames style option".into(),
+            ));
+        }
+
+        let fallback = string_option("fallback").unwrap_or_else(|| "code".to_string());
+        if !matches!(fallback.as_str(), "code" | "none") {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames fallback option".into(),
+            ));
+        }
+
+        let language_display =
+            string_option("languageDisplay").unwrap_or_else(|| "dialect".to_string());
+        if !matches!(language_display.as_str(), "dialect" | "standard") {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames languageDisplay option".into(),
+            ));
+        }
+
+        Ok(IntlDisplayNamesOptions {
+            style,
+            display_type,
+            fallback,
+            language_display,
+        })
+    }
+
+    fn intl_display_names_options_to_value(options: &IntlDisplayNamesOptions) -> Value {
+        let mut entries = vec![
+            ("style".to_string(), Value::String(options.style.clone())),
+            (
+                "type".to_string(),
+                Value::String(options.display_type.clone()),
+            ),
+            (
+                "fallback".to_string(),
+                Value::String(options.fallback.clone()),
+            ),
+        ];
+        if options.display_type == "language" {
+            entries.push((
+                "languageDisplay".to_string(),
+                Value::String(options.language_display.clone()),
+            ));
+        }
+        Self::new_object_value(entries)
+    }
+
+    fn intl_display_names_options_from_internal(
+        entries: &[(String, Value)],
+    ) -> IntlDisplayNamesOptions {
+        if let Some(Value::Object(options)) =
+            Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
+        {
+            let options = options.borrow();
+            let string_option = |key: &str| -> Option<String> {
+                match Self::object_get_entry(&options, key) {
+                    Some(Value::String(value)) => Some(value),
+                    _ => None,
+                }
+            };
+            return IntlDisplayNamesOptions {
+                style: string_option("style").unwrap_or_else(|| "long".to_string()),
+                display_type: string_option("type").unwrap_or_else(|| "region".to_string()),
+                fallback: string_option("fallback").unwrap_or_else(|| "code".to_string()),
+                language_display: string_option("languageDisplay")
+                    .unwrap_or_else(|| "dialect".to_string()),
+            };
+        }
+        IntlDisplayNamesOptions {
+            style: "long".to_string(),
+            display_type: "region".to_string(),
+            fallback: "code".to_string(),
+            language_display: "dialect".to_string(),
+        }
+    }
+
+    fn intl_canonicalize_display_names_code(display_type: &str, code: &str) -> Result<String> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames code".into(),
+            ));
+        }
+        match display_type {
+            "region" => {
+                if code.len() == 2 && code.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                    Ok(code.to_ascii_uppercase())
+                } else if code.len() == 3 && code.chars().all(|ch| ch.is_ascii_digit()) {
+                    Ok(code.to_string())
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "RangeError: invalid region code for Intl.DisplayNames".into(),
+                    ))
+                }
+            }
+            "script" => {
+                if code.len() == 4 && code.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                    let mut chars = code.chars();
+                    let first = chars.next().unwrap_or_default().to_ascii_uppercase();
+                    Ok(format!("{first}{}", chars.as_str().to_ascii_lowercase()))
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "RangeError: invalid script code for Intl.DisplayNames".into(),
+                    ))
+                }
+            }
+            "currency" => {
+                if code.len() == 3 && code.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                    Ok(code.to_ascii_uppercase())
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "RangeError: invalid currency code for Intl.DisplayNames".into(),
+                    ))
+                }
+            }
+            "language" => Self::intl_canonicalize_locale(code),
+            _ => Err(Error::ScriptRuntime(
+                "RangeError: invalid Intl.DisplayNames type option".into(),
+            )),
+        }
+    }
+
+    fn intl_display_names_lookup(
+        locale: &str,
+        options: &IntlDisplayNamesOptions,
+        code: &str,
+    ) -> Option<String> {
+        let is_zh = Self::intl_locale_family(locale) == "zh";
+        match options.display_type.as_str() {
+            "region" => {
+                if is_zh {
+                    match code {
+                        "419" => Some("拉丁美洲".to_string()),
+                        "BZ" => Some("貝里斯".to_string()),
+                        "US" => Some("美國".to_string()),
+                        "BA" => Some("波士尼亞與赫塞哥維納".to_string()),
+                        "MM" => Some("緬甸".to_string()),
+                        _ => None,
+                    }
+                } else {
+                    match code {
+                        "419" => Some("Latin America".to_string()),
+                        "BZ" => Some("Belize".to_string()),
+                        "US" => Some("United States".to_string()),
+                        "BA" => Some("Bosnia & Herzegovina".to_string()),
+                        "MM" => Some("Myanmar (Burma)".to_string()),
+                        _ => None,
+                    }
+                }
+            }
+            "language" => {
+                if is_zh {
+                    match code {
+                        "fr" => Some("法文".to_string()),
+                        "de" => Some("德文".to_string()),
+                        "zh" => Some("中文".to_string()),
+                        "fr-CA" => Some("加拿大法文".to_string()),
+                        "zh-Hant" => Some("繁體中文".to_string()),
+                        "en-US" => Some("美式英文".to_string()),
+                        "zh-TW" => Some("中文（台灣）".to_string()),
+                        _ => None,
+                    }
+                } else {
+                    match code {
+                        "fr" => Some("French".to_string()),
+                        "de" => Some("German".to_string()),
+                        "zh" => Some("Chinese".to_string()),
+                        "fr-CA" => Some("Canadian French".to_string()),
+                        "zh-Hant" => Some("Traditional Chinese".to_string()),
+                        "en-US" => Some("American English".to_string()),
+                        "zh-TW" => Some("Chinese (Taiwan)".to_string()),
+                        _ => None,
+                    }
+                }
+            }
+            "script" => {
+                if is_zh {
+                    match code {
+                        "Latn" => Some("拉丁文".to_string()),
+                        "Arab" => Some("阿拉伯文".to_string()),
+                        "Kana" => Some("片假名".to_string()),
+                        _ => None,
+                    }
+                } else {
+                    match code {
+                        "Latn" => Some("Latin".to_string()),
+                        "Arab" => Some("Arabic".to_string()),
+                        "Kana" => Some("Katakana".to_string()),
+                        _ => None,
+                    }
+                }
+            }
+            "currency" => {
+                if is_zh {
+                    match code {
+                        "USD" => Some("美元".to_string()),
+                        "EUR" => Some("歐元".to_string()),
+                        "TWD" => Some("新台幣".to_string()),
+                        "CNY" => Some("人民幣".to_string()),
+                        _ => None,
+                    }
+                } else {
+                    match code {
+                        "USD" => Some("US Dollar".to_string()),
+                        "EUR" => Some("Euro".to_string()),
+                        "TWD" => Some("New Taiwan Dollar".to_string()),
+                        "CNY" => Some("Chinese Yuan".to_string()),
+                        _ => None,
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn intl_display_names_of(
+        &self,
+        locale: &str,
+        options: &IntlDisplayNamesOptions,
+        code: &str,
+    ) -> Result<Value> {
+        let canonical_code =
+            Self::intl_canonicalize_display_names_code(&options.display_type, code)?;
+        if let Some(name) = Self::intl_display_names_lookup(locale, options, &canonical_code) {
+            return Ok(Value::String(name));
+        }
+        if options.fallback == "none" {
+            Ok(Value::Undefined)
+        } else {
+            Ok(Value::String(canonical_code))
+        }
+    }
+
+    fn intl_display_names_resolved_options_value(
+        &self,
+        locale: String,
+        options: &IntlDisplayNamesOptions,
+    ) -> Value {
+        let mut entries = vec![
+            ("locale".to_string(), Value::String(locale)),
+            ("style".to_string(), Value::String(options.style.clone())),
+            (
+                "type".to_string(),
+                Value::String(options.display_type.clone()),
+            ),
+            (
+                "fallback".to_string(),
+                Value::String(options.fallback.clone()),
+            ),
+        ];
+        if options.display_type == "language" {
+            entries.push((
+                "languageDisplay".to_string(),
+                Value::String(options.language_display.clone()),
+            ));
+        }
+        Self::new_object_value(entries)
+    }
+
     fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
         let values = match key.trim().to_ascii_lowercase().as_str() {
             "calendar" => vec!["gregory", "islamic-umalqura", "japanese"],
@@ -13910,6 +14276,28 @@ impl Harness {
         ])
     }
 
+    fn new_intl_display_names_value(
+        &self,
+        locale: String,
+        options: IntlDisplayNamesOptions,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::DisplayNames.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                Self::intl_display_names_options_to_value(&options),
+            ),
+            (
+                "constructor".to_string(),
+                self.intl_constructor_value("DisplayNames"),
+            ),
+        ])
+    }
+
     fn new_intl_number_format_callable(&self, locale: String) -> Value {
         Self::new_object_value(vec![
             (
@@ -14009,6 +14397,41 @@ impl Harness {
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
         let options = Self::intl_date_time_options_from_internal(&entries);
+        Ok((locale, options))
+    }
+
+    fn resolve_intl_display_names_options(
+        &self,
+        value: &Value,
+    ) -> Result<(String, IntlDisplayNamesOptions)> {
+        let Value::Object(entries) = value else {
+            return Err(Error::ScriptRuntime(
+                "Intl.DisplayNames method requires an Intl.DisplayNames instance".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = Self::object_get_entry(&entries, INTERNAL_INTL_KIND_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => IntlFormatterKind::from_storage_name(&value),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "Intl.DisplayNames method requires an Intl.DisplayNames instance".into(),
+                )
+            })?;
+        if kind != IntlFormatterKind::DisplayNames {
+            return Err(Error::ScriptRuntime(
+                "Intl.DisplayNames method requires an Intl.DisplayNames instance".into(),
+            ));
+        }
+        let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+        let options = Self::intl_display_names_options_from_internal(&entries);
         Ok((locale, options))
     }
 
@@ -23521,6 +23944,136 @@ fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
         }));
     }
 
+    if member == "DisplayNames" {
+        if called_with_new && cursor.eof() {
+            return Ok(Some(Expr::IntlFormatterConstruct {
+                kind: IntlFormatterKind::DisplayNames,
+                locales: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            let Some(display_names_member) = cursor.parse_identifier() else {
+                return Ok(None);
+            };
+            cursor.skip_ws();
+
+            if display_names_member == "prototype" {
+                if !cursor.consume_byte(b'[') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("Symbol") {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'.') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("toStringTag") {
+                    return Ok(None);
+                }
+                if let Some(next) = cursor.peek() {
+                    if is_ident_char(next) {
+                        return Ok(None);
+                    }
+                }
+                cursor.skip_ws();
+                cursor.expect_byte(b']')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::String("Intl.DisplayNames".to_string())));
+            }
+
+            if display_names_member == "supportedLocalesOf" {
+                if cursor.peek() != Some(b'(') {
+                    return Ok(None);
+                }
+                let args_src = cursor.read_balanced_block(b'(', b')')?;
+                let raw_args = split_top_level_by_char(&args_src, b',');
+                let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                    Vec::new()
+                } else {
+                    raw_args
+                };
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.DisplayNames.supportedLocalesOf requires locales and optional options"
+                            .into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.DisplayNames.supportedLocalesOf options cannot be empty".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                parsed.push(parse_expr(args[0].trim())?);
+                if args.len() == 2 {
+                    parsed.push(parse_expr(args[1].trim())?);
+                }
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::IntlStaticMethod {
+                    method: IntlStaticMethod::DisplayNamesSupportedLocalesOf,
+                    args: parsed,
+                }));
+            }
+
+            return Ok(None);
+        }
+
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "Intl.DisplayNames supports up to two arguments".into(),
+            ));
+        }
+        if args.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse(
+                "Intl.DisplayNames argument cannot be empty".into(),
+            ));
+        }
+        let locales = args
+            .first()
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        let options = args
+            .get(1)
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::IntlFormatterConstruct {
+            kind: IntlFormatterKind::DisplayNames,
+            locales,
+            options,
+            called_with_new,
+        }));
+    }
+
     let intl_formatter_kind = match member.as_str() {
         "NumberFormat" => Some(IntlFormatterKind::NumberFormat),
         _ => None,
@@ -27155,6 +27708,33 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
                     .map(|arg| parse_expr(arg.trim()))
                     .transpose()?
                     .map(Box::new),
+            }));
+        }
+
+        if method_name == "of" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.DisplayNames.of requires exactly one argument".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlDisplayNamesOf {
+                display_names: Box::new(parse_expr(base_src)?),
+                code: Box::new(parse_expr(args[0].trim())?),
             }));
         }
 
@@ -34774,6 +35354,96 @@ mod tests {
         h.assert_text(
             "#result",
             "id,en-GB|ja-JP-u-ca-japanese:japanese:arab:America/Los_Angeles:short|Intl.DateTimeFormat|٢٠/١٢/٢٠١٢",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_display_names_try_it_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const regionNamesInEnglish = new Intl.DisplayNames(['en'], { type: 'region' });
+            const regionNamesInTraditionalChinese = new Intl.DisplayNames(['zh-Hant'], {
+              type: 'region',
+            });
+            document.getElementById('result').textContent =
+              regionNamesInEnglish.of('US') + '|' + regionNamesInTraditionalChinese.of('US');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "United States|美國")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_display_names_of_examples_for_multiple_types_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const regionNamesEn = new Intl.DisplayNames(['en'], { type: 'region' });
+            const regionNamesZh = new Intl.DisplayNames(['zh-Hant'], { type: 'region' });
+            const languageNamesEn = new Intl.DisplayNames(['en'], { type: 'language' });
+            const languageNamesZh = new Intl.DisplayNames(['zh-Hant'], { type: 'language' });
+            const scriptNamesEn = new Intl.DisplayNames(['en'], { type: 'script' });
+            const scriptNamesZh = new Intl.DisplayNames(['zh-Hant'], { type: 'script' });
+            const currencyNamesEn = new Intl.DisplayNames(['en'], { type: 'currency' });
+            const currencyNamesZh = new Intl.DisplayNames(['zh-Hant'], { type: 'currency' });
+
+            document.getElementById('result').textContent =
+              regionNamesEn.of('419') + ':' + regionNamesZh.of('MM') + '|' +
+              languageNamesEn.of('fr-CA') + ':' + languageNamesZh.of('fr') + '|' +
+              scriptNamesEn.of('Latn') + ':' + scriptNamesZh.of('Kana') + '|' +
+              currencyNamesEn.of('TWD') + ':' + currencyNamesZh.of('USD');
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "Latin America:緬甸|Canadian French:法文|Latin:片假名|New Taiwan Dollar:美元",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_display_names_static_and_resolved_options_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const supported = Intl.DisplayNames.supportedLocalesOf(['zh-Hant', 'en', 'de']);
+            const ro = new Intl.DisplayNames(['zh-Hant'], {
+              type: 'language',
+              style: 'short',
+              fallback: 'none',
+              languageDisplay: 'standard'
+            }).resolvedOptions();
+            const tag = Intl.DisplayNames.prototype[Symbol.toStringTag];
+            const unknown = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }).of('ZZ');
+            document.getElementById('result').textContent =
+              supported.join(',') + '|' +
+              ro.locale + ':' + ro.style + ':' + ro.fallback + ':' + ro.languageDisplay + '|' +
+              tag + '|' + (unknown === undefined);
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "zh-Hant,en|zh-Hant:short:none:standard|Intl.DisplayNames|true",
         )?;
         Ok(())
     }
