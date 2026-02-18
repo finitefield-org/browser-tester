@@ -17,6 +17,10 @@ use std::rc::Rc;
 const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
 const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
+const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
+const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
+const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
+const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -3939,6 +3943,35 @@ enum MatchMediaProp {
     Media,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntlFormatterKind {
+    DateTimeFormat,
+    NumberFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntlStaticMethod {
+    GetCanonicalLocales,
+    SupportedValuesOf,
+}
+
+impl IntlFormatterKind {
+    fn storage_name(self) -> &'static str {
+        match self {
+            Self::DateTimeFormat => "DateTimeFormat",
+            Self::NumberFormat => "NumberFormat",
+        }
+    }
+
+    fn from_storage_name(value: &str) -> Option<Self> {
+        match value {
+            "DateTimeFormat" => Some(Self::DateTimeFormat),
+            "NumberFormat" => Some(Self::NumberFormat),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Expr {
     String(String),
@@ -3969,6 +4002,23 @@ enum Expr {
     DateGetHours(String),
     DateGetMinutes(String),
     DateGetSeconds(String),
+    IntlFormatterConstruct {
+        kind: IntlFormatterKind,
+        locales: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    IntlFormat {
+        formatter: Box<Expr>,
+        value: Option<Box<Expr>>,
+    },
+    IntlStaticMethod {
+        method: IntlStaticMethod,
+        args: Vec<Expr>,
+    },
+    IntlConstruct {
+        args: Vec<Expr>,
+    },
     RegexLiteral {
         pattern: String,
         flags: String,
@@ -4146,6 +4196,10 @@ enum Expr {
         target: String,
         key: String,
     },
+    ObjectPathGet {
+        target: String,
+        path: Vec<String>,
+    },
     ObjectGetOwnPropertySymbols(Box<Expr>),
     ObjectKeys(Box<Expr>),
     ObjectValues(Box<Expr>),
@@ -4162,6 +4216,10 @@ enum Expr {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayIsArray(Box<Expr>),
+    ArrayFrom {
+        source: Box<Expr>,
+        map_fn: Option<Box<Expr>>,
+    },
     ArrayLength(String),
     ArrayIndex {
         target: String,
@@ -5253,11 +5311,85 @@ impl Harness {
             trace_to_stderr: true,
         };
 
+        harness.initialize_global_bindings();
+
         for script in scripts {
             harness.compile_and_register_script(&script)?;
         }
 
         Ok(harness)
+    }
+
+    fn initialize_global_bindings(&mut self) {
+        let navigator = Self::new_object_value(vec![
+            ("language".into(), Value::String(DEFAULT_LOCALE.to_string())),
+            (
+                "languages".into(),
+                Self::new_array_value(vec![
+                    Value::String(DEFAULT_LOCALE.to_string()),
+                    Value::String("en".to_string()),
+                ]),
+            ),
+        ]);
+
+        let mut intl_entries = vec![
+            ("Collator".into(), Self::new_builtin_placeholder_function()),
+            (
+                "DateTimeFormat".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "DisplayNames".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "DurationFormat".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "ListFormat".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("Locale".into(), Self::new_builtin_placeholder_function()),
+            (
+                "NumberFormat".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "PluralRules".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "RelativeTimeFormat".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("Segmenter".into(), Self::new_builtin_placeholder_function()),
+            (
+                "getCanonicalLocales".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "supportedValuesOf".into(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ];
+        let to_string_tag = self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag);
+        Self::object_set_entry(
+            &mut intl_entries,
+            to_string_tag_key,
+            Value::String("Intl".to_string()),
+        );
+        let intl = Self::new_object_value(intl_entries);
+
+        let window = Self::new_object_value(vec![
+            ("navigator".into(), navigator.clone()),
+            ("Intl".into(), intl.clone()),
+        ]);
+
+        self.script_env.insert("navigator".to_string(), navigator);
+        self.script_env.insert("Intl".to_string(), intl);
+        self.script_env.insert("window".to_string(), window);
     }
 
     pub fn enable_trace(&mut self, enabled: bool) {
@@ -7492,6 +7624,79 @@ impl Harness {
                 let (_, _, _, _, _, second, _) = Self::date_components_utc(*date.borrow());
                 Ok(Value::Number(second as i64))
             }
+            Expr::IntlFormatterConstruct {
+                kind,
+                locales,
+                options: _options,
+                called_with_new: _called_with_new,
+            } => {
+                let requested_locales = if let Some(locales) = locales {
+                    let value = self.eval_expr(locales, env, event_param, event)?;
+                    self.intl_collect_locales(&value)?
+                } else {
+                    Vec::new()
+                };
+                let locale = Self::intl_select_locale(&requested_locales);
+                Ok(self.new_intl_formatter_value(*kind, locale))
+            }
+            Expr::IntlFormat { formatter, value } => {
+                let formatter = self.eval_expr(formatter, env, event_param, event)?;
+                let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
+                let value = if let Some(value) = value {
+                    self.eval_expr(value, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                match kind {
+                    IntlFormatterKind::NumberFormat => {
+                        Ok(Value::String(Self::intl_format_number_for_locale(
+                            Self::coerce_number_for_global(&value),
+                            &locale,
+                        )))
+                    }
+                    IntlFormatterKind::DateTimeFormat => {
+                        let timestamp_ms = if matches!(value, Value::Undefined) {
+                            self.now_ms
+                        } else {
+                            self.coerce_date_timestamp_ms(&value)
+                        };
+                        Ok(Value::String(Self::intl_format_date_for_locale(
+                            timestamp_ms,
+                            &locale,
+                        )))
+                    }
+                }
+            }
+            Expr::IntlStaticMethod { method, args } => match method {
+                IntlStaticMethod::GetCanonicalLocales => {
+                    let locales = if let Some(locale_expr) = args.first() {
+                        let value = self.eval_expr(locale_expr, env, event_param, event)?;
+                        self.intl_collect_locales(&value)?
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(Self::new_array_value(
+                        locales.into_iter().map(Value::String).collect::<Vec<_>>(),
+                    ))
+                }
+                IntlStaticMethod::SupportedValuesOf => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "Intl.supportedValuesOf requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
+                    let values = Self::intl_supported_values_of(&key)?;
+                    Ok(Self::new_array_value(
+                        values.into_iter().map(Value::String).collect::<Vec<_>>(),
+                    ))
+                }
+            },
+            Expr::IntlConstruct { .. } => {
+                Err(Error::ScriptRuntime("Intl is not a constructor".into()))
+            }
             Expr::RegexLiteral { pattern, flags } => {
                 Self::new_regex_value(pattern.clone(), flags.clone())
             }
@@ -7942,99 +8147,35 @@ impl Harness {
                 }
                 Ok(Self::new_object_value(object_entries))
             }
-            Expr::ObjectGet { target, key } => {
-                match env.get(target) {
-                    Some(Value::Object(entries)) => {
-                        Ok(Self::object_get_entry(&entries.borrow(), key)
-                            .unwrap_or(Value::Undefined))
-                    }
-                    Some(Value::Promise(promise)) => {
-                        if key == "constructor" {
-                            Ok(Value::PromiseConstructor)
-                        } else {
-                            let promise = promise.borrow();
-                            if key == "status" {
-                                let status = match &promise.state {
-                                    PromiseState::Pending => "pending",
-                                    PromiseState::Fulfilled(_) => "fulfilled",
-                                    PromiseState::Rejected(_) => "rejected",
-                                };
-                                Ok(Value::String(status.to_string()))
-                            } else {
-                                Ok(Value::Undefined)
+            Expr::ObjectGet { target, key } => match env.get(target) {
+                Some(value) => {
+                    self.object_property_from_value(value, key)
+                        .map_err(|err| match err {
+                            Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                                Error::ScriptRuntime(format!(
+                                    "variable '{}' is not an object",
+                                    target
+                                ))
                             }
-                        }
-                    }
-                    Some(Value::Map(map)) => {
-                        let map = map.borrow();
-                        if key == "size" {
-                            Ok(Value::Number(map.entries.len() as i64))
-                        } else if key == "constructor" {
-                            Ok(Value::MapConstructor)
-                        } else {
-                            Ok(Self::object_get_entry(&map.properties, key)
-                                .unwrap_or(Value::Undefined))
-                        }
-                    }
-                    Some(Value::Set(set)) => {
-                        let set = set.borrow();
-                        if key == "size" {
-                            Ok(Value::Number(set.values.len() as i64))
-                        } else if key == "constructor" {
-                            Ok(Value::SetConstructor)
-                        } else {
-                            Ok(Self::object_get_entry(&set.properties, key)
-                                .unwrap_or(Value::Undefined))
-                        }
-                    }
-                    Some(Value::ArrayBuffer(_)) => {
-                        if key == "constructor" {
-                            Ok(Value::ArrayBufferConstructor)
-                        } else {
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    Some(Value::Symbol(symbol)) => {
-                        let value = match key.as_str() {
-                            "description" => symbol
-                                .description
-                                .as_ref()
-                                .map(|value| Value::String(value.clone()))
-                                .unwrap_or(Value::Undefined),
-                            "constructor" => Value::SymbolConstructor,
-                            _ => Value::Undefined,
-                        };
-                        Ok(value)
-                    }
-                    Some(Value::RegExp(regex)) => {
-                        let regex = regex.borrow();
-                        let value = match key.as_str() {
-                            "source" => Value::String(regex.source.clone()),
-                            "flags" => Value::String(regex.flags.clone()),
-                            "global" => Value::Bool(regex.global),
-                            "ignoreCase" => Value::Bool(regex.ignore_case),
-                            "multiline" => Value::Bool(regex.multiline),
-                            "dotAll" => Value::Bool(regex.dot_all),
-                            "sticky" => Value::Bool(regex.sticky),
-                            "hasIndices" => Value::Bool(regex.has_indices),
-                            "unicode" => Value::Bool(regex.unicode),
-                            "unicodeSets" => Value::Bool(false),
-                            "lastIndex" => Value::Number(regex.last_index as i64),
-                            "constructor" => Value::RegExpConstructor,
-                            _ => Self::object_get_entry(&regex.properties, key)
-                                .unwrap_or(Value::Undefined),
-                        };
-                        Ok(value)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an object",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
+                            other => other,
+                        })
+                }
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ObjectPathGet { target, path } => {
+                let Some(mut value) = env.get(target).cloned() else {
+                    return Err(Error::ScriptRuntime(format!(
                         "unknown variable: {}",
                         target
-                    ))),
+                    )));
+                };
+                for key in path {
+                    value = self.object_property_from_value(&value, key)?;
                 }
+                Ok(value)
             }
             Expr::ObjectGetOwnPropertySymbols(object) => {
                 let object = self.eval_expr(object, env, event_param, event)?;
@@ -8183,6 +8324,23 @@ impl Harness {
             Expr::ArrayIsArray(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
                 Ok(Value::Bool(matches!(value, Value::Array(_))))
+            }
+            Expr::ArrayFrom { source, map_fn } => {
+                let source = self.eval_expr(source, env, event_param, event)?;
+                let values = self.array_like_values_from_value(&source)?;
+                if let Some(map_fn) = map_fn {
+                    let callback = self.eval_expr(map_fn, env, event_param, event)?;
+                    let mut mapped = Vec::with_capacity(values.len());
+                    for (index, value) in values.into_iter().enumerate() {
+                        mapped.push(self.execute_callback_value(
+                            &callback,
+                            &[value, Value::Number(index as i64)],
+                            event,
+                        )?);
+                    }
+                    return Ok(Self::new_array_value(mapped));
+                }
+                Ok(Self::new_array_value(values))
             }
             Expr::ArrayLength(target) => match env.get(target) {
                 Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
@@ -10228,6 +10386,90 @@ impl Harness {
             .find_map(|(name, value)| (name == key).then(|| value.clone()))
     }
 
+    fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
+        match value {
+            Value::Object(entries) => {
+                Ok(Self::object_get_entry(&entries.borrow(), key).unwrap_or(Value::Undefined))
+            }
+            Value::Promise(promise) => {
+                if key == "constructor" {
+                    Ok(Value::PromiseConstructor)
+                } else {
+                    let promise = promise.borrow();
+                    if key == "status" {
+                        let status = match &promise.state {
+                            PromiseState::Pending => "pending",
+                            PromiseState::Fulfilled(_) => "fulfilled",
+                            PromiseState::Rejected(_) => "rejected",
+                        };
+                        Ok(Value::String(status.to_string()))
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                }
+            }
+            Value::Map(map) => {
+                let map = map.borrow();
+                if key == "size" {
+                    Ok(Value::Number(map.entries.len() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::MapConstructor)
+                } else {
+                    Ok(Self::object_get_entry(&map.properties, key).unwrap_or(Value::Undefined))
+                }
+            }
+            Value::Set(set) => {
+                let set = set.borrow();
+                if key == "size" {
+                    Ok(Value::Number(set.values.len() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::SetConstructor)
+                } else {
+                    Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
+                }
+            }
+            Value::ArrayBuffer(_) => {
+                if key == "constructor" {
+                    Ok(Value::ArrayBufferConstructor)
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Symbol(symbol) => {
+                let value = match key {
+                    "description" => symbol
+                        .description
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Undefined),
+                    "constructor" => Value::SymbolConstructor,
+                    _ => Value::Undefined,
+                };
+                Ok(value)
+            }
+            Value::RegExp(regex) => {
+                let regex = regex.borrow();
+                let value = match key {
+                    "source" => Value::String(regex.source.clone()),
+                    "flags" => Value::String(regex.flags.clone()),
+                    "global" => Value::Bool(regex.global),
+                    "ignoreCase" => Value::Bool(regex.ignore_case),
+                    "multiline" => Value::Bool(regex.multiline),
+                    "dotAll" => Value::Bool(regex.dot_all),
+                    "sticky" => Value::Bool(regex.sticky),
+                    "hasIndices" => Value::Bool(regex.has_indices),
+                    "unicode" => Value::Bool(regex.unicode),
+                    "unicodeSets" => Value::Bool(false),
+                    "lastIndex" => Value::Number(regex.last_index as i64),
+                    "constructor" => Value::RegExpConstructor,
+                    _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
+                };
+                Ok(value)
+            }
+            _ => Err(Error::ScriptRuntime("value is not an object".into())),
+        }
+    }
+
     fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
         match prop {
             DomProp::Value => Some("value"),
@@ -11724,6 +11966,302 @@ impl Harness {
         Self::normalize_exponential_string(out, false)
     }
 
+    fn intl_canonicalize_locale(raw: &str) -> Result<String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "RangeError: invalid locale identifier".into(),
+            ));
+        }
+
+        let subtags = raw.split('-').collect::<Vec<_>>();
+        if subtags.iter().any(|subtag| subtag.is_empty()) {
+            return Err(Error::ScriptRuntime(format!(
+                "RangeError: invalid locale identifier: {raw}"
+            )));
+        }
+
+        let language = subtags[0];
+        let language_len = language.len();
+        if !(language_len == 2 || language_len == 3 || (5..=8).contains(&language_len))
+            || !language.chars().all(|ch| ch.is_ascii_alphabetic())
+        {
+            return Err(Error::ScriptRuntime(format!(
+                "RangeError: invalid locale identifier: {raw}"
+            )));
+        }
+
+        let mut canonical = Vec::with_capacity(subtags.len());
+        canonical.push(language.to_ascii_lowercase());
+
+        let mut saw_script = false;
+        let mut saw_region = false;
+        let mut in_extension = false;
+        let mut in_private_use = false;
+
+        for subtag in subtags.into_iter().skip(1) {
+            if !subtag.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                return Err(Error::ScriptRuntime(format!(
+                    "RangeError: invalid locale identifier: {raw}"
+                )));
+            }
+
+            if subtag.len() == 1 {
+                let singleton = subtag.to_ascii_lowercase();
+                in_private_use = singleton == "x";
+                in_extension = !in_private_use;
+                canonical.push(singleton);
+                continue;
+            }
+
+            if in_private_use {
+                if subtag.len() > 8 {
+                    return Err(Error::ScriptRuntime(format!(
+                        "RangeError: invalid locale identifier: {raw}"
+                    )));
+                }
+                canonical.push(subtag.to_ascii_lowercase());
+                continue;
+            }
+
+            if in_extension {
+                if !(2..=8).contains(&subtag.len()) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "RangeError: invalid locale identifier: {raw}"
+                    )));
+                }
+                canonical.push(subtag.to_ascii_lowercase());
+                continue;
+            }
+
+            if !saw_script && subtag.len() == 4 && subtag.chars().all(|ch| ch.is_ascii_alphabetic())
+            {
+                let mut chars = subtag.chars();
+                let first = chars.next().unwrap_or_default().to_ascii_uppercase();
+                canonical.push(format!("{first}{}", chars.as_str().to_ascii_lowercase()));
+                saw_script = true;
+                continue;
+            }
+
+            if !saw_region
+                && ((subtag.len() == 2 && subtag.chars().all(|ch| ch.is_ascii_alphabetic()))
+                    || (subtag.len() == 3 && subtag.chars().all(|ch| ch.is_ascii_digit())))
+            {
+                if subtag.len() == 2 {
+                    canonical.push(subtag.to_ascii_uppercase());
+                } else {
+                    canonical.push(subtag.to_string());
+                }
+                saw_region = true;
+                continue;
+            }
+
+            if (5..=8).contains(&subtag.len())
+                || (subtag.len() == 4
+                    && subtag
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_digit()))
+            {
+                canonical.push(subtag.to_ascii_lowercase());
+                continue;
+            }
+
+            return Err(Error::ScriptRuntime(format!(
+                "RangeError: invalid locale identifier: {raw}"
+            )));
+        }
+
+        Ok(canonical.join("-"))
+    }
+
+    fn intl_locale_family(locale: &str) -> &str {
+        locale.split('-').next().unwrap_or_default()
+    }
+
+    fn intl_select_locale(requested_locales: &[String]) -> String {
+        for locale in requested_locales {
+            match Self::intl_locale_family(locale) {
+                "en" | "de" => return locale.clone(),
+                _ => {}
+            }
+        }
+        DEFAULT_LOCALE.to_string()
+    }
+
+    fn intl_collect_locales(&self, locales: &Value) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+
+        let mut push_locale = |raw: &str| -> Result<()> {
+            let canonical = Self::intl_canonicalize_locale(raw)?;
+            if seen.insert(canonical.clone()) {
+                out.push(canonical);
+            }
+            Ok(())
+        };
+
+        match locales {
+            Value::Undefined | Value::Null => {}
+            Value::String(locale) => push_locale(locale)?,
+            Value::Array(values) => {
+                for locale in values.borrow().iter() {
+                    match locale {
+                        Value::String(locale) => push_locale(locale)?,
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: locale identifier must be a string".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(Value::String(locale)) = Self::object_get_entry(&entries, "baseName") {
+                    push_locale(&locale)?;
+                } else {
+                    return Err(Error::ScriptRuntime(
+                        "TypeError: locale identifier must be a string".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: locale identifier must be a string".into(),
+                ));
+            }
+        }
+
+        Ok(out)
+    }
+
+    fn intl_format_number_for_locale(value: f64, locale: &str) -> String {
+        if !value.is_finite() {
+            return Self::format_number_default(value);
+        }
+
+        let family = Self::intl_locale_family(locale);
+        let (group_sep, decimal_sep) = if family == "de" {
+            ('.', ',')
+        } else {
+            (',', '.')
+        };
+
+        let mut rendered = Self::format_number_default(value.abs());
+        if rendered.contains('e') {
+            if decimal_sep != '.' {
+                rendered = rendered.replacen('.', &decimal_sep.to_string(), 1);
+            }
+            if value.is_sign_negative() {
+                return format!("-{rendered}");
+            }
+            return rendered;
+        }
+
+        let mut parts = rendered.splitn(2, '.');
+        let integer = parts.next().unwrap_or_default();
+        let fraction = parts.next();
+
+        let mut grouped = String::new();
+        for (index, ch) in integer.chars().rev().enumerate() {
+            if index > 0 && index % 3 == 0 {
+                grouped.push(group_sep);
+            }
+            grouped.push(ch);
+        }
+        let mut grouped_integer = grouped.chars().rev().collect::<String>();
+        if grouped_integer.is_empty() {
+            grouped_integer.push('0');
+        }
+
+        if let Some(fraction) = fraction {
+            grouped_integer.push(decimal_sep);
+            grouped_integer.push_str(fraction);
+        }
+
+        if value.is_sign_negative() && grouped_integer != "0" {
+            format!("-{grouped_integer}")
+        } else {
+            grouped_integer
+        }
+    }
+
+    fn intl_format_date_for_locale(timestamp_ms: i64, locale: &str) -> String {
+        let (year, month, day, ..) = Self::date_components_utc(timestamp_ms);
+        if Self::intl_locale_family(locale) == "de" {
+            format!("{day}.{month}.{year}")
+        } else {
+            format!("{month}/{day}/{year}")
+        }
+    }
+
+    fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
+        let values = match key.trim().to_ascii_lowercase().as_str() {
+            "calendar" => vec!["gregory", "islamic-umalqura", "japanese"],
+            "collation" => vec!["default", "emoji", "phonebk"],
+            "currency" => vec!["EUR", "JPY", "USD"],
+            "numberingsystem" => vec!["latn", "thai"],
+            "unit" => vec![
+                "day", "hour", "meter", "minute", "month", "second", "week", "year",
+            ],
+            _ => {
+                return Err(Error::ScriptRuntime(format!(
+                    "RangeError: unsupported Intl.supportedValuesOf key: {}",
+                    key.trim()
+                )));
+            }
+        };
+        Ok(values.into_iter().map(str::to_string).collect())
+    }
+
+    fn new_builtin_placeholder_function() -> Value {
+        Value::Function(Rc::new(FunctionValue {
+            handler: ScriptHandler {
+                params: Vec::new(),
+                stmts: Vec::new(),
+            },
+            captured_env: HashMap::new(),
+            global_scope: true,
+        }))
+    }
+
+    fn new_intl_formatter_value(&self, kind: IntlFormatterKind, locale: String) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(kind.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+        ])
+    }
+
+    fn resolve_intl_formatter(&self, value: &Value) -> Result<(IntlFormatterKind, String)> {
+        let Value::Object(entries) = value else {
+            return Err(Error::ScriptRuntime(
+                "Intl formatter format requires an Intl formatter instance".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = Self::object_get_entry(&entries, INTERNAL_INTL_KIND_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => IntlFormatterKind::from_storage_name(&value),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "Intl formatter format requires an Intl formatter instance".into(),
+                )
+            })?;
+        let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+        Ok((kind, locale))
+    }
+
     fn number_to_exponential(value: f64, fraction_digits: Option<usize>) -> String {
         if !value.is_finite() {
             return Self::format_number_default(value);
@@ -12115,6 +12653,7 @@ impl Harness {
                 .chars()
                 .map(|ch| Value::String(ch.to_string()))
                 .collect::<Vec<_>>()),
+            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 let length_value =
@@ -13362,7 +13901,9 @@ impl Harness {
     }
 
     fn is_internal_object_key(key: &str) -> bool {
-        Self::is_symbol_storage_key(key) || key == INTERNAL_SYMBOL_WRAPPER_KEY
+        Self::is_symbol_storage_key(key)
+            || key == INTERNAL_SYMBOL_WRAPPER_KEY
+            || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
     }
 
     fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
@@ -17635,7 +18176,10 @@ fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>>
         )));
     }
 
-    let items = split_top_level_by_char(&items_src, b',');
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
     if items.len() == 1 && items[0].trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -17668,7 +18212,10 @@ fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String
         )));
     }
 
-    let items = split_top_level_by_char(&items_src, b',');
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
     if items.len() == 1 && items[0].trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -19664,6 +20211,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::DateUtc { args });
     }
 
+    if let Some(expr) = parse_intl_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_math_expr(src)? {
         return Ok(expr);
     }
@@ -19806,6 +20357,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::ArrayIsArray(Box::new(value)));
     }
 
+    if let Some(expr) = parse_array_from_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_array_access_expr(src)? {
         return Ok(expr);
     }
@@ -19843,6 +20398,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_bigint_method_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_intl_format_expr(src)? {
         return Ok(expr);
     }
 
@@ -20769,6 +21328,185 @@ fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
         out.push(parse_expr(arg.trim())?);
     }
     Ok(Some(out))
+}
+
+fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Intl") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if called_with_new && cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl constructor argument cannot be empty".into(),
+                ));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::IntlConstruct { args: parsed }));
+    }
+
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+
+    let intl_formatter_kind = match member.as_str() {
+        "DateTimeFormat" => Some(IntlFormatterKind::DateTimeFormat),
+        "NumberFormat" => Some(IntlFormatterKind::NumberFormat),
+        _ => None,
+    };
+    if let Some(kind) = intl_formatter_kind {
+        if called_with_new && cursor.eof() {
+            return Ok(Some(Expr::IntlFormatterConstruct {
+                kind,
+                locales: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(format!(
+                "Intl.{member} supports up to two arguments"
+            )));
+        }
+        if args.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse(format!(
+                "Intl.{member} argument cannot be empty"
+            )));
+        }
+        let locales = args
+            .first()
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        let options = args
+            .get(1)
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::IntlFormatterConstruct {
+            kind,
+            locales,
+            options,
+            called_with_new,
+        }));
+    }
+
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    let expr = match member.as_str() {
+        "getCanonicalLocales" => {
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "Intl.getCanonicalLocales supports zero or one argument".into(),
+                ));
+            }
+            if args.len() == 1 && args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.getCanonicalLocales argument cannot be empty".into(),
+                ));
+            }
+            let mut parsed = Vec::new();
+            if let Some(arg) = args.first() {
+                parsed.push(parse_expr(arg.trim())?);
+            }
+            Expr::IntlStaticMethod {
+                method: IntlStaticMethod::GetCanonicalLocales,
+                args: parsed,
+            }
+        }
+        "supportedValuesOf" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.supportedValuesOf requires exactly one argument".into(),
+                ));
+            }
+            Expr::IntlStaticMethod {
+                method: IntlStaticMethod::SupportedValuesOf,
+                args: vec![parse_expr(args[0].trim())?],
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(expr))
 }
 
 fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
@@ -22967,7 +23705,10 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>
         return Ok(None);
     }
 
-    let entries = split_top_level_by_char(&entries_src, b',');
+    let mut entries = split_top_level_by_char(&entries_src, b',');
+    while entries.len() > 1 && entries.last().is_some_and(|entry| entry.trim().is_empty()) {
+        entries.pop();
+    }
     if entries.len() == 1 && entries[0].trim().is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -23281,16 +24022,30 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     if !cursor.consume_byte(b'.') {
         return Ok(None);
     }
-    cursor.skip_ws();
-    let Some(key) = cursor.parse_identifier() else {
-        return Ok(None);
-    };
+    let mut path = Vec::new();
+    loop {
+        cursor.skip_ws();
+        let Some(key) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        path.push(key);
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            break;
+        }
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
 
-    Ok(Some(Expr::ObjectGet { target, key }))
+    if path.len() == 1 {
+        return Ok(Some(Expr::ObjectGet {
+            target,
+            key: path.remove(0),
+        }));
+    }
+    Ok(Some(Expr::ObjectPathGet { target, path }))
 }
 
 fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
@@ -23474,7 +24229,10 @@ fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
         return Ok(None);
     }
 
-    let items = split_top_level_by_char(&items_src, b',');
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
     if items.len() == 1 && items[0].trim().is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -23545,6 +24303,71 @@ fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(value))
+}
+
+fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Array") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("from") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Array.from requires one or two arguments".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Array.from map function cannot be empty".into(),
+        ));
+    }
+
+    let source = parse_expr(args[0].trim())?;
+    let map_fn = if args.len() == 2 {
+        Some(Box::new(parse_expr(args[1].trim())?))
+    } else {
+        None
+    };
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::ArrayFrom {
+        source: Box::new(source),
+        map_fn,
+    }))
 }
 
 fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
@@ -24046,6 +24869,69 @@ fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod>
         "valueOf" => Some(BigIntInstanceMethod::ValueOf),
         _ => None,
     }
+}
+
+fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = src.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+
+        let mut cursor = Cursor::new(tail_src);
+        let Some(method_name) = cursor.parse_identifier() else {
+            continue;
+        };
+        if method_name != "format" {
+            continue;
+        }
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            continue;
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "Intl formatter format supports at most one argument".into(),
+            ));
+        }
+        if args.len() == 1 && args[0].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "Intl formatter format argument cannot be empty".into(),
+            ));
+        }
+
+        return Ok(Some(Expr::IntlFormat {
+            formatter: Box::new(parse_expr(base_src)?),
+            value: args
+                .first()
+                .map(|arg| parse_expr(arg.trim()))
+                .transpose()?
+                .map(Box::new),
+        }));
+    }
+
+    Ok(None)
 }
 
 fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
@@ -26330,8 +27216,7 @@ fn can_start_regex_literal(previous: Option<u8>) -> bool {
         None => true,
         Some(byte) => matches!(
             byte,
-            b'('
-                | b'['
+            b'(' | b'['
                 | b'{'
                 | b','
                 | b';'
@@ -31345,6 +32230,95 @@ mod tests {
                 assert!(msg.contains("toString radix must be between 2 and 36"))
             }
             other => panic!("unexpected toString error: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn intl_date_time_and_number_format_examples_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const count = 26254.39;
+            const date = new Date('2012-05-24');
+            const us =
+              new Intl.DateTimeFormat('en-US').format(date) + ' ' +
+              new Intl.NumberFormat('en-US').format(count);
+            const de =
+              new Intl.DateTimeFormat('de-DE').format(date) + ' ' +
+              new Intl.NumberFormat('de-DE').format(count);
+            document.getElementById('result').textContent = us + '|' + de;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "5/24/2012 26,254.39|24.5.2012 26.254,39")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_uses_navigator_language_preferences() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date('2012-05-24');
+            const formattedDate = new Intl.DateTimeFormat(navigator.language).format(date);
+            const formattedCount = new Intl.NumberFormat(navigator.languages).format(26254.39);
+            document.getElementById('result').textContent = formattedDate + '|' + formattedCount;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "5/24/2012|26,254.39")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_static_methods_and_to_string_tag_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const canonical = Intl.getCanonicalLocales(['EN-us', 'de-de', 'EN-us']);
+            const currencies = Intl.supportedValuesOf('currency');
+            document.getElementById('result').textContent =
+              canonical.join(',') + '|' + currencies.join(',') + '|' + Intl[Symbol.toStringTag];
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "en-US,de-DE|EUR,JPY,USD|Intl")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_namespace_is_not_a_constructor() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const i = new Intl();
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        let err = h.click("#btn").expect_err("new Intl should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("Intl is not a constructor")),
+            other => panic!("unexpected error: {other:?}"),
         }
 
         Ok(())
