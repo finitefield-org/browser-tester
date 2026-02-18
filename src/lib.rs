@@ -17290,52 +17290,85 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
         Single,
         Double,
         Backtick,
+        Regex { in_class: bool },
     }
     let mut state = StrState::None;
+    let mut previous_significant = None;
 
     while i < bytes.len() {
         let b = bytes[i];
         match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => {
-                    brace += 1;
-                    brace_open_stack.push(i);
+            StrState::None => {
+                if b.is_ascii_whitespace() {
+                    i += 1;
+                    continue;
                 }
-                b'}' => {
-                    brace = brace.saturating_sub(1);
-                    let block_open = brace_open_stack.pop();
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        let tail = body.get(i + 1..).unwrap_or_default();
-                        if should_split_after_closing_brace(body, block_open, tail) {
-                            if let Some(part) = body.get(start..=i) {
+                match b {
+                    b'\'' => state = StrState::Single,
+                    b'"' => state = StrState::Double,
+                    b'`' => state = StrState::Backtick,
+                    b'/' => {
+                        if can_start_regex_literal(previous_significant) {
+                            state = StrState::Regex { in_class: false };
+                        } else {
+                            previous_significant = Some(b);
+                        }
+                    }
+                    b'(' => {
+                        paren += 1;
+                        previous_significant = Some(b);
+                    }
+                    b')' => {
+                        paren = paren.saturating_sub(1);
+                        previous_significant = Some(b);
+                    }
+                    b'[' => {
+                        bracket += 1;
+                        previous_significant = Some(b);
+                    }
+                    b']' => {
+                        bracket = bracket.saturating_sub(1);
+                        previous_significant = Some(b);
+                    }
+                    b'{' => {
+                        brace += 1;
+                        brace_open_stack.push(i);
+                        previous_significant = Some(b);
+                    }
+                    b'}' => {
+                        brace = brace.saturating_sub(1);
+                        let block_open = brace_open_stack.pop();
+                        if paren == 0 && bracket == 0 && brace == 0 {
+                            let tail = body.get(i + 1..).unwrap_or_default();
+                            if should_split_after_closing_brace(body, block_open, tail) {
+                                if let Some(part) = body.get(start..=i) {
+                                    out.push(part.to_string());
+                                }
+                                start = i + 1;
+                            }
+                        }
+                        previous_significant = Some(b);
+                    }
+                    b';' => {
+                        if paren == 0 && bracket == 0 && brace == 0 {
+                            if let Some(part) = body.get(start..i) {
                                 out.push(part.to_string());
                             }
                             start = i + 1;
                         }
+                        previous_significant = Some(b);
+                    }
+                    _ => {
+                        previous_significant = Some(b);
                     }
                 }
-                b';' => {
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        if let Some(part) = body.get(start..i) {
-                            out.push(part.to_string());
-                        }
-                        start = i + 1;
-                    }
-                }
-                _ => {}
-            },
+            }
             StrState::Single => {
                 if b == b'\\' {
                     i += 1;
                 } else if b == b'\'' {
                     state = StrState::None;
+                    previous_significant = Some(b'\'');
                 }
             }
             StrState::Double => {
@@ -17343,6 +17376,7 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
                     i += 1;
                 } else if b == b'"' {
                     state = StrState::None;
+                    previous_significant = Some(b'"');
                 }
             }
             StrState::Backtick => {
@@ -17350,6 +17384,23 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
                     i += 1;
                 } else if b == b'`' {
                     state = StrState::None;
+                    previous_significant = Some(b'`');
+                }
+            }
+            StrState::Regex { mut in_class } => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'[' {
+                    in_class = true;
+                    state = StrState::Regex { in_class };
+                } else if b == b']' && in_class {
+                    in_class = false;
+                    state = StrState::Regex { in_class };
+                } else if b == b'/' && !in_class {
+                    state = StrState::None;
+                    previous_significant = Some(b'/');
+                } else {
+                    state = StrState::Regex { in_class };
                 }
             }
         }
@@ -25996,6 +26047,8 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
 
             let (tag, attrs, self_closing, next) = parse_start_tag(html, i)?;
             i = next;
+            let executable_script = tag.eq_ignore_ascii_case("script")
+                && is_executable_script_type(attrs.get("type").map(String::as_str));
 
             let parent = *stack
                 .last()
@@ -26008,7 +26061,9 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
                 if let Some(script_body) = html.get(i..close) {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
-                        scripts.push(script_body.to_string());
+                        if executable_script {
+                            scripts.push(script_body.to_string());
+                        }
                     }
                 }
                 i = close;
@@ -26041,6 +26096,32 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
     dom.initialize_form_control_values()?;
     dom.normalize_radio_groups()?;
     Ok(ParseOutput { dom, scripts })
+}
+
+fn is_executable_script_type(raw_type: Option<&str>) -> bool {
+    let Some(raw_type) = raw_type else {
+        return true;
+    };
+
+    let media_type = raw_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if media_type.is_empty() {
+        return true;
+    }
+
+    matches!(
+        media_type.as_str(),
+        "text/javascript"
+            | "application/javascript"
+            | "application/ecmascript"
+            | "text/ecmascript"
+            | "module"
+    )
 }
 
 fn parse_start_tag(
@@ -26244,6 +26325,35 @@ fn find_subslice(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     None
 }
 
+fn can_start_regex_literal(previous: Option<u8>) -> bool {
+    match previous {
+        None => true,
+        Some(byte) => matches!(
+            byte,
+            b'('
+                | b'['
+                | b'{'
+                | b','
+                | b';'
+                | b':'
+                | b'='
+                | b'!'
+                | b'?'
+                | b'&'
+                | b'|'
+                | b'^'
+                | b'~'
+                | b'<'
+                | b'>'
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'%'
+                | b'/'
+        ),
+    }
+}
+
 fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Option<usize> {
     fn is_ident_separator(byte: u8) -> bool {
         !byte.is_ascii_alphanumeric()
@@ -26255,14 +26365,20 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
         Single,
         Double,
         Template,
+        Regex { in_class: bool },
     }
     let mut state = State::Normal;
+    let mut previous_significant = None;
 
     while i < bytes.len() {
         let b = bytes[i];
 
         match state {
             State::Normal => {
+                if b.is_ascii_whitespace() {
+                    i += 1;
+                    continue;
+                }
                 if b == b'\'' {
                     state = State::Single;
                     i += 1;
@@ -26297,6 +26413,16 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     }
                     continue;
                 }
+                if b == b'/' {
+                    if can_start_regex_literal(previous_significant) {
+                        state = State::Regex { in_class: false };
+                        i += 1;
+                        continue;
+                    }
+                    previous_significant = Some(b);
+                    i += 1;
+                    continue;
+                }
                 if b == b'<' && bytes.get(i + 1) == Some(&b'/') {
                     let mut j = i + 2;
                     while j < bytes.len() && bytes[j].is_ascii_whitespace() {
@@ -26319,6 +26445,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                         }
                     }
                 }
+                previous_significant = Some(b);
                 i += 1;
             }
             State::Single => {
@@ -26327,6 +26454,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                 } else {
                     if b == b'\'' {
                         state = State::Normal;
+                        previous_significant = Some(b'\'');
                     }
                     i += 1;
                 }
@@ -26337,6 +26465,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                 } else {
                     if b == b'"' {
                         state = State::Normal;
+                        previous_significant = Some(b'"');
                     }
                     i += 1;
                 }
@@ -26347,9 +26476,39 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                 } else {
                     if b == b'`' {
                         state = State::Normal;
+                        previous_significant = Some(b'`');
                     }
                     i += 1;
                 }
+            }
+            State::Regex { mut in_class } => {
+                if b == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if b == b'[' {
+                    in_class = true;
+                    state = State::Regex { in_class };
+                    i += 1;
+                    continue;
+                }
+                if b == b']' && in_class {
+                    in_class = false;
+                    state = State::Regex { in_class };
+                    i += 1;
+                    continue;
+                }
+                if b == b'/' && !in_class {
+                    i += 1;
+                    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                        i += 1;
+                    }
+                    state = State::Normal;
+                    previous_significant = Some(b'/');
+                    continue;
+                }
+                state = State::Regex { in_class };
+                i += 1;
             }
         }
     }
@@ -31695,6 +31854,21 @@ mod tests {
         let mut h = Harness::from_html(html)?;
         h.click("#btn")?;
         h.assert_text("#result", "</script>|<script>not real</script>")?;
+        Ok(())
+    }
+
+    #[test]
+    fn script_extractor_handles_regex_literals_with_quotes_for_end_tag_scan() -> Result<()> {
+        let html = r##"
+        <script>
+          const sanitizer = /["]/g;
+        </script>
+        <p id="result"></p>
+        "##;
+
+        let parsed = parse_html(html)?;
+        assert_eq!(parsed.scripts.len(), 1);
+        assert!(parsed.scripts[0].contains(r#"/["]/g"#));
         Ok(())
     }
 
