@@ -20,6 +20,10 @@ const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
 const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
 const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
+const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
+const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
+const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
+const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
 const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -3945,12 +3949,14 @@ enum MatchMediaProp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IntlFormatterKind {
+    Collator,
     DateTimeFormat,
     NumberFormat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IntlStaticMethod {
+    CollatorSupportedLocalesOf,
     GetCanonicalLocales,
     SupportedValuesOf,
 }
@@ -3958,6 +3964,7 @@ enum IntlStaticMethod {
 impl IntlFormatterKind {
     fn storage_name(self) -> &'static str {
         match self {
+            Self::Collator => "Collator",
             Self::DateTimeFormat => "DateTimeFormat",
             Self::NumberFormat => "NumberFormat",
         }
@@ -3965,6 +3972,7 @@ impl IntlFormatterKind {
 
     fn from_storage_name(value: &str) -> Option<Self> {
         match value {
+            "Collator" => Some(Self::Collator),
             "DateTimeFormat" => Some(Self::DateTimeFormat),
             "NumberFormat" => Some(Self::NumberFormat),
             _ => None,
@@ -4011,6 +4019,17 @@ enum Expr {
     IntlFormat {
         formatter: Box<Expr>,
         value: Option<Box<Expr>>,
+    },
+    IntlCollatorCompare {
+        collator: Box<Expr>,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    IntlCollatorCompareGetter {
+        collator: Box<Expr>,
+    },
+    IntlCollatorResolvedOptions {
+        collator: Box<Expr>,
     },
     IntlStaticMethod {
         method: IntlStaticMethod,
@@ -4283,6 +4302,10 @@ enum Expr {
     ArrayJoin {
         target: String,
         separator: Option<Box<Expr>>,
+    },
+    ArraySort {
+        target: String,
+        comparator: Option<Box<Expr>>,
     },
     StringTrim {
         value: Box<Expr>,
@@ -6498,6 +6521,7 @@ impl Harness {
 
     fn is_callable_value(&self, value: &Value) -> bool {
         matches!(value, Value::Function(_) | Value::PromiseCapability(_))
+            || Self::callable_kind_from_value(value).is_some()
     }
 
     fn execute_callable_value(
@@ -6510,6 +6534,31 @@ impl Harness {
             Value::Function(function) => self.execute_function_call(function.as_ref(), args, event),
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
+            }
+            Value::Object(_) => {
+                let Some(kind) = Self::callable_kind_from_value(callable) else {
+                    return Err(Error::ScriptRuntime("callback is not a function".into()));
+                };
+                match kind {
+                    "intl_collator_compare" => {
+                        let (locale, case_first, sensitivity) =
+                            self.resolve_intl_collator_options(callable)?;
+                        let left = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        let right = args.get(1).cloned().unwrap_or(Value::Undefined).as_string();
+                        Ok(Value::Number(Self::intl_collator_compare_strings(
+                            &left,
+                            &right,
+                            &locale,
+                            &case_first,
+                            &sensitivity,
+                        )))
+                    }
+                    _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+                }
             }
             _ => Err(Error::ScriptRuntime("callback is not a function".into())),
         }
@@ -7627,7 +7676,7 @@ impl Harness {
             Expr::IntlFormatterConstruct {
                 kind,
                 locales,
-                options: _options,
+                options,
                 called_with_new: _called_with_new,
             } => {
                 let requested_locales = if let Some(locales) = locales {
@@ -7637,7 +7686,18 @@ impl Harness {
                     Vec::new()
                 };
                 let locale = Self::intl_select_locale(&requested_locales);
-                Ok(self.new_intl_formatter_value(*kind, locale))
+                match kind {
+                    IntlFormatterKind::Collator => {
+                        let options = options
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?;
+                        let (case_first, sensitivity) =
+                            self.intl_collator_options_from_value(options.as_ref())?;
+                        Ok(self.new_intl_collator_value(locale, case_first, sensitivity))
+                    }
+                    _ => Ok(self.new_intl_formatter_value(*kind, locale)),
+                }
             }
             Expr::IntlFormat { formatter, value } => {
                 let formatter = self.eval_expr(formatter, env, event_param, event)?;
@@ -7665,9 +7725,68 @@ impl Harness {
                             &locale,
                         )))
                     }
+                    IntlFormatterKind::Collator => Err(Error::ScriptRuntime(
+                        "Intl.Collator does not support format()".into(),
+                    )),
                 }
             }
+            Expr::IntlCollatorCompare {
+                collator,
+                left,
+                right,
+            } => {
+                let collator = self.eval_expr(collator, env, event_param, event)?;
+                let (locale, case_first, sensitivity) =
+                    self.resolve_intl_collator_options(&collator)?;
+                let left = self.eval_expr(left, env, event_param, event)?.as_string();
+                let right = self.eval_expr(right, env, event_param, event)?.as_string();
+                Ok(Value::Number(Self::intl_collator_compare_strings(
+                    &left,
+                    &right,
+                    &locale,
+                    &case_first,
+                    &sensitivity,
+                )))
+            }
+            Expr::IntlCollatorCompareGetter { collator } => {
+                let collator = self.eval_expr(collator, env, event_param, event)?;
+                let (locale, case_first, sensitivity) =
+                    self.resolve_intl_collator_options(&collator)?;
+                Ok(self.new_intl_collator_compare_callable(locale, case_first, sensitivity))
+            }
+            Expr::IntlCollatorResolvedOptions { collator } => {
+                let collator = self.eval_expr(collator, env, event_param, event)?;
+                let (locale, case_first, sensitivity) =
+                    self.resolve_intl_collator_options(&collator)?;
+                Ok(Self::new_object_value(vec![
+                    ("locale".into(), Value::String(locale)),
+                    ("usage".into(), Value::String("sort".to_string())),
+                    ("sensitivity".into(), Value::String(sensitivity)),
+                    ("ignorePunctuation".into(), Value::Bool(false)),
+                    ("collation".into(), Value::String("default".to_string())),
+                    ("numeric".into(), Value::Bool(false)),
+                    ("caseFirst".into(), Value::String(case_first)),
+                ]))
+            }
             Expr::IntlStaticMethod { method, args } => match method {
+                IntlStaticMethod::CollatorSupportedLocalesOf => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Intl.Collator.supportedLocalesOf requires locales and optional options"
+                                .into(),
+                        ));
+                    }
+                    let locales = self.eval_expr(&args[0], env, event_param, event)?;
+                    let locales = self.intl_collect_locales(&locales)?;
+                    let supported = locales
+                        .into_iter()
+                        .filter(|locale| {
+                            matches!(Self::intl_locale_family(locale), "en" | "de" | "sv")
+                        })
+                        .map(Value::String)
+                        .collect::<Vec<_>>();
+                    Ok(Self::new_array_value(supported))
+                }
                 IntlStaticMethod::GetCanonicalLocales => {
                     let locales = if let Some(locale_expr) = args.first() {
                         let value = self.eval_expr(locale_expr, env, event_param, event)?;
@@ -9042,6 +9161,42 @@ impl Harness {
                 }
                 Ok(Value::String(out))
             }
+            Expr::ArraySort { target, comparator } => {
+                let comparator = comparator
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                if comparator
+                    .as_ref()
+                    .is_some_and(|value| !self.is_callable_value(value))
+                {
+                    return Err(Error::ScriptRuntime("callback is not a function".into()));
+                }
+
+                let values = self.resolve_array_from_env(env, target)?;
+                let mut snapshot = values.borrow().clone();
+                let len = snapshot.len();
+                for i in 0..len {
+                    let end = len.saturating_sub(i + 1);
+                    for j in 0..end {
+                        let should_swap = if let Some(comparator) = comparator.as_ref() {
+                            let compared = self.execute_callable_value(
+                                comparator,
+                                &[snapshot[j].clone(), snapshot[j + 1].clone()],
+                                event,
+                            )?;
+                            Self::coerce_number_for_global(&compared) > 0.0
+                        } else {
+                            snapshot[j].as_string() > snapshot[j + 1].as_string()
+                        };
+                        if should_swap {
+                            snapshot.swap(j, j + 1);
+                        }
+                    }
+                }
+                *values.borrow_mut() = snapshot;
+                Ok(Value::Array(values))
+            }
             Expr::StringTrim { value, mode } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
                 let value = match mode {
@@ -10384,6 +10539,20 @@ impl Harness {
         entries
             .iter()
             .find_map(|(name, value)| (name == key).then(|| value.clone()))
+    }
+
+    fn callable_kind_from_value(value: &Value) -> Option<&str> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        match Self::object_get_entry(&entries, INTERNAL_CALLABLE_KIND_KEY) {
+            Some(Value::String(kind)) => Some(match kind.as_str() {
+                "intl_collator_compare" => "intl_collator_compare",
+                _ => return None,
+            }),
+            _ => None,
+        }
     }
 
     fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
@@ -12082,7 +12251,7 @@ impl Harness {
     fn intl_select_locale(requested_locales: &[String]) -> String {
         for locale in requested_locales {
             match Self::intl_locale_family(locale) {
-                "en" | "de" => return locale.clone(),
+                "en" | "de" | "sv" => return locale.clone(),
                 _ => {}
             }
         }
@@ -12226,6 +12395,121 @@ impl Harness {
         }))
     }
 
+    fn intl_constructor_value(&self, constructor_name: &str) -> Value {
+        let Some(Value::Object(entries)) = self.script_env.get("Intl") else {
+            return Self::new_builtin_placeholder_function();
+        };
+        Self::object_get_entry(&entries.borrow(), constructor_name)
+            .unwrap_or_else(Self::new_builtin_placeholder_function)
+    }
+
+    fn intl_collator_options_from_value(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<(String, String)> {
+        let mut case_first = "false".to_string();
+        let mut sensitivity = "variant".to_string();
+        let Some(options) = options else {
+            return Ok((case_first, sensitivity));
+        };
+
+        match options {
+            Value::Undefined | Value::Null => {}
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(value) = Self::object_get_entry(&entries, "caseFirst") {
+                    if !matches!(value, Value::Undefined) {
+                        let parsed = value.as_string();
+                        if !matches!(parsed.as_str(), "upper" | "lower" | "false") {
+                            return Err(Error::ScriptRuntime(
+                                "RangeError: invalid Intl.Collator caseFirst option".into(),
+                            ));
+                        }
+                        case_first = parsed;
+                    }
+                }
+                if let Some(value) = Self::object_get_entry(&entries, "sensitivity") {
+                    if !matches!(value, Value::Undefined) {
+                        let parsed = value.as_string();
+                        if !matches!(parsed.as_str(), "base" | "accent" | "case" | "variant") {
+                            return Err(Error::ScriptRuntime(
+                                "RangeError: invalid Intl.Collator sensitivity option".into(),
+                            ));
+                        }
+                        sensitivity = parsed;
+                    }
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: Intl.Collator options must be an object".into(),
+                ));
+            }
+        }
+
+        Ok((case_first, sensitivity))
+    }
+
+    fn new_intl_collator_compare_callable(
+        &self,
+        locale: String,
+        case_first: String,
+        sensitivity: String,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("intl_collator_compare".to_string()),
+            ),
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::Collator.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_CASE_FIRST_KEY.to_string(),
+                Value::String(case_first),
+            ),
+            (
+                INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
+                Value::String(sensitivity),
+            ),
+        ])
+    }
+
+    fn new_intl_collator_value(
+        &self,
+        locale: String,
+        case_first: String,
+        sensitivity: String,
+    ) -> Value {
+        let compare = self.new_intl_collator_compare_callable(
+            locale.clone(),
+            case_first.clone(),
+            sensitivity.clone(),
+        );
+        Self::new_object_value(vec![
+            (
+                INTERNAL_INTL_KIND_KEY.to_string(),
+                Value::String(IntlFormatterKind::Collator.storage_name().to_string()),
+            ),
+            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_CASE_FIRST_KEY.to_string(),
+                Value::String(case_first),
+            ),
+            (
+                INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
+                Value::String(sensitivity),
+            ),
+            ("compare".to_string(), compare),
+            (
+                "constructor".to_string(),
+                self.intl_constructor_value("Collator"),
+            ),
+        ])
+    }
+
     fn new_intl_formatter_value(&self, kind: IntlFormatterKind, locale: String) -> Value {
         Self::new_object_value(vec![
             (
@@ -12260,6 +12544,119 @@ impl Harness {
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
         Ok((kind, locale))
+    }
+
+    fn resolve_intl_collator_options(&self, value: &Value) -> Result<(String, String, String)> {
+        let Value::Object(entries) = value else {
+            return Err(Error::ScriptRuntime(
+                "Intl.Collator.compare requires an Intl.Collator instance".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = Self::object_get_entry(&entries, INTERNAL_INTL_KIND_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => IntlFormatterKind::from_storage_name(&value),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "Intl.Collator.compare requires an Intl.Collator instance".into(),
+                )
+            })?;
+        if kind != IntlFormatterKind::Collator {
+            return Err(Error::ScriptRuntime(
+                "Intl.Collator.compare requires an Intl.Collator instance".into(),
+            ));
+        }
+        let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+        let case_first = Self::object_get_entry(&entries, INTERNAL_INTL_CASE_FIRST_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| "false".to_string());
+        let sensitivity = Self::object_get_entry(&entries, INTERNAL_INTL_SENSITIVITY_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| "variant".to_string());
+        Ok((locale, case_first, sensitivity))
+    }
+
+    fn intl_collator_compare_strings(
+        left: &str,
+        right: &str,
+        locale: &str,
+        case_first: &str,
+        sensitivity: &str,
+    ) -> i64 {
+        let case_priority = match case_first {
+            "upper" => 0i32,
+            _ => 1i32,
+        };
+
+        let mut left_chars = left.chars();
+        let mut right_chars = right.chars();
+        loop {
+            match (left_chars.next(), right_chars.next()) {
+                (Some(left), Some(right)) => {
+                    let (lp, ls, lc) = Self::intl_collator_char_key(left, locale, case_priority);
+                    let (rp, rs, rc) = Self::intl_collator_char_key(right, locale, case_priority);
+
+                    if lp != rp {
+                        return if lp < rp { -1 } else { 1 };
+                    }
+                    if matches!(sensitivity, "accent" | "variant") && ls != rs {
+                        return if ls < rs { -1 } else { 1 };
+                    }
+                    if matches!(sensitivity, "case" | "variant") && lc != rc {
+                        return if lc < rc { -1 } else { 1 };
+                    }
+                }
+                (Some(_), None) => return 1,
+                (None, Some(_)) => return -1,
+                (None, None) => return 0,
+            }
+        }
+    }
+
+    fn intl_collator_char_key(ch: char, locale: &str, case_priority: i32) -> (i32, i32, i32) {
+        let lower = ch.to_ascii_lowercase();
+        let is_upper = ch.is_ascii_uppercase();
+
+        let (primary, secondary) = if Self::intl_locale_family(locale) == "sv" {
+            match lower {
+                'a'..='z' => ((lower as u32 - 'a' as u32 + 1) as i32, 0),
+                'å' => (27, 0),
+                'ä' => (28, 0),
+                'ö' => (29, 0),
+                _ => (1000 + lower as i32, 0),
+            }
+        } else {
+            match lower {
+                'a'..='z' => ((lower as u32 - 'a' as u32 + 1) as i32, 0),
+                'ä' => (1, 1),
+                'ö' => (15, 1),
+                'ü' => (21, 1),
+                'ß' => (19, 1),
+                _ => (1000 + lower as i32, 0),
+            }
+        };
+
+        let case_rank = if case_priority == 0 {
+            if is_upper { 0 } else { 1 }
+        } else if is_upper {
+            1
+        } else {
+            0
+        };
+        (primary, secondary, case_rank)
     }
 
     fn number_to_exponential(value: f64, fraction_digits: Option<usize>) -> String {
@@ -13904,6 +14301,7 @@ impl Harness {
         Self::is_symbol_storage_key(key)
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
+            || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
     }
 
     fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
@@ -21397,6 +21795,136 @@ fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
     };
     cursor.skip_ws();
 
+    if member == "Collator" {
+        if called_with_new && cursor.eof() {
+            return Ok(Some(Expr::IntlFormatterConstruct {
+                kind: IntlFormatterKind::Collator,
+                locales: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            let Some(collator_member) = cursor.parse_identifier() else {
+                return Ok(None);
+            };
+            cursor.skip_ws();
+
+            if collator_member == "prototype" {
+                if !cursor.consume_byte(b'[') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("Symbol") {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'.') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("toStringTag") {
+                    return Ok(None);
+                }
+                if let Some(next) = cursor.peek() {
+                    if is_ident_char(next) {
+                        return Ok(None);
+                    }
+                }
+                cursor.skip_ws();
+                cursor.expect_byte(b']')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::String("Intl.Collator".to_string())));
+            }
+
+            if collator_member == "supportedLocalesOf" {
+                if cursor.peek() != Some(b'(') {
+                    return Ok(None);
+                }
+                let args_src = cursor.read_balanced_block(b'(', b')')?;
+                let raw_args = split_top_level_by_char(&args_src, b',');
+                let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                    Vec::new()
+                } else {
+                    raw_args
+                };
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.Collator.supportedLocalesOf requires locales and optional options"
+                            .into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.Collator.supportedLocalesOf options cannot be empty".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                parsed.push(parse_expr(args[0].trim())?);
+                if args.len() == 2 {
+                    parsed.push(parse_expr(args[1].trim())?);
+                }
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::IntlStaticMethod {
+                    method: IntlStaticMethod::CollatorSupportedLocalesOf,
+                    args: parsed,
+                }));
+            }
+
+            return Ok(None);
+        }
+
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "Intl.Collator supports up to two arguments".into(),
+            ));
+        }
+        if args.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse(
+                "Intl.Collator argument cannot be empty".into(),
+            ));
+        }
+        let locales = args
+            .first()
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        let options = args
+            .get(1)
+            .map(|value| parse_expr(value.trim()))
+            .transpose()?
+            .map(Box::new);
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::IntlFormatterConstruct {
+            kind: IntlFormatterKind::Collator,
+            locales,
+            options,
+            called_with_new,
+        }));
+    }
+
     let intl_formatter_kind = match member.as_str() {
         "DateTimeFormat" => Some(IntlFormatterKind::DateTimeFormat),
         "NumberFormat" => Some(IntlFormatterKind::NumberFormat),
@@ -24632,6 +25160,24 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
             };
             Expr::ArrayJoin { target, separator }
         }
+        "sort" => {
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "sort supports at most one argument".into(),
+                ));
+            }
+            if args.len() == 1 && args[0].trim().is_empty() {
+                return Err(Error::ScriptParse("sort comparator cannot be empty".into()));
+            }
+            Expr::ArraySort {
+                target,
+                comparator: if args.len() == 1 {
+                    Some(Box::new(parse_expr(args[0].trim())?))
+                } else {
+                    None
+                },
+            }
+        }
         _ => return Ok(None),
     };
 
@@ -24891,44 +25437,103 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
         let Some(method_name) = cursor.parse_identifier() else {
             continue;
         };
-        if method_name != "format" {
-            continue;
-        }
-        cursor.skip_ws();
-        if cursor.peek() != Some(b'(') {
-            continue;
-        }
-        let args_src = cursor.read_balanced_block(b'(', b')')?;
-        cursor.skip_ws();
-        if !cursor.eof() {
-            continue;
+
+        if method_name == "compare" {
+            cursor.skip_ws();
+            if cursor.eof() {
+                return Ok(Some(Expr::IntlCollatorCompareGetter {
+                    collator: Box::new(parse_expr(base_src)?),
+                }));
+            }
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.Collator.compare requires exactly two arguments".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlCollatorCompare {
+                collator: Box::new(parse_expr(base_src)?),
+                left: Box::new(parse_expr(args[0].trim())?),
+                right: Box::new(parse_expr(args[1].trim())?),
+            }));
         }
 
-        let raw_args = split_top_level_by_char(&args_src, b',');
-        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-            Vec::new()
-        } else {
-            raw_args
-        };
-        if args.len() > 1 {
-            return Err(Error::ScriptParse(
-                "Intl formatter format supports at most one argument".into(),
-            ));
-        }
-        if args.len() == 1 && args[0].trim().is_empty() {
-            return Err(Error::ScriptParse(
-                "Intl formatter format argument cannot be empty".into(),
-            ));
+        if method_name == "resolvedOptions" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl.Collator.resolvedOptions does not take arguments".into(),
+                ));
+            }
+            return Ok(Some(Expr::IntlCollatorResolvedOptions {
+                collator: Box::new(parse_expr(base_src)?),
+            }));
         }
 
-        return Ok(Some(Expr::IntlFormat {
-            formatter: Box::new(parse_expr(base_src)?),
-            value: args
-                .first()
-                .map(|arg| parse_expr(arg.trim()))
-                .transpose()?
-                .map(Box::new),
-        }));
+        if method_name == "format" {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                continue;
+            }
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                continue;
+            }
+
+            let raw_args = split_top_level_by_char(&args_src, b',');
+            let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                Vec::new()
+            } else {
+                raw_args
+            };
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "Intl formatter format supports at most one argument".into(),
+                ));
+            }
+            if args.len() == 1 && args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Intl formatter format argument cannot be empty".into(),
+                ));
+            }
+
+            return Ok(Some(Expr::IntlFormat {
+                formatter: Box::new(parse_expr(base_src)?),
+                value: args
+                    .first()
+                    .map(|arg| parse_expr(arg.trim()))
+                    .transpose()?
+                    .map(Box::new),
+            }));
+        }
     }
 
     Ok(None)
@@ -26162,26 +26767,86 @@ fn parse_string_literal_exact(src: &str) -> Result<String> {
 
 fn unescape_string(src: &str) -> String {
     let mut out = String::new();
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\\' && i + 1 < bytes.len() {
-            let next = bytes[i + 1];
-            match next {
-                b'n' => out.push('\n'),
-                b'r' => out.push('\r'),
-                b't' => out.push('\t'),
-                b'\\' => out.push('\\'),
-                b'\'' => out.push('\''),
-                b'"' => out.push('"'),
-                b'`' => out.push('`'),
-                b'$' => out.push('$'),
-                _ => out.push(next as char),
+    let chars = src.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            match chars[i + 1] {
+                'n' => {
+                    out.push('\n');
+                    i += 2;
+                }
+                'r' => {
+                    out.push('\r');
+                    i += 2;
+                }
+                't' => {
+                    out.push('\t');
+                    i += 2;
+                }
+                '\\' => {
+                    out.push('\\');
+                    i += 2;
+                }
+                '\'' => {
+                    out.push('\'');
+                    i += 2;
+                }
+                '"' => {
+                    out.push('"');
+                    i += 2;
+                }
+                '`' => {
+                    out.push('`');
+                    i += 2;
+                }
+                '$' => {
+                    out.push('$');
+                    i += 2;
+                }
+                'u' if i + 5 < chars.len() => {
+                    let hex = [chars[i + 2], chars[i + 3], chars[i + 4], chars[i + 5]];
+                    let mut parsed = String::new();
+                    for ch in hex {
+                        parsed.push(ch);
+                    }
+                    if parsed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                        if let Ok(codepoint) = u32::from_str_radix(&parsed, 16) {
+                            if let Some(ch) = char::from_u32(codepoint) {
+                                out.push(ch);
+                                i += 6;
+                                continue;
+                            }
+                        }
+                    }
+                    out.push('u');
+                    i += 2;
+                }
+                'x' if i + 3 < chars.len() => {
+                    let hex = [chars[i + 2], chars[i + 3]];
+                    let mut parsed = String::new();
+                    for ch in hex {
+                        parsed.push(ch);
+                    }
+                    if parsed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                        if let Ok(codepoint) = u32::from_str_radix(&parsed, 16) {
+                            if let Some(ch) = char::from_u32(codepoint) {
+                                out.push(ch);
+                                i += 4;
+                                continue;
+                            }
+                        }
+                    }
+                    out.push('x');
+                    i += 2;
+                }
+                other => {
+                    out.push(other);
+                    i += 2;
+                }
             }
-            i += 2;
         } else {
-            out.push(b as char);
+            out.push(chars[i]);
             i += 1;
         }
     }
@@ -32321,6 +32986,90 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn intl_collator_compare_returns_sign_values() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const c = new Intl.Collator();
+            const a = c.compare('a', 'c');
+            const b = c.compare('c', 'a');
+            const d = c.compare('a', 'a');
+            document.getElementById('result').textContent =
+              (a < 0) + ':' + (b > 0) + ':' + d;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "true:true:0")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_collator_demo_sort_and_options_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const deValues = ['Z', 'a', 'z', 'ä'];
+            deValues.sort(new Intl.Collator('de').compare);
+            const de = deValues.join(',');
+            const svValues = ['Z', 'a', 'z', 'ä'];
+            svValues.sort(new Intl.Collator('sv').compare);
+            const sv = svValues.join(',');
+            const upValues = ['Z', 'a', 'z', 'ä'];
+            upValues.sort(new Intl.Collator('de', { caseFirst: 'upper' }).compare);
+            const up = upValues.join(',');
+            document.getElementById('result').textContent = de + '|' + sv + '|' + up;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text("#result", "a,ä,z,Z|a,z,Z,ä|a,ä,Z,z")?;
+        Ok(())
+    }
+
+    #[test]
+    fn intl_collator_locales_sensitivity_and_static_methods_work() -> Result<()> {
+        let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const deCmp = new Intl.Collator('de').compare('ä', 'z');
+            const svCmp = new Intl.Collator('sv').compare('ä', 'z');
+            const deBase = new Intl.Collator('de', { sensitivity: 'base' }).compare('ä', 'a');
+            const svBase = new Intl.Collator('sv', { sensitivity: 'base' }).compare('ä', 'a');
+            const supportedLocales = Intl.Collator.supportedLocalesOf(['de', 'sv', 'fr']);
+            const supported = supportedLocales.join(',');
+            const ro = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            }).resolvedOptions();
+            const tag = Intl.Collator.prototype[Symbol.toStringTag];
+            document.getElementById('result').textContent =
+              (deCmp < 0) + ':' + (svCmp > 0) + ':' + deBase + ':' + (svBase > 0) + ':' +
+              supported + ':' + ro.locale + ':' + ro.caseFirst + ':' + ro.sensitivity + ':' + tag;
+          });
+        </script>
+        "#;
+
+        let mut h = Harness::from_html(html)?;
+        h.click("#btn")?;
+        h.assert_text(
+            "#result",
+            "true:true:0:true:de,sv:sv:upper:base:Intl.Collator",
+        )?;
         Ok(())
     }
 
