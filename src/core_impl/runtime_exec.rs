@@ -2891,6 +2891,30 @@ impl Harness {
                     evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
                 }
 
+                if let Value::Array(values) = &receiver {
+                    if member == "forEach" {
+                        if evaluated_args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "forEach requires exactly one callback argument".into(),
+                            ));
+                        }
+                        let callback = evaluated_args[0].clone();
+                        let snapshot = values.borrow().clone();
+                        for (idx, item) in snapshot.into_iter().enumerate() {
+                            let _ = self.execute_callback_value(
+                                &callback,
+                                &[
+                                    item,
+                                    Value::Number(idx as i64),
+                                    Value::Array(values.clone()),
+                                ],
+                                event,
+                            )?;
+                        }
+                        return Ok(Value::Undefined);
+                    }
+                }
+
                 if let Value::TypedArray(array) = &receiver {
                     if let Some(value) =
                         self.eval_typed_array_member_call(array, member, &evaluated_args)?
@@ -3102,6 +3126,9 @@ impl Harness {
                     DomProp::Id => Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default())),
                     DomProp::Name => Ok(Value::String(
                         self.dom.attr(node, "name").unwrap_or_default(),
+                    )),
+                    DomProp::Lang => Ok(Value::String(
+                        self.dom.attr(node, "lang").unwrap_or_default(),
                     )),
                     DomProp::Dataset(key) => Ok(Value::String(self.dom.dataset_get(node, key)?)),
                     DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
@@ -4626,6 +4653,7 @@ impl Harness {
             DomProp::ClassName => Some("className"),
             DomProp::Id => Some("id"),
             DomProp::Name => Some("name"),
+            DomProp::Lang => Some("lang"),
             DomProp::OffsetWidth => Some("offsetWidth"),
             DomProp::OffsetHeight => Some("offsetHeight"),
             DomProp::OffsetLeft => Some("offsetLeft"),
@@ -12099,6 +12127,7 @@ impl Harness {
             DomProp::ClassName => "className".into(),
             DomProp::Id => "id".into(),
             DomProp::Name => "name".into(),
+            DomProp::Lang => "lang".into(),
             DomProp::OffsetWidth => "offsetWidth".into(),
             DomProp::OffsetHeight => "offsetHeight".into(),
             DomProp::OffsetLeft => "offsetLeft".into(),

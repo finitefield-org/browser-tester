@@ -404,14 +404,97 @@ fn normalize_get_elements_by_name(name: &str) -> Result<String> {
     Ok(format!("[name='{}']", escaped))
 }
 
+struct ParsedCallbackParams {
+    params: Vec<FunctionParam>,
+    prologue: Vec<String>,
+}
+
+fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
+    let mut suffix = seed;
+    loop {
+        let candidate = format!("__bt_callback_arg_{suffix}");
+        if params.iter().all(|param| param.name != candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
+    let mut out = String::from("[");
+    for (idx, item) in pattern.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        if let Some(name) = item {
+            out.push_str(name);
+        }
+    }
+    out.push(']');
+    out
+}
+
+fn inject_callback_param_prologue(
+    body: String,
+    concise_body: bool,
+    prologue: &[String],
+) -> (String, bool) {
+    if prologue.is_empty() {
+        return (body, concise_body);
+    }
+
+    let mut rewritten = String::new();
+    for stmt in prologue {
+        rewritten.push_str(stmt.trim());
+        if !stmt.trim_end().ends_with(';') {
+            rewritten.push(';');
+        }
+        rewritten.push('\n');
+    }
+
+    if concise_body {
+        rewritten.push_str("return ");
+        rewritten.push_str(body.trim());
+        rewritten.push(';');
+        (rewritten, false)
+    } else {
+        rewritten.push_str(&body);
+        (rewritten, false)
+    }
+}
+
+fn prepend_callback_param_prologue_stmts(
+    mut stmts: Vec<Stmt>,
+    prologue: &[String],
+) -> Result<Vec<Stmt>> {
+    if prologue.is_empty() {
+        return Ok(stmts);
+    }
+
+    let mut src = String::new();
+    for stmt in prologue {
+        src.push_str(stmt.trim());
+        if !stmt.trim_end().ends_with(';') {
+            src.push(';');
+        }
+        src.push('\n');
+    }
+    let mut prefixed = parse_block_statements(&src)?;
+    prefixed.append(&mut stmts);
+    Ok(prefixed)
+}
+
 fn parse_callback_parameter_list(
     src: &str,
     max_params: usize,
     label: &str,
-) -> Result<Vec<FunctionParam>> {
+) -> Result<ParsedCallbackParams> {
     let parts = split_top_level_by_char(src.trim(), b',');
     if parts.len() == 1 && parts[0].trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(ParsedCallbackParams {
+            params: Vec::new(),
+            prologue: Vec::new(),
+        });
     }
 
     if parts.len() > max_params {
@@ -419,7 +502,9 @@ fn parse_callback_parameter_list(
     }
 
     let mut params = Vec::new();
-    for raw in parts {
+    let mut prologue = Vec::new();
+    let mut bound_names: Vec<String> = Vec::new();
+    for (index, raw) in parts.into_iter().enumerate() {
         let param = raw.trim();
         if param.is_empty() {
             return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
@@ -438,19 +523,42 @@ fn parse_callback_parameter_list(
                 name: name.to_string(),
                 default: Some(parse_expr(default_src)?),
             });
+            bound_names.push(name.to_string());
             continue;
         }
 
-        if !is_ident(param) {
-            return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+        if is_ident(param) {
+            params.push(FunctionParam {
+                name: param.to_string(),
+                default: None,
+            });
+            bound_names.push(param.to_string());
+            continue;
         }
-        params.push(FunctionParam {
-            name: param.to_string(),
-            default: None,
-        });
+
+        if param.starts_with('[') && param.ends_with(']') {
+            let pattern = parse_array_destructure_pattern(param)?;
+            let temp = next_callback_temp_name(&params, index);
+            let pattern_src = format_array_destructure_pattern(&pattern);
+            for name in pattern.iter().flatten() {
+                if !bound_names.iter().any(|bound| bound == name) {
+                    prologue.push(format!("let {name} = undefined;"));
+                    bound_names.push(name.clone());
+                }
+            }
+            prologue.push(format!("{pattern_src} = {temp};"));
+            bound_names.push(temp.clone());
+            params.push(FunctionParam {
+                name: temp,
+                default: None,
+            });
+            continue;
+        }
+
+        return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
     }
 
-    Ok(params)
+    Ok(ParsedCallbackParams { params, prologue })
 }
 
 fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
@@ -605,7 +713,7 @@ fn parse_callback(
 ) -> Result<(Vec<FunctionParam>, String, bool)> {
     cursor.skip_ws();
 
-    let params = if cursor
+    let parsed_params = if cursor
         .src
         .get(cursor.i..)
         .is_some_and(|src| src.starts_with("function"))
@@ -627,29 +735,35 @@ fn parse_callback(
 
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(&params, max_params, label)?;
+        let parsed_params = parse_callback_parameter_list(&params, max_params, label)?;
         cursor.skip_ws();
         let body = cursor.read_balanced_block(b'{', b'}')?;
-        return Ok((params, body, false));
+        let (body, concise_body) =
+            inject_callback_param_prologue(body, false, &parsed_params.prologue);
+        return Ok((parsed_params.params, body, concise_body));
     } else if cursor.consume_byte(b'(') {
         let params = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(&params, max_params, label)?;
-        params
+        parse_callback_parameter_list(&params, max_params, label)?
     } else {
         let ident = cursor
             .parse_identifier()
             .ok_or_else(|| Error::ScriptParse("expected callback parameter or ()".into()))?;
-        vec![FunctionParam {
-            name: ident,
-            default: None,
-        }]
+        ParsedCallbackParams {
+            params: vec![FunctionParam {
+                name: ident,
+                default: None,
+            }],
+            prologue: Vec::new(),
+        }
     };
 
     cursor.skip_ws();
     cursor.expect_ascii("=>")?;
     let (body, concise_body) = parse_arrow_or_block_body(cursor)?;
-    Ok((params, body, concise_body))
+    let (body, concise_body) =
+        inject_callback_param_prologue(body, concise_body, &parsed_params.prologue);
+    Ok((parsed_params.params, body, concise_body))
 }
 
 fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
@@ -999,7 +1113,13 @@ fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     let cond_src = cursor.read_balanced_block(b'(', b')')?;
-    let cond = parse_expr(cond_src.trim())?;
+    let cond = parse_expr(cond_src.trim()).map_err(|err| {
+        Error::ScriptParse(format!(
+            "if condition parse failed: cond={:?} stmt={:?} err={err:?}",
+            cond_src.trim(),
+            stmt
+        ))
+    })?;
 
     let tail = cursor.src[cursor.i..].trim();
     if tail.is_empty() {
@@ -1838,7 +1958,8 @@ fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     };
     cursor.skip_ws();
     let params_src = cursor.read_balanced_block(b'(', b')')?;
-    let params = parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
+    let parsed_params =
+        parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
     cursor.skip_ws();
     let body = cursor.read_balanced_block(b'{', b'}')?;
     cursor.skip_ws();
@@ -1850,11 +1971,14 @@ fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
+    let body_stmts =
+        prepend_callback_param_prologue_stmts(parse_block_statements(&body)?, &parsed_params.prologue)?;
+
     Ok(Some(Stmt::FunctionDecl {
         name,
         handler: ScriptHandler {
-            params,
-            stmts: parse_block_statements(&body)?,
+            params: parsed_params.params,
+            stmts: body_stmts,
         },
         is_async,
     }))
@@ -2196,10 +2320,6 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
 
-    if op_len != 1 {
-        return Ok(None);
-    }
-
     let Some((target, prop)) = parse_dom_access(lhs)? else {
         return Ok(None);
     };
@@ -2212,10 +2332,6 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
-
-    if op_len != 1 {
-        return Ok(None);
-    }
 
     let lhs = stmt[..eq_pos].trim();
     let rhs = stmt[eq_pos + op_len..].trim();
@@ -2254,7 +2370,53 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
 
-    let expr = parse_expr(rhs)?;
+    let rhs_expr = parse_expr(rhs)?;
+    let op = &stmt[eq_pos..eq_pos + op_len];
+    let expr = if op_len == 1 {
+        rhs_expr
+    } else {
+        let key_name = match &key {
+            Expr::String(name) => name.clone(),
+            _ => {
+                return Err(Error::ScriptParse(
+                    "compound object assignment requires a static key".into(),
+                ));
+            }
+        };
+        let lhs_expr = Expr::ObjectGet {
+            target: target.clone(),
+            key: key_name,
+        };
+        match op {
+            "+=" => append_concat_expr(lhs_expr, rhs_expr),
+            "-=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Sub,
+                right: Box::new(rhs_expr),
+            },
+            "*=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Mul,
+                right: Box::new(rhs_expr),
+            },
+            "/=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Div,
+                right: Box::new(rhs_expr),
+            },
+            "%=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Mod,
+                right: Box::new(rhs_expr),
+            },
+            "**=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Pow,
+                right: Box::new(rhs_expr),
+            },
+            _ => return Ok(None),
+        }
+    };
     Ok(Some(Stmt::ObjectAssign { target, key, expr }))
 }
 
@@ -2394,6 +2556,7 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
 pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
     let mut cursor = Cursor::new(src.trim());
     cursor.skip_ws();
+    let mut param_prologue: Vec<String> = Vec::new();
 
     let (item_var, index_var) = if cursor
         .src
@@ -2415,17 +2578,22 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         }
         let params_src = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(
+        let parsed_params = parse_callback_parameter_list(
             &params_src,
             2,
             "forEach callback must have one or two parameters",
         )?;
-        if params.iter().any(|param| param.default.is_some()) {
+        if parsed_params
+            .params
+            .iter()
+            .any(|param| param.default.is_some())
+        {
             return Err(Error::ScriptParse(format!(
                 "forEach callback must not use default parameters: {src}"
             )));
         }
-        let item_var = params
+        let item_var = parsed_params
+            .params
             .first()
             .map(|param| param.name.clone())
             .ok_or_else(|| {
@@ -2433,7 +2601,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
                     "forEach callback must have one or two parameters: {src}"
                 ))
             })?;
-        let index_var = params.get(1).map(|param| param.name.clone());
+        let index_var = parsed_params.params.get(1).map(|param| param.name.clone());
 
         cursor.skip_ws();
         let (body, concise_body) = parse_arrow_or_block_body(&mut cursor)?;
@@ -2449,21 +2617,29 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         } else {
             parse_block_statements(&body)?
         };
+        let body_stmts =
+            prepend_callback_param_prologue_stmts(body_stmts, &parsed_params.prologue)?;
         return Ok((item_var, index_var, body_stmts));
     } else if cursor.consume_byte(b'(') {
         let params_src = cursor.read_until_byte(b')')?;
         cursor.expect_byte(b')')?;
-        let params = parse_callback_parameter_list(
+        let parsed_params = parse_callback_parameter_list(
             &params_src,
             2,
             "forEach callback must have one or two parameters",
         )?;
-        if params.iter().any(|param| param.default.is_some()) {
+        if parsed_params
+            .params
+            .iter()
+            .any(|param| param.default.is_some())
+        {
             return Err(Error::ScriptParse(format!(
                 "forEach callback must not use default parameters: {src}"
             )));
         }
-        let item_var = params
+        param_prologue = parsed_params.prologue;
+        let item_var = parsed_params
+            .params
             .first()
             .map(|param| param.name.clone())
             .ok_or_else(|| {
@@ -2471,7 +2647,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
                     "forEach callback must have one or two parameters: {src}"
                 ))
             })?;
-        let index_var = params.get(1).map(|param| param.name.clone());
+        let index_var = parsed_params.params.get(1).map(|param| param.name.clone());
         (item_var, index_var)
     } else {
         let Some(item) = cursor.parse_identifier() else {
@@ -2498,6 +2674,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
     } else {
         parse_block_statements(&body)?
     };
+    let body_stmts = prepend_callback_param_prologue_stmts(body_stmts, &param_prologue)?;
     Ok((item_var, index_var, body_stmts))
 }
 

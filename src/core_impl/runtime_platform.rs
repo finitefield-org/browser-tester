@@ -3182,6 +3182,7 @@ impl Harness {
                         }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
+                        DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                         DomProp::Title => self.dom.set_document_title(&value.as_string())?,
                         DomProp::Location | DomProp::LocationHref => self.navigate_location(
                             &value.as_string(),

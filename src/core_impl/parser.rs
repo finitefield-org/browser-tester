@@ -84,6 +84,188 @@ pub(super) fn is_submit_control(dom: &Dom, node_id: NodeId) -> bool {
     false
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum JsLexMode {
+    Normal,
+    Single,
+    Double,
+    Backtick,
+    Regex { in_class: bool },
+    LineComment,
+    BlockComment,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct JsLexScanner {
+    mode: JsLexMode,
+    paren: usize,
+    bracket: usize,
+    brace: usize,
+    previous_significant: Option<u8>,
+}
+
+impl JsLexScanner {
+    pub(super) fn new() -> Self {
+        Self {
+            mode: JsLexMode::Normal,
+            paren: 0,
+            bracket: 0,
+            brace: 0,
+            previous_significant: None,
+        }
+    }
+
+    pub(super) fn in_normal(&self) -> bool {
+        matches!(self.mode, JsLexMode::Normal)
+    }
+
+    pub(super) fn is_top_level(&self) -> bool {
+        self.in_normal() && self.paren == 0 && self.bracket == 0 && self.brace == 0
+    }
+
+    pub(super) fn consume_significant_bytes(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.note_significant_byte(b);
+        }
+    }
+
+    pub(super) fn slash_starts_comment_or_regex(&self, bytes: &[u8], i: usize) -> bool {
+        if !self.in_normal() || bytes.get(i).copied() != Some(b'/') {
+            return false;
+        }
+        if i + 1 < bytes.len() && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*') {
+            return true;
+        }
+        can_start_regex_literal(self.previous_significant)
+    }
+
+    fn note_significant_byte(&mut self, b: u8) {
+        match b {
+            b'(' => self.paren += 1,
+            b')' => self.paren = self.paren.saturating_sub(1),
+            b'[' => self.bracket += 1,
+            b']' => self.bracket = self.bracket.saturating_sub(1),
+            b'{' => self.brace += 1,
+            b'}' => self.brace = self.brace.saturating_sub(1),
+            _ => {}
+        }
+        self.previous_significant = Some(b);
+    }
+
+    pub(super) fn advance(&mut self, bytes: &[u8], i: usize) -> usize {
+        let b = bytes[i];
+        match self.mode {
+            JsLexMode::Normal => {
+                if b.is_ascii_whitespace() {
+                    return i + 1;
+                }
+                match b {
+                    b'\'' => {
+                        self.mode = JsLexMode::Single;
+                        i + 1
+                    }
+                    b'"' => {
+                        self.mode = JsLexMode::Double;
+                        i + 1
+                    }
+                    b'`' => {
+                        self.mode = JsLexMode::Backtick;
+                        i + 1
+                    }
+                    b'/' => {
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                            self.mode = JsLexMode::LineComment;
+                            i + 2
+                        } else if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                            self.mode = JsLexMode::BlockComment;
+                            i + 2
+                        } else if can_start_regex_literal(self.previous_significant) {
+                            self.mode = JsLexMode::Regex { in_class: false };
+                            i + 1
+                        } else {
+                            self.note_significant_byte(b'/');
+                            i + 1
+                        }
+                    }
+                    _ => {
+                        self.note_significant_byte(b);
+                        i + 1
+                    }
+                }
+            }
+            JsLexMode::Single => {
+                if b == b'\\' {
+                    (i + 2).min(bytes.len())
+                } else {
+                    if b == b'\'' {
+                        self.mode = JsLexMode::Normal;
+                        self.previous_significant = Some(b'\'');
+                    }
+                    i + 1
+                }
+            }
+            JsLexMode::Double => {
+                if b == b'\\' {
+                    (i + 2).min(bytes.len())
+                } else {
+                    if b == b'"' {
+                        self.mode = JsLexMode::Normal;
+                        self.previous_significant = Some(b'"');
+                    }
+                    i + 1
+                }
+            }
+            JsLexMode::Backtick => {
+                if b == b'\\' {
+                    (i + 2).min(bytes.len())
+                } else {
+                    if b == b'`' {
+                        self.mode = JsLexMode::Normal;
+                        self.previous_significant = Some(b'`');
+                    }
+                    i + 1
+                }
+            }
+            JsLexMode::LineComment => {
+                if b == b'\n' || b == b'\r' {
+                    self.mode = JsLexMode::Normal;
+                }
+                i + 1
+            }
+            JsLexMode::BlockComment => {
+                if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    self.mode = JsLexMode::Normal;
+                    i + 2
+                } else {
+                    i + 1
+                }
+            }
+            JsLexMode::Regex { mut in_class } => {
+                if b == b'\\' {
+                    return (i + 2).min(bytes.len());
+                }
+                if b == b'[' {
+                    in_class = true;
+                    self.mode = JsLexMode::Regex { in_class };
+                    return i + 1;
+                }
+                if b == b']' && in_class {
+                    in_class = false;
+                    self.mode = JsLexMode::Regex { in_class };
+                    return i + 1;
+                }
+                if b == b'/' && !in_class {
+                    self.mode = JsLexMode::Normal;
+                    self.previous_significant = Some(b'/');
+                    return i + 1;
+                }
+                self.mode = JsLexMode::Regex { in_class };
+                i + 1
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Cursor<'a> {
     src: &'a str,
@@ -277,63 +459,28 @@ impl<'a> Cursor<'a> {
 
         let mut depth = 1usize;
         let mut idx = self.i;
-
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum StrState {
-            None,
-            Single,
-            Double,
-            Backtick,
-        }
-        let mut state = StrState::None;
+        let mut scanner = JsLexScanner::new();
 
         while idx < bytes.len() {
             let b = bytes[idx];
-            match state {
-                StrState::None => match b {
-                    b'\'' => state = StrState::Single,
-                    b'"' => state = StrState::Double,
-                    b'`' => state = StrState::Backtick,
-                    _ => {
-                        if b == open {
-                            depth += 1;
-                        } else if b == close {
-                            depth -= 1;
-                            if depth == 0 {
-                                let body = self
-                                    .src
-                                    .get(start..idx)
-                                    .ok_or_else(|| Error::ScriptParse("invalid block".into()))?
-                                    .to_string();
-                                self.i = idx + 1;
-                                return Ok(body);
-                            }
-                        }
-                    }
-                },
-                StrState::Single => {
-                    if b == b'\\' {
-                        idx += 1;
-                    } else if b == b'\'' {
-                        state = StrState::None;
-                    }
-                }
-                StrState::Double => {
-                    if b == b'\\' {
-                        idx += 1;
-                    } else if b == b'"' {
-                        state = StrState::None;
-                    }
-                }
-                StrState::Backtick => {
-                    if b == b'\\' {
-                        idx += 1;
-                    } else if b == b'`' {
-                        state = StrState::None;
+            let was_normal = scanner.in_normal();
+            idx = scanner.advance(bytes, idx);
+            if was_normal {
+                if b == open {
+                    depth += 1;
+                } else if b == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        let body = self
+                            .src
+                            .get(start..idx - 1)
+                            .ok_or_else(|| Error::ScriptParse("invalid block".into()))?
+                            .to_string();
+                        self.i = idx;
+                        return Ok(body);
                     }
                 }
             }
-            idx += 1;
         }
 
         Err(Error::ScriptParse("unclosed block".into()))

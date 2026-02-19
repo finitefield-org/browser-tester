@@ -2417,6 +2417,7 @@ enum DomProp {
     ClassName,
     Id,
     Name,
+    Lang,
     OffsetWidth,
     OffsetHeight,
     OffsetLeft,

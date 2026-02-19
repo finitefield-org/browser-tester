@@ -351,68 +351,19 @@ fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     let mut parts = Vec::new();
     let mut ops = Vec::new();
     let mut start = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     let mut i = 0usize;
     while i < bytes.len() {
         let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'+' | b'-' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if is_add_sub_binary_operator(bytes, i) {
-                        if let Some(part) = src.get(start..i) {
-                            parts.push(part);
-                        }
-                        ops.push(b as char);
-                        start = i + 1;
-                    }
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
+        if scanner.is_top_level() && matches!(b, b'+' | b'-') && is_add_sub_binary_operator(bytes, i) {
+            if let Some(part) = src.get(start..i) {
+                parts.push(part);
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+            ops.push(b as char);
+            start = i + 1;
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     if let Some(part) = src.get(start..) {
@@ -475,77 +426,35 @@ fn parse_mul_expr(src: &str) -> Result<Expr> {
     let mut ops: Vec<u8> = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
         let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'/' | b'%' => {
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        if let Some(part) = src.get(start..i) {
-                            parts.push(part);
-                            ops.push(b);
-                            start = i + 1;
-                        }
-                    }
+        if scanner.is_top_level() {
+            if b == b'/' && !scanner.slash_starts_comment_or_regex(bytes, i) {
+                if let Some(part) = src.get(start..i) {
+                    parts.push(part);
+                    ops.push(b'/');
+                    start = i + 1;
                 }
-                b'*' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                        i += 1;
-                    } else if let Some(part) = src.get(start..i) {
-                        parts.push(part);
-                        ops.push(b);
-                        start = i + 1;
-                    }
+            } else if b == b'%' {
+                if let Some(part) = src.get(start..i) {
+                    parts.push(part);
+                    ops.push(b'%');
+                    start = i + 1;
                 }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
+            } else if b == b'*'
+                && !(i + 1 < bytes.len() && bytes[i + 1] == b'*')
+                && !(i > 0 && bytes[i - 1] == b'*')
+            {
+                if let Some(part) = src.get(start..i) {
+                    parts.push(part);
+                    ops.push(b'*');
+                    start = i + 1;
                 }
             }
         }
-
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     if let Some(last) = src.get(start..) {
@@ -577,69 +486,20 @@ fn parse_pow_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let bytes = src.as_bytes();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
         let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'*' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                        let left = parse_expr(src[..i].trim())?;
-                        let right = parse_pow_expr(src[i + 2..].trim())?;
-                        return Ok(Expr::Binary {
-                            left: Box::new(left),
-                            op: BinaryOp::Pow,
-                            right: Box::new(right),
-                        });
-                    }
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+        if scanner.is_top_level() && b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            let left = parse_expr(src[..i].trim())?;
+            let right = parse_pow_expr(src[i + 2..].trim())?;
+            return Ok(Expr::Binary {
+                left: Box::new(left),
+                op: BinaryOp::Pow,
+                right: Box::new(right),
+            });
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     parse_unary_expr(src)
@@ -6439,6 +6299,13 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>
         }
 
         let Some(colon) = find_first_top_level_colon(entry) else {
+            if is_ident(entry) {
+                out.push(ObjectLiteralEntry::Pair(
+                    ObjectLiteralKey::Static(entry.to_string()),
+                    Expr::Var(entry.to_string()),
+                ));
+                continue;
+            }
             return Err(Error::ScriptParse(
                 "object literal entry must use key: value".into(),
             ));
@@ -6753,6 +6620,21 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ObjectPathGet { target, path }))
 }
 
+fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec<&'a str>> {
+    if args_src.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut args = split_top_level_by_char(args_src, b',');
+    if args.len() > 1 && args.last().is_some_and(|arg| arg.trim().is_empty()) {
+        args.pop();
+    }
+    if args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(Error::ScriptParse(empty_err.into()));
+    }
+    Ok(args)
+}
+
 fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
@@ -6784,20 +6666,10 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             continue;
         }
 
-        let raw_args = split_top_level_by_char(&args_src, b',');
-        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-            Vec::new()
-        } else {
-            raw_args
-        };
+        let args = parse_call_args(&args_src, "member call arguments cannot be empty")?;
         let mut parsed_args = Vec::with_capacity(args.len());
         for arg in args {
             let arg = arg.trim();
-            if arg.is_empty() {
-                return Err(Error::ScriptParse(
-                    "member call arguments cannot be empty".into(),
-                ));
-            }
             parsed_args.push(parse_expr(arg)?);
         }
 
@@ -6812,21 +6684,11 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
 
 fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     let parse_args = |args_src: &str| -> Result<Vec<Expr>> {
-        let raw_args = split_top_level_by_char(args_src, b',');
-        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-            Vec::new()
-        } else {
-            raw_args
-        };
+        let args = parse_call_args(args_src, "function call arguments cannot be empty")?;
 
         let mut parsed = Vec::with_capacity(args.len());
         for arg in args {
             let arg = arg.trim();
-            if arg.is_empty() {
-                return Err(Error::ScriptParse(
-                    "function call arguments cannot be empty".into(),
-                ));
-            }
             parsed.push(parse_expr(arg)?);
         }
         Ok(parsed)
@@ -7207,12 +7069,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let raw_args = split_top_level_by_char(&args_src, b',');
-    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-        Vec::new()
-    } else {
-        raw_args
-    };
+    let args = parse_call_args(&args_src, "array method arguments cannot be empty")?;
 
     let expr = match method.as_str() {
         "push" => {
@@ -9017,6 +8874,16 @@ fn parse_template_literal(src: &str) -> Result<Expr> {
     Ok(Expr::Add(parts))
 }
 
+fn starts_with_window_member_access(src: &str) -> bool {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("window") {
+        return false;
+    }
+    cursor.skip_ws();
+    cursor.consume_byte(b'.')
+}
+
 fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -9079,6 +8946,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("className", None) => DomProp::ClassName,
         ("id", None) => DomProp::Id,
         ("name", None) => DomProp::Name,
+        ("lang", None) => DomProp::Lang,
         ("offsetWidth", None) => DomProp::OffsetWidth,
         ("offsetHeight", None) => DomProp::OffsetHeight,
         ("offsetLeft", None) => DomProp::OffsetLeft,
@@ -9244,26 +9112,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
-            let src_trimmed = src.trim_start();
-            if matches!(target, DomQuery::DocumentRoot)
-                && src_trimmed.starts_with("window.")
-                && matches!(
-                    head.as_str(),
-                    "window"
-                        | "self"
-                        | "top"
-                        | "parent"
-                        | "frames"
-                        | "length"
-                        | "closed"
-                        | "document"
-                        | "navigator"
-                        | "clientInformation"
-                        | "origin"
-                        | "isSecureContext"
-                        | "name"
-                )
-            {
+            if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {
                 return Ok(None);
             }
             if matches!(target, DomQuery::Var(_) | DomQuery::VarPath { .. }) {
@@ -10097,66 +9946,17 @@ fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
         let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                _ => {
-                    if b == target && paren == 0 && bracket == 0 && brace == 0 {
-                        if let Some(part) = src.get(start..i) {
-                            parts.push(part);
-                        }
-                        start = i + 1;
-                    }
-                }
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
+        if scanner.is_top_level() && b == target {
+            if let Some(part) = src.get(start..i) {
+                parts.push(part);
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+            start = i + 1;
         }
-
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     if let Some(last) = src.get(start..) {
@@ -10172,100 +9972,48 @@ fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, V
     let mut found_ops = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                _ => {
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        let mut matched = None;
-                        for op in ops {
-                            let op_bytes = op.as_bytes();
-                            if i + op_bytes.len() <= bytes.len()
-                                && &bytes[i..i + op_bytes.len()] == op_bytes
-                            {
-                                if op_bytes.iter().all(|b| b.is_ascii_alphabetic()) {
-                                    if i > 0 && is_ident_char(bytes[i - 1]) {
-                                        continue;
-                                    }
-                                    if i + op_bytes.len() < bytes.len()
-                                        && is_ident_char(bytes[i + op_bytes.len()])
-                                    {
-                                        continue;
-                                    }
-                                } else if op.len() == 1 && (op == &"<" || op == &">") {
-                                    let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
-                                    let next = bytes.get(i + 1).copied();
-                                    if prev == Some(b'<')
-                                        || prev == Some(b'>')
-                                        || next == Some(b'<')
-                                        || next == Some(b'>')
-                                    {
-                                        continue;
-                                    }
-                                }
-                                matched = Some(*op);
-                                break;
-                            }
+        if scanner.is_top_level() {
+            let mut matched = None;
+            for op in ops {
+                let op_bytes = op.as_bytes();
+                if i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+                    if op_bytes.iter().all(|b| b.is_ascii_alphabetic()) {
+                        if i > 0 && is_ident_char(bytes[i - 1]) {
+                            continue;
                         }
-                        if let Some(op) = matched {
-                            if let Some(part) = src.get(start..i) {
-                                parts.push(part);
-                                found_ops.push(op);
-                                i += op.len();
-                                start = i;
-                                continue;
-                            }
+                        if i + op_bytes.len() < bytes.len() && is_ident_char(bytes[i + op_bytes.len()]) {
+                            continue;
+                        }
+                    } else if op.len() == 1 && (op == &"<" || op == &">") {
+                        let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
+                        let next = bytes.get(i + 1).copied();
+                        if prev == Some(b'<')
+                            || prev == Some(b'>')
+                            || next == Some(b'<')
+                            || next == Some(b'>')
+                        {
+                            continue;
                         }
                     }
-                }
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
+                    matched = Some(*op);
+                    break;
                 }
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
+            if let Some(op) = matched {
+                if let Some(part) = src.get(start..i) {
+                    parts.push(part);
+                    found_ops.push(op);
+                    scanner.consume_significant_bytes(b"=");
+                    i += op.len();
+                    start = i;
+                    continue;
                 }
             }
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     if let Some(last) = src.get(start..) {
