@@ -3907,6 +3907,8 @@ enum DomProp {
     Value,
     Checked,
     Open,
+    ReturnValue,
+    ClosedBy,
     Readonly,
     Required,
     Disabled,
@@ -4150,6 +4152,8 @@ enum EventExprProp {
     CurrentTargetId,
     EventPhase,
     TimeStamp,
+    OldState,
+    NewState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5398,6 +5402,7 @@ enum Stmt {
     DomMethodCall {
         target: DomQuery,
         method: DomMethod,
+        arg: Option<Expr>,
     },
     Expr(Expr),
 }
@@ -5425,6 +5430,10 @@ enum DomMethod {
     ScrollIntoView,
     Submit,
     Reset,
+    Show,
+    ShowModal,
+    Close,
+    RequestClose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5641,7 +5650,11 @@ fn split_opaque_search_hash(rest: &str) -> (String, String, String) {
         opaque_path = &opaque_path[..search_pos];
     }
 
-    (opaque_path.to_string(), search.to_string(), hash.to_string())
+    (
+        opaque_path.to_string(),
+        search.to_string(),
+        hash.to_string(),
+    )
 }
 
 fn normalize_pathname(pathname: &str) -> String {
@@ -5770,6 +5783,8 @@ struct EventState {
     is_trusted: bool,
     bubbles: bool,
     cancelable: bool,
+    old_state: Option<String>,
+    new_state: Option<String>,
     propagation_stopped: bool,
     immediate_propagation_stopped: bool,
 }
@@ -5786,6 +5801,8 @@ impl EventState {
             is_trusted: true,
             bubbles: true,
             cancelable: true,
+            old_state: None,
+            new_state: None,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
@@ -5864,6 +5881,7 @@ pub struct Harness {
     location_reload_count: usize,
     task_queue: Vec<ScheduledTask>,
     microtask_queue: VecDeque<ScheduledMicrotask>,
+    dialog_return_values: HashMap<NodeId, String>,
     active_element: Option<NodeId>,
     now_ms: i64,
     timer_step_limit: usize,
@@ -6072,6 +6090,7 @@ impl Harness {
             location_reload_count: 0,
             task_queue: Vec::new(),
             microtask_queue: VecDeque::new(),
+            dialog_return_values: HashMap::new(),
             active_element: None,
             now_ms: 0,
             timer_step_limit: 10_000,
@@ -6233,7 +6252,10 @@ impl Harness {
                 if Self::is_internal_object_key(key) {
                     continue;
                 }
-                if Self::location_builtin_keys().iter().any(|builtin| builtin == key) {
+                if Self::location_builtin_keys()
+                    .iter()
+                    .any(|builtin| builtin == key)
+                {
                     continue;
                 }
                 extras.push((key.clone(), value.clone()));
@@ -6250,7 +6272,10 @@ impl Harness {
             ("href".to_string(), Value::String(parts.href())),
             ("protocol".to_string(), Value::String(parts.protocol())),
             ("host".to_string(), Value::String(parts.host())),
-            ("hostname".to_string(), Value::String(parts.hostname.clone())),
+            (
+                "hostname".to_string(),
+                Value::String(parts.hostname.clone()),
+            ),
             ("port".to_string(), Value::String(parts.port.clone())),
             (
                 "pathname".to_string(),
@@ -6263,11 +6288,26 @@ impl Harness {
             ("search".to_string(), Value::String(parts.search.clone())),
             ("hash".to_string(), Value::String(parts.hash.clone())),
             ("origin".to_string(), Value::String(parts.origin())),
-            ("ancestorOrigins".to_string(), Self::new_array_value(Vec::new())),
-            ("assign".to_string(), Self::new_builtin_placeholder_function()),
-            ("reload".to_string(), Self::new_builtin_placeholder_function()),
-            ("replace".to_string(), Self::new_builtin_placeholder_function()),
-            ("toString".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "ancestorOrigins".to_string(),
+                Self::new_array_value(Vec::new()),
+            ),
+            (
+                "assign".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "reload".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "replace".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "toString".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ];
         entries.extend(extras);
         *self.location_object.borrow_mut() = entries;
@@ -6489,11 +6529,15 @@ impl Harness {
                 parts.hash = ensure_hash_prefix(&value.as_string());
                 self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
             }
-            "origin" | "ancestorOrigins" => Err(Error::ScriptRuntime(format!(
-                "location.{key} is read-only"
-            ))),
+            "origin" | "ancestorOrigins" => {
+                Err(Error::ScriptRuntime(format!("location.{key} is read-only")))
+            }
             _ => {
-                Self::object_set_entry(&mut self.location_object.borrow_mut(), key.to_string(), value);
+                Self::object_set_entry(
+                    &mut self.location_object.borrow_mut(),
+                    key.to_string(),
+                    value,
+                );
                 Ok(())
             }
         }
@@ -6546,7 +6590,8 @@ impl Harness {
 
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
         let normalized = self.resolve_location_target_url(url);
-        self.location_mock_pages.insert(normalized, html.to_string());
+        self.location_mock_pages
+            .insert(normalized, html.to_string());
     }
 
     pub fn clear_location_mock_pages(&mut self) {
@@ -6728,7 +6773,14 @@ impl Harness {
 
             if is_submit_control(&self.dom, target) {
                 if let Some(form_id) = self.resolve_form_for_submit(target) {
-                    self.dispatch_event_with_env(form_id, "submit", env, true)?;
+                    if !self.form_is_valid_for_submit(form_id)? {
+                        return Ok(());
+                    }
+                    let submit_outcome =
+                        self.dispatch_event_with_env(form_id, "submit", env, true)?;
+                    if !submit_outcome.default_prevented {
+                        self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+                    }
                 }
             }
 
@@ -6768,7 +6820,12 @@ impl Harness {
         };
 
         if let Some(form_id) = form {
-            self.dispatch_event(form_id, "submit")?;
+            let submit_outcome = self.dispatch_event(form_id, "submit")?;
+            if !submit_outcome.default_prevented {
+                let mut env = self.script_env.clone();
+                self.maybe_close_dialog_for_form_submit_with_env(form_id, &mut env)?;
+                self.script_env = env;
+            }
         }
 
         Ok(())
@@ -6791,9 +6848,30 @@ impl Harness {
         };
 
         if let Some(form_id) = form {
-            self.dispatch_event_with_env(form_id, "submit", env, true)?;
+            let submit_outcome = self.dispatch_event_with_env(form_id, "submit", env, true)?;
+            if !submit_outcome.default_prevented {
+                self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+            }
         }
 
+        Ok(())
+    }
+
+    fn maybe_close_dialog_for_form_submit_with_env(
+        &mut self,
+        form: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let Some(method) = self.dom.attr(form, "method") else {
+            return Ok(());
+        };
+        if !method.eq_ignore_ascii_case("dialog") {
+            return Ok(());
+        }
+        let Some(dialog) = self.dom.find_ancestor_by_tag(form, "dialog") else {
+            return Ok(());
+        };
+        let _ = self.transition_dialog_open_state_with_env(dialog, false, true, env)?;
         Ok(())
     }
 
@@ -7229,6 +7307,69 @@ impl Harness {
         Ok(value)
     }
 
+    fn form_is_valid_for_submit(&self, form: NodeId) -> Result<bool> {
+        let controls = self.form_elements(form)?;
+        for control in &controls {
+            if !self.required_control_satisfied(*control, &controls)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn required_control_satisfied(&self, control: NodeId, controls: &[NodeId]) -> Result<bool> {
+        if self.dom.disabled(control) || !self.dom.required(control) {
+            return Ok(true);
+        }
+
+        let tag = self
+            .dom
+            .tag_name(control)
+            .ok_or_else(|| Error::ScriptRuntime("required target is not an element".into()))?;
+
+        if tag.eq_ignore_ascii_case("input") {
+            let kind = self
+                .dom
+                .attr(control, "type")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if kind == "checkbox" {
+                return self.dom.checked(control);
+            }
+            if kind == "radio" {
+                if self.dom.checked(control)? {
+                    return Ok(true);
+                }
+                let name = self.dom.attr(control, "name").unwrap_or_default();
+                if name.is_empty() {
+                    return Ok(false);
+                }
+                for candidate in controls {
+                    if *candidate == control {
+                        continue;
+                    }
+                    if !is_radio_input(&self.dom, *candidate) {
+                        continue;
+                    }
+                    if self.dom.attr(*candidate, "name").unwrap_or_default() != name {
+                        continue;
+                    }
+                    if self.dom.checked(*candidate)? {
+                        return Ok(true);
+                    }
+                }
+                return Ok(false);
+            }
+            return Ok(!self.dom.value(control)?.is_empty());
+        }
+
+        if tag.eq_ignore_ascii_case("select") || tag.eq_ignore_ascii_case("textarea") {
+            return Ok(!self.dom.value(control)?.is_empty());
+        }
+
+        Ok(true)
+    }
+
     fn eval_form_data_source(
         &mut self,
         source: &FormDataSource,
@@ -7276,11 +7417,43 @@ impl Harness {
         env: &mut HashMap<String, Value>,
         trusted: bool,
     ) -> Result<EventState> {
+        let event = if trusted {
+            EventState::new(event_type, target, self.now_ms)
+        } else {
+            EventState::new_untrusted(event_type, target, self.now_ms)
+        };
+        self.dispatch_prepared_event_with_env(event, env)
+    }
+
+    fn dispatch_event_with_options(
+        &mut self,
+        target: NodeId,
+        event_type: &str,
+        env: &mut HashMap<String, Value>,
+        trusted: bool,
+        bubbles: bool,
+        cancelable: bool,
+        old_state: Option<&str>,
+        new_state: Option<&str>,
+    ) -> Result<EventState> {
         let mut event = if trusted {
             EventState::new(event_type, target, self.now_ms)
         } else {
             EventState::new_untrusted(event_type, target, self.now_ms)
         };
+        event.bubbles = bubbles;
+        event.cancelable = cancelable;
+        event.old_state = old_state.map(str::to_string);
+        event.new_state = new_state.map(str::to_string);
+        self.dispatch_prepared_event_with_env(event, env)
+    }
+
+    fn dispatch_prepared_event_with_env(
+        &mut self,
+        mut event: EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        let target = event.target;
         self.run_in_task_context(|this| {
             let mut path = Vec::new();
             let mut cursor = Some(target);
@@ -7400,6 +7573,138 @@ impl Harness {
         _env: &mut HashMap<String, Value>,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn ensure_dialog_target(&self, node: NodeId, operation: &str) -> Result<()> {
+        let tag = self
+            .dom
+            .tag_name(node)
+            .ok_or_else(|| Error::ScriptRuntime(format!("{operation} target is not an element")))?;
+        if tag.eq_ignore_ascii_case("dialog") {
+            return Ok(());
+        }
+        Err(Error::ScriptRuntime(format!(
+            "{operation} target is not a <dialog> element"
+        )))
+    }
+
+    fn dialog_return_value(&self, dialog: NodeId) -> Result<String> {
+        self.ensure_dialog_target(dialog, "returnValue")?;
+        Ok(self
+            .dialog_return_values
+            .get(&dialog)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn set_dialog_return_value(&mut self, dialog: NodeId, value: String) -> Result<()> {
+        self.ensure_dialog_target(dialog, "returnValue")?;
+        self.dialog_return_values.insert(dialog, value);
+        Ok(())
+    }
+
+    fn show_dialog_with_env(
+        &mut self,
+        dialog: NodeId,
+        _modal: bool,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        self.ensure_dialog_target(dialog, "show/showModal")?;
+        let _ = self.transition_dialog_open_state_with_env(dialog, true, false, env)?;
+        Ok(())
+    }
+
+    fn close_dialog_with_env(
+        &mut self,
+        dialog: NodeId,
+        return_value: Option<Value>,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        self.ensure_dialog_target(dialog, "close()")?;
+        if let Some(return_value) = return_value {
+            self.set_dialog_return_value(dialog, return_value.as_string())?;
+        }
+        let _ = self.transition_dialog_open_state_with_env(dialog, false, true, env)?;
+        Ok(())
+    }
+
+    fn request_close_dialog_with_env(
+        &mut self,
+        dialog: NodeId,
+        return_value: Option<Value>,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        self.ensure_dialog_target(dialog, "requestClose()")?;
+        if let Some(return_value) = return_value {
+            self.set_dialog_return_value(dialog, return_value.as_string())?;
+        }
+        if !self.dom.has_attr(dialog, "open")? {
+            return Ok(());
+        }
+        let cancel_event =
+            self.dispatch_event_with_options(dialog, "cancel", env, true, false, true, None, None)?;
+        if cancel_event.default_prevented {
+            return Ok(());
+        }
+        let _ = self.transition_dialog_open_state_with_env(dialog, false, true, env)?;
+        Ok(())
+    }
+
+    fn transition_dialog_open_state_with_env(
+        &mut self,
+        dialog: NodeId,
+        open: bool,
+        fire_close_event: bool,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<bool> {
+        let was_open = self.dom.has_attr(dialog, "open")?;
+        if was_open == open {
+            return Ok(false);
+        }
+
+        let (old_state, new_state) = if open {
+            ("closed", "open")
+        } else {
+            ("open", "closed")
+        };
+        let beforetoggle = self.dispatch_event_with_options(
+            dialog,
+            "beforetoggle",
+            env,
+            true,
+            false,
+            true,
+            Some(old_state),
+            Some(new_state),
+        )?;
+        if beforetoggle.default_prevented {
+            return Ok(false);
+        }
+
+        if open {
+            self.dom.set_attr(dialog, "open", "true")?;
+        } else {
+            self.dom.remove_attr(dialog, "open")?;
+        }
+
+        let _ = self.dispatch_event_with_options(
+            dialog,
+            "toggle",
+            env,
+            true,
+            false,
+            false,
+            Some(old_state),
+            Some(new_state),
+        )?;
+
+        if !open && fire_close_event {
+            let _ = self.dispatch_event_with_options(
+                dialog, "close", env, true, false, false, None, None,
+            )?;
+        }
+
+        Ok(true)
     }
 
     fn invoke_listeners(
@@ -8262,6 +8567,12 @@ impl Harness {
                                 self.dom.remove_attr(node, "open")?;
                             }
                         }
+                        DomProp::ReturnValue => {
+                            self.set_dialog_return_value(node, value.as_string())?;
+                        }
+                        DomProp::ClosedBy => {
+                            self.dom.set_attr(node, "closedby", &value.as_string())?
+                        }
                         DomProp::Readonly => {
                             if value.truthy() {
                                 self.dom.set_attr(node, "readonly", "true")?;
@@ -8289,9 +8600,10 @@ impl Harness {
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                         DomProp::Title => self.dom.set_document_title(&value.as_string())?,
-                        DomProp::Location | DomProp::LocationHref => {
-                            self.navigate_location(&value.as_string(), LocationNavigationKind::HrefSet)?
-                        }
+                        DomProp::Location | DomProp::LocationHref => self.navigate_location(
+                            &value.as_string(),
+                            LocationNavigationKind::HrefSet,
+                        )?,
                         DomProp::LocationProtocol => {
                             self.set_location_property("protocol", value.clone())?
                         }
@@ -8976,8 +9288,16 @@ impl Harness {
                         }
                     }
                 }
-                Stmt::DomMethodCall { target, method } => {
+                Stmt::DomMethodCall {
+                    target,
+                    method,
+                    arg,
+                } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
+                    let arg_value = arg
+                        .as_ref()
+                        .map(|expr| self.eval_expr(expr, env, event_param, event))
+                        .transpose()?;
                     match method {
                         DomMethod::Focus => self.focus_node_with_env(node, env)?,
                         DomMethod::Blur => self.blur_node_with_env(node, env)?,
@@ -8986,6 +9306,12 @@ impl Harness {
                         DomMethod::Reset => self.reset_form_with_env(node, env)?,
                         DomMethod::ScrollIntoView => {
                             self.scroll_into_view_node_with_env(node, env)?
+                        }
+                        DomMethod::Show => self.show_dialog_with_env(node, false, env)?,
+                        DomMethod::ShowModal => self.show_dialog_with_env(node, true, env)?,
+                        DomMethod::Close => self.close_dialog_with_env(node, arg_value, env)?,
+                        DomMethod::RequestClose => {
+                            self.request_close_dialog_with_env(node, arg_value, env)?
                         }
                     }
                 }
@@ -11880,6 +12206,10 @@ impl Harness {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
                     DomProp::Open => Ok(Value::Bool(self.dom.has_attr(node, "open")?)),
+                    DomProp::ReturnValue => Ok(Value::String(self.dialog_return_value(node)?)),
+                    DomProp::ClosedBy => Ok(Value::String(
+                        self.dom.attr(node, "closedby").unwrap_or_default(),
+                    )),
                     DomProp::Readonly => Ok(Value::Bool(self.dom.readonly(node))),
                     DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
                     DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
@@ -11927,9 +12257,7 @@ impl Harness {
                     DomProp::LocationHostname => {
                         Ok(Value::String(self.current_location_parts().hostname))
                     }
-                    DomProp::LocationPort => {
-                        Ok(Value::String(self.current_location_parts().port))
-                    }
+                    DomProp::LocationPort => Ok(Value::String(self.current_location_parts().port)),
                     DomProp::LocationPathname => {
                         let parts = self.current_location_parts();
                         Ok(Value::String(if parts.has_authority {
@@ -11972,18 +12300,18 @@ impl Harness {
                         .map(Value::Node)
                         .unwrap_or(Value::Null)),
                     DomProp::CurrentScript => Ok(Value::Null),
-                    DomProp::FormsLength => {
-                        Ok(Value::Number(self.dom.query_selector_all("form")?.len() as i64))
-                    }
-                    DomProp::ImagesLength => {
-                        Ok(Value::Number(self.dom.query_selector_all("img")?.len() as i64))
-                    }
+                    DomProp::FormsLength => Ok(Value::Number(
+                        self.dom.query_selector_all("form")?.len() as i64,
+                    )),
+                    DomProp::ImagesLength => Ok(Value::Number(
+                        self.dom.query_selector_all("img")?.len() as i64,
+                    )),
                     DomProp::LinksLength => Ok(Value::Number(
                         self.dom.query_selector_all("a[href], area[href]")?.len() as i64,
                     )),
-                    DomProp::ScriptsLength => {
-                        Ok(Value::Number(self.dom.query_selector_all("script")?.len() as i64))
-                    }
+                    DomProp::ScriptsLength => Ok(Value::Number(
+                        self.dom.query_selector_all("script")?.len() as i64,
+                    )),
                     DomProp::ChildrenLength => {
                         Ok(Value::Number(self.dom.child_element_count(node) as i64))
                     }
@@ -11996,7 +12324,9 @@ impl Harness {
                             "location.assign requires exactly one argument".into(),
                         ));
                     };
-                    let url = self.eval_expr(url_expr, env, event_param, event)?.as_string();
+                    let url = self
+                        .eval_expr(url_expr, env, event_param, event)?
+                        .as_string();
                     self.navigate_location(&url, LocationNavigationKind::Assign)?;
                     Ok(Value::Undefined)
                 }
@@ -12010,7 +12340,9 @@ impl Harness {
                             "location.replace requires exactly one argument".into(),
                         ));
                     };
-                    let url = self.eval_expr(url_expr, env, event_param, event)?.as_string();
+                    let url = self
+                        .eval_expr(url_expr, env, event_param, event)?
+                        .as_string();
                     self.navigate_location(&url, LocationNavigationKind::Replace)?;
                     Ok(Value::Undefined)
                 }
@@ -12131,6 +12463,16 @@ impl Harness {
                     ),
                     EventExprProp::EventPhase => Value::Number(event.event_phase as i64),
                     EventExprProp::TimeStamp => Value::Number(event.time_stamp_ms),
+                    EventExprProp::OldState => event
+                        .old_state
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Undefined),
+                    EventExprProp::NewState => event
+                        .new_state
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Undefined),
                 };
                 Ok(value)
             }
@@ -13107,6 +13449,8 @@ impl Harness {
             DomProp::Value => Some("value"),
             DomProp::Checked => Some("checked"),
             DomProp::Open => Some("open"),
+            DomProp::ReturnValue => Some("returnValue"),
+            DomProp::ClosedBy => Some("closedBy"),
             DomProp::Readonly => Some("readOnly"),
             DomProp::Required => Some("required"),
             DomProp::Disabled => Some("disabled"),
@@ -18938,6 +19282,8 @@ impl Harness {
             DomProp::Value => "value".into(),
             DomProp::Checked => "checked".into(),
             DomProp::Open => "open".into(),
+            DomProp::ReturnValue => "returnValue".into(),
+            DomProp::ClosedBy => "closedBy".into(),
             DomProp::Readonly => "readonly".into(),
             DomProp::Required => "required".into(),
             DomProp::Disabled => "disabled".into(),
@@ -19220,7 +19566,10 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "classList"
             | "className"
             | "click"
+            | "close"
             | "closest"
+            | "closedBy"
+            | "closedby"
             | "dataset"
             | "disabled"
             | "dispatchEvent"
@@ -19252,6 +19601,8 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "removeAttribute"
             | "removeChild"
             | "removeEventListener"
+            | "requestClose"
+            | "returnValue"
             | "replaceWith"
             | "required"
             | "reset"
@@ -19261,6 +19612,8 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "scrollTop"
             | "scrollWidth"
             | "setAttribute"
+            | "show"
+            | "showModal"
             | "style"
             | "submit"
             | "textContent"
@@ -21283,24 +21636,44 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let Some(method_name) = cursor.parse_identifier() else {
         return Ok(None);
     };
-    let method = match method_name.as_str() {
-        "focus" => DomMethod::Focus,
-        "blur" => DomMethod::Blur,
-        "click" => DomMethod::Click,
-        "scrollIntoView" => DomMethod::ScrollIntoView,
-        "submit" => DomMethod::Submit,
-        "reset" => DomMethod::Reset,
+    let (method, accepts_optional_arg) = match method_name.as_str() {
+        "focus" => (DomMethod::Focus, false),
+        "blur" => (DomMethod::Blur, false),
+        "click" => (DomMethod::Click, false),
+        "scrollIntoView" => (DomMethod::ScrollIntoView, false),
+        "submit" => (DomMethod::Submit, false),
+        "reset" => (DomMethod::Reset, false),
+        "show" => (DomMethod::Show, false),
+        "showModal" => (DomMethod::ShowModal, false),
+        "close" => (DomMethod::Close, true),
+        "requestClose" => (DomMethod::RequestClose, true),
         _ => return Ok(None),
     };
 
     cursor.skip_ws();
     let args = cursor.read_balanced_block(b'(', b')')?;
-    if !args.trim().is_empty() {
-        return Err(Error::ScriptParse(format!(
-            "{} takes no arguments: {stmt}",
-            method_name
-        )));
-    }
+    let arg = if accepts_optional_arg {
+        let parsed_args = split_top_level_by_char(&args, b',');
+        if parsed_args.len() == 1 && parsed_args[0].trim().is_empty() {
+            None
+        } else {
+            if parsed_args.len() != 1 || parsed_args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "{} accepts zero or one argument: {stmt}",
+                    method_name
+                )));
+            }
+            Some(parse_expr(parsed_args[0].trim())?)
+        }
+    } else {
+        if !args.trim().is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "{} takes no arguments: {stmt}",
+                method_name
+            )));
+        }
+        None
+    };
 
     cursor.skip_ws();
     cursor.consume_byte(b';');
@@ -21312,7 +21685,11 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
-    Ok(Some(Stmt::DomMethodCall { target, method }))
+    Ok(Some(Stmt::DomMethodCall {
+        target,
+        method,
+        arg,
+    }))
 }
 
 fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
@@ -23844,8 +24221,7 @@ fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
         cursor.skip_ws();
         if cursor.consume_byte(b'.') {
             cursor.skip_ws();
-            if cursor.consume_ascii("location")
-                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            if cursor.consume_ascii("location") && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
             {
                 return true;
             }
@@ -23885,8 +24261,7 @@ fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
                 return false;
             }
             cursor.skip_ws();
-            if cursor.consume_ascii("location")
-                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            if cursor.consume_ascii("location") && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
             {
                 return true;
             }
@@ -30671,6 +31046,8 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("value", None) => DomProp::Value,
         ("checked", None) => DomProp::Checked,
         ("open", None) => DomProp::Open,
+        ("returnValue", None) => DomProp::ReturnValue,
+        ("closedBy", None) | ("closedby", None) => DomProp::ClosedBy,
         ("readonly", None) | ("readOnly", None) => DomProp::Readonly,
         ("required", None) => DomProp::Required,
         ("disabled", None) => DomProp::Disabled,
@@ -30703,9 +31080,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("URL", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Url,
         ("documentURI", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DocumentUri,
         ("location", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Location,
-        ("location", Some(href))
-            if matches!(target, DomQuery::DocumentRoot) && href == "href" =>
-        {
+        ("location", Some(href)) if matches!(target, DomQuery::DocumentRoot) && href == "href" => {
             DomProp::LocationHref
         }
         ("location", Some(protocol))
@@ -30713,9 +31088,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::LocationProtocol
         }
-        ("location", Some(host))
-            if matches!(target, DomQuery::DocumentRoot) && host == "host" =>
-        {
+        ("location", Some(host)) if matches!(target, DomQuery::DocumentRoot) && host == "host" => {
             DomProp::LocationHost
         }
         ("location", Some(hostname))
@@ -30723,9 +31096,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::LocationHostname
         }
-        ("location", Some(port))
-            if matches!(target, DomQuery::DocumentRoot) && port == "port" =>
-        {
+        ("location", Some(port)) if matches!(target, DomQuery::DocumentRoot) && port == "port" => {
             DomProp::LocationPort
         }
         ("location", Some(pathname))
@@ -30738,9 +31109,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::LocationSearch
         }
-        ("location", Some(hash))
-            if matches!(target, DomQuery::DocumentRoot) && hash == "hash" =>
-        {
+        ("location", Some(hash)) if matches!(target, DomQuery::DocumentRoot) && hash == "hash" => {
             DomProp::LocationHash
         }
         ("location", Some(origin))
@@ -30749,7 +31118,8 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
             DomProp::LocationOrigin
         }
         ("location", Some(ancestor_origins))
-            if matches!(target, DomQuery::DocumentRoot) && ancestor_origins == "ancestorOrigins" =>
+            if matches!(target, DomQuery::DocumentRoot)
+                && ancestor_origins == "ancestorOrigins" =>
         {
             DomProp::LocationAncestorOrigins
         }
@@ -31017,6 +31387,8 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
         ("currentTarget", Some("id")) => EventExprProp::CurrentTargetId,
         ("eventPhase", None) => EventExprProp::EventPhase,
         ("timeStamp", None) => EventExprProp::TimeStamp,
+        ("oldState", None) => EventExprProp::OldState,
+        ("newState", None) => EventExprProp::NewState,
         _ => return Ok(None),
     };
 

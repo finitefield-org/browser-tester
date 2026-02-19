@@ -1771,6 +1771,192 @@ fn form_reset_method_dispatches_reset_and_restores_defaults() -> Result<()> {
 }
 
 #[test]
+fn dialog_show_modal_close_and_toggle_events_work() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog'>
+          <button id='close' type='button'>Close</button>
+          <form method='dialog' id='form'>
+            <p>
+              <label for='fav-animal'>Favorite animal:</label>
+              <select id='fav-animal' name='favAnimal' required>
+                <option></option>
+                <option>Brine shrimp</option>
+                <option>Red panda</option>
+                <option>Spider monkey</option>
+              </select>
+            </p>
+            <button id='submit' type='submit'>Confirm</button>
+          </form>
+        </dialog>
+        <button id='open'>Open dialog</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          let logs = '';
+
+          dialog.addEventListener('beforetoggle', (event) => {
+            logs = logs + 'before:' + event.oldState + '>' + event.newState + '|';
+          });
+          dialog.addEventListener('toggle', (event) => {
+            logs = logs + 'toggle:' + event.newState + '|';
+          });
+          dialog.addEventListener('close', () => {
+            logs = logs + 'close:' + dialog.returnValue + '|';
+          });
+
+          document.getElementById('open').addEventListener('click', () => {
+            dialog.showModal();
+            dialog.close('Red panda');
+            document.getElementById('result').textContent = logs + 'open=' + dialog.open;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#open")?;
+    h.assert_text(
+        "#result",
+        "before:closed>open|toggle:open|before:open>closed|toggle:closed|close:Red panda|open=false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dialog_request_close_fires_cancel_and_can_be_prevented() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog' open></dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          let marker = '';
+          dialog.addEventListener('cancel', (event) => {
+            marker = marker + 'cancel:' + dialog.returnValue;
+            dialog.returnValue = '';
+            event.preventDefault();
+          });
+          dialog.addEventListener('close', () => {
+            marker = marker + '|close';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialog.returnValue = 'seed';
+            dialog.requestClose('next');
+            document.getElementById('result').textContent =
+              marker + '|open=' + dialog.open + '|value=' + dialog.returnValue;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "cancel:next|open=true|value=")?;
+    Ok(())
+}
+
+#[test]
+fn dialog_form_method_dialog_closes_and_keeps_submit_return_value() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog'>
+          <form id='form' method='dialog'>
+            <select id='fav-animal' required>
+              <option></option>
+              <option>Brine shrimp</option>
+              <option>Red panda</option>
+              <option>Spider monkey</option>
+            </select>
+            <button id='submit' type='submit'>Confirm</button>
+          </form>
+        </dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          const form = document.getElementById('form');
+          const select = document.getElementById('fav-animal');
+
+          form.addEventListener('submit', () => {
+            dialog.returnValue = select.value;
+          });
+          dialog.addEventListener('close', () => {
+            document.getElementById('result').textContent =
+              dialog.returnValue + ':' + dialog.open;
+          });
+
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialog.show();
+            select.value = 'Spider monkey';
+            document.getElementById('submit').click();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "Spider monkey:false")?;
+    Ok(())
+}
+
+#[test]
+fn dialog_form_submit_is_blocked_when_required_control_is_empty() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog'>
+          <form id='form' method='dialog'>
+            <select id='fav-animal' required>
+              <option></option>
+              <option>Brine shrimp</option>
+            </select>
+            <button id='submit' type='submit'>Confirm</button>
+          </form>
+        </dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          let marker = 'none';
+          document.getElementById('form').addEventListener('submit', () => {
+            marker = 'submitted';
+          });
+          dialog.addEventListener('close', () => {
+            marker = marker + '|closed';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialog.showModal();
+            document.getElementById('submit').click();
+            document.getElementById('result').textContent = marker + ':' + dialog.open;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "none:true")?;
+    Ok(())
+}
+
+#[test]
+fn dialog_closed_by_property_reflects_closedby_attribute() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog' closedby='none'></dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          document.getElementById('trigger').addEventListener('click', () => {
+            const before = dialog.closedBy;
+            dialog.closedBy = 'any';
+            document.getElementById('result').textContent =
+              before + ':' + dialog.closedBy + ':' + dialog.getAttribute('closedby');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "none:any:any")?;
+    Ok(())
+}
+
+#[test]
 fn element_matches_method_works() -> Result<()> {
     let html = r#"
         <div id='container'>

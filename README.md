@@ -226,7 +226,8 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `matches(selector)`, `closest(selector)` (returns `null` when not matched),
   `getComputedStyle(element).getPropertyValue(property)`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
-  `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`
+  `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
+  dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
 - Timers: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   (returns timer ID. No real-time waiting; execute via `harness.advance_time(ms)` / `harness.flush()`),
   `clearTimeout(timerId)` / `clearInterval(timerId)`,
@@ -272,7 +273,7 @@ Simplified `FormData` spec (for testing):
 ### 8.1 Event Object
 Fields:
 - `type`, `target`, `currentTarget`, `bubbles`, `cancelable`, `defaultPrevented`, `isTrusted`
-- `eventPhase`, `timeStamp`
+- `eventPhase`, `timeStamp`, `oldState`, `newState` (for toggle events)
 - Reference properties: `targetName`, `currentTargetName`, `targetId`, `currentTargetId`
 - Internal controls: `propagation_stopped`, `immediate_propagation_stopped`
 
@@ -293,6 +294,7 @@ Fields:
 `click` on submit button:
 1. Fire `submit` event on ancestor `form`.
 2. Do not perform navigation or similar default browser actions (`preventDefault` state is observable via `event.defaultPrevented`).
+3. When `form method="dialog"` and the submit is not canceled, close the ancestor `<dialog>` and fire dialog close-related events.
 
 ## 9. Runtime Execution Model
 
