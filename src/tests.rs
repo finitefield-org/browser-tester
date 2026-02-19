@@ -3859,6 +3859,105 @@ fn focus_in_and_focus_out_events_are_dispatched() -> Result<()> {
 }
 
 #[test]
+fn html_dom_input_event_toggles_submit_button_disabled_state() -> Result<()> {
+    let html = r#"
+        <form action='' method='get'>
+          <input type='text' id='userName'>
+          <input type='submit' value='Send' id='sendButton'>
+        </form>
+        <p id='result'></p>
+        <script>
+          const nameField = document.getElementById('userName');
+          const sendButton = document.getElementById('sendButton');
+
+          sendButton.disabled = true;
+
+          nameField.addEventListener('input', (event) => {
+            const elem = event.target;
+            const valid = elem.value.length !== 0;
+
+            if (valid && sendButton.disabled) {
+              sendButton.disabled = false;
+            } else if (!valid && !sendButton.disabled) {
+              sendButton.disabled = true;
+            }
+
+            document.getElementById('result').textContent =
+              sendButton.disabled ? 'disabled' : 'enabled';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#userName", "Kaz")?;
+    h.assert_text("#result", "enabled")?;
+    h.type_text("#userName", "")?;
+    h.assert_text("#result", "disabled")?;
+    Ok(())
+}
+
+#[test]
+fn html_element_hidden_and_inner_text_properties_work() -> Result<()> {
+    let html = r#"
+        <div id='box'>Hello <span>DOM</span></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          document.getElementById('run').addEventListener('click', () => {
+            const before = box.hidden + ':' + box.hasAttribute('hidden');
+
+            box.hidden = true;
+            const hiddenState = box.hidden + ':' + box.hasAttribute('hidden');
+
+            box.hidden = false;
+            box.innerText = 'Replaced';
+
+            document.getElementById('result').textContent =
+              before + '|' +
+              hiddenState + '|' +
+              box.innerText + '|' +
+              box.textContent + '|' +
+              box.hasAttribute('hidden');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:false|true:true|Replaced|Replaced|false")?;
+    Ok(())
+}
+
+#[test]
+fn document_hidden_remains_read_only_while_element_hidden_is_writable() -> Result<()> {
+    let html = r#"
+        <div id='box'>x</div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let docErr = '';
+            try {
+              document.hidden = true;
+            } catch (e) {
+              docErr = '' + e;
+            }
+            const box = document.getElementById('box');
+            box.hidden = true;
+            document.getElementById('result').textContent =
+              docErr + '|' + box.hidden + ':' + box.hasAttribute('hidden');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "hidden is read-only|true:true")?;
+    Ok(())
+}
+
+#[test]
 fn focus_skips_disabled_element() -> Result<()> {
     let html = r#"
         <input id='name' disabled>

@@ -4107,6 +4107,7 @@ impl Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DomProp {
     Value,
+    ValueLength,
     Checked,
     Open,
     ReturnValue,
@@ -4115,6 +4116,7 @@ enum DomProp {
     Required,
     Disabled,
     TextContent,
+    InnerText,
     InnerHtml,
     ClassName,
     Id,
@@ -9532,6 +9534,9 @@ impl Harness {
                         DomProp::TextContent => {
                             self.dom.set_text_content(node, &value.as_string())?
                         }
+                        DomProp::InnerText => {
+                            self.dom.set_text_content(node, &value.as_string())?
+                        }
                         DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
@@ -9567,6 +9572,17 @@ impl Harness {
                                 self.dom.set_attr(node, "disabled", "true")?;
                             } else {
                                 self.dom.remove_attr(node, "disabled")?;
+                            }
+                        }
+                        DomProp::Hidden => {
+                            if node == self.dom.root {
+                                let call = self.describe_dom_prop(prop);
+                                return Err(Error::ScriptRuntime(format!("{call} is read-only")));
+                            }
+                            if value.truthy() {
+                                self.dom.set_attr(node, "hidden", "true")?;
+                            } else {
+                                self.dom.remove_attr(node, "hidden")?;
                             }
                         }
                         DomProp::ClassName => {
@@ -9674,6 +9690,7 @@ impl Harness {
                             self.dom.set_attr(node, "shape", &value.as_string())?
                         }
                         DomProp::OffsetWidth
+                        | DomProp::ValueLength
                         | DomProp::OffsetHeight
                         | DomProp::OffsetLeft
                         | DomProp::OffsetTop
@@ -9695,7 +9712,6 @@ impl Harness {
                         | DomProp::HistoryLength
                         | DomProp::HistoryState
                         | DomProp::DefaultView
-                        | DomProp::Hidden
                         | DomProp::VisibilityState
                         | DomProp::Forms
                         | DomProp::Images
@@ -13504,6 +13520,9 @@ impl Harness {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 match prop {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
+                    DomProp::ValueLength => Ok(Value::Number(
+                        self.dom.value(node)?.chars().count() as i64,
+                    )),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
                     DomProp::Open => Ok(Value::Bool(self.dom.has_attr(node, "open")?)),
                     DomProp::ReturnValue => Ok(Value::String(self.dialog_return_value(node)?)),
@@ -13514,6 +13533,7 @@ impl Harness {
                     DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
                     DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
                     DomProp::TextContent => Ok(Value::String(self.dom.text_content(node))),
+                    DomProp::InnerText => Ok(Value::String(self.dom.text_content(node))),
                     DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
                     DomProp::ClassName => Ok(Value::String(
                         self.dom.attr(node, "class").unwrap_or_default(),
@@ -13583,7 +13603,13 @@ impl Harness {
                     DomProp::DefaultView => {
                         Ok(env.get("window").cloned().unwrap_or(Value::Undefined))
                     }
-                    DomProp::Hidden => Ok(Value::Bool(false)),
+                    DomProp::Hidden => {
+                        if node == self.dom.root {
+                            Ok(Value::Bool(false))
+                        } else {
+                            Ok(Value::Bool(self.dom.attr(node, "hidden").is_some()))
+                        }
+                    }
                     DomProp::VisibilityState => Ok(Value::String("visible".to_string())),
                     DomProp::Forms => Ok(Value::NodeList(self.dom.query_selector_all("form")?)),
                     DomProp::Images => Ok(Value::NodeList(self.dom.query_selector_all("img")?)),
@@ -13878,12 +13904,8 @@ impl Harness {
                     if param == event_var {
                         let value = match prop {
                             EventExprProp::Type => Value::String(event.event_type.clone()),
-                            EventExprProp::Target => {
-                                Value::String(self.event_node_label(event.target))
-                            }
-                            EventExprProp::CurrentTarget => {
-                                Value::String(self.event_node_label(event.current_target))
-                            }
+                            EventExprProp::Target => Value::Node(event.target),
+                            EventExprProp::CurrentTarget => Value::Node(event.current_target),
                             EventExprProp::TargetName => Value::String(
                                 self.dom.attr(event.target, "name").unwrap_or_default(),
                             ),
@@ -15038,6 +15060,7 @@ impl Harness {
             DomProp::Required => Some("required"),
             DomProp::Disabled => Some("disabled"),
             DomProp::TextContent => Some("textContent"),
+            DomProp::InnerText => Some("innerText"),
             DomProp::InnerHtml => Some("innerHTML"),
             DomProp::ClassName => Some("className"),
             DomProp::Id => Some("id"),
@@ -15079,6 +15102,7 @@ impl Harness {
             DomProp::AnchorShape => Some("shape"),
             DomProp::Dataset(_)
             | DomProp::Style(_)
+            | DomProp::ValueLength
             | DomProp::ActiveElement
             | DomProp::CharacterSet
             | DomProp::CompatMode
@@ -22435,6 +22459,7 @@ impl Harness {
     fn describe_dom_prop(&self, prop: &DomProp) -> String {
         match prop {
             DomProp::Value => "value".into(),
+            DomProp::ValueLength => "value.length".into(),
             DomProp::Checked => "checked".into(),
             DomProp::Open => "open".into(),
             DomProp::ReturnValue => "returnValue".into(),
@@ -22443,6 +22468,7 @@ impl Harness {
             DomProp::Required => "required".into(),
             DomProp::Disabled => "disabled".into(),
             DomProp::TextContent => "textContent".into(),
+            DomProp::InnerText => "innerText".into(),
             DomProp::InnerHtml => "innerHTML".into(),
             DomProp::ClassName => "className".into(),
             DomProp::Id => "id".into(),
@@ -22776,9 +22802,11 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "hostname"
             | "href"
             | "hreflang"
+            | "hidden"
             | "id"
             | "interestForElement"
             | "innerHTML"
+            | "innerText"
             | "insertAdjacentElement"
             | "insertAdjacentHTML"
             | "insertAdjacentText"
@@ -35011,6 +35039,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
 
     let prop = match (head.as_str(), nested.as_ref()) {
         ("value", None) => DomProp::Value,
+        ("value", Some(length)) if length == "length" => DomProp::ValueLength,
         ("checked", None) => DomProp::Checked,
         ("open", None) => DomProp::Open,
         ("returnValue", None) => DomProp::ReturnValue,
@@ -35019,6 +35048,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("required", None) => DomProp::Required,
         ("disabled", None) => DomProp::Disabled,
         ("textContent", None) => DomProp::TextContent,
+        ("innerText", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::InnerText,
         ("innerHTML", None) => DomProp::InnerHtml,
         ("className", None) => DomProp::ClassName,
         ("id", None) => DomProp::Id,
@@ -35108,7 +35138,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
             DomProp::HistoryScrollRestoration
         }
         ("defaultView", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DefaultView,
-        ("hidden", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Hidden,
+        ("hidden", None) => DomProp::Hidden,
         ("visibilityState", None) if matches!(target, DomQuery::DocumentRoot) => {
             DomProp::VisibilityState
         }

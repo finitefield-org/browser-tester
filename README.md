@@ -275,7 +275,7 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `form.elements.length`, `form.elements[index]`,
   `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
   `formData.getAll(name).length`
-- DOM updates: `textContent`, `value`, `checked`, `disabled`, `readonly`, `required`, `className`, `id`, `name`, `classList.*`,
+- DOM updates: `textContent`, `innerText`, `value`, `checked`, `disabled`, `readonly`, `required`, `hidden`, `className`, `id`, `name`, `classList.*`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `matches(selector)`, `closest(selector)` (returns `null` when not matched),
   `getComputedStyle(element).getPropertyValue(property)`,
