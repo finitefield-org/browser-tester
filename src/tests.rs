@@ -1268,6 +1268,358 @@ fn class_list_add_remove_multiple_arguments_work() -> Result<()> {
 }
 
 #[test]
+fn member_chain_dom_targets_support_class_list_listener_and_open_property() -> Result<()> {
+    let html = r#"
+        <div id='dialog' class='panel hidden'></div>
+        <button id='open-tool'>open</button>
+        <details id='settings' open></details>
+        <p id='result'></p>
+        <script>
+          const el = {
+            dialog: document.getElementById('dialog'),
+            openToolBtn: document.getElementById('open-tool'),
+            settingsDetails: document.getElementById('settings'),
+          };
+
+          el.dialog.classList.remove('hidden');
+          el.openToolBtn.addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              el.dialog.className + ':' + (el.settingsDetails.open ? 'open' : 'closed');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#open-tool")?;
+    h.assert_text("#result", "panel:open")?;
+    Ok(())
+}
+
+#[test]
+fn document_core_properties_and_collections_work() -> Result<()> {
+    let html = r#"
+        <html id='doc'>
+          <head id='head'>
+            <title>Initial</title>
+          </head>
+          <body id='body'>
+            <form id='f'><input id='name'></form>
+            <img id='logo' src='logo.png'>
+            <a id='link' href='/x'>x</a>
+            <button id='btn'>run</button>
+            <p id='result'></p>
+            <script>
+              document.getElementById('btn').addEventListener('click', () => {
+                const kids = document.children;
+                const first = document.firstElementChild;
+                const last = document.lastElementChild;
+                const activeBeforeNode = document.activeElement;
+                const activeBefore = activeBeforeNode ? activeBeforeNode.id : 'none';
+                document.getElementById('name').focus();
+                const activeAfterNode = document.activeElement;
+                const activeAfter = activeAfterNode ? activeAfterNode.id : 'none';
+
+                document.getElementById('result').textContent =
+                  document.title + ':' +
+                  document.characterSet + ':' +
+                  document.compatMode + ':' +
+                  document.contentType + ':' +
+                  document.readyState + ':' +
+                  document.referrer + ':' +
+                  document.URL + ':' +
+                  document.documentURI + ':' +
+                  document.location + ':' +
+                  document.location.href + ':' +
+                  document.visibilityState + ':' +
+                  document.hidden + ':' +
+                  document.body.id + ':' +
+                  document.head.id + ':' +
+                  document.documentElement.id + ':' +
+                  document.childElementCount + ':' +
+                  kids.length + ':' +
+                  first.id + ':' +
+                  last.id + ':' +
+                  document.forms.length + ':' +
+                  document.images.length + ':' +
+                  document.links.length + ':' +
+                  document.scripts.length + ':' +
+                  activeBefore + ':' +
+                  activeAfter + ':' +
+                  (document.defaultView ? 'yes' : 'no');
+              });
+            </script>
+          </body>
+        </html>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "Initial:UTF-8:CSS1Compat:text/html:complete::about:blank:about:blank:about:blank:about:blank:visible:false:body:head:doc:1:1:doc:doc:1:1:1:1:none:name:yes",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_title_assignment_and_body_chain_target_work() -> Result<()> {
+    let html = r#"
+        <html id='doc'>
+          <head id='head'></head>
+          <body id='body'>
+            <button id='btn'>run</button>
+            <p id='result'></p>
+            <script>
+              document.body.classList.add('ready');
+              document.body.addEventListener('click', () => {});
+
+              document.getElementById('btn').addEventListener('click', () => {
+                document.title = 'Updated';
+                const first = document.firstElementChild;
+                const last = document.lastElementChild;
+                document.getElementById('result').textContent =
+                  document.title + ':' +
+                  document.head.id + ':' +
+                  document.documentElement.id + ':' +
+                  document.body.className + ':' +
+                  first.id + ':' +
+                  last.id;
+              });
+            </script>
+          </body>
+        </html>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "Updated:head:doc:ready:doc:doc")?;
+    Ok(())
+}
+
+#[test]
+fn location_properties_and_setters_work_from_location_document_and_window() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://developer.mozilla.org:8080/en-US/search?q=URL#search-results-close-container';
+            document.location.protocol = 'http:';
+            window.location.hostname = 'example.com';
+            location.port = '9090';
+            location.pathname = 'docs';
+            location.search = 'k=v';
+            location.hash = 'anchor';
+
+            document.getElementById('result').textContent =
+              location.href + '|' +
+              location.protocol + '|' +
+              location.host + '|' +
+              location.hostname + '|' +
+              location.port + '|' +
+              location.pathname + '|' +
+              location.search + '|' +
+              location.hash + '|' +
+              location.origin + '|' +
+              document.location.toString() + '|' +
+              window.location.toString() + '|' +
+              location.ancestorOrigins.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "http://example.com:9090/docs?k=v#anchor|http:|example.com:9090|example.com|9090|/docs|?k=v|#anchor|http://example.com:9090|http://example.com:9090/docs?k=v#anchor|http://example.com:9090/docs?k=v#anchor|0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn location_assign_replace_reload_and_navigation_logs_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.assign('https://app.local/a?x=1#h');
+            location.replace('/b');
+            location.reload();
+            document.getElementById('result').textContent = location.href;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "https://app.local/b")?;
+    assert_eq!(h.location_reload_count(), 1);
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::Assign,
+                from: "about:blank".to_string(),
+                to: "https://app.local/a?x=1#h".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::Replace,
+                from: "https://app.local/a?x=1#h".to_string(),
+                to: "https://app.local/b".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::Reload,
+                from: "https://app.local/b".to_string(),
+                to: "https://app.local/b".to_string(),
+            },
+        ]
+    );
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
+fn location_mock_pages_load_on_navigation_and_reload() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let first_mock = r#"
+        <button id='reload'>reload</button>
+        <p id='marker'>first</p>
+        <script>
+          document.getElementById('reload').addEventListener('click', () => {
+            location.reload();
+          });
+        </script>
+        "#;
+    let second_mock = "<p id='marker'>second</p>";
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", first_mock);
+    h.click("#go")?;
+    h.assert_text("#marker", "first")?;
+
+    h.set_location_mock_page("https://app.local/next", second_mock);
+    h.click("#reload")?;
+    h.assert_text("#marker", "second")?;
+    assert_eq!(h.location_reload_count(), 1);
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::Assign,
+                from: "about:blank".to_string(),
+                to: "https://app.local/next".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::Reload,
+                from: "https://app.local/next".to_string(),
+                to: "https://app.local/next".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn hash_only_location_navigation_does_not_trigger_mock_page_swap() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'>alive</p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://app.local/path';
+            location.hash = 'frag';
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + ':' + location.href;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/path#frag", "<p id='result'>swapped</p>");
+    h.click("#run")?;
+    h.assert_text("#result", "alive:https://app.local/path#frag")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "about:blank".to_string(),
+                to: "https://app.local/path".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://app.local/path".to_string(),
+                to: "https://app.local/path#frag".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn document_has_focus_reports_active_element_state() -> Result<()> {
+    let html = r#"
+        <input id='name'>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const before = document.hasFocus();
+            document.getElementById('name').focus();
+            const during = document.hasFocus();
+            document.getElementById('name').blur();
+            const after = document.hasFocus();
+            document.getElementById('result').textContent = before + ':' + during + ':' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "false:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn document_body_chain_supports_query_selector_and_query_selector_all() -> Result<()> {
+    let html = r#"
+        <body>
+          <div id='a' class='item'></div>
+          <div id='b' class='item'></div>
+          <button id='btn'>run</button>
+          <p id='result'></p>
+          <script>
+            document.getElementById('btn').addEventListener('click', () => {
+              const picked = document.body.querySelector('.item');
+              const total = document.body.querySelectorAll('.item').length;
+              picked.classList.remove('item');
+              document.getElementById('result').textContent =
+                picked.id + ':' + total + ':' + document.body.querySelectorAll('.item').length;
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a:2:1")?;
+    Ok(())
+}
+
+#[test]
 fn class_list_for_each_supports_single_arg_and_index() -> Result<()> {
     let html = r#"
         <div id='box' class='red green blue'></div>
@@ -2022,6 +2374,136 @@ fn for_loop_post_increment_with_function_callback_works() -> Result<()> {
 }
 
 #[test]
+fn try_catch_catches_runtime_error_and_binds_exception() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'init';
+            try {
+              nonExistentFunction();
+              out = 'not-caught';
+            } catch (error) {
+              out = typeof error + ':' + (error ? 'y' : 'n');
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "string:y")?;
+    Ok(())
+}
+
+#[test]
+fn try_catch_finally_and_rethrow_behavior_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            try {
+              try {
+                throw 'oops';
+              } catch (ex) {
+                out = out + 'inner:' + ex;
+                throw ex;
+              } finally {
+                out = out + ':finally';
+              }
+            } catch (ex) {
+              out = out + ':outer:' + ex;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "inner:oops:finally:outer:oops")?;
+    Ok(())
+}
+
+#[test]
+fn try_finally_runs_without_catch_and_finally_return_masks_try_return() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function doIt() {
+            try {
+              return 1;
+            } finally {
+              return 2;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'start';
+            try {
+              try {
+                throw 'boom';
+              } finally {
+                out = out + ':inner-finally';
+              }
+            } catch (e) {
+              out = out + ':outer-catch:' + e;
+            }
+            document.getElementById('result').textContent = doIt() + ':' + out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:start:inner-finally:outer-catch:boom")?;
+    Ok(())
+}
+
+#[test]
+fn catch_without_binding_and_pattern_binding_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function isValidJSON(text) {
+            try {
+              JSON.parse(text);
+              return true;
+            } catch {
+              return false;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = isValidJSON('{"a":1}') + ':' + isValidJSON('{bad}');
+            try {
+              throw { name: 'TypeError', message: 'oops' };
+            } catch ({ name, message }) {
+              out = out + ':' + name + ':' + message;
+            }
+            try {
+              throw ['A', 'B'];
+            } catch ([first, second]) {
+              out = out + ':' + first + second;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:TypeError:oops:AB")?;
+    Ok(())
+}
+
+#[test]
 fn promise_then_function_callback_runs_as_microtask() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2343,6 +2825,85 @@ fn arrow_function_value_can_be_called() -> Result<()> {
     h.click("#btn")?;
     h.assert_text("#result", "A")?;
     Ok(())
+}
+
+#[test]
+fn default_function_parameters_apply_for_missing_or_undefined() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function multiply(a, b = 1) {
+            return a * b;
+          }
+
+          function test(num = 1) {
+            return typeof num;
+          }
+
+          document.getElementById('result').textContent =
+            multiply(5, 2) + ':' +
+            multiply(5) + ':' +
+            multiply(5, undefined) + ':' +
+            test() + ':' +
+            test(undefined) + ':' +
+            test('') + ':' +
+            test(null);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "10:5:5:number:number:string:object")?;
+    Ok(())
+}
+
+#[test]
+fn default_function_parameters_are_evaluated_left_to_right_at_call_time() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function greet(name, greeting, message = `${greeting} ${name}`) {
+            return message;
+          }
+
+          function append(value, array = []) {
+            array.push(value);
+            return array.length;
+          }
+
+          const exprFn = function(a = 2, b = a + 1) {
+            return a + b;
+          };
+
+          const arrowFn = (a, b = a + 5) => {
+            return a + ':' + b;
+          };
+
+          document.getElementById('result').textContent =
+            greet('David', 'Hi') + ':' +
+            greet('David', 'Hi', 'Happy Birthday!') + ':' +
+            append(1) + ':' +
+            append(2) + ':' +
+            exprFn(undefined, undefined) + ':' +
+            exprFn(5) + ':' +
+            arrowFn(7);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "Hi David:Happy Birthday!:1:1:5:11:7:12")?;
+    Ok(())
+}
+
+#[test]
+fn default_parameter_initializer_cannot_access_function_body_bindings() {
+    let err = Harness::from_html(
+        "<script>function f(a = go()) { function go() { return ':P'; } } f();</script>",
+    )
+    .expect_err("default parameter initializer should not see function body bindings");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("unknown variable: go")),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -8752,6 +9313,102 @@ fn await_operator_supports_values_and_fulfilled_promises() -> Result<()> {
 }
 
 #[test]
+fn async_function_declaration_and_expression_return_promises() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function resolveNow(value) {
+            return Promise.resolve(value);
+          }
+
+          async function asyncDecl() {
+            const first = await resolveNow('A');
+            return first + 'B';
+          }
+
+          const asyncExpr = async function(value = 'C') {
+            const second = await Promise.resolve(value);
+            return second + 'D';
+          };
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const p1 = asyncDecl();
+            const p2 = asyncExpr();
+            result.textContent = typeof p1;
+            Promise.all([p1, p2]).then((values) => {
+              result.textContent = result.textContent + ':' + values[0] + ':' + values[1];
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "object:AB:CD")?;
+    Ok(())
+}
+
+#[test]
+fn async_function_returned_promise_reference_differs_from_returned_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const p = Promise.resolve(1);
+
+          async function asyncReturn() {
+            return p;
+          }
+
+          function basicReturn() {
+            return Promise.resolve(p);
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const sameBasic = p === basicReturn();
+            const sameAsync = p === asyncReturn();
+            document.getElementById('result').textContent = sameBasic + ':' + sameAsync;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false")?;
+    Ok(())
+}
+
+#[test]
+fn async_function_errors_reject_promise_instead_of_throwing_synchronously() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          async function explode() {
+            missingFunction();
+            return 'never';
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const promise = explode();
+            result.textContent = 'called';
+            promise.catch(() => {
+              result.textContent = result.textContent + ':caught';
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "called:caught")?;
+    Ok(())
+}
+
+#[test]
 fn nullish_coalescing_operator_works() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -10475,6 +11132,114 @@ fn string_slice_substring_split_and_replace_work() -> Result<()> {
         "#result",
         "123:45:0:123:123:01:a-b-c:a|b|c:a:b:1:bar foo:-abc",
     )?;
+    Ok(())
+}
+
+#[test]
+fn string_constructor_and_static_methods_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const string1 = "A string primitive";
+            const string2 = String(1);
+            const string3 = String(true);
+            const string4 = new String("A String object");
+            const types =
+              typeof string1 + ':' + typeof string2 + ':' + typeof string3 + ':' + typeof string4;
+            const ctor = string4.constructor === String;
+            const value = string4.valueOf();
+            const rendered = string4.toString();
+            const fromChar = String.fromCharCode(65, 66, 67);
+            const fromCode = String.fromCodePoint(0x1F600);
+            const raw = String.raw({ raw: ['Hi\\n', '!'] }, 'Bob');
+            const symbolText = String(Symbol('token'));
+            document.getElementById('result').textContent =
+              types + '|' + ctor + '|' + value + '|' + rendered + '|' +
+              fromChar + '|' + (fromCode.length > 0) + '|' + raw + '|' + symbolText;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "string:string:string:object|true|A String object|A String object|ABC|true|Hi\\nBob!|Symbol(token)",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_extended_instance_methods_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const text = 'cat';
+            const charAt = text.charAt(1);
+            const charCodeAt = text.charCodeAt(1);
+            const codePointAt = text.codePointAt(1);
+            const at = text.at(-1);
+            const concat = text.concat('s', '!');
+            const lastIndex1 = 'bananas'.lastIndexOf('an');
+            const lastIndex2 = 'bananas'.lastIndexOf('an', 3);
+            const searchRegex = 'abc123'.search(/[0-9]+/);
+            const searchString = 'abc'.search('d');
+            const replaceAll = 'foo foo'.replaceAll('foo', 'bar');
+            const replaceAllRegex = 'a1b2c3'.replaceAll(/[0-9]/g, '');
+            const repeated = 'ha'.repeat(3);
+            const paddedStart = '5'.padStart(3, '0');
+            const paddedEnd = '5'.padEnd(3, '0');
+            const localeUpper = 'abc'.toLocaleUpperCase();
+            const localeLower = 'ABC'.toLocaleLowerCase();
+            const wellFormed = 'ok'.isWellFormed();
+            const toWellFormed = 'ok'.toWellFormed();
+            document.getElementById('result').textContent =
+              charAt + ':' + charCodeAt + ':' + codePointAt + ':' + at + ':' +
+              concat + ':' + lastIndex1 + ':' + lastIndex2 + ':' +
+              searchRegex + ':' + searchString + ':' +
+              replaceAll + ':' + replaceAllRegex + ':' +
+              repeated + ':' + paddedStart + ':' + paddedEnd + ':' +
+              localeUpper + ':' + localeLower + ':' + wellFormed + ':' + toWellFormed;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "a:97:97:t:cats!:3:1:3:-1:bar bar:abc:hahaha:005:500:ABC:abc:true:ok",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_locale_compare_and_character_access_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const de = 'ä'.localeCompare('z', 'de');
+            const sv = 'ä'.localeCompare('z', 'sv');
+            const word = 'cat';
+            const charAt = word.charAt(1);
+            const bracket = word[1];
+            const less = 'a' < 'b';
+            const eq = 'HELLO'.toLowerCase() === 'hello';
+            document.getElementById('result').textContent =
+              (de < 0) + ':' + (sv > 0) + ':' + charAt + ':' + bracket + ':' + less + ':' + eq;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:a:a:true:true")?;
     Ok(())
 }
 

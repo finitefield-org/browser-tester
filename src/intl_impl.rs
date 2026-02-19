@@ -4078,6 +4078,7 @@ impl Harness {
             },
             captured_env: HashMap::new(),
             global_scope: true,
+            is_async: false,
         }))
     }
 

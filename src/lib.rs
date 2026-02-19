@@ -17,6 +17,7 @@ use std::rc::Rc;
 const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
 const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
+const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
 const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
 const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
 const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
@@ -28,15 +29,17 @@ const INTERNAL_INTL_SEGMENTS_KEY: &str = "\u{0}\u{0}bt_intl:segments";
 const INTERNAL_INTL_SEGMENT_INDEX_KEY: &str = "\u{0}\u{0}bt_intl:segmentIndex";
 const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
 const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
+const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
 const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Error {
     HtmlParse(String),
     ScriptParse(String),
     ScriptRuntime(String),
+    ScriptThrown(ThrownValue),
     SelectorNotFound(String),
     UnsupportedSelector(String),
     TypeMismatch {
@@ -58,6 +61,9 @@ impl fmt::Display for Error {
             Self::HtmlParse(msg) => write!(f, "html parse error: {msg}"),
             Self::ScriptParse(msg) => write!(f, "script parse error: {msg}"),
             Self::ScriptRuntime(msg) => write!(f, "script runtime error: {msg}"),
+            Self::ScriptThrown(value) => {
+                write!(f, "script thrown value: {}", value.as_string())
+            }
             Self::SelectorNotFound(selector) => write!(f, "selector not found: {selector}"),
             Self::UnsupportedSelector(selector) => write!(f, "unsupported selector: {selector}"),
             Self::TypeMismatch {
@@ -82,6 +88,25 @@ impl fmt::Display for Error {
 }
 
 impl StdError for Error {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThrownValue {
+    value: Value,
+}
+
+impl ThrownValue {
+    fn new(value: Value) -> Self {
+        Self { value }
+    }
+
+    fn into_value(self) -> Value {
+        self.value
+    }
+
+    fn as_string(&self) -> String {
+        self.value.as_string()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeId(usize);
@@ -1217,6 +1242,126 @@ impl Dom {
         let mut out = Vec::new();
         self.collect_elements_dfs(self.root, &mut out);
         out
+    }
+
+    fn child_elements(&self, node_id: NodeId) -> Vec<NodeId> {
+        self.nodes[node_id.0]
+            .children
+            .iter()
+            .copied()
+            .filter(|child| self.element(*child).is_some())
+            .collect()
+    }
+
+    fn child_element_count(&self, node_id: NodeId) -> usize {
+        self.child_elements(node_id).len()
+    }
+
+    fn first_element_child(&self, node_id: NodeId) -> Option<NodeId> {
+        self.nodes[node_id.0]
+            .children
+            .iter()
+            .copied()
+            .find(|child| self.element(*child).is_some())
+    }
+
+    fn last_element_child(&self, node_id: NodeId) -> Option<NodeId> {
+        self.nodes[node_id.0]
+            .children
+            .iter()
+            .rev()
+            .copied()
+            .find(|child| self.element(*child).is_some())
+    }
+
+    fn document_element(&self) -> Option<NodeId> {
+        self.first_element_child(self.root)
+    }
+
+    fn head(&self) -> Option<NodeId> {
+        if let Some(document_element) = self.document_element() {
+            if self
+                .tag_name(document_element)
+                .map(|tag| tag.eq_ignore_ascii_case("html"))
+                .unwrap_or(false)
+            {
+                return self
+                    .child_elements(document_element)
+                    .into_iter()
+                    .find(|child| {
+                        self.tag_name(*child)
+                            .map(|tag| tag.eq_ignore_ascii_case("head"))
+                            .unwrap_or(false)
+                    });
+            }
+        }
+        self.query_selector("head").ok().flatten()
+    }
+
+    fn body(&self) -> Option<NodeId> {
+        if let Some(document_element) = self.document_element() {
+            if self
+                .tag_name(document_element)
+                .map(|tag| tag.eq_ignore_ascii_case("html"))
+                .unwrap_or(false)
+            {
+                return self
+                    .child_elements(document_element)
+                    .into_iter()
+                    .find(|child| {
+                        self.tag_name(*child)
+                            .map(|tag| {
+                                tag.eq_ignore_ascii_case("body")
+                                    || tag.eq_ignore_ascii_case("frameset")
+                            })
+                            .unwrap_or(false)
+                    });
+            }
+        }
+        self.query_selector("body")
+            .ok()
+            .flatten()
+            .or_else(|| self.query_selector("frameset").ok().flatten())
+    }
+
+    fn document_title(&self) -> String {
+        self.query_selector("title")
+            .ok()
+            .flatten()
+            .map(|node| self.text_content(node))
+            .unwrap_or_default()
+    }
+
+    fn set_document_title(&mut self, title: &str) -> Result<()> {
+        let title_node = if let Some(existing_title) = self.query_selector("title")? {
+            existing_title
+        } else {
+            let head = self.ensure_head_element()?;
+            self.create_element(head, "title".to_string(), HashMap::new())
+        };
+        self.set_text_content(title_node, title)
+    }
+
+    fn ensure_head_element(&mut self) -> Result<NodeId> {
+        if let Some(head) = self.head() {
+            return Ok(head);
+        }
+
+        let parent = if let Some(document_element) = self.document_element() {
+            if self
+                .tag_name(document_element)
+                .map(|tag| tag.eq_ignore_ascii_case("html"))
+                .unwrap_or(false)
+            {
+                document_element
+            } else {
+                self.root
+            }
+        } else {
+            self.create_element(self.root, "html".to_string(), HashMap::new())
+        };
+
+        Ok(self.create_element(parent, "head".to_string(), HashMap::new()))
     }
 
     fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorPart]) -> bool {
@@ -3553,6 +3698,7 @@ impl PartialEq for SymbolValue {
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     String(String),
+    StringConstructor,
     Bool(bool),
     Number(i64),
     Float(f64),
@@ -3620,11 +3766,14 @@ struct FunctionValue {
     handler: ScriptHandler,
     captured_env: HashMap<String, Value>,
     global_scope: bool,
+    is_async: bool,
 }
 
 impl PartialEq for FunctionValue {
     fn eq(&self, other: &Self) -> bool {
-        self.handler == other.handler && self.global_scope == other.global_scope
+        self.handler == other.handler
+            && self.global_scope == other.global_scope
+            && self.is_async == other.is_async
     }
 }
 
@@ -3644,6 +3793,7 @@ impl Value {
         match self {
             Self::Bool(v) => *v,
             Self::String(v) => !v.is_empty(),
+            Self::StringConstructor => true,
             Self::Number(v) => *v != 0,
             Self::Float(v) => *v != 0.0,
             Self::BigInt(v) => !v.is_zero(),
@@ -3677,6 +3827,7 @@ impl Value {
     fn as_string(&self) -> String {
         match self {
             Self::String(v) => v.clone(),
+            Self::StringConstructor => "String".to_string(),
             Self::Bool(v) => {
                 if *v {
                     "true".into()
@@ -3701,7 +3852,15 @@ impl Value {
                 }
                 out
             }
-            Self::Object(_) => "[object Object]".into(),
+            Self::Object(entries) => {
+                let entries = entries.borrow();
+                match entries.iter().find_map(|(key, value)| {
+                    (key == INTERNAL_STRING_WRAPPER_VALUE_KEY).then(|| value)
+                }) {
+                    Some(Value::String(value)) => value.clone(),
+                    _ => "[object Object]".into(),
+                }
+            }
             Self::Promise(_) => "[object Promise]".into(),
             Self::Map(_) => "[object Map]".into(),
             Self::Set(_) => "[object Set]".into(),
@@ -3747,6 +3906,7 @@ impl Value {
 enum DomProp {
     Value,
     Checked,
+    Open,
     Readonly,
     Required,
     Disabled,
@@ -3766,6 +3926,42 @@ enum DomProp {
     Dataset(String),
     Style(String),
     ActiveElement,
+    CharacterSet,
+    CompatMode,
+    ContentType,
+    ReadyState,
+    Referrer,
+    Title,
+    Url,
+    DocumentUri,
+    Location,
+    LocationHref,
+    LocationProtocol,
+    LocationHost,
+    LocationHostname,
+    LocationPort,
+    LocationPathname,
+    LocationSearch,
+    LocationHash,
+    LocationOrigin,
+    LocationAncestorOrigins,
+    DefaultView,
+    Hidden,
+    VisibilityState,
+    Forms,
+    Images,
+    Links,
+    Scripts,
+    Children,
+    ChildElementCount,
+    FirstElementChild,
+    LastElementChild,
+    CurrentScript,
+    FormsLength,
+    ImagesLength,
+    LinksLength,
+    ScriptsLength,
+    ChildrenLength,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3793,6 +3989,9 @@ impl DomIndex {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DomQuery {
     DocumentRoot,
+    DocumentBody,
+    DocumentHead,
+    DocumentElement,
     ById(String),
     BySelector(String),
     BySelectorAll {
@@ -3824,6 +4023,10 @@ enum DomQuery {
         index: DomIndex,
     },
     Var(String),
+    VarPath {
+        base: String,
+        path: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3836,6 +4039,9 @@ impl DomQuery {
     fn describe_call(&self) -> String {
         match self {
             Self::DocumentRoot => "document".into(),
+            Self::DocumentBody => "document.body".into(),
+            Self::DocumentHead => "document.head".into(),
+            Self::DocumentElement => "document.documentElement".into(),
             Self::ById(id) => format!("document.getElementById('{id}')"),
             Self::BySelector(selector) => format!("document.querySelector('{selector}')"),
             Self::BySelectorAll { selector } => format!("document.querySelectorAll('{selector}')"),
@@ -3869,6 +4075,7 @@ impl DomQuery {
                 format!("{}.elements[{}]", form.describe_call(), index.describe())
             }
             Self::Var(name) => name.clone(),
+            Self::VarPath { base, path } => format!("{base}.{}", path.join(".")),
         }
     }
 }
@@ -4273,6 +4480,15 @@ enum Expr {
         method: MathMethod,
         args: Vec<Expr>,
     },
+    StringConstruct {
+        value: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    StringStaticMethod {
+        method: StringStaticMethod,
+        args: Vec<Expr>,
+    },
+    StringConstructor,
     NumberConstruct {
         value: Option<Box<Expr>>,
     },
@@ -4558,11 +4774,69 @@ enum Expr {
         from: Box<Expr>,
         to: Box<Expr>,
     },
+    StringReplaceAll {
+        value: Box<Expr>,
+        from: Box<Expr>,
+        to: Box<Expr>,
+    },
     StringIndexOf {
         value: Box<Expr>,
         search: Box<Expr>,
         position: Option<Box<Expr>>,
     },
+    StringLastIndexOf {
+        value: Box<Expr>,
+        search: Box<Expr>,
+        position: Option<Box<Expr>>,
+    },
+    StringCharAt {
+        value: Box<Expr>,
+        index: Option<Box<Expr>>,
+    },
+    StringCharCodeAt {
+        value: Box<Expr>,
+        index: Option<Box<Expr>>,
+    },
+    StringCodePointAt {
+        value: Box<Expr>,
+        index: Option<Box<Expr>>,
+    },
+    StringAt {
+        value: Box<Expr>,
+        index: Option<Box<Expr>>,
+    },
+    StringConcat {
+        value: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    StringSearch {
+        value: Box<Expr>,
+        pattern: Box<Expr>,
+    },
+    StringRepeat {
+        value: Box<Expr>,
+        count: Box<Expr>,
+    },
+    StringPadStart {
+        value: Box<Expr>,
+        target_length: Box<Expr>,
+        pad: Option<Box<Expr>>,
+    },
+    StringPadEnd {
+        value: Box<Expr>,
+        target_length: Box<Expr>,
+        pad: Option<Box<Expr>>,
+    },
+    StringLocaleCompare {
+        value: Box<Expr>,
+        compare: Box<Expr>,
+        locales: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+    },
+    StringIsWellFormed(Box<Expr>),
+    StringToWellFormed(Box<Expr>),
+    StringValueOf(Box<Expr>),
+    StringToString(Box<Expr>),
     StructuredClone(Box<Expr>),
     Fetch(Box<Expr>),
     MatchMedia(Box<Expr>),
@@ -4600,6 +4874,7 @@ enum Expr {
     },
     Function {
         handler: ScriptHandler,
+        is_async: bool,
     },
     QueueMicrotask {
         handler: ScriptHandler,
@@ -4613,6 +4888,11 @@ enum Expr {
         target: DomQuery,
         prop: DomProp,
     },
+    LocationMethodCall {
+        method: LocationMethod,
+        url: Option<Box<Expr>>,
+    },
+    DocumentHasFocus,
     DomMatches {
         target: DomQuery,
         selector: String,
@@ -4698,6 +4978,13 @@ enum StringTrimMode {
     Both,
     Start,
     End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringStaticMethod {
+    FromCharCode,
+    FromCodePoint,
+    Raw,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4946,6 +5233,7 @@ enum Stmt {
     FunctionDecl {
         name: String,
         handler: ScriptHandler,
+        is_async: bool,
     },
     VarAssign {
         name: String,
@@ -5075,6 +5363,15 @@ enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    Try {
+        try_stmts: Vec<Stmt>,
+        catch_binding: Option<CatchBinding>,
+        catch_stmts: Option<Vec<Stmt>>,
+        finally_stmts: Option<Vec<Stmt>>,
+    },
+    Throw {
+        value: Expr,
+    },
     Return {
         value: Option<Expr>,
     },
@@ -5105,6 +5402,13 @@ enum Stmt {
     Expr(Expr),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum CatchBinding {
+    Identifier(String),
+    ArrayPattern(Vec<Option<String>>),
+    ObjectPattern(Vec<(String, String)>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecFlow {
     Continue,
@@ -5123,22 +5427,29 @@ enum DomMethod {
     Reset,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocationMethod {
+    Assign,
+    Reload,
+    Replace,
+    ToString,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ScriptHandler {
-    params: Vec<String>,
+    params: Vec<FunctionParam>,
     stmts: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FunctionParam {
+    name: String,
+    default: Option<Expr>,
 }
 
 impl ScriptHandler {
     fn first_event_param(&self) -> Option<&str> {
-        self.params.first().map(String::as_str)
-    }
-
-    fn bind_event_params(&self, args: &[Value], env: &mut HashMap<String, Value>) {
-        for (index, name) in self.params.iter().enumerate() {
-            let value = args.get(index).cloned().unwrap_or(Value::Undefined);
-            env.insert(name.clone(), value);
-        }
+        self.params.first().map(|param| param.name.as_str())
     }
 }
 
@@ -5152,6 +5463,233 @@ enum TimerCallback {
 struct TimerInvocation {
     callback: TimerCallback,
     args: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocationParts {
+    scheme: String,
+    has_authority: bool,
+    hostname: String,
+    port: String,
+    pathname: String,
+    opaque_path: String,
+    search: String,
+    hash: String,
+}
+
+impl LocationParts {
+    fn protocol(&self) -> String {
+        format!("{}:", self.scheme)
+    }
+
+    fn host(&self) -> String {
+        if self.port.is_empty() {
+            self.hostname.clone()
+        } else {
+            format!("{}:{}", self.hostname, self.port)
+        }
+    }
+
+    fn origin(&self) -> String {
+        if self.has_authority && !self.hostname.is_empty() {
+            format!("{}//{}", self.protocol(), self.host())
+        } else {
+            "null".to_string()
+        }
+    }
+
+    fn href(&self) -> String {
+        if self.has_authority {
+            let path = if self.pathname.is_empty() {
+                "/".to_string()
+            } else {
+                self.pathname.clone()
+            };
+            format!(
+                "{}//{}{}{}{}",
+                self.protocol(),
+                self.host(),
+                path,
+                self.search,
+                self.hash
+            )
+        } else {
+            format!(
+                "{}{}{}{}",
+                self.protocol(),
+                self.opaque_path,
+                self.search,
+                self.hash
+            )
+        }
+    }
+
+    fn parse(input: &str) -> Option<Self> {
+        let trimmed = input.trim();
+        let scheme_end = trimmed.find(':')?;
+        let scheme = trimmed[..scheme_end].to_ascii_lowercase();
+        if !is_valid_url_scheme(&scheme) {
+            return None;
+        }
+        let rest = &trimmed[scheme_end + 1..];
+        if let Some(without_slashes) = rest.strip_prefix("//") {
+            let authority_end = without_slashes
+                .find(|ch| ['/', '?', '#'].contains(&ch))
+                .unwrap_or(without_slashes.len());
+            let authority = &without_slashes[..authority_end];
+            let tail = &without_slashes[authority_end..];
+            let (hostname, port) = split_hostname_and_port(authority);
+            let (pathname, search, hash) = split_path_search_hash(tail);
+            let pathname = if pathname.is_empty() {
+                "/".to_string()
+            } else {
+                normalize_pathname(&pathname)
+            };
+            Some(Self {
+                scheme,
+                has_authority: true,
+                hostname,
+                port,
+                pathname,
+                opaque_path: String::new(),
+                search,
+                hash,
+            })
+        } else {
+            let (opaque_path, search, hash) = split_opaque_search_hash(rest);
+            Some(Self {
+                scheme,
+                has_authority: false,
+                hostname: String::new(),
+                port: String::new(),
+                pathname: String::new(),
+                opaque_path,
+                search,
+                hash,
+            })
+        }
+    }
+}
+
+fn is_valid_url_scheme(scheme: &str) -> bool {
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+fn split_hostname_and_port(authority: &str) -> (String, String) {
+    if authority.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    if let Some(rest) = authority.strip_prefix('[') {
+        if let Some(end_idx) = rest.find(']') {
+            let hostname = authority[..end_idx + 2].to_string();
+            let suffix = &authority[end_idx + 2..];
+            if let Some(port) = suffix.strip_prefix(':') {
+                return (hostname, port.to_string());
+            }
+            return (hostname, String::new());
+        }
+    }
+
+    if let Some(idx) = authority.rfind(':') {
+        let hostname = &authority[..idx];
+        let port = &authority[idx + 1..];
+        if !hostname.contains(':') {
+            return (hostname.to_string(), port.to_string());
+        }
+    }
+    (authority.to_string(), String::new())
+}
+
+fn split_path_search_hash(tail: &str) -> (String, String, String) {
+    let mut pathname = tail;
+    let mut search = "";
+    let mut hash = "";
+
+    if let Some(hash_pos) = tail.find('#') {
+        pathname = &tail[..hash_pos];
+        hash = &tail[hash_pos..];
+    }
+
+    if let Some(search_pos) = pathname.find('?') {
+        search = &pathname[search_pos..];
+        pathname = &pathname[..search_pos];
+    }
+
+    (pathname.to_string(), search.to_string(), hash.to_string())
+}
+
+fn split_opaque_search_hash(rest: &str) -> (String, String, String) {
+    let mut opaque_path = rest;
+    let mut search = "";
+    let mut hash = "";
+
+    if let Some(hash_pos) = rest.find('#') {
+        opaque_path = &rest[..hash_pos];
+        hash = &rest[hash_pos..];
+    }
+
+    if let Some(search_pos) = opaque_path.find('?') {
+        search = &opaque_path[search_pos..];
+        opaque_path = &opaque_path[..search_pos];
+    }
+
+    (opaque_path.to_string(), search.to_string(), hash.to_string())
+}
+
+fn normalize_pathname(pathname: &str) -> String {
+    let starts_with_slash = pathname.starts_with('/');
+    let ends_with_slash = pathname.ends_with('/') && pathname.len() > 1;
+    let mut parts = Vec::new();
+    for segment in pathname.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            parts.pop();
+            continue;
+        }
+        parts.push(segment);
+    }
+    let mut out = if starts_with_slash {
+        format!("/{}", parts.join("/"))
+    } else {
+        parts.join("/")
+    };
+    if out.is_empty() {
+        out.push('/');
+    }
+    if ends_with_slash && !out.ends_with('/') {
+        out.push('/');
+    }
+    out
+}
+
+fn ensure_search_prefix(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else if value.starts_with('?') {
+        value.to_string()
+    } else {
+        format!("?{value}")
+    }
+}
+
+fn ensure_hash_prefix(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else if value.starts_with('#') {
+        value.to_string()
+    } else {
+        format!("#{value}")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5299,11 +5837,31 @@ pub struct PendingTimer {
     pub interval_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocationNavigationKind {
+    Assign,
+    Replace,
+    HrefSet,
+    Reload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationNavigation {
+    pub kind: LocationNavigationKind,
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug)]
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
     script_env: HashMap<String, Value>,
+    document_url: String,
+    location_object: Rc<RefCell<Vec<(String, Value)>>>,
+    location_mock_pages: HashMap<String, String>,
+    location_navigations: Vec<LocationNavigation>,
+    location_reload_count: usize,
     task_queue: Vec<ScheduledTask>,
     microtask_queue: VecDeque<ScheduledMicrotask>,
     active_element: Option<NodeId>,
@@ -5359,7 +5917,8 @@ impl MockWindow {
     }
 
     pub fn open_page(&mut self, url: &str, html: &str) -> Result<usize> {
-        let harness = Harness::from_html(html)?;
+        let mut harness = Harness::from_html(html)?;
+        harness.document_url = url.to_string();
         if let Some(index) = self
             .pages
             .iter()
@@ -5506,6 +6065,11 @@ impl Harness {
             dom,
             listeners: ListenerStore::default(),
             script_env: HashMap::new(),
+            document_url: "about:blank".to_string(),
+            location_object: Rc::new(RefCell::new(Vec::new())),
+            location_mock_pages: HashMap::new(),
+            location_navigations: Vec::new(),
+            location_reload_count: 0,
             task_queue: Vec::new(),
             microtask_queue: VecDeque::new(),
             active_element: None,
@@ -5550,6 +6114,9 @@ impl Harness {
     }
 
     fn initialize_global_bindings(&mut self) {
+        self.sync_location_object();
+        let location = Value::Object(self.location_object.clone());
+
         let navigator = Self::new_object_value(vec![
             ("language".into(), Value::String(DEFAULT_LOCALE.to_string())),
             (
@@ -5614,11 +6181,322 @@ impl Harness {
         let window = Self::new_object_value(vec![
             ("navigator".into(), navigator.clone()),
             ("Intl".into(), intl.clone()),
+            ("String".into(), Value::StringConstructor),
+            ("location".into(), location.clone()),
         ]);
 
         self.script_env.insert("navigator".to_string(), navigator);
         self.script_env.insert("Intl".to_string(), intl);
+        self.script_env
+            .insert("String".to_string(), Value::StringConstructor);
+        self.script_env.insert("location".to_string(), location);
         self.script_env.insert("window".to_string(), window);
+    }
+
+    fn current_location_parts(&self) -> LocationParts {
+        LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
+            scheme: "about".to_string(),
+            has_authority: false,
+            hostname: String::new(),
+            port: String::new(),
+            pathname: String::new(),
+            opaque_path: "blank".to_string(),
+            search: String::new(),
+            hash: String::new(),
+        })
+    }
+
+    fn location_builtin_keys() -> &'static [&'static str] {
+        &[
+            "href",
+            "protocol",
+            "host",
+            "hostname",
+            "port",
+            "pathname",
+            "search",
+            "hash",
+            "origin",
+            "ancestorOrigins",
+            "assign",
+            "reload",
+            "replace",
+            "toString",
+        ]
+    }
+
+    fn sync_location_object(&mut self) {
+        let mut extras = Vec::new();
+        {
+            let entries = self.location_object.borrow();
+            for (key, value) in entries.iter() {
+                if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if Self::location_builtin_keys().iter().any(|builtin| builtin == key) {
+                    continue;
+                }
+                extras.push((key.clone(), value.clone()));
+            }
+        }
+
+        let parts = self.current_location_parts();
+        let mut entries = vec![
+            (INTERNAL_LOCATION_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
+                Value::String(parts.href()),
+            ),
+            ("href".to_string(), Value::String(parts.href())),
+            ("protocol".to_string(), Value::String(parts.protocol())),
+            ("host".to_string(), Value::String(parts.host())),
+            ("hostname".to_string(), Value::String(parts.hostname.clone())),
+            ("port".to_string(), Value::String(parts.port.clone())),
+            (
+                "pathname".to_string(),
+                Value::String(if parts.has_authority {
+                    parts.pathname.clone()
+                } else {
+                    parts.opaque_path.clone()
+                }),
+            ),
+            ("search".to_string(), Value::String(parts.search.clone())),
+            ("hash".to_string(), Value::String(parts.hash.clone())),
+            ("origin".to_string(), Value::String(parts.origin())),
+            ("ancestorOrigins".to_string(), Self::new_array_value(Vec::new())),
+            ("assign".to_string(), Self::new_builtin_placeholder_function()),
+            ("reload".to_string(), Self::new_builtin_placeholder_function()),
+            ("replace".to_string(), Self::new_builtin_placeholder_function()),
+            ("toString".to_string(), Self::new_builtin_placeholder_function()),
+        ];
+        entries.extend(extras);
+        *self.location_object.borrow_mut() = entries;
+    }
+
+    fn is_location_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_LOCATION_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn resolve_location_target_url(&self, input: &str) -> String {
+        let input = input.trim();
+        if input.is_empty() {
+            return self.document_url.clone();
+        }
+
+        if let Some(parts) = LocationParts::parse(input) {
+            return parts.href();
+        }
+
+        let base = self.current_location_parts();
+        if input.starts_with("//") {
+            return LocationParts::parse(&format!("{}{}", base.protocol(), input))
+                .map(|parts| parts.href())
+                .unwrap_or_else(|| input.to_string());
+        }
+
+        let mut next = base.clone();
+        if input.starts_with('#') {
+            next.hash = ensure_hash_prefix(input);
+            return next.href();
+        }
+
+        if input.starts_with('?') {
+            next.search = ensure_search_prefix(input);
+            next.hash.clear();
+            return next.href();
+        }
+
+        if input.starts_with('/') {
+            if next.has_authority {
+                next.pathname = normalize_pathname(input);
+            } else {
+                next.opaque_path = input.to_string();
+            }
+            next.search.clear();
+            next.hash.clear();
+            return next.href();
+        }
+
+        let mut relative = input;
+        let mut next_search = String::new();
+        let mut next_hash = String::new();
+        if let Some(hash_pos) = relative.find('#') {
+            next_hash = ensure_hash_prefix(&relative[hash_pos + 1..]);
+            relative = &relative[..hash_pos];
+        }
+        if let Some(search_pos) = relative.find('?') {
+            next_search = ensure_search_prefix(&relative[search_pos + 1..]);
+            relative = &relative[..search_pos];
+        }
+
+        if next.has_authority {
+            let base_dir = if let Some((prefix, _)) = next.pathname.rsplit_once('/') {
+                if prefix.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("{prefix}/")
+                }
+            } else {
+                "/".to_string()
+            };
+            next.pathname = normalize_pathname(&format!("{base_dir}{relative}"));
+        } else {
+            next.opaque_path = relative.to_string();
+        }
+        next.search = next_search;
+        next.hash = next_hash;
+        next.href()
+    }
+
+    fn is_hash_only_navigation(from: &str, to: &str) -> bool {
+        let Some(from_parts) = LocationParts::parse(from) else {
+            return false;
+        };
+        let Some(to_parts) = LocationParts::parse(to) else {
+            return false;
+        };
+        from_parts.scheme == to_parts.scheme
+            && from_parts.has_authority == to_parts.has_authority
+            && from_parts.hostname == to_parts.hostname
+            && from_parts.port == to_parts.port
+            && from_parts.pathname == to_parts.pathname
+            && from_parts.opaque_path == to_parts.opaque_path
+            && from_parts.search == to_parts.search
+            && from_parts.hash != to_parts.hash
+    }
+
+    fn navigate_location(&mut self, next_url: &str, kind: LocationNavigationKind) -> Result<()> {
+        let from = self.document_url.clone();
+        let to = self.resolve_location_target_url(next_url);
+        self.document_url = to.clone();
+        self.sync_location_object();
+        self.location_navigations.push(LocationNavigation {
+            kind,
+            from,
+            to: to.clone(),
+        });
+
+        if !Self::is_hash_only_navigation(
+            &self
+                .location_navigations
+                .last()
+                .map(|nav| nav.from.clone())
+                .unwrap_or_default(),
+            &to,
+        ) {
+            self.load_location_mock_page_if_exists(&to)?;
+        }
+        Ok(())
+    }
+
+    fn reload_location(&mut self) -> Result<()> {
+        self.location_reload_count += 1;
+        let current = self.document_url.clone();
+        self.location_navigations.push(LocationNavigation {
+            kind: LocationNavigationKind::Reload,
+            from: current.clone(),
+            to: current.clone(),
+        });
+        self.sync_location_object();
+        self.load_location_mock_page_if_exists(&current)
+    }
+
+    fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<()> {
+        let Some(html) = self.location_mock_pages.get(url).cloned() else {
+            return Ok(());
+        };
+        self.replace_document_with_html(&html)
+    }
+
+    fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
+        let ParseOutput { dom, scripts } = parse_html(html)?;
+        self.dom = dom;
+        self.listeners = ListenerStore::default();
+        self.script_env.clear();
+        self.task_queue.clear();
+        self.microtask_queue.clear();
+        self.active_element = None;
+        self.running_timer_id = None;
+        self.running_timer_canceled = false;
+        self.dom.set_active_element(None);
+        self.dom.set_active_pseudo_element(None);
+        self.initialize_global_bindings();
+        for script in scripts {
+            self.compile_and_register_script(&script)?;
+        }
+        Ok(())
+    }
+
+    fn set_location_property(&mut self, key: &str, value: Value) -> Result<()> {
+        match key {
+            "href" => self.navigate_location(&value.as_string(), LocationNavigationKind::HrefSet),
+            "protocol" => {
+                let mut parts = self.current_location_parts();
+                let protocol = value.as_string();
+                let protocol = protocol.trim_end_matches(':').to_ascii_lowercase();
+                if !is_valid_url_scheme(&protocol) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "invalid location.protocol value: {}",
+                        value.as_string()
+                    )));
+                }
+                parts.scheme = protocol;
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "host" => {
+                let mut parts = self.current_location_parts();
+                let host = value.as_string();
+                let (hostname, port) = split_hostname_and_port(host.trim());
+                parts.hostname = hostname;
+                parts.port = port;
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "hostname" => {
+                let mut parts = self.current_location_parts();
+                parts.hostname = value.as_string();
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "port" => {
+                let mut parts = self.current_location_parts();
+                parts.port = value.as_string();
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "pathname" => {
+                let mut parts = self.current_location_parts();
+                let raw = value.as_string();
+                if parts.has_authority {
+                    let normalized_input = if raw.starts_with('/') {
+                        raw
+                    } else {
+                        format!("/{raw}")
+                    };
+                    parts.pathname = normalize_pathname(&normalized_input);
+                } else {
+                    parts.opaque_path = raw;
+                }
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "search" => {
+                let mut parts = self.current_location_parts();
+                parts.search = ensure_search_prefix(&value.as_string());
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "hash" => {
+                let mut parts = self.current_location_parts();
+                parts.hash = ensure_hash_prefix(&value.as_string());
+                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+            }
+            "origin" | "ancestorOrigins" => Err(Error::ScriptRuntime(format!(
+                "location.{key} is read-only"
+            ))),
+            _ => {
+                Self::object_set_entry(&mut self.location_object.borrow_mut(), key.to_string(), value);
+                Ok(())
+            }
+        }
     }
 
     pub fn enable_trace(&mut self, enabled: bool) {
@@ -5664,6 +6542,23 @@ impl Harness {
 
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
         self.fetch_mocks.insert(url.to_string(), body.to_string());
+    }
+
+    pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
+        let normalized = self.resolve_location_target_url(url);
+        self.location_mock_pages.insert(normalized, html.to_string());
+    }
+
+    pub fn clear_location_mock_pages(&mut self) {
+        self.location_mock_pages.clear();
+    }
+
+    pub fn take_location_navigations(&mut self) -> Vec<LocationNavigation> {
+        std::mem::take(&mut self.location_navigations)
+    }
+
+    pub fn location_reload_count(&self) -> usize {
+        self.location_reload_count
     }
 
     pub fn clear_fetch_mocks(&mut self) {
@@ -6610,6 +7505,7 @@ impl Harness {
                     let event_param = handler
                         .first_event_param()
                         .map(|event_param| event_param.to_string());
+                    self.bind_handler_params(&handler, &[], &mut env, &event_param, &event)?;
                     let run =
                         self.execute_stmts(&handler.stmts, &event_param, &mut event, &mut env);
                     let run = run.map(|_| ());
@@ -6652,6 +7548,12 @@ impl Harness {
         let event_param = handler
             .first_event_param()
             .map(|event_param| event_param.to_string());
+        let event_args = if event_param.is_some() {
+            vec![Self::new_object_value(Vec::new())]
+        } else {
+            Vec::new()
+        };
+        self.bind_handler_params(handler, &event_args, env, &event_param, event)?;
         let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
         env.remove(INTERNAL_RETURN_SLOT);
         match flow {
@@ -6688,11 +7590,10 @@ impl Harness {
                 function.handler.clone()
             }
         };
-        handler.bind_event_params(callback_args, env);
-
         let event_param = handler
             .first_event_param()
             .map(|event_param| event_param.to_string());
+        self.bind_handler_params(&handler, callback_args, env, &event_param, event)?;
         let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
         env.remove(INTERNAL_RETURN_SLOT);
         match flow {
@@ -6712,6 +7613,7 @@ impl Harness {
         handler: ScriptHandler,
         env: &HashMap<String, Value>,
         global_scope: bool,
+        is_async: bool,
     ) -> Value {
         let captured_env = if global_scope {
             self.script_env.clone()
@@ -6722,12 +7624,15 @@ impl Harness {
             handler,
             captured_env,
             global_scope,
+            is_async,
         }))
     }
 
     fn is_callable_value(&self, value: &Value) -> bool {
-        matches!(value, Value::Function(_) | Value::PromiseCapability(_))
-            || Self::callable_kind_from_value(value).is_some()
+        matches!(
+            value,
+            Value::Function(_) | Value::PromiseCapability(_) | Value::StringConstructor
+        ) || Self::callable_kind_from_value(value).is_some()
     }
 
     fn execute_callable_value(
@@ -6740,6 +7645,10 @@ impl Harness {
             Value::Function(function) => self.execute_function_call(function.as_ref(), args, event),
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
+            }
+            Value::StringConstructor => {
+                let value = args.first().cloned().unwrap_or(Value::Undefined);
+                Ok(Value::String(value.as_string()))
             }
             Value::Object(_) => {
                 let Some(kind) = Self::callable_kind_from_value(callable) else {
@@ -6883,38 +7792,176 @@ impl Harness {
         }
     }
 
+    fn bind_handler_params(
+        &mut self,
+        handler: &ScriptHandler,
+        args: &[Value],
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        for (index, param) in handler.params.iter().enumerate() {
+            let provided = args.get(index).cloned().unwrap_or(Value::Undefined);
+            let value = if matches!(provided, Value::Undefined) {
+                if let Some(default_expr) = &param.default {
+                    self.eval_expr(default_expr, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                }
+            } else {
+                provided
+            };
+            env.insert(param.name.clone(), value);
+        }
+        Ok(())
+    }
+
     fn execute_function_call(
         &mut self,
         function: &FunctionValue,
         args: &[Value],
         event: &EventState,
     ) -> Result<Value> {
-        let mut call_env = if function.global_scope {
-            self.script_env.clone()
-        } else {
-            function.captured_env.clone()
+        let run = |this: &mut Self| -> Result<Value> {
+            let mut call_env = if function.global_scope {
+                this.script_env.clone()
+            } else {
+                function.captured_env.clone()
+            };
+            call_env.remove(INTERNAL_RETURN_SLOT);
+            let mut call_event = event.clone();
+            let event_param = None;
+            this.bind_handler_params(
+                &function.handler,
+                args,
+                &mut call_env,
+                &event_param,
+                &call_event,
+            )?;
+            let flow = this.execute_stmts(
+                &function.handler.stmts,
+                &event_param,
+                &mut call_event,
+                &mut call_env,
+            )?;
+            match flow {
+                ExecFlow::Continue => Ok(Value::Undefined),
+                ExecFlow::Break => Err(Error::ScriptRuntime(
+                    "break statement outside of loop".into(),
+                )),
+                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                    "continue statement outside of loop".into(),
+                )),
+                ExecFlow::Return => Ok(call_env
+                    .remove(INTERNAL_RETURN_SLOT)
+                    .unwrap_or(Value::Undefined)),
+            }
         };
-        call_env.remove(INTERNAL_RETURN_SLOT);
-        function.handler.bind_event_params(args, &mut call_env);
-        let mut call_event = event.clone();
-        let flow = self.execute_stmts(
-            &function.handler.stmts,
-            &None,
-            &mut call_event,
-            &mut call_env,
-        )?;
-        match flow {
-            ExecFlow::Continue => Ok(Value::Undefined),
-            ExecFlow::Break => Err(Error::ScriptRuntime(
-                "break statement outside of loop".into(),
-            )),
-            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                "continue statement outside of loop".into(),
-            )),
-            ExecFlow::Return => Ok(call_env
-                .remove(INTERNAL_RETURN_SLOT)
-                .unwrap_or(Value::Undefined)),
+
+        if function.is_async {
+            let promise = self.new_pending_promise();
+            match run(self) {
+                Ok(value) => {
+                    if let Err(err) = self.promise_resolve(&promise, value) {
+                        self.promise_reject(&promise, Self::promise_error_reason(err));
+                    }
+                }
+                Err(err) => self.promise_reject(&promise, Self::promise_error_reason(err)),
+            }
+            Ok(Value::Promise(promise))
+        } else {
+            run(self)
         }
+    }
+
+    fn error_to_catch_value(err: Error) -> std::result::Result<Value, Error> {
+        match err {
+            Error::ScriptThrown(value) => Ok(value.into_value()),
+            Error::ScriptRuntime(message) => Ok(Value::String(message)),
+            other => Err(other),
+        }
+    }
+
+    fn bind_catch_binding(
+        &self,
+        binding: &CatchBinding,
+        caught: &Value,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<Vec<(String, Option<Value>)>> {
+        let mut previous = Vec::new();
+        let mut seen = HashSet::new();
+        let mut remember = |name: &str, env: &HashMap<String, Value>| {
+            if seen.insert(name.to_string()) {
+                previous.push((name.to_string(), env.get(name).cloned()));
+            }
+        };
+
+        match binding {
+            CatchBinding::Identifier(name) => {
+                remember(name, env);
+                env.insert(name.clone(), caught.clone());
+            }
+            CatchBinding::ArrayPattern(pattern) => {
+                let values = self.array_like_values_from_value(caught)?;
+                for (index, name) in pattern.iter().enumerate() {
+                    let Some(name) = name else {
+                        continue;
+                    };
+                    remember(name, env);
+                    let value = values.get(index).cloned().unwrap_or(Value::Undefined);
+                    env.insert(name.clone(), value);
+                }
+            }
+            CatchBinding::ObjectPattern(pattern) => {
+                let Value::Object(entries) = caught else {
+                    return Err(Error::ScriptRuntime(
+                        "catch object binding requires an object value".into(),
+                    ));
+                };
+                let entries = entries.borrow();
+                for (source_key, target_name) in pattern {
+                    remember(target_name, env);
+                    let value =
+                        Self::object_get_entry(&entries, source_key).unwrap_or(Value::Undefined);
+                    env.insert(target_name.clone(), value);
+                }
+            }
+        }
+
+        Ok(previous)
+    }
+
+    fn restore_catch_binding(
+        &self,
+        previous: Vec<(String, Option<Value>)>,
+        env: &mut HashMap<String, Value>,
+    ) {
+        for (name, value) in previous {
+            if let Some(value) = value {
+                env.insert(name, value);
+            } else {
+                env.remove(&name);
+            }
+        }
+    }
+
+    fn execute_catch_block(
+        &mut self,
+        catch_binding: &Option<CatchBinding>,
+        catch_stmts: &[Stmt],
+        caught: Value,
+        event_param: &Option<String>,
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<ExecFlow> {
+        let previous = if let Some(binding) = catch_binding {
+            self.bind_catch_binding(binding, &caught, env)?
+        } else {
+            Vec::new()
+        };
+        let result = self.execute_stmts(catch_stmts, event_param, event, env);
+        self.restore_catch_binding(previous, env);
+        result
     }
 
     fn parse_function_constructor_param_names(spec: &str) -> Result<Vec<String>> {
@@ -6950,8 +7997,12 @@ impl Harness {
                     env.insert(name.clone(), value.clone());
                     self.bind_timer_id_to_task_env(name, expr, &value);
                 }
-                Stmt::FunctionDecl { name, handler } => {
-                    let function = self.make_function_value(handler.clone(), env, false);
+                Stmt::FunctionDecl {
+                    name,
+                    handler,
+                    is_async,
+                } => {
+                    let function = self.make_function_value(handler.clone(), env, false, *is_async);
                     env.insert(name.clone(), function);
                 }
                 Stmt::VarAssign { name, op, expr } => {
@@ -7102,6 +8153,14 @@ impl Harness {
                     match env.get(target) {
                         Some(Value::Object(object)) => {
                             let key = self.property_key_to_storage_key(&key);
+                            let is_location = {
+                                let entries = object.borrow();
+                                Self::is_location_object(&entries)
+                            };
+                            if is_location {
+                                self.set_location_property(&key, value)?;
+                                continue;
+                            }
                             Self::object_set_entry(&mut object.borrow_mut(), key, value);
                         }
                         Some(Value::Array(values)) => {
@@ -7196,6 +8255,13 @@ impl Harness {
                         DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
+                        DomProp::Open => {
+                            if value.truthy() {
+                                self.dom.set_attr(node, "open", "true")?;
+                            } else {
+                                self.dom.remove_attr(node, "open")?;
+                            }
+                        }
                         DomProp::Readonly => {
                             if value.truthy() {
                                 self.dom.set_attr(node, "readonly", "true")?;
@@ -7222,6 +8288,31 @@ impl Harness {
                         }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
+                        DomProp::Title => self.dom.set_document_title(&value.as_string())?,
+                        DomProp::Location | DomProp::LocationHref => {
+                            self.navigate_location(&value.as_string(), LocationNavigationKind::HrefSet)?
+                        }
+                        DomProp::LocationProtocol => {
+                            self.set_location_property("protocol", value.clone())?
+                        }
+                        DomProp::LocationHost => {
+                            self.set_location_property("host", value.clone())?
+                        }
+                        DomProp::LocationHostname => {
+                            self.set_location_property("hostname", value.clone())?
+                        }
+                        DomProp::LocationPort => {
+                            self.set_location_property("port", value.clone())?
+                        }
+                        DomProp::LocationPathname => {
+                            self.set_location_property("pathname", value.clone())?
+                        }
+                        DomProp::LocationSearch => {
+                            self.set_location_property("search", value.clone())?
+                        }
+                        DomProp::LocationHash => {
+                            self.set_location_property("hash", value.clone())?
+                        }
                         DomProp::OffsetWidth
                         | DomProp::OffsetHeight
                         | DomProp::OffsetLeft
@@ -7230,7 +8321,33 @@ impl Harness {
                         | DomProp::ScrollHeight
                         | DomProp::ScrollLeft
                         | DomProp::ScrollTop
-                        | DomProp::ActiveElement => {
+                        | DomProp::ActiveElement
+                        | DomProp::CharacterSet
+                        | DomProp::CompatMode
+                        | DomProp::ContentType
+                        | DomProp::ReadyState
+                        | DomProp::Referrer
+                        | DomProp::Url
+                        | DomProp::DocumentUri
+                        | DomProp::LocationOrigin
+                        | DomProp::LocationAncestorOrigins
+                        | DomProp::DefaultView
+                        | DomProp::Hidden
+                        | DomProp::VisibilityState
+                        | DomProp::Forms
+                        | DomProp::Images
+                        | DomProp::Links
+                        | DomProp::Scripts
+                        | DomProp::Children
+                        | DomProp::ChildElementCount
+                        | DomProp::FirstElementChild
+                        | DomProp::LastElementChild
+                        | DomProp::CurrentScript
+                        | DomProp::FormsLength
+                        | DomProp::ImagesLength
+                        | DomProp::LinksLength
+                        | DomProp::ScriptsLength
+                        | DomProp::ChildrenLength => {
                             let call = self.describe_dom_prop(prop);
                             return Err(Error::ScriptRuntime(format!("{call} is read-only")));
                         }
@@ -7759,6 +8876,48 @@ impl Harness {
                             flow => return Ok(flow),
                         }
                     }
+                }
+                Stmt::Try {
+                    try_stmts,
+                    catch_binding,
+                    catch_stmts,
+                    finally_stmts,
+                } => {
+                    let mut completion = self.execute_stmts(try_stmts, event_param, event, env);
+
+                    if let Err(err) = completion {
+                        if let Some(catch_stmts) = catch_stmts {
+                            let caught = Self::error_to_catch_value(err)?;
+                            completion = self.execute_catch_block(
+                                catch_binding,
+                                catch_stmts,
+                                caught,
+                                event_param,
+                                event,
+                                env,
+                            );
+                        } else {
+                            completion = Err(err);
+                        }
+                    }
+
+                    if let Some(finally_stmts) = finally_stmts {
+                        match self.execute_stmts(finally_stmts, event_param, event, env) {
+                            Ok(ExecFlow::Continue) => {}
+                            Ok(flow) => return Ok(flow),
+                            Err(err) => return Err(err),
+                        }
+                    }
+
+                    match completion {
+                        Ok(ExecFlow::Continue) => {}
+                        Ok(flow) => return Ok(flow),
+                        Err(err) => return Err(err),
+                    }
+                }
+                Stmt::Throw { value } => {
+                    let thrown = self.eval_expr(value, env, event_param, event)?;
+                    return Err(Error::ScriptThrown(ThrownValue::new(thrown)));
                 }
                 Stmt::Return { value } => {
                     let return_value = if let Some(value) = value {
@@ -8642,6 +9801,26 @@ impl Harness {
             Expr::MathMethod { method, args } => {
                 self.eval_math_method(*method, args, env, event_param, event)
             }
+            Expr::StringConstruct {
+                value,
+                called_with_new,
+            } => {
+                let value = value
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .unwrap_or(Value::Undefined);
+                let coerced = value.as_string();
+                if *called_with_new {
+                    Ok(Self::new_string_wrapper_value(coerced))
+                } else {
+                    Ok(Value::String(coerced))
+                }
+            }
+            Expr::StringStaticMethod { method, args } => {
+                self.eval_string_static_method(*method, args, env, event_param, event)
+            }
+            Expr::StringConstructor => Ok(Value::StringConstructor),
             Expr::NumberConstruct { value } => {
                 let value = value
                     .as_ref()
@@ -9239,6 +10418,17 @@ impl Harness {
                 }
                 Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
                 Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
+                Some(Value::Object(entries)) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
+                        Ok(Value::Number(value.chars().count() as i64))
+                    } else {
+                        Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        )))
+                    }
+                }
                 Some(_) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not an array",
                     target
@@ -9252,9 +10442,19 @@ impl Harness {
                 let index = self.eval_expr(index, env, event_param, event)?;
                 match env.get(target) {
                     Some(Value::Object(entries)) => {
+                        let entries_ref = entries.borrow();
+                        if let Some(value) = Self::string_wrapper_value_from_object(&entries_ref) {
+                            let Some(index) = self.value_as_index(&index) else {
+                                return Ok(Value::Undefined);
+                            };
+                            return Ok(value
+                                .chars()
+                                .nth(index)
+                                .map(|ch| Value::String(ch.to_string()))
+                                .unwrap_or(Value::Undefined));
+                        }
                         let key = self.property_key_to_storage_key(&index);
-                        Ok(Self::object_get_entry(&entries.borrow(), &key)
-                            .unwrap_or(Value::Undefined))
+                        Ok(Self::object_get_entry(&entries_ref, &key).unwrap_or(Value::Undefined))
                     }
                     Some(Value::Array(values)) => {
                         let Some(index) = self.value_as_index(&index) else {
@@ -9968,6 +11168,91 @@ impl Harness {
                 *values.borrow_mut() = snapshot;
                 Ok(Value::Array(values))
             }
+            Expr::StringCharAt { value, index } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let index = index
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if index < 0 || (index as usize) >= len {
+                    Ok(Value::String(String::new()))
+                } else {
+                    Ok(value
+                        .chars()
+                        .nth(index as usize)
+                        .map(|ch| Value::String(ch.to_string()))
+                        .unwrap_or_else(|| Value::String(String::new())))
+                }
+            }
+            Expr::StringCharCodeAt { value, index } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let index = index
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if index < 0 || (index as usize) >= len {
+                    Ok(Value::Float(f64::NAN))
+                } else {
+                    Ok(value
+                        .chars()
+                        .nth(index as usize)
+                        .map(|ch| Value::Number(ch as i64))
+                        .unwrap_or(Value::Float(f64::NAN)))
+                }
+            }
+            Expr::StringCodePointAt { value, index } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count();
+                let index = index
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                if index < 0 || (index as usize) >= len {
+                    Ok(Value::Undefined)
+                } else {
+                    Ok(value
+                        .chars()
+                        .nth(index as usize)
+                        .map(|ch| Value::Number(ch as i64))
+                        .unwrap_or(Value::Undefined))
+                }
+            }
+            Expr::StringAt { value, index } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let len = value.chars().count() as i64;
+                let index = index
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(0);
+                let index = if index < 0 { len + index } else { index };
+                if index < 0 || index >= len {
+                    Ok(Value::Undefined)
+                } else {
+                    Ok(value
+                        .chars()
+                        .nth(index as usize)
+                        .map(|ch| Value::String(ch.to_string()))
+                        .unwrap_or(Value::Undefined))
+                }
+            }
+            Expr::StringConcat { value, args } => {
+                let mut out = self.eval_expr(value, env, event_param, event)?.as_string();
+                for arg in args {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    out.push_str(&value.as_string());
+                }
+                Ok(Value::String(out))
+            }
             Expr::StringTrim { value, mode } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
                 let value = match mode {
@@ -10155,6 +11440,37 @@ impl Harness {
                 };
                 Ok(Value::String(replaced))
             }
+            Expr::StringReplaceAll { value, from, to } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let to = self.eval_expr(to, env, event_param, event)?.as_string();
+                let from = self.eval_expr(from, env, event_param, event)?;
+                let replaced = match from {
+                    Value::RegExp(regex) => {
+                        if !regex.borrow().global {
+                            return Err(Error::ScriptRuntime(
+                                "String.prototype.replaceAll called with a non-global RegExp argument"
+                                    .into(),
+                            ));
+                        }
+                        Self::replace_string_with_regex(&value, &regex, &to)
+                    }
+                    other => {
+                        let from = other.as_string();
+                        if from.is_empty() {
+                            let mut out = String::new();
+                            for ch in value.chars() {
+                                out.push_str(&to);
+                                out.push(ch);
+                            }
+                            out.push_str(&to);
+                            out
+                        } else {
+                            value.replace(&from, &to)
+                        }
+                    }
+                };
+                Ok(Value::String(replaced))
+            }
             Expr::StringIndexOf {
                 value,
                 search,
@@ -10178,6 +11494,190 @@ impl Harness {
                         .map(|value| value as i64)
                         .unwrap_or(-1),
                 ))
+            }
+            Expr::StringLastIndexOf {
+                value,
+                search,
+                position,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                let len = value.chars().count() as i64;
+                let position = position
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(len);
+                let position = if position < 0 { 0 } else { position.min(len) } as usize;
+                let candidate = Self::substring_chars(&value, 0, position.saturating_add(1));
+                let found = if search.is_empty() {
+                    Some(position.min(candidate.chars().count()))
+                } else {
+                    candidate
+                        .rfind(&search)
+                        .map(|byte| candidate[..byte].chars().count())
+                };
+                Ok(Value::Number(found.map(|idx| idx as i64).unwrap_or(-1)))
+            }
+            Expr::StringSearch { value, pattern } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let pattern = self.eval_expr(pattern, env, event_param, event)?;
+                let idx = match pattern {
+                    Value::RegExp(regex) => regex
+                        .borrow()
+                        .compiled
+                        .find(&value)
+                        .map(|m| value[..m.start()].chars().count() as i64),
+                    other => {
+                        let search = other.as_string();
+                        Self::string_index_of(&value, &search, 0).map(|idx| idx as i64)
+                    }
+                };
+                Ok(Value::Number(idx.unwrap_or(-1)))
+            }
+            Expr::StringRepeat { value, count } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let count = self.eval_expr(count, env, event_param, event)?;
+                let count = Self::value_to_i64(&count);
+                if count < 0 {
+                    return Err(Error::ScriptRuntime(
+                        "Invalid count value for String.prototype.repeat".into(),
+                    ));
+                }
+                let count = usize::try_from(count).map_err(|_| {
+                    Error::ScriptRuntime("Invalid count value for String.prototype.repeat".into())
+                })?;
+                Ok(Value::String(value.repeat(count)))
+            }
+            Expr::StringPadStart {
+                value,
+                target_length,
+                pad,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let target_length = self.eval_expr(target_length, env, event_param, event)?;
+                let target_length = Self::value_to_i64(&target_length).max(0) as usize;
+                let current_len = value.chars().count();
+                if target_length <= current_len {
+                    return Ok(Value::String(value));
+                }
+                let pad = pad
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| value.as_string())
+                    .unwrap_or_else(|| " ".to_string());
+                if pad.is_empty() {
+                    return Ok(Value::String(value));
+                }
+                let mut filler = String::new();
+                let needed = target_length - current_len;
+                while filler.chars().count() < needed {
+                    filler.push_str(&pad);
+                }
+                let filler = filler.chars().take(needed).collect::<String>();
+                Ok(Value::String(format!("{filler}{value}")))
+            }
+            Expr::StringPadEnd {
+                value,
+                target_length,
+                pad,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let target_length = self.eval_expr(target_length, env, event_param, event)?;
+                let target_length = Self::value_to_i64(&target_length).max(0) as usize;
+                let current_len = value.chars().count();
+                if target_length <= current_len {
+                    return Ok(Value::String(value));
+                }
+                let pad = pad
+                    .as_ref()
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?
+                    .map(|value| value.as_string())
+                    .unwrap_or_else(|| " ".to_string());
+                if pad.is_empty() {
+                    return Ok(Value::String(value));
+                }
+                let mut filler = String::new();
+                let needed = target_length - current_len;
+                while filler.chars().count() < needed {
+                    filler.push_str(&pad);
+                }
+                let filler = filler.chars().take(needed).collect::<String>();
+                Ok(Value::String(format!("{value}{filler}")))
+            }
+            Expr::StringLocaleCompare {
+                value,
+                compare,
+                locales,
+                options,
+            } => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                let compare = self
+                    .eval_expr(compare, env, event_param, event)?
+                    .as_string();
+                let locale = locales
+                    .as_ref()
+                    .map(|locales| self.eval_expr(locales, env, event_param, event))
+                    .transpose()?
+                    .map(|locales| self.intl_collect_locales(&locales))
+                    .transpose()?
+                    .and_then(|locales| locales.into_iter().next())
+                    .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+                let mut case_first = "false".to_string();
+                let mut sensitivity = "variant".to_string();
+                if let Some(options) = options {
+                    let options = self.eval_expr(options, env, event_param, event)?;
+                    if let Value::Object(entries) = options {
+                        let entries = entries.borrow();
+                        if let Some(Value::String(value)) =
+                            Self::object_get_entry(&entries, "caseFirst")
+                        {
+                            case_first = value;
+                        }
+                        if let Some(Value::String(value)) =
+                            Self::object_get_entry(&entries, "sensitivity")
+                        {
+                            sensitivity = value;
+                        }
+                    }
+                }
+                Ok(Value::Number(Self::intl_collator_compare_strings(
+                    &value,
+                    &compare,
+                    &locale,
+                    &case_first,
+                    &sensitivity,
+                )))
+            }
+            Expr::StringIsWellFormed(value) => {
+                let _ = self.eval_expr(value, env, event_param, event)?.as_string();
+                Ok(Value::Bool(true))
+            }
+            Expr::StringToWellFormed(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                Ok(Value::String(value))
+            }
+            Expr::StringValueOf(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?;
+                match value {
+                    Value::Object(entries) => {
+                        let entries_ref = entries.borrow();
+                        if let Some(value) = Self::string_wrapper_value_from_object(&entries_ref) {
+                            Ok(Value::String(value))
+                        } else {
+                            Ok(Value::Object(entries.clone()))
+                        }
+                    }
+                    Value::String(value) => Ok(Value::String(value)),
+                    other => Ok(other),
+                }
+            }
+            Expr::StringToString(value) => {
+                let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                Ok(Value::String(value))
             }
             Expr::StructuredClone(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
@@ -10268,13 +11768,17 @@ impl Harness {
                 })?;
                 let mut params = Vec::new();
                 for part in parts.iter().take(parts.len().saturating_sub(1)) {
-                    params.extend(Self::parse_function_constructor_param_names(part)?);
+                    let names = Self::parse_function_constructor_param_names(part)?;
+                    params.extend(names.into_iter().map(|name| FunctionParam {
+                        name,
+                        default: None,
+                    }));
                 }
 
                 let stmts = parse_block_statements(&body_src).map_err(|err| {
                     Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
                 })?;
-                Ok(self.make_function_value(ScriptHandler { params, stmts }, env, true))
+                Ok(self.make_function_value(ScriptHandler { params, stmts }, env, true, false))
             }
             Expr::FunctionCall { target, args } => {
                 let callee = env
@@ -10320,7 +11824,9 @@ impl Harness {
                 let node = self.dom.create_detached_text(text.clone());
                 Ok(Value::Node(node))
             }
-            Expr::Function { handler } => Ok(self.make_function_value(handler.clone(), env, false)),
+            Expr::Function { handler, is_async } => {
+                Ok(self.make_function_value(handler.clone(), env, false, *is_async))
+            }
             Expr::SetTimeout { handler, delay_ms } => {
                 let delay = self.eval_expr(delay_ms, env, event_param, event)?;
                 let delay = Self::value_to_i64(&delay);
@@ -10373,6 +11879,7 @@ impl Harness {
                 match prop {
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
+                    DomProp::Open => Ok(Value::Bool(self.dom.has_attr(node, "open")?)),
                     DomProp::Readonly => Ok(Value::Bool(self.dom.readonly(node))),
                     DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
                     DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
@@ -10400,8 +11907,116 @@ impl Harness {
                         .active_element()
                         .map(Value::Node)
                         .unwrap_or(Value::Null)),
+                    DomProp::CharacterSet => Ok(Value::String("UTF-8".to_string())),
+                    DomProp::CompatMode => Ok(Value::String("CSS1Compat".to_string())),
+                    DomProp::ContentType => Ok(Value::String("text/html".to_string())),
+                    DomProp::ReadyState => Ok(Value::String("complete".to_string())),
+                    DomProp::Referrer => Ok(Value::String(String::new())),
+                    DomProp::Title => Ok(Value::String(self.dom.document_title())),
+                    DomProp::Url | DomProp::DocumentUri => {
+                        Ok(Value::String(self.document_url.clone()))
+                    }
+                    DomProp::Location => Ok(Value::Object(self.location_object.clone())),
+                    DomProp::LocationHref => Ok(Value::String(self.document_url.clone())),
+                    DomProp::LocationProtocol => {
+                        Ok(Value::String(self.current_location_parts().protocol()))
+                    }
+                    DomProp::LocationHost => {
+                        Ok(Value::String(self.current_location_parts().host()))
+                    }
+                    DomProp::LocationHostname => {
+                        Ok(Value::String(self.current_location_parts().hostname))
+                    }
+                    DomProp::LocationPort => {
+                        Ok(Value::String(self.current_location_parts().port))
+                    }
+                    DomProp::LocationPathname => {
+                        let parts = self.current_location_parts();
+                        Ok(Value::String(if parts.has_authority {
+                            parts.pathname
+                        } else {
+                            parts.opaque_path
+                        }))
+                    }
+                    DomProp::LocationSearch => {
+                        Ok(Value::String(self.current_location_parts().search))
+                    }
+                    DomProp::LocationHash => Ok(Value::String(self.current_location_parts().hash)),
+                    DomProp::LocationOrigin => {
+                        Ok(Value::String(self.current_location_parts().origin()))
+                    }
+                    DomProp::LocationAncestorOrigins => Ok(Self::new_array_value(Vec::new())),
+                    DomProp::DefaultView => {
+                        Ok(env.get("window").cloned().unwrap_or(Value::Undefined))
+                    }
+                    DomProp::Hidden => Ok(Value::Bool(false)),
+                    DomProp::VisibilityState => Ok(Value::String("visible".to_string())),
+                    DomProp::Forms => Ok(Value::NodeList(self.dom.query_selector_all("form")?)),
+                    DomProp::Images => Ok(Value::NodeList(self.dom.query_selector_all("img")?)),
+                    DomProp::Links => Ok(Value::NodeList(
+                        self.dom.query_selector_all("a[href], area[href]")?,
+                    )),
+                    DomProp::Scripts => Ok(Value::NodeList(self.dom.query_selector_all("script")?)),
+                    DomProp::Children => Ok(Value::NodeList(self.dom.child_elements(node))),
+                    DomProp::ChildElementCount => {
+                        Ok(Value::Number(self.dom.child_element_count(node) as i64))
+                    }
+                    DomProp::FirstElementChild => Ok(self
+                        .dom
+                        .first_element_child(node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    DomProp::LastElementChild => Ok(self
+                        .dom
+                        .last_element_child(node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    DomProp::CurrentScript => Ok(Value::Null),
+                    DomProp::FormsLength => {
+                        Ok(Value::Number(self.dom.query_selector_all("form")?.len() as i64))
+                    }
+                    DomProp::ImagesLength => {
+                        Ok(Value::Number(self.dom.query_selector_all("img")?.len() as i64))
+                    }
+                    DomProp::LinksLength => Ok(Value::Number(
+                        self.dom.query_selector_all("a[href], area[href]")?.len() as i64,
+                    )),
+                    DomProp::ScriptsLength => {
+                        Ok(Value::Number(self.dom.query_selector_all("script")?.len() as i64))
+                    }
+                    DomProp::ChildrenLength => {
+                        Ok(Value::Number(self.dom.child_element_count(node) as i64))
+                    }
                 }
             }
+            Expr::LocationMethodCall { method, url } => match method {
+                LocationMethod::Assign => {
+                    let Some(url_expr) = url else {
+                        return Err(Error::ScriptRuntime(
+                            "location.assign requires exactly one argument".into(),
+                        ));
+                    };
+                    let url = self.eval_expr(url_expr, env, event_param, event)?.as_string();
+                    self.navigate_location(&url, LocationNavigationKind::Assign)?;
+                    Ok(Value::Undefined)
+                }
+                LocationMethod::Reload => {
+                    self.reload_location()?;
+                    Ok(Value::Undefined)
+                }
+                LocationMethod::Replace => {
+                    let Some(url_expr) = url else {
+                        return Err(Error::ScriptRuntime(
+                            "location.replace requires exactly one argument".into(),
+                        ));
+                    };
+                    let url = self.eval_expr(url_expr, env, event_param, event)?.as_string();
+                    self.navigate_location(&url, LocationNavigationKind::Replace)?;
+                    Ok(Value::Undefined)
+                }
+                LocationMethod::ToString => Ok(Value::String(self.document_url.clone())),
+            },
+            Expr::DocumentHasFocus => Ok(Value::Bool(self.active_element.is_some())),
             Expr::DomMatches { target, selector } => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 let result = self.dom.matches_selector(node, selector)?;
@@ -10584,6 +12199,7 @@ impl Harness {
                         Value::Symbol(_) => "symbol",
                         Value::Undefined => "undefined",
                         Value::String(_) => "string",
+                        Value::StringConstructor => "function",
                         Value::TypedArrayConstructor(_)
                         | Value::ArrayBufferConstructor
                         | Value::PromiseConstructor
@@ -10616,6 +12232,7 @@ impl Harness {
                             Value::Symbol(_) => "symbol",
                             Value::Undefined => "undefined",
                             Value::String(_) => "string",
+                            Value::StringConstructor => "function",
                             Value::TypedArrayConstructor(_)
                             | Value::ArrayBufferConstructor
                             | Value::PromiseConstructor
@@ -10973,6 +12590,7 @@ impl Harness {
                 | Value::Set(_)
                 | Value::ArrayBuffer(_)
                 | Value::TypedArray(_)
+                | Value::StringConstructor
                 | Value::TypedArrayConstructor(_)
                 | Value::ArrayBufferConstructor
                 | Value::PromiseConstructor
@@ -10993,6 +12611,9 @@ impl Harness {
     fn to_primitive_for_loose(&self, value: &Value) -> Value {
         match value {
             Value::Object(entries) => {
+                if let Some(wrapped) = Self::string_wrapper_value_from_object(&entries.borrow()) {
+                    return Value::String(wrapped);
+                }
                 if let Some(id) = Self::symbol_wrapper_id_from_object(&entries.borrow()) {
                     if let Some(symbol) = self.symbols_by_id.get(&id) {
                         return Value::Symbol(symbol.clone());
@@ -11006,6 +12627,7 @@ impl Harness {
             | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -11062,6 +12684,9 @@ impl Harness {
             (Value::Symbol(left), Value::Symbol(right)) => left.id == right.id,
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
+            (Value::Object(left), Value::StringConstructor) => {
+                Self::string_wrapper_value_from_object(&left.borrow()).is_some()
+            }
             _ => false,
         }
     }
@@ -11111,6 +12736,7 @@ impl Harness {
             (Value::Promise(l), Value::Promise(r)) => Rc::ptr_eq(l, r),
             (Value::TypedArray(l), Value::TypedArray(r)) => Rc::ptr_eq(l, r),
             (Value::ArrayBuffer(l), Value::ArrayBuffer(r)) => Rc::ptr_eq(l, r),
+            (Value::StringConstructor, Value::StringConstructor) => true,
             (Value::TypedArrayConstructor(l), Value::TypedArrayConstructor(r)) => l == r,
             (Value::ArrayBufferConstructor, Value::ArrayBufferConstructor) => true,
             (Value::PromiseConstructor, Value::PromiseConstructor) => true,
@@ -11135,6 +12761,17 @@ impl Harness {
         F: Fn(f64, f64) -> bool,
     {
         match (left, right) {
+            (Value::String(l), Value::String(r)) => {
+                let ordering = l.cmp(r);
+                let cmp = if ordering.is_lt() {
+                    -1.0
+                } else if ordering.is_gt() {
+                    1.0
+                } else {
+                    0.0
+                };
+                return op(cmp, 0.0);
+            }
             (Value::BigInt(l), Value::BigInt(r)) => {
                 return op(
                     l.to_f64().unwrap_or_else(|| {
@@ -11298,6 +12935,13 @@ impl Harness {
         Value::Object(Rc::new(RefCell::new(entries)))
     }
 
+    fn new_string_wrapper_value(value: String) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
+            Value::String(value),
+        )])
+    }
+
     fn object_set_entry(entries: &mut Vec<(String, Value)>, key: String, value: Value) {
         if let Some((_, existing)) = entries.iter_mut().find(|(name, _)| name == &key) {
             *existing = value;
@@ -11334,6 +12978,21 @@ impl Harness {
 
     fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
         match value {
+            Value::String(text) => {
+                if key == "length" {
+                    Ok(Value::Number(text.chars().count() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::StringConstructor)
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(text
+                        .chars()
+                        .nth(index)
+                        .map(|ch| Value::String(ch.to_string()))
+                        .unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             Value::Array(values) => {
                 let values = values.borrow();
                 if key == "length" {
@@ -11345,7 +13004,23 @@ impl Harness {
                 }
             }
             Value::Object(entries) => {
-                Ok(Self::object_get_entry(&entries.borrow(), key).unwrap_or(Value::Undefined))
+                let entries = entries.borrow();
+                if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
+                    if key == "length" {
+                        return Ok(Value::Number(text.chars().count() as i64));
+                    }
+                    if key == "constructor" {
+                        return Ok(Value::StringConstructor);
+                    }
+                    if let Ok(index) = key.parse::<usize>() {
+                        return Ok(text
+                            .chars()
+                            .nth(index)
+                            .map(|ch| Value::String(ch.to_string()))
+                            .unwrap_or(Value::Undefined));
+                    }
+                }
+                Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
             }
             Value::Promise(promise) => {
                 if key == "constructor" {
@@ -11422,6 +13097,7 @@ impl Harness {
                 };
                 Ok(value)
             }
+            Value::StringConstructor => Ok(Value::Undefined),
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
         }
     }
@@ -11430,6 +13106,7 @@ impl Harness {
         match prop {
             DomProp::Value => Some("value"),
             DomProp::Checked => Some("checked"),
+            DomProp::Open => Some("open"),
             DomProp::Readonly => Some("readOnly"),
             DomProp::Required => Some("required"),
             DomProp::Disabled => Some("disabled"),
@@ -11446,7 +13123,45 @@ impl Harness {
             DomProp::ScrollHeight => Some("scrollHeight"),
             DomProp::ScrollLeft => Some("scrollLeft"),
             DomProp::ScrollTop => Some("scrollTop"),
-            DomProp::Dataset(_) | DomProp::Style(_) | DomProp::ActiveElement => None,
+            DomProp::Title => Some("title"),
+            DomProp::Dataset(_)
+            | DomProp::Style(_)
+            | DomProp::ActiveElement
+            | DomProp::CharacterSet
+            | DomProp::CompatMode
+            | DomProp::ContentType
+            | DomProp::ReadyState
+            | DomProp::Referrer
+            | DomProp::Url
+            | DomProp::DocumentUri
+            | DomProp::Location
+            | DomProp::LocationHref
+            | DomProp::LocationProtocol
+            | DomProp::LocationHost
+            | DomProp::LocationHostname
+            | DomProp::LocationPort
+            | DomProp::LocationPathname
+            | DomProp::LocationSearch
+            | DomProp::LocationHash
+            | DomProp::LocationOrigin
+            | DomProp::LocationAncestorOrigins
+            | DomProp::DefaultView
+            | DomProp::Hidden
+            | DomProp::VisibilityState
+            | DomProp::Forms
+            | DomProp::Images
+            | DomProp::Links
+            | DomProp::Scripts
+            | DomProp::Children
+            | DomProp::ChildElementCount
+            | DomProp::FirstElementChild
+            | DomProp::LastElementChild
+            | DomProp::CurrentScript
+            | DomProp::FormsLength
+            | DomProp::ImagesLength
+            | DomProp::LinksLength
+            | DomProp::ScriptsLength
+            | DomProp::ChildrenLength => None,
         }
     }
 
@@ -11840,6 +13555,7 @@ impl Harness {
             | Value::Node(_)
             | Value::NodeList(_)
             | Value::FormData(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -12054,6 +13770,7 @@ impl Harness {
             | Value::FormData(_)
             | Value::Promise(_)
             | Value::Symbol(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -12611,6 +14328,7 @@ impl Harness {
             | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -12651,6 +14369,7 @@ impl Harness {
             | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -12815,6 +14534,7 @@ impl Harness {
             | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -14563,6 +16283,7 @@ impl Harness {
     fn is_internal_object_key(key: &str) -> bool {
         Self::is_symbol_storage_key(key)
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
+            || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
     }
@@ -14571,6 +16292,13 @@ impl Harness {
         let value = Self::object_get_entry(entries, INTERNAL_SYMBOL_WRAPPER_KEY)?;
         match value {
             Value::Number(value) if value >= 0 => Some(value as usize),
+            _ => None,
+        }
+    }
+
+    fn string_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<String> {
+        match Self::object_get_entry(entries, INTERNAL_STRING_WRAPPER_VALUE_KEY) {
+            Some(Value::String(value)) => Some(value),
             _ => None,
         }
     }
@@ -14698,6 +16426,82 @@ impl Harness {
         };
         self.well_known_symbols.insert(name, symbol.clone());
         Value::Symbol(symbol)
+    }
+
+    fn eval_string_static_method(
+        &mut self,
+        method: StringStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            StringStaticMethod::FromCharCode => {
+                let mut units = Vec::with_capacity(args.len());
+                for arg in args {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    let unit = (Self::value_to_i64(&value) as i128).rem_euclid(1 << 16) as u16;
+                    units.push(unit);
+                }
+                Ok(Value::String(String::from_utf16_lossy(&units)))
+            }
+            StringStaticMethod::FromCodePoint => {
+                let mut out = String::new();
+                for arg in args {
+                    let value = self.eval_expr(arg, env, event_param, event)?;
+                    let n = Self::coerce_number_for_global(&value);
+                    if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
+                    {
+                        return Err(Error::ScriptRuntime(
+                            "Invalid code point for String.fromCodePoint".into(),
+                        ));
+                    }
+                    let cp = n as u32;
+                    if (0xD800..=0xDFFF).contains(&cp) {
+                        return Err(Error::ScriptRuntime(
+                            "Invalid code point for String.fromCodePoint".into(),
+                        ));
+                    }
+                    let ch = char::from_u32(cp).ok_or_else(|| {
+                        Error::ScriptRuntime("Invalid code point for String.fromCodePoint".into())
+                    })?;
+                    out.push(ch);
+                }
+                Ok(Value::String(out))
+            }
+            StringStaticMethod::Raw => {
+                if args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "String.raw requires at least one argument".into(),
+                    ));
+                }
+                let template = self.eval_expr(&args[0], env, event_param, event)?;
+                let raw = match template {
+                    Value::Object(entries) => {
+                        let entries = entries.borrow();
+                        Self::object_get_entry(&entries, "raw").unwrap_or(Value::Undefined)
+                    }
+                    other => other,
+                };
+                let raw_segments = self.array_like_values_from_value(&raw)?;
+                let mut substitutions = Vec::with_capacity(args.len().saturating_sub(1));
+                for arg in args.iter().skip(1) {
+                    substitutions.push(self.eval_expr(arg, env, event_param, event)?.as_string());
+                }
+                if raw_segments.is_empty() {
+                    return Ok(Value::String(String::new()));
+                }
+                let mut out = String::new();
+                for (idx, segment) in raw_segments.iter().enumerate() {
+                    out.push_str(&segment.as_string());
+                    if let Some(substitution) = substitutions.get(idx) {
+                        out.push_str(substitution);
+                    }
+                }
+                Ok(Value::String(out))
+            }
+        }
     }
 
     fn eval_regexp_static_method(
@@ -15608,6 +17412,60 @@ impl Harness {
                 };
             }
 
+            if matches!(method, TypedArrayInstanceMethod::At) {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "at supports zero or one argument".into(),
+                    ));
+                }
+                let index = if let Some(index) = args.first() {
+                    Self::value_to_i64(&self.eval_expr(index, env, event_param, event)?)
+                } else {
+                    0
+                };
+
+                return match target_value {
+                    Value::String(value) => {
+                        let len = value.chars().count() as i64;
+                        let index = if index < 0 { len + index } else { index };
+                        if index < 0 || index >= len {
+                            Ok(Value::Undefined)
+                        } else {
+                            Ok(value
+                                .chars()
+                                .nth(index as usize)
+                                .map(|ch| Value::String(ch.to_string()))
+                                .unwrap_or(Value::Undefined))
+                        }
+                    }
+                    Value::Object(entries) => {
+                        let entries = entries.borrow();
+                        if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
+                            let len = value.chars().count() as i64;
+                            let index = if index < 0 { len + index } else { index };
+                            if index < 0 || index >= len {
+                                Ok(Value::Undefined)
+                            } else {
+                                Ok(value
+                                    .chars()
+                                    .nth(index as usize)
+                                    .map(|ch| Value::String(ch.to_string()))
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        } else {
+                            Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not a TypedArray",
+                                target
+                            )))
+                        }
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
+
             if matches!(
                 method,
                 TypedArrayInstanceMethod::IndexOf | TypedArrayInstanceMethod::LastIndexOf
@@ -16188,9 +18046,15 @@ impl Harness {
     ) -> Result<Value> {
         let mut callback_env = env.clone();
         callback_env.remove(INTERNAL_RETURN_SLOT);
-        callback.bind_event_params(args, &mut callback_env);
         let mut callback_event = event.clone();
         let event_param = None;
+        self.bind_handler_params(
+            callback,
+            args,
+            &mut callback_env,
+            &event_param,
+            &callback_event,
+        )?;
         match self.execute_stmts(
             &callback.stmts,
             &event_param,
@@ -16223,14 +18087,13 @@ impl Harness {
         event: &EventState,
     ) -> Result<()> {
         let mut previous_values = Vec::with_capacity(callback.params.len());
-        for (idx, param) in callback.params.iter().enumerate() {
-            previous_values.push((param.clone(), env.get(param).cloned()));
-            let value = args.get(idx).cloned().unwrap_or(Value::Undefined);
-            env.insert(param.clone(), value);
+        for param in &callback.params {
+            previous_values.push((param.name.clone(), env.get(&param.name).cloned()));
         }
 
         let mut callback_event = event.clone();
         let event_param = None;
+        self.bind_handler_params(callback, args, env, &event_param, &callback_event)?;
         let result = self.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env);
         env.remove(INTERNAL_RETURN_SLOT);
 
@@ -16734,6 +18597,7 @@ impl Harness {
             | Value::Set(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
+            | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
@@ -16774,6 +18638,33 @@ impl Harness {
             return 0;
         }
         numeric.trunc().rem_euclid(4_294_967_296.0) as u32
+    }
+
+    fn resolve_dom_query_var_path_value(
+        &self,
+        base: &str,
+        path: &[String],
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<Value>> {
+        let Some(mut value) = env.get(base).cloned() else {
+            return Err(Error::ScriptRuntime(format!(
+                "unknown element variable: {}",
+                base
+            )));
+        };
+
+        for key in path {
+            let next = match self.object_property_from_value(&value, key) {
+                Ok(next) => next,
+                Err(_) => return Ok(None),
+            };
+            if matches!(next, Value::Null | Value::Undefined) {
+                return Ok(None);
+            }
+            value = next;
+        }
+
+        Ok(Some(value))
     }
 
     fn resolve_dom_query_list_static(&mut self, target: &DomQuery) -> Result<Option<Vec<NodeId>>> {
@@ -16821,7 +18712,7 @@ impl Harness {
                 let list = self.dom.query_selector_all_from(&target_node, selector)?;
                 Ok(list.get(index).copied().map(|node| vec![node]))
             }
-            DomQuery::Var(_) => Err(Error::ScriptRuntime(
+            DomQuery::Var(_) | DomQuery::VarPath { .. } => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
             )),
             _ => Ok(None),
@@ -16849,6 +18740,18 @@ impl Harness {
                     name
                 ))),
             },
+            DomQuery::VarPath { base, path } => {
+                let Some(value) = self.resolve_dom_query_var_path_value(base, path, env)? else {
+                    return Ok(None);
+                };
+                match value {
+                    Value::NodeList(nodes) => Ok(Some(nodes)),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a node list",
+                        target.describe_call()
+                    ))),
+                }
+            }
             _ => self.resolve_dom_query_list_static(target),
         }
     }
@@ -16856,6 +18759,9 @@ impl Harness {
     fn resolve_dom_query_static(&mut self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
+            DomQuery::DocumentBody => Ok(self.dom.body()),
+            DomQuery::DocumentHead => Ok(self.dom.head()),
+            DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
             DomQuery::BySelector(selector) => self.dom.query_selector(selector),
             DomQuery::BySelectorAll { .. } => Err(Error::ScriptRuntime(
@@ -16906,7 +18812,7 @@ impl Harness {
                 let index = self.resolve_runtime_dom_index(index, None)?;
                 Ok(all.get(index).copied())
             }
-            DomQuery::Var(_) => Err(Error::ScriptRuntime(
+            DomQuery::Var(_) | DomQuery::VarPath { .. } => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
             )),
         }
@@ -16919,6 +18825,9 @@ impl Harness {
     ) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
+            DomQuery::DocumentBody => Ok(self.dom.body()),
+            DomQuery::DocumentHead => Ok(self.dom.head()),
+            DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::Var(name) => match env.get(name) {
                 Some(Value::Node(node)) => Ok(Some(*node)),
                 Some(Value::NodeList(_)) => Err(Error::ScriptRuntime(format!(
@@ -16934,6 +18843,18 @@ impl Harness {
                     name
                 ))),
             },
+            DomQuery::VarPath { base, path } => {
+                let Some(value) = self.resolve_dom_query_var_path_value(base, path, env)? else {
+                    return Ok(None);
+                };
+                match value {
+                    Value::Node(node) => Ok(Some(node)),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a single element",
+                        target.describe_call()
+                    ))),
+                }
+            }
             DomQuery::BySelectorAll { .. } => Err(Error::ScriptRuntime(
                 "cannot use querySelectorAll result as single element".into(),
             )),
@@ -17016,6 +18937,7 @@ impl Harness {
         match prop {
             DomProp::Value => "value".into(),
             DomProp::Checked => "checked".into(),
+            DomProp::Open => "open".into(),
             DomProp::Readonly => "readonly".into(),
             DomProp::Required => "required".into(),
             DomProp::Disabled => "disabled".into(),
@@ -17035,6 +18957,42 @@ impl Harness {
             DomProp::Dataset(_) => "dataset".into(),
             DomProp::Style(_) => "style".into(),
             DomProp::ActiveElement => "activeElement".into(),
+            DomProp::CharacterSet => "characterSet".into(),
+            DomProp::CompatMode => "compatMode".into(),
+            DomProp::ContentType => "contentType".into(),
+            DomProp::ReadyState => "readyState".into(),
+            DomProp::Referrer => "referrer".into(),
+            DomProp::Title => "title".into(),
+            DomProp::Url => "URL".into(),
+            DomProp::DocumentUri => "documentURI".into(),
+            DomProp::Location => "location".into(),
+            DomProp::LocationHref => "location.href".into(),
+            DomProp::LocationProtocol => "location.protocol".into(),
+            DomProp::LocationHost => "location.host".into(),
+            DomProp::LocationHostname => "location.hostname".into(),
+            DomProp::LocationPort => "location.port".into(),
+            DomProp::LocationPathname => "location.pathname".into(),
+            DomProp::LocationSearch => "location.search".into(),
+            DomProp::LocationHash => "location.hash".into(),
+            DomProp::LocationOrigin => "location.origin".into(),
+            DomProp::LocationAncestorOrigins => "location.ancestorOrigins".into(),
+            DomProp::DefaultView => "defaultView".into(),
+            DomProp::Hidden => "hidden".into(),
+            DomProp::VisibilityState => "visibilityState".into(),
+            DomProp::Forms => "forms".into(),
+            DomProp::Images => "images".into(),
+            DomProp::Links => "links".into(),
+            DomProp::Scripts => "scripts".into(),
+            DomProp::Children => "children".into(),
+            DomProp::ChildElementCount => "childElementCount".into(),
+            DomProp::FirstElementChild => "firstElementChild".into(),
+            DomProp::LastElementChild => "lastElementChild".into(),
+            DomProp::CurrentScript => "currentScript".into(),
+            DomProp::FormsLength => "forms.length".into(),
+            DomProp::ImagesLength => "images.length".into(),
+            DomProp::LinksLength => "links.length".into(),
+            DomProp::ScriptsLength => "scripts.length".into(),
+            DomProp::ChildrenLength => "children.length".into(),
         }
     }
 
@@ -17104,6 +19062,7 @@ impl Harness {
             Value::Set(_) => 0,
             Value::ArrayBuffer(_) => 0,
             Value::TypedArray(_) => 0,
+            Value::StringConstructor => 0,
             Value::TypedArrayConstructor(_) => 0,
             Value::ArrayBufferConstructor => 0,
             Value::PromiseConstructor => 0,
@@ -17229,6 +19188,86 @@ enum ListenerRegistrationOp {
     Remove,
 }
 
+fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
+    match target {
+        DomQuery::Var(base) => Some(DomQuery::VarPath {
+            base: base.clone(),
+            path: vec![member.to_string()],
+        }),
+        DomQuery::VarPath { base, path } => {
+            let mut next_path = path.clone();
+            next_path.push(member.to_string());
+            Some(DomQuery::VarPath {
+                base: base.clone(),
+                path: next_path,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn is_dom_target_chain_stop(ident: &str) -> bool {
+    matches!(
+        ident,
+        "activeElement"
+            | "addEventListener"
+            | "after"
+            | "append"
+            | "appendChild"
+            | "before"
+            | "blur"
+            | "checked"
+            | "classList"
+            | "className"
+            | "click"
+            | "closest"
+            | "dataset"
+            | "disabled"
+            | "dispatchEvent"
+            | "elements"
+            | "focus"
+            | "forEach"
+            | "getAttribute"
+            | "hasAttribute"
+            | "id"
+            | "innerHTML"
+            | "insertAdjacentElement"
+            | "insertAdjacentHTML"
+            | "insertAdjacentText"
+            | "insertBefore"
+            | "length"
+            | "matches"
+            | "name"
+            | "offsetHeight"
+            | "offsetLeft"
+            | "offsetTop"
+            | "offsetWidth"
+            | "open"
+            | "querySelector"
+            | "querySelectorAll"
+            | "prepend"
+            | "readOnly"
+            | "readonly"
+            | "remove"
+            | "removeAttribute"
+            | "removeChild"
+            | "removeEventListener"
+            | "replaceWith"
+            | "required"
+            | "reset"
+            | "scrollHeight"
+            | "scrollIntoView"
+            | "scrollLeft"
+            | "scrollTop"
+            | "scrollWidth"
+            | "setAttribute"
+            | "style"
+            | "submit"
+            | "textContent"
+            | "value"
+    )
+}
+
 fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
@@ -17256,8 +19295,21 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
         };
 
         match method.as_str() {
+            "body" if matches!(target, DomQuery::DocumentRoot) => {
+                target = DomQuery::DocumentBody;
+            }
+            "head" if matches!(target, DomQuery::DocumentRoot) => {
+                target = DomQuery::DocumentHead;
+            }
+            "documentElement" if matches!(target, DomQuery::DocumentRoot) => {
+                target = DomQuery::DocumentElement;
+            }
             "querySelector" => {
                 cursor.skip_ws();
+                if cursor.peek() != Some(b'(') {
+                    cursor.set_pos(dot_pos);
+                    break;
+                }
                 cursor.expect_byte(b'(')?;
                 cursor.skip_ws();
                 let selector = cursor.parse_string_literal()?;
@@ -17271,6 +19323,10 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
             }
             "querySelectorAll" => {
                 cursor.skip_ws();
+                if cursor.peek() != Some(b'(') {
+                    cursor.set_pos(dot_pos);
+                    break;
+                }
                 cursor.expect_byte(b'(')?;
                 cursor.skip_ws();
                 let selector = cursor.parse_string_literal()?;
@@ -17283,6 +19339,14 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
                 };
             }
             _ => {
+                if is_dom_target_chain_stop(&method) {
+                    cursor.set_pos(dot_pos);
+                    break;
+                }
+                if let Some(next_target) = append_dom_query_member_path(&target, &method) {
+                    target = next_target;
+                    continue;
+                }
                 cursor.set_pos(dot_pos);
                 break;
             }
@@ -17342,6 +19406,8 @@ fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
             cursor.skip_ws();
             if cursor.consume_ascii("document") {
                 cursor.skip_ws();
+            } else {
+                cursor.set_pos(start + "window".len());
             }
         }
         return Ok(DomQuery::DocumentRoot);
@@ -17493,7 +19559,11 @@ fn normalize_get_elements_by_name(name: &str) -> Result<String> {
     Ok(format!("[name='{}']", escaped))
 }
 
-fn parse_callback_parameter_list(src: &str, max_params: usize, label: &str) -> Result<Vec<String>> {
+fn parse_callback_parameter_list(
+    src: &str,
+    max_params: usize,
+    label: &str,
+) -> Result<Vec<FunctionParam>> {
     let parts = split_top_level_by_char(src.trim(), b',');
     if parts.len() == 1 && parts[0].trim().is_empty() {
         return Ok(Vec::new());
@@ -17506,10 +19576,33 @@ fn parse_callback_parameter_list(src: &str, max_params: usize, label: &str) -> R
     let mut params = Vec::new();
     for raw in parts {
         let param = raw.trim();
+        if param.is_empty() {
+            return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+        }
+
+        if let Some((eq_pos, op_len)) = find_top_level_assignment(param) {
+            if op_len != 1 {
+                return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+            }
+            let name = param[..eq_pos].trim();
+            let default_src = param[eq_pos + op_len..].trim();
+            if !is_ident(name) || default_src.is_empty() {
+                return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+            }
+            params.push(FunctionParam {
+                name: name.to_string(),
+                default: Some(parse_expr(default_src)?),
+            });
+            continue;
+        }
+
         if !is_ident(param) {
             return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
         }
-        params.push(param.to_string());
+        params.push(FunctionParam {
+            name: param.to_string(),
+            default: None,
+        });
     }
 
     Ok(params)
@@ -17551,8 +19644,81 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
     Err(Error::ScriptParse("expected callback body".into()))
 }
 
+fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+    if !cursor.consume_ascii("async") {
+        return false;
+    }
+    if cursor.peek().is_some_and(is_ident_char) {
+        cursor.set_pos(start);
+        return false;
+    }
+
+    let mut saw_separator = false;
+    let mut saw_line_terminator = false;
+    while let Some(b) = cursor.peek() {
+        if b == b' ' || b == b'\t' || b == 0x0B || b == 0x0C {
+            saw_separator = true;
+            cursor.set_pos(cursor.pos() + 1);
+            continue;
+        }
+        if b == b'\n' || b == b'\r' {
+            saw_separator = true;
+            saw_line_terminator = true;
+            cursor.set_pos(cursor.pos() + 1);
+            continue;
+        }
+        break;
+    }
+
+    if !saw_separator || saw_line_terminator {
+        cursor.set_pos(start);
+        return false;
+    }
+
+    let function_pos = cursor.pos();
+    if cursor
+        .src
+        .get(function_pos..)
+        .is_some_and(|rest| rest.starts_with("function"))
+        && !cursor
+            .bytes()
+            .get(function_pos + "function".len())
+            .is_some_and(|&b| is_ident_char(b))
+    {
+        true
+    } else {
+        cursor.set_pos(start);
+        false
+    }
+}
+
 fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
+    {
+        let mut cursor = Cursor::new(src);
+        cursor.skip_ws();
+        if try_consume_async_function_prefix(&mut cursor) {
+            let (params, body, concise_body) =
+                parse_callback(&mut cursor, usize::MAX, "function parameters")?;
+            cursor.skip_ws();
+            if !cursor.eof() {
+                return Ok(None);
+            }
+            let stmts = if concise_body {
+                vec![Stmt::Return {
+                    value: Some(parse_expr(body.trim())?),
+                }]
+            } else {
+                parse_block_statements(&body)?
+            };
+            return Ok(Some(Expr::Function {
+                handler: ScriptHandler { params, stmts },
+                is_async: true,
+            }));
+        }
+    }
+
     if !src.starts_with("function") && !src.contains("=>") {
         return Ok(None);
     }
@@ -17583,6 +19749,7 @@ fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     };
     Ok(Some(Expr::Function {
         handler: ScriptHandler { params, stmts },
+        is_async: false,
     }))
 }
 
@@ -17590,7 +19757,7 @@ fn parse_callback(
     cursor: &mut Cursor<'_>,
     max_params: usize,
     label: &str,
-) -> Result<(Vec<String>, String, bool)> {
+) -> Result<(Vec<FunctionParam>, String, bool)> {
     cursor.skip_ws();
 
     let params = if cursor
@@ -17628,7 +19795,10 @@ fn parse_callback(
         let ident = cursor
             .parse_identifier()
             .ok_or_else(|| Error::ScriptParse("expected callback parameter or ()".into()))?;
-        vec![ident]
+        vec![FunctionParam {
+            name: ident,
+            default: None,
+        }]
     };
 
     cursor.skip_ws();
@@ -17652,7 +19822,7 @@ fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
     }
 
     match parse_expr(src)? {
-        Expr::Function { handler } => Ok(TimerCallback::Inline(handler)),
+        Expr::Function { handler, .. } => Ok(TimerCallback::Inline(handler)),
         Expr::Var(name) => Ok(TimerCallback::Reference(name)),
         _ => Err(Error::ScriptParse(format!(
             "unsupported {timer_name} callback: {src}"
@@ -17712,7 +19882,15 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_try_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_return_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_throw_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -18112,6 +20290,121 @@ fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     Ok(Some(Stmt::DoWhile { cond, body }))
+}
+
+fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
+    let start = cursor.pos();
+    if !cursor.consume_ascii(keyword) {
+        return false;
+    }
+    if cursor.peek().is_some_and(is_ident_char) {
+        cursor.set_pos(start);
+        return false;
+    }
+    true
+}
+
+fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Err(Error::ScriptParse("catch binding cannot be empty".into()));
+    }
+    if is_ident(src) {
+        return Ok(CatchBinding::Identifier(src.to_string()));
+    }
+    if src.starts_with('[') && src.ends_with(']') {
+        let pattern = parse_array_destructure_pattern(src)?;
+        return Ok(CatchBinding::ArrayPattern(pattern));
+    }
+    if src.starts_with('{') && src.ends_with('}') {
+        let pattern = parse_object_destructure_pattern(src)?;
+        return Ok(CatchBinding::ObjectPattern(pattern));
+    }
+    Err(Error::ScriptParse(format!(
+        "unsupported catch binding pattern: {src}"
+    )))
+}
+
+fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "try") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    let try_src = cursor.read_balanced_block(b'{', b'}')?;
+    let try_stmts = parse_block_statements(&try_src)?;
+
+    cursor.skip_ws();
+    let mut catch_binding = None;
+    let mut catch_stmts = None;
+    let mut finally_stmts = None;
+
+    if consume_keyword(&mut cursor, "catch") {
+        cursor.skip_ws();
+        if cursor.peek() == Some(b'(') {
+            let binding_src = cursor.read_balanced_block(b'(', b')')?;
+            catch_binding = Some(parse_catch_binding(binding_src.trim())?);
+            cursor.skip_ws();
+        }
+        let catch_src = cursor.read_balanced_block(b'{', b'}')?;
+        catch_stmts = Some(parse_block_statements(&catch_src)?);
+        cursor.skip_ws();
+    }
+
+    if consume_keyword(&mut cursor, "finally") {
+        cursor.skip_ws();
+        let finally_src = cursor.read_balanced_block(b'{', b'}')?;
+        finally_stmts = Some(parse_block_statements(&finally_src)?);
+        cursor.skip_ws();
+    }
+
+    if catch_stmts.is_none() && finally_stmts.is_none() {
+        return Err(Error::ScriptParse(format!(
+            "try statement requires catch or finally: {stmt}"
+        )));
+    }
+
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported try statement tail: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::Try {
+        try_stmts,
+        catch_binding,
+        catch_stmts,
+        finally_stmts,
+    }))
+}
+
+fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "throw") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if cursor.eof() {
+        return Err(Error::ScriptParse(
+            "throw statement requires an operand".into(),
+        ));
+    }
+
+    let expr_src = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+    let expr_src = expr_src.strip_suffix(';').unwrap_or(expr_src).trim();
+    if expr_src.is_empty() {
+        return Err(Error::ScriptParse(
+            "throw statement requires an operand".into(),
+        ));
+    }
+    let value = parse_expr(expr_src)?;
+    Ok(Some(Stmt::Throw { value }))
 }
 
 fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -18630,6 +20923,12 @@ fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail:
     if is_keyword_prefix(tail, "else") {
         return false;
     }
+    if is_keyword_prefix(tail, "catch") {
+        return false;
+    }
+    if is_keyword_prefix(tail, "finally") {
+        return false;
+    }
     if is_keyword_prefix(tail, "while")
         && block_open.is_some_and(|open| is_do_block_prefix(body, open))
     {
@@ -18671,14 +20970,20 @@ fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
-    if !cursor.consume_ascii("function") {
-        return Ok(None);
-    }
-    if let Some(next) = cursor.peek() {
-        if is_ident_char(next) {
+    let is_async = if try_consume_async_function_prefix(&mut cursor) {
+        cursor.consume_ascii("function");
+        true
+    } else {
+        if !cursor.consume_ascii("function") {
             return Ok(None);
         }
-    }
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        false
+    };
     cursor.skip_ws();
 
     let Some(name) = cursor.parse_identifier() else {
@@ -18706,6 +21011,7 @@ fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
             params,
             stmts: parse_block_statements(&body)?,
         },
+        is_async,
     }))
 }
 
@@ -19245,12 +21551,20 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
             2,
             "forEach callback must have one or two parameters",
         )?;
-        let item_var = params.first().cloned().ok_or_else(|| {
-            Error::ScriptParse(format!(
-                "forEach callback must have one or two parameters: {src}"
-            ))
-        })?;
-        let index_var = params.get(1).cloned();
+        if params.iter().any(|param| param.default.is_some()) {
+            return Err(Error::ScriptParse(format!(
+                "forEach callback must not use default parameters: {src}"
+            )));
+        }
+        let item_var = params
+            .first()
+            .map(|param| param.name.clone())
+            .ok_or_else(|| {
+                Error::ScriptParse(format!(
+                    "forEach callback must have one or two parameters: {src}"
+                ))
+            })?;
+        let index_var = params.get(1).map(|param| param.name.clone());
 
         cursor.skip_ws();
         let (body, concise_body) = parse_arrow_or_block_body(&mut cursor)?;
@@ -19275,12 +21589,20 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
             2,
             "forEach callback must have one or two parameters",
         )?;
-        let item_var = params.first().cloned().ok_or_else(|| {
-            Error::ScriptParse(format!(
-                "forEach callback must have one or two parameters: {src}"
-            ))
-        })?;
-        let index_var = params.get(1).cloned();
+        if params.iter().any(|param| param.default.is_some()) {
+            return Err(Error::ScriptParse(format!(
+                "forEach callback must not use default parameters: {src}"
+            )));
+        }
+        let item_var = params
+            .first()
+            .map(|param| param.name.clone())
+            .ok_or_else(|| {
+                Error::ScriptParse(format!(
+                    "forEach callback must have one or two parameters: {src}"
+                ))
+            })?;
+        let index_var = params.get(1).map(|param| param.name.clone());
         (item_var, index_var)
     } else {
         let Some(item) = cursor.parse_identifier() else {
@@ -20876,6 +23198,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_string_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_math_expr(src)? {
         return Ok(expr);
     }
@@ -21046,6 +23372,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_location_method_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_string_method_expr(src)? {
         return Ok(expr);
     }
@@ -21076,6 +23406,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some(text) = parse_document_create_text_node_expr(src)? {
         return Ok(Expr::CreateTextNode(text));
+    }
+
+    if parse_document_has_focus_expr(src)? {
+        return Ok(Expr::DocumentHasFocus);
     }
 
     if let Some(handler_expr) = parse_function_expr(src)? {
@@ -21390,6 +23724,177 @@ fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(text))
+}
+
+fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(false);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("document") {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(false);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("hasFocus") {
+        return Ok(false);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(false);
+        }
+    }
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    if !args_src.trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "document.hasFocus takes no arguments".into(),
+        ));
+    }
+    cursor.skip_ws();
+    Ok(cursor.eof())
+}
+
+fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if !parse_location_base(&mut cursor) {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method_name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let method = match method_name.as_str() {
+        "assign" => LocationMethod::Assign,
+        "reload" => LocationMethod::Reload,
+        "replace" => LocationMethod::Replace,
+        "toString" => LocationMethod::ToString,
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    let args = if args.len() == 1 && args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        args
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let url = match method {
+        LocationMethod::Assign | LocationMethod::Replace => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "location.{} requires exactly one argument",
+                    method_name
+                )));
+            }
+            Some(Box::new(parse_expr(args[0].trim())?))
+        }
+        LocationMethod::Reload | LocationMethod::ToString => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "location.{} takes no arguments",
+                    method_name
+                )));
+            }
+            None
+        }
+    };
+
+    Ok(Some(Expr::LocationMethodCall { method, url }))
+}
+
+fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+
+    if cursor.consume_ascii("location") {
+        if cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+        cursor.set_pos(start);
+    }
+
+    if cursor.consume_ascii("document") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            if cursor.consume_ascii("location")
+                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            {
+                return true;
+            }
+        }
+        cursor.set_pos(start);
+    }
+
+    if cursor.consume_ascii("window") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_ascii("location") && cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+        cursor.set_pos(start);
+        if cursor.consume_ascii("window") {
+            cursor.skip_ws();
+            if !cursor.consume_byte(b'.') {
+                cursor.set_pos(start);
+                return false;
+            }
+            cursor.skip_ws();
+            if !cursor.consume_ascii("document") {
+                cursor.set_pos(start);
+                return false;
+            }
+            cursor.skip_ws();
+            if !cursor.consume_byte(b'.') {
+                cursor.set_pos(start);
+                return false;
+            }
+            cursor.skip_ws();
+            if cursor.consume_ascii("location")
+                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            {
+                return true;
+            }
+        }
+        cursor.set_pos(start);
+    }
+
+    false
 }
 
 fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
@@ -23510,6 +26015,138 @@ fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
         _ => format!("Math.{method_name} requires exactly one argument"),
     };
     Err(Error::ScriptParse(message))
+}
+
+fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("String") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "String supports zero or one argument".into(),
+            ));
+        }
+        let value = if let Some(arg) = args.first() {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse("String argument cannot be empty".into()));
+            }
+            Some(Box::new(parse_expr(arg)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::StringConstruct {
+            value,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::StringConstruct {
+                value: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let method = match member.as_str() {
+            "fromCharCode" => StringStaticMethod::FromCharCode,
+            "fromCodePoint" => StringStaticMethod::FromCodePoint,
+            "raw" => StringStaticMethod::Raw,
+            _ => return Ok(None),
+        };
+
+        if matches!(method, StringStaticMethod::Raw) && args.is_empty() {
+            return Err(Error::ScriptParse(
+                "String.raw requires at least one argument".into(),
+            ));
+        }
+
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "String.{member} argument cannot be empty"
+                )));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::StringStaticMethod {
+            method,
+            args: parsed,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::StringConstructor))
 }
 
 fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
@@ -27089,11 +29726,18 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
 
         if !matches!(
             method.as_str(),
-            "trim"
+            "charAt"
+                | "charCodeAt"
+                | "codePointAt"
+                | "at"
+                | "concat"
+                | "trim"
                 | "trimStart"
                 | "trimEnd"
                 | "toUpperCase"
+                | "toLocaleUpperCase"
                 | "toLowerCase"
+                | "toLocaleLowerCase"
                 | "includes"
                 | "startsWith"
                 | "endsWith"
@@ -27102,13 +29746,117 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 | "match"
                 | "split"
                 | "replace"
+                | "replaceAll"
                 | "indexOf"
+                | "lastIndexOf"
+                | "search"
+                | "repeat"
+                | "padStart"
+                | "padEnd"
+                | "localeCompare"
+                | "isWellFormed"
+                | "toWellFormed"
+                | "valueOf"
+                | "toString"
         ) {
+            continue;
+        }
+
+        if (method == "toString" || method == "valueOf") && !args.is_empty() {
             continue;
         }
 
         let base = Box::new(parse_expr(base_src)?);
         let expr = match method.as_str() {
+            "charAt" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "charAt supports zero or one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse("charAt index cannot be empty".into()));
+                }
+                Expr::StringCharAt {
+                    value: base,
+                    index: args
+                        .first()
+                        .map(|arg| parse_expr(arg.trim()))
+                        .transpose()?
+                        .map(Box::new),
+                }
+            }
+            "charCodeAt" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "charCodeAt supports zero or one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "charCodeAt index cannot be empty".into(),
+                    ));
+                }
+                Expr::StringCharCodeAt {
+                    value: base,
+                    index: args
+                        .first()
+                        .map(|arg| parse_expr(arg.trim()))
+                        .transpose()?
+                        .map(Box::new),
+                }
+            }
+            "codePointAt" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "codePointAt supports zero or one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "codePointAt index cannot be empty".into(),
+                    ));
+                }
+                Expr::StringCodePointAt {
+                    value: base,
+                    index: args
+                        .first()
+                        .map(|arg| parse_expr(arg.trim()))
+                        .transpose()?
+                        .map(Box::new),
+                }
+            }
+            "at" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "at supports zero or one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse("at index cannot be empty".into()));
+                }
+                Expr::StringAt {
+                    value: base,
+                    index: args
+                        .first()
+                        .map(|arg| parse_expr(arg.trim()))
+                        .transpose()?
+                        .map(Box::new),
+                }
+            }
+            "concat" => {
+                let mut parsed = Vec::with_capacity(args.len());
+                for arg in args {
+                    if arg.trim().is_empty() {
+                        return Err(Error::ScriptParse("concat argument cannot be empty".into()));
+                    }
+                    parsed.push(parse_expr(arg.trim())?);
+                }
+                Expr::StringConcat {
+                    value: base,
+                    args: parsed,
+                }
+            }
             "trim" => {
                 if !args.is_empty() {
                     return Err(Error::ScriptParse("trim does not take arguments".into()));
@@ -27146,10 +29894,36 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 }
                 Expr::StringToUpperCase(base)
             }
+            "toLocaleUpperCase" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "toLocaleUpperCase supports up to one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "toLocaleUpperCase locale cannot be empty".into(),
+                    ));
+                }
+                Expr::StringToUpperCase(base)
+            }
             "toLowerCase" => {
                 if !args.is_empty() {
                     return Err(Error::ScriptParse(
                         "toLowerCase does not take arguments".into(),
+                    ));
+                }
+                Expr::StringToLowerCase(base)
+            }
+            "toLocaleLowerCase" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptParse(
+                        "toLocaleLowerCase supports up to one argument".into(),
+                    ));
+                }
+                if args.len() == 1 && args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "toLocaleLowerCase locale cannot be empty".into(),
                     ));
                 }
                 Expr::StringToLowerCase(base)
@@ -27330,6 +30104,18 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                     to: Box::new(parse_expr(args[1].trim())?),
                 }
             }
+            "replaceAll" => {
+                if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "replaceAll requires exactly two arguments".into(),
+                    ));
+                }
+                Expr::StringReplaceAll {
+                    value: base,
+                    from: Box::new(parse_expr(args[0].trim())?),
+                    to: Box::new(parse_expr(args[1].trim())?),
+                }
+            }
             "indexOf" => {
                 if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
                     return Err(Error::ScriptParse(
@@ -27351,6 +30137,140 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                     },
                 }
             }
+            "lastIndexOf" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "lastIndexOf requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "lastIndexOf position cannot be empty".into(),
+                    ));
+                }
+                Expr::StringLastIndexOf {
+                    value: base,
+                    search: Box::new(parse_expr(args[0].trim())?),
+                    position: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "search" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "search requires exactly one argument".into(),
+                    ));
+                }
+                Expr::StringSearch {
+                    value: base,
+                    pattern: Box::new(parse_expr(args[0].trim())?),
+                }
+            }
+            "repeat" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "repeat requires exactly one argument".into(),
+                    ));
+                }
+                Expr::StringRepeat {
+                    value: base,
+                    count: Box::new(parse_expr(args[0].trim())?),
+                }
+            }
+            "padStart" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "padStart requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "padStart pad string cannot be empty expression".into(),
+                    ));
+                }
+                Expr::StringPadStart {
+                    value: base,
+                    target_length: Box::new(parse_expr(args[0].trim())?),
+                    pad: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "padEnd" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "padEnd requires one or two arguments".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "padEnd pad string cannot be empty expression".into(),
+                    ));
+                }
+                Expr::StringPadEnd {
+                    value: base,
+                    target_length: Box::new(parse_expr(args[0].trim())?),
+                    pad: if args.len() == 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "localeCompare" => {
+                if args.is_empty() || args.len() > 3 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "localeCompare requires one to three arguments".into(),
+                    ));
+                }
+                if args.len() >= 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "localeCompare locales argument cannot be empty".into(),
+                    ));
+                }
+                if args.len() == 3 && args[2].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "localeCompare options argument cannot be empty".into(),
+                    ));
+                }
+                Expr::StringLocaleCompare {
+                    value: base,
+                    compare: Box::new(parse_expr(args[0].trim())?),
+                    locales: if args.len() >= 2 {
+                        Some(Box::new(parse_expr(args[1].trim())?))
+                    } else {
+                        None
+                    },
+                    options: if args.len() == 3 {
+                        Some(Box::new(parse_expr(args[2].trim())?))
+                    } else {
+                        None
+                    },
+                }
+            }
+            "isWellFormed" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "isWellFormed does not take arguments".into(),
+                    ));
+                }
+                Expr::StringIsWellFormed(base)
+            }
+            "toWellFormed" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "toWellFormed does not take arguments".into(),
+                    ));
+                }
+                Expr::StringToWellFormed(base)
+            }
+            "valueOf" => Expr::StringValueOf(base),
+            "toString" => Expr::StringToString(base),
             _ => unreachable!(),
         };
 
@@ -27750,6 +30670,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let prop = match (head.as_str(), nested.as_ref()) {
         ("value", None) => DomProp::Value,
         ("checked", None) => DomProp::Checked,
+        ("open", None) => DomProp::Open,
         ("readonly", None) | ("readOnly", None) => DomProp::Readonly,
         ("required", None) => DomProp::Required,
         ("disabled", None) => DomProp::Disabled,
@@ -27769,10 +30690,120 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => {
             DomProp::ActiveElement
         }
+        ("characterSet", None) | ("charset", None) | ("inputEncoding", None)
+            if matches!(target, DomQuery::DocumentRoot) =>
+        {
+            DomProp::CharacterSet
+        }
+        ("compatMode", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::CompatMode,
+        ("contentType", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::ContentType,
+        ("readyState", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::ReadyState,
+        ("referrer", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Referrer,
+        ("title", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Title,
+        ("URL", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Url,
+        ("documentURI", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DocumentUri,
+        ("location", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Location,
+        ("location", Some(href))
+            if matches!(target, DomQuery::DocumentRoot) && href == "href" =>
+        {
+            DomProp::LocationHref
+        }
+        ("location", Some(protocol))
+            if matches!(target, DomQuery::DocumentRoot) && protocol == "protocol" =>
+        {
+            DomProp::LocationProtocol
+        }
+        ("location", Some(host))
+            if matches!(target, DomQuery::DocumentRoot) && host == "host" =>
+        {
+            DomProp::LocationHost
+        }
+        ("location", Some(hostname))
+            if matches!(target, DomQuery::DocumentRoot) && hostname == "hostname" =>
+        {
+            DomProp::LocationHostname
+        }
+        ("location", Some(port))
+            if matches!(target, DomQuery::DocumentRoot) && port == "port" =>
+        {
+            DomProp::LocationPort
+        }
+        ("location", Some(pathname))
+            if matches!(target, DomQuery::DocumentRoot) && pathname == "pathname" =>
+        {
+            DomProp::LocationPathname
+        }
+        ("location", Some(search))
+            if matches!(target, DomQuery::DocumentRoot) && search == "search" =>
+        {
+            DomProp::LocationSearch
+        }
+        ("location", Some(hash))
+            if matches!(target, DomQuery::DocumentRoot) && hash == "hash" =>
+        {
+            DomProp::LocationHash
+        }
+        ("location", Some(origin))
+            if matches!(target, DomQuery::DocumentRoot) && origin == "origin" =>
+        {
+            DomProp::LocationOrigin
+        }
+        ("location", Some(ancestor_origins))
+            if matches!(target, DomQuery::DocumentRoot) && ancestor_origins == "ancestorOrigins" =>
+        {
+            DomProp::LocationAncestorOrigins
+        }
+        ("defaultView", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DefaultView,
+        ("hidden", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Hidden,
+        ("visibilityState", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::VisibilityState
+        }
+        ("forms", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Forms,
+        ("images", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Images,
+        ("links", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Links,
+        ("scripts", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Scripts,
+        ("children", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Children,
+        ("childElementCount", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::ChildElementCount
+        }
+        ("firstElementChild", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::FirstElementChild
+        }
+        ("lastElementChild", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::LastElementChild
+        }
+        ("currentScript", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::CurrentScript
+        }
+        ("forms", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::FormsLength
+        }
+        ("images", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::ImagesLength
+        }
+        ("links", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::LinksLength
+        }
+        ("scripts", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::ScriptsLength
+        }
+        ("children", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::ChildrenLength
+        }
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
-            if matches!(target, DomQuery::Var(_)) {
+            if matches!(target, DomQuery::Var(_) | DomQuery::VarPath { .. }) {
                 return Ok(None);
             }
             let prop_label = if let Some(nested) = nested {

@@ -55,10 +55,47 @@ cargo test
 
 - `fetch` is designed to be replaced with mocks during tests.
 - `confirm` / `prompt` provide APIs for injecting mocked return values.
+- `location` navigation can load mocked HTML for a target URL.
 - Main APIs:
   - `Harness::set_fetch_mock(url, body)`
   - `Harness::enqueue_confirm_response(bool)`
   - `Harness::enqueue_prompt_response(Option<&str>)`
+  - `Harness::set_location_mock_page(url, html)`
+  - `Harness::clear_location_mock_pages()`
+  - `Harness::take_location_navigations()`
+  - `Harness::location_reload_count()`
+
+Location mock example:
+
+```rust
+use browser_tester::{Harness, LocationNavigation, LocationNavigationKind};
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='go'>go</button>
+      <script>
+        document.getElementById('go').addEventListener('click', () => {
+          location.assign('https://app.local/next');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", "<p id='msg'>next page</p>");
+    h.click("#go")?;
+    h.assert_text("#msg", "next page")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "about:blank".to_string(),
+            to: "https://app.local/next".to_string(),
+        }]
+    );
+    Ok(())
+}
+```
 
 Developed by [Finite Field, K.K.](https://finitefield.org)
 
