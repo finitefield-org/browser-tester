@@ -164,6 +164,8 @@ impl Harness {
         self.script_env
             .insert("String".to_string(), Value::StringConstructor);
         self.script_env
+            .insert("Boolean".to_string(), Self::new_boolean_constructor_callable());
+        self.script_env
             .insert("URL".to_string(), Value::UrlConstructor);
         self.script_env.insert("location".to_string(), location);
         self.script_env.insert("history".to_string(), history);
@@ -256,6 +258,7 @@ impl Harness {
             "isSecureContext",
             "Intl",
             "String",
+            "Boolean",
             "URL",
             "name",
         ]
@@ -318,6 +321,7 @@ impl Harness {
             ),
             ("Intl".to_string(), intl.clone()),
             ("String".to_string(), Value::StringConstructor),
+            ("Boolean".to_string(), Self::new_boolean_constructor_callable()),
             ("URL".to_string(), Value::UrlConstructor),
             ("name".to_string(), name_value),
         ];
@@ -2751,6 +2755,10 @@ impl Harness {
                             ("value".to_string(), value),
                             ("done".to_string(), Value::Bool(false)),
                         ]))
+                    }
+                    "boolean_constructor" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::Bool(value.truthy()))
                     }
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }

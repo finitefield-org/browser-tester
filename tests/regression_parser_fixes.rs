@@ -227,6 +227,41 @@ fn array_member_calls_via_object_path_are_supported() -> browser_tester::Result<
 }
 
 #[test]
+fn array_filter_boolean_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [0, 1, "", 2, null, 3, false];
+      const filtered = values.filter(Boolean);
+      document.getElementById("result").textContent = filtered.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,2,3")?;
+    Ok(())
+}
+
+#[test]
+fn chained_filter_boolean_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const text = "a\n\n b \n";
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      document.getElementById("result").textContent = lines.join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a|b")?;
+    Ok(())
+}
+
+#[test]
 fn add_event_listener_accepts_named_function_reference_callback() -> browser_tester::Result<()> {
     let html = r#"
     <button id="open-tool">open</button>

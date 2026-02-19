@@ -4784,6 +4784,13 @@ impl Harness {
         Value::Object(Rc::new(RefCell::new(entries)))
     }
 
+    pub(super) fn new_boolean_constructor_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("boolean_constructor".to_string()),
+        )])
+    }
+
     pub(super) fn new_string_wrapper_value(value: String) -> Value {
         Self::new_object_value(vec![(
             INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
@@ -4819,6 +4826,7 @@ impl Harness {
                 "intl_number_format" => "intl_number_format",
                 "intl_segmenter_segments_iterator" => "intl_segmenter_segments_iterator",
                 "intl_segmenter_iterator_next" => "intl_segmenter_iterator_next",
+                "boolean_constructor" => "boolean_constructor",
                 _ => return None,
             }),
             _ => None,

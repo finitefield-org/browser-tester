@@ -7125,7 +7125,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "map requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArrayMap { target, callback }
         }
         "filter" => {
@@ -7134,7 +7148,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "filter requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArrayFilter { target, callback }
         }
         "reduce" => {
@@ -7143,7 +7171,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "reduce requires callback and optional initial value".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 4, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 4, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             let initial = if args.len() == 2 {
                 if args[1].trim().is_empty() {
                     return Err(Error::ScriptParse(
@@ -7166,7 +7208,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "forEach requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArrayForEach { target, callback }
         }
         "find" => {
@@ -7175,7 +7231,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "find requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArrayFind { target, callback }
         }
         "some" => {
@@ -7184,7 +7254,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "some requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArraySome { target, callback }
         }
         "every" => {
@@ -7193,7 +7277,21 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "every requires exactly one callback argument".into(),
                 ));
             }
-            let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
             Expr::ArrayEvery { target, callback }
         }
         "includes" => {
