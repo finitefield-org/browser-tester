@@ -1227,11 +1227,7 @@ impl Harness {
                                         );
                                     }
                                 }
-                                _ => {
-                                    return Err(Error::ScriptRuntime(
-                                        "object spread source must be an object, array, string, null, or undefined".into(),
-                                    ));
-                                }
+                                _ => {}
                             }
                         }
                     }
@@ -1405,7 +1401,7 @@ impl Harness {
                     match value {
                         Expr::Spread(expr) => {
                             let spread_value = self.eval_expr(expr, env, event_param, event)?;
-                            out.extend(self.array_like_values_from_value(&spread_value)?);
+                            out.extend(self.spread_iterable_values_from_value(&spread_value)?);
                         }
                         _ => out.push(self.eval_expr(value, env, event_param, event)?),
                     }
@@ -1535,10 +1531,7 @@ impl Harness {
             }
             Expr::ArrayPush { target, args } => {
                 let values = self.resolve_array_from_env(env, target)?;
-                let mut evaluated = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let evaluated = self.eval_call_args_with_spread(args, env, event_param, event)?;
                 let mut values = values.borrow_mut();
                 values.extend(evaluated);
                 Ok(Value::Number(values.len() as i64))
@@ -1558,10 +1551,7 @@ impl Harness {
             }
             Expr::ArrayUnshift { target, args } => {
                 let values = self.resolve_array_from_env(env, target)?;
-                let mut evaluated = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let evaluated = self.eval_call_args_with_spread(args, env, event_param, event)?;
                 let mut values = values.borrow_mut();
                 for value in evaluated.into_iter().rev() {
                     values.insert(0, value);
@@ -2131,10 +2121,7 @@ impl Harness {
                     .map(|value| self.eval_expr(value, env, event_param, event))
                     .transpose()?
                     .map(|value| Self::value_to_i64(&value));
-                let mut insert_items = Vec::with_capacity(items.len());
-                for item in items {
-                    insert_items.push(self.eval_expr(item, env, event_param, event)?);
-                }
+                let insert_items = self.eval_call_args_with_spread(items, env, event_param, event)?;
 
                 let mut values = values.borrow_mut();
                 let len = values.len();
@@ -2854,10 +2841,7 @@ impl Harness {
                     .get(target)
                     .cloned()
                     .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
                 self.execute_callable_value(&callee, &evaluated_args, event)
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
@@ -2868,10 +2852,7 @@ impl Harness {
             }
             Expr::Call { target, args } => {
                 let callee = self.eval_expr(target, env, event_param, event)?;
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
                 self.execute_callable_value(&callee, &evaluated_args, event)
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
@@ -2886,10 +2867,7 @@ impl Harness {
                 args,
             } => {
                 let receiver = self.eval_expr(target, env, event_param, event)?;
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
 
                 if let Value::Array(values) = &receiver {
                     if member == "forEach" {
@@ -3716,7 +3694,7 @@ impl Harness {
                 Ok(last)
             }
             Expr::Spread(_) => Err(Error::ScriptRuntime(
-                "spread syntax is only supported in array and object literals".into(),
+                "spread syntax is only supported in array literals, object literals, and call arguments".into(),
             )),
             Expr::Add(parts) => {
                 if parts.is_empty() {
@@ -6831,6 +6809,60 @@ impl Harness {
             )));
         }
         usize::try_from(n).map_err(|_| Error::ScriptRuntime(format!("{label} is too large")))
+    }
+
+    pub(super) fn eval_call_args_with_spread(
+        &mut self,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Vec<Value>> {
+        let mut evaluated = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                Expr::Spread(inner) => {
+                    let spread_value = self.eval_expr(inner, env, event_param, event)?;
+                    evaluated.extend(self.spread_iterable_values_from_value(&spread_value)?);
+                }
+                _ => evaluated.push(self.eval_expr(arg, env, event_param, event)?),
+            }
+        }
+        Ok(evaluated)
+    }
+
+    pub(super) fn spread_iterable_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
+        match value {
+            Value::Array(values) => Ok(values.borrow().clone()),
+            Value::TypedArray(values) => self.typed_array_snapshot(values),
+            Value::Map(map) => {
+                let map = map.borrow();
+                Ok(map
+                    .entries
+                    .iter()
+                    .map(|(key, value)| Self::new_array_value(vec![key.clone(), value.clone()]))
+                    .collect::<Vec<_>>())
+            }
+            Value::Set(set) => Ok(set.borrow().values.clone()),
+            Value::String(text) => Ok(text
+                .chars()
+                .map(|ch| Value::String(ch.to_string()))
+                .collect::<Vec<_>>()),
+            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if Self::is_url_search_params_object(&entries) {
+                    return Ok(Self::url_search_params_pairs_from_object_entries(&entries)
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Self::new_array_value(vec![Value::String(name), Value::String(value)])
+                        })
+                        .collect::<Vec<_>>());
+                }
+                Err(Error::ScriptRuntime("spread source is not iterable".into()))
+            }
+            _ => Err(Error::ScriptRuntime("spread source is not iterable".into())),
+        }
     }
 
     pub(super) fn array_like_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {

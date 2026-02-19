@@ -6635,6 +6635,21 @@ fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec
     Ok(args)
 }
 
+fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
+    let arg_src = arg_src.trim();
+    if let Some(rest) = arg_src.strip_prefix("...") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return Err(Error::ScriptParse(
+                "call spread source cannot be empty".into(),
+            ));
+        }
+        Ok(Expr::Spread(Box::new(parse_expr(rest)?)))
+    } else {
+        parse_expr(arg_src)
+    }
+}
+
 fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
@@ -6670,7 +6685,7 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
         let mut parsed_args = Vec::with_capacity(args.len());
         for arg in args {
             let arg = arg.trim();
-            parsed_args.push(parse_expr(arg)?);
+            parsed_args.push(parse_call_arg_expr(arg)?);
         }
 
         return Ok(Some(Expr::MemberCall {
@@ -6689,7 +6704,7 @@ fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
         let mut parsed = Vec::with_capacity(args.len());
         for arg in args {
             let arg = arg.trim();
-            parsed.push(parse_expr(arg)?);
+            parsed.push(parse_call_arg_expr(arg)?);
         }
         Ok(parsed)
     };
@@ -7075,10 +7090,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
         "push" => {
             let mut parsed = Vec::with_capacity(args.len());
             for arg in args {
-                if arg.trim().is_empty() {
-                    return Err(Error::ScriptParse("push argument cannot be empty".into()));
-                }
-                parsed.push(parse_expr(arg.trim())?);
+                parsed.push(parse_call_arg_expr(arg)?);
             }
             Expr::ArrayPush {
                 target,
@@ -7100,12 +7112,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
         "unshift" => {
             let mut parsed = Vec::with_capacity(args.len());
             for arg in args {
-                if arg.trim().is_empty() {
-                    return Err(Error::ScriptParse(
-                        "unshift argument cannot be empty".into(),
-                    ));
-                }
-                parsed.push(parse_expr(arg.trim())?);
+                parsed.push(parse_call_arg_expr(arg)?);
             }
             Expr::ArrayUnshift {
                 target,
@@ -7253,10 +7260,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
             };
             let mut items = Vec::new();
             for arg in args.iter().skip(2) {
-                if arg.trim().is_empty() {
-                    return Err(Error::ScriptParse("splice item cannot be empty".into()));
-                }
-                items.push(parse_expr(arg.trim())?);
+                items.push(parse_call_arg_expr(arg)?);
             }
             Expr::ArraySplice {
                 target,

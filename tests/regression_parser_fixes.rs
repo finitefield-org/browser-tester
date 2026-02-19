@@ -176,3 +176,88 @@ fn lone_comma_argument_is_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn function_call_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function sum(x, y, z) { return x + y + z; }
+      const numbers = [1, 2, 3];
+      document.getElementById("r").textContent = String(sum(...numbers));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "6")?;
+    Ok(())
+}
+
+#[test]
+fn mixed_call_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function myFunction(v, w, x, y, z) { return v + "," + w + "," + x + "," + y + "," + z; }
+      const args = [0, 1];
+      document.getElementById("r").textContent = myFunction(-1, ...args, 2, ...[3]);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "-1,0,1,2,3")?;
+    Ok(())
+}
+
+#[test]
+fn array_push_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const lines = ["a"];
+      const next = ["b", "c"];
+      lines.push(...next,);
+      document.getElementById("r").textContent = lines.join(",");
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "a,b,c")?;
+    Ok(())
+}
+
+#[test]
+fn object_spread_primitives_follow_js_behavior() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const obj = { ...true, ..."test", ...10 };
+      document.getElementById("r").textContent =
+        obj["0"] + obj["1"] + obj["2"] + obj["3"] + "|" + String(obj["4"] === undefined);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "test|true")?;
+    Ok(())
+}
+
+#[test]
+fn non_iterable_spread_in_call_is_rejected() {
+    let err = Harness::from_html("<script>function f(a){} const obj={a:1}; f(...obj);</script>")
+        .unwrap_err();
+    match err {
+        browser_tester::Error::ScriptRuntime(msg) => assert!(msg.contains("iterable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn non_iterable_spread_in_array_literal_is_rejected() {
+    let err =
+        Harness::from_html("<script>const obj={a:1}; const arr=[...obj];</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptRuntime(msg) => assert!(msg.contains("iterable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
