@@ -2328,6 +2328,46 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
 }
 
+fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
+    let mut cursor = Cursor::new(lhs);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+
+    let mut path = Vec::new();
+    loop {
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            let Some(prop) = cursor.parse_identifier() else {
+                return Ok(None);
+            };
+            path.push(Expr::String(prop));
+            continue;
+        }
+
+        if cursor.peek() == Some(b'[') {
+            let key_src = cursor.read_balanced_block(b'[', b']')?;
+            let key_src = key_src.trim();
+            if key_src.is_empty() {
+                return Err(Error::ScriptParse(
+                    "object assignment key cannot be empty".into(),
+                ));
+            }
+            path.push(parse_expr(key_src)?);
+            continue;
+        }
+        break;
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() || path.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((target, path)))
+}
+
 fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
@@ -2339,53 +2379,35 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
 
-    let mut cursor = Cursor::new(lhs);
-    cursor.skip_ws();
-    let Some(target) = cursor.parse_identifier() else {
+    let Some((target, path)) = parse_object_assignment_target(lhs)? else {
         return Ok(None);
     };
-    cursor.skip_ws();
-
-    let key = if cursor.consume_byte(b'.') {
-        cursor.skip_ws();
-        let Some(prop) = cursor.parse_identifier() else {
-            return Ok(None);
-        };
-        Expr::String(prop)
-    } else if cursor.peek() == Some(b'[') {
-        let key_src = cursor.read_balanced_block(b'[', b']')?;
-        let key_src = key_src.trim();
-        if key_src.is_empty() {
-            return Err(Error::ScriptParse(
-                "object assignment key cannot be empty".into(),
-            ));
-        }
-        parse_expr(key_src)?
-    } else {
-        return Ok(None);
-    };
-
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
 
     let rhs_expr = parse_expr(rhs)?;
     let op = &stmt[eq_pos..eq_pos + op_len];
     let expr = if op_len == 1 {
         rhs_expr
     } else {
-        let key_name = match &key {
-            Expr::String(name) => name.clone(),
-            _ => {
+        let mut static_path = Vec::with_capacity(path.len());
+        for segment in &path {
+            if let Expr::String(name) = segment {
+                static_path.push(name.clone());
+            } else {
                 return Err(Error::ScriptParse(
                     "compound object assignment requires a static key".into(),
                 ));
             }
-        };
-        let lhs_expr = Expr::ObjectGet {
-            target: target.clone(),
-            key: key_name,
+        }
+        let lhs_expr = if static_path.len() == 1 {
+            Expr::ObjectGet {
+                target: target.clone(),
+                key: static_path.remove(0),
+            }
+        } else {
+            Expr::ObjectPathGet {
+                target: target.clone(),
+                path: static_path,
+            }
         };
         match op {
             "+=" => append_concat_expr(lhs_expr, rhs_expr),
@@ -2417,7 +2439,7 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
             _ => return Ok(None),
         }
     };
-    Ok(Some(Stmt::ObjectAssign { target, key, expr }))
+    Ok(Some(Stmt::ObjectAssign { target, path, expr }))
 }
 
 fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {

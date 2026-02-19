@@ -587,6 +587,160 @@ impl Harness {
         }
     }
 
+    pub(super) fn read_object_assignment_property(
+        &self,
+        container: &Value,
+        key_value: &Value,
+        target: &str,
+    ) -> Result<Value> {
+        let key = self.property_key_to_storage_key(key_value);
+        let value = self
+            .object_property_from_value(container, &key)
+            .map_err(|err| match err {
+                Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                    Error::ScriptRuntime(format!("variable '{}' is not an object", target))
+                }
+                other => other,
+            })?;
+
+        if matches!(value, Value::Null | Value::Undefined) {
+            let kind = if matches!(value, Value::Null) {
+                "null"
+            } else {
+                "undefined"
+            };
+            return Err(Error::ScriptRuntime(format!(
+                "cannot set property '{}' of {}",
+                key, kind
+            )));
+        }
+        Ok(value)
+    }
+
+    pub(super) fn set_object_assignment_property(
+        &mut self,
+        container: &Value,
+        key_value: &Value,
+        value: Value,
+        target: &str,
+    ) -> Result<()> {
+        match container {
+            Value::Object(object) => {
+                let key = self.property_key_to_storage_key(key_value);
+                let (is_location, is_history, is_window, is_navigator, is_url) = {
+                    let entries = object.borrow();
+                    (
+                        Self::is_location_object(&entries),
+                        Self::is_history_object(&entries),
+                        Self::is_window_object(&entries),
+                        Self::is_navigator_object(&entries),
+                        Self::is_url_object(&entries),
+                    )
+                };
+                if is_location {
+                    self.set_location_property(&key, value)?;
+                    return Ok(());
+                }
+                if is_history {
+                    self.set_history_property(&key, value)?;
+                    return Ok(());
+                }
+                if is_window {
+                    self.set_window_property(&key, value)?;
+                    return Ok(());
+                }
+                if is_navigator {
+                    self.set_navigator_property(object, &key, value)?;
+                    return Ok(());
+                }
+                if is_url {
+                    self.set_url_object_property(object, &key, value)?;
+                    return Ok(());
+                }
+                Self::object_set_entry(&mut object.borrow_mut(), key, value);
+                Ok(())
+            }
+            Value::Array(values) => {
+                let Some(index) = self.value_as_index(key_value) else {
+                    return Ok(());
+                };
+                let mut values = values.borrow_mut();
+                if index >= values.len() {
+                    values.resize(index + 1, Value::Undefined);
+                }
+                values[index] = value;
+                Ok(())
+            }
+            Value::TypedArray(values) => {
+                let Some(index) = self.value_as_index(key_value) else {
+                    return Ok(());
+                };
+                self.typed_array_set_index(values, index, value)
+            }
+            Value::Map(map) => {
+                let key = self.property_key_to_storage_key(key_value);
+                Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
+                Ok(())
+            }
+            Value::Set(set) => {
+                let key = self.property_key_to_storage_key(key_value);
+                Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
+                Ok(())
+            }
+            Value::RegExp(regex) => {
+                let key = self.property_key_to_storage_key(key_value);
+                if key == "lastIndex" {
+                    let mut regex = regex.borrow_mut();
+                    let next = Self::value_to_i64(&value);
+                    regex.last_index = if next <= 0 { 0 } else { next as usize };
+                } else {
+                    Self::object_set_entry(&mut regex.borrow_mut().properties, key, value);
+                }
+                Ok(())
+            }
+            _ => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not an object",
+                target
+            ))),
+        }
+    }
+
+    pub(super) fn execute_object_assignment_stmt(
+        &mut self,
+        target: &str,
+        path: &[Expr],
+        expr: &Expr,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        if path.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "object assignment path cannot be empty".into(),
+            ));
+        }
+
+        let value = self.eval_expr(expr, env, event_param, event)?;
+
+        let mut keys = Vec::with_capacity(path.len());
+        for segment in path {
+            keys.push(self.eval_expr(segment, env, event_param, event)?);
+        }
+
+        let mut container = env
+            .get(target)
+            .cloned()
+            .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+        for key in keys.iter().take(keys.len().saturating_sub(1)) {
+            container = self.read_object_assignment_property(&container, key, target)?;
+        }
+
+        let final_key = keys.last().ok_or_else(|| {
+            Error::ScriptRuntime("object assignment key cannot be empty".into())
+        })?;
+        self.set_object_assignment_property(&container, final_key, value, target)
+    }
+
     pub(super) fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
         if input.is_empty() {
@@ -2977,95 +3131,15 @@ impl Harness {
                         env.insert(target_name.clone(), next);
                     }
                 }
-                Stmt::ObjectAssign { target, key, expr } => {
-                    let value = self.eval_expr(expr, env, event_param, event)?;
-                    let key = self.eval_expr(key, env, event_param, event)?;
-                    match env.get(target) {
-                        Some(Value::Object(object)) => {
-                            let key = self.property_key_to_storage_key(&key);
-                            let (is_location, is_history, is_window, is_navigator, is_url) = {
-                                let entries = object.borrow();
-                                (
-                                    Self::is_location_object(&entries),
-                                    Self::is_history_object(&entries),
-                                    Self::is_window_object(&entries),
-                                    Self::is_navigator_object(&entries),
-                                    Self::is_url_object(&entries),
-                                )
-                            };
-                            if is_location {
-                                self.set_location_property(&key, value)?;
-                                continue;
-                            }
-                            if is_history {
-                                self.set_history_property(&key, value)?;
-                                continue;
-                            }
-                            if is_window {
-                                self.set_window_property(&key, value)?;
-                                continue;
-                            }
-                            if is_navigator {
-                                self.set_navigator_property(object, &key, value)?;
-                                continue;
-                            }
-                            if is_url {
-                                self.set_url_object_property(object, &key, value)?;
-                                continue;
-                            }
-                            Self::object_set_entry(&mut object.borrow_mut(), key, value);
-                        }
-                        Some(Value::Array(values)) => {
-                            let Some(index) = self.value_as_index(&key) else {
-                                continue;
-                            };
-                            let mut values = values.borrow_mut();
-                            if index >= values.len() {
-                                values.resize(index + 1, Value::Undefined);
-                            }
-                            values[index] = value;
-                        }
-                        Some(Value::TypedArray(values)) => {
-                            let Some(index) = self.value_as_index(&key) else {
-                                continue;
-                            };
-                            self.typed_array_set_index(values, index, value)?;
-                        }
-                        Some(Value::Map(map)) => {
-                            let key = self.property_key_to_storage_key(&key);
-                            Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
-                        }
-                        Some(Value::Set(set)) => {
-                            let key = self.property_key_to_storage_key(&key);
-                            Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
-                        }
-                        Some(Value::RegExp(regex)) => {
-                            let key = self.property_key_to_storage_key(&key);
-                            if key == "lastIndex" {
-                                let mut regex = regex.borrow_mut();
-                                let next = Self::value_to_i64(&value);
-                                regex.last_index = if next <= 0 { 0 } else { next as usize };
-                            } else {
-                                Self::object_set_entry(
-                                    &mut regex.borrow_mut().properties,
-                                    key,
-                                    value,
-                                );
-                            }
-                        }
-                        Some(_) => {
-                            return Err(Error::ScriptRuntime(format!(
-                                "variable '{}' is not an object",
-                                target
-                            )));
-                        }
-                        None => {
-                            return Err(Error::ScriptRuntime(format!(
-                                "unknown variable: {}",
-                                target
-                            )));
-                        }
-                    }
+                Stmt::ObjectAssign { target, path, expr } => {
+                    self.execute_object_assignment_stmt(
+                        target,
+                        path,
+                        expr,
+                        env,
+                        event_param,
+                        event,
+                    )?;
                 }
                 Stmt::FormDataAppend {
                     target_var,

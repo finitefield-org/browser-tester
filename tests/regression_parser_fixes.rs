@@ -101,6 +101,38 @@ fn object_property_compound_assignment_supported() -> browser_tester::Result<()>
 }
 
 #[test]
+fn nested_object_property_assignment_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { settings: { allowOpenCase: false } };
+      state.settings.allowOpenCase = true;
+      document.getElementById("result").textContent = String(state.settings.allowOpenCase);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn nested_object_property_compound_assignment_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { settings: { count: 1 } };
+      state.settings.count += 2;
+      document.getElementById("result").textContent = String(state.settings.count);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
 fn array_destructured_callback_params_supported() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>

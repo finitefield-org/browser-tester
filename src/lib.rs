@@ -3855,7 +3855,7 @@ enum Stmt {
     },
     ObjectAssign {
         target: String,
-        key: Expr,
+        path: Vec<Expr>,
         expr: Expr,
     },
     FormDataAppend {
