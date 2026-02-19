@@ -1570,6 +1570,160 @@ fn hash_only_location_navigation_does_not_trigger_mock_page_swap() -> Result<()>
 }
 
 #[test]
+fn history_properties_push_state_and_replace_state_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const initialLen = history.length;
+            const initialState = history.state === null ? 'null' : 'non-null';
+            history.pushState({ step: 1 }, '', 'https://app.local/one');
+            const pushed = history.length + ':' + history.state.step + ':' + location.href;
+            history.replaceState({ step: 2 }, '', 'https://app.local/two');
+            const replaced = history.length + ':' + history.state.step + ':' + location.href;
+            document.getElementById('result').textContent =
+              initialLen + ':' + initialState + '|' + pushed + '|' + replaced + '|' + window.history.scrollRestoration;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1:null|2:1:https://app.local/one|2:2:https://app.local/two|auto",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn history_back_forward_and_go_dispatch_popstate_with_state() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          window.addEventListener('popstate', (event) => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent +
+              '[' + (event.state === null ? 'null' : event.state) + '@' + location.href + ']';
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = '';
+            history.pushState('A', '', 'https://app.local/a');
+            history.pushState('B', '', 'https://app.local/b');
+            history.back();
+            history.forward();
+            history.go(-2);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[A@https://app.local/a][B@https://app.local/b][null@about:blank]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn history_out_of_bounds_navigation_is_noop() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            history.pushState('A', '', 'https://app.local/a');
+            history.go(10);
+            history.forward();
+            history.go(-10);
+            document.getElementById('result').textContent =
+              history.length + ':' + history.state + ':' + location.href;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:A:https://app.local/a")?;
+    Ok(())
+}
+
+#[test]
+fn history_go_reload_works_with_location_mock_page() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            history.go();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("about:blank", "<p id='marker'>reloaded</p>");
+    h.click("#run")?;
+    h.assert_text("#marker", "reloaded")?;
+    assert_eq!(h.location_reload_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn history_scroll_restoration_setter_and_window_history_access_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = window.history.scrollRestoration;
+            history.scrollRestoration = 'manual';
+            document.getElementById('result').textContent =
+              before + ':' + history.scrollRestoration + ':' + window.history.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "auto:manual:1")?;
+    Ok(())
+}
+
+#[test]
+fn history_read_only_and_invalid_scroll_restoration_are_rejected() {
+    let readonly_err = Harness::from_html(
+        r#"
+        <script>
+          window.history.length = 2;
+        </script>
+        "#,
+    )
+    .expect_err("history.length should be read-only");
+    match readonly_err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "history.length is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let invalid_mode_err = Harness::from_html(
+        r#"
+        <script>
+          history.scrollRestoration = 'smooth';
+        </script>
+        "#,
+    )
+    .expect_err("invalid scrollRestoration value should fail");
+    match invalid_mode_err {
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "history.scrollRestoration must be 'auto' or 'manual'")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn document_has_focus_reports_active_element_state() -> Result<()> {
     let html = r#"
         <input id='name'>
@@ -10393,6 +10547,91 @@ fn match_media_default_value_can_be_configured() -> Result<()> {
 }
 
 #[test]
+fn navigator_clipboard_read_text_then_updates_dom() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p class='clip-text'>initial</p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard
+              .readText()
+              .then((clipText) => {
+                document.querySelector('.clip-text').textContent = clipText;
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_text("from-clipboard");
+    h.click("#btn")?;
+    h.assert_text(".clip-text", "from-clipboard")?;
+    Ok(())
+}
+
+#[test]
+fn navigator_clipboard_read_text_returns_empty_string_when_clipboard_is_empty() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p class='clip-text'>keep</p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard.readText().then((clipText) => {
+              document.querySelector('.clip-text').textContent = clipText;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(".clip-text", "")?;
+    Ok(())
+}
+
+#[test]
+fn navigator_clipboard_write_text_and_window_alias_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const same = navigator.clipboard === window.navigator.clipboard;
+            window.navigator.clipboard
+              .writeText('saved')
+              .then(() => navigator.clipboard.readText())
+              .then((clipText) => {
+                document.getElementById('result').textContent = same + ':' + clipText;
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:saved")?;
+    assert_eq!(h.clipboard_text(), "saved");
+    Ok(())
+}
+
+#[test]
+fn navigator_clipboard_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          navigator.clipboard = null;
+        </script>
+        "#,
+    )
+    .expect_err("navigator.clipboard should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "navigator.clipboard is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn structured_clone_deep_copies_objects_arrays_and_dates() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -10625,6 +10864,14 @@ fn global_function_arity_errors_have_stable_messages() {
         (
             "<script>matchMedia();</script>",
             "matchMedia requires exactly one argument",
+        ),
+        (
+            "<script>navigator.clipboard.readText('x');</script>",
+            "navigator.clipboard.readText takes no arguments",
+        ),
+        (
+            "<script>window.navigator.clipboard.writeText();</script>",
+            "navigator.clipboard.writeText requires exactly one argument",
         ),
         (
             "<script>structuredClone();</script>",

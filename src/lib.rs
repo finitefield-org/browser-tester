@@ -30,6 +30,9 @@ const INTERNAL_INTL_SEGMENT_INDEX_KEY: &str = "\u{0}\u{0}bt_intl:segmentIndex";
 const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
 const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
 const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
+const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
+const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
+const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
 const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -3947,6 +3950,10 @@ enum DomProp {
     LocationHash,
     LocationOrigin,
     LocationAncestorOrigins,
+    History,
+    HistoryLength,
+    HistoryState,
+    HistoryScrollRestoration,
     DefaultView,
     Hidden,
     VisibilityState,
@@ -4152,6 +4159,7 @@ enum EventExprProp {
     CurrentTargetId,
     EventPhase,
     TimeStamp,
+    State,
     OldState,
     NewState,
 }
@@ -4896,6 +4904,14 @@ enum Expr {
         method: LocationMethod,
         url: Option<Box<Expr>>,
     },
+    HistoryMethodCall {
+        method: HistoryMethod,
+        args: Vec<Expr>,
+    },
+    ClipboardMethodCall {
+        method: ClipboardMethod,
+        args: Vec<Expr>,
+    },
     DocumentHasFocus,
     DomMatches {
         target: DomQuery,
@@ -5444,6 +5460,21 @@ enum LocationMethod {
     ToString,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryMethod {
+    Back,
+    Forward,
+    Go,
+    PushState,
+    ReplaceState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardMethod {
+    ReadText,
+    WriteText,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ScriptHandler {
     params: Vec<FunctionParam>,
@@ -5783,6 +5814,7 @@ struct EventState {
     is_trusted: bool,
     bubbles: bool,
     cancelable: bool,
+    state: Option<Value>,
     old_state: Option<String>,
     new_state: Option<String>,
     propagation_stopped: bool,
@@ -5801,6 +5833,7 @@ impl EventState {
             is_trusted: true,
             bubbles: true,
             cancelable: true,
+            state: None,
             old_state: None,
             new_state: None,
             propagation_stopped: false,
@@ -5869,6 +5902,12 @@ pub struct LocationNavigation {
     pub to: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct HistoryEntry {
+    url: String,
+    state: Value,
+}
+
 #[derive(Debug)]
 pub struct Harness {
     dom: Dom,
@@ -5876,6 +5915,10 @@ pub struct Harness {
     script_env: HashMap<String, Value>,
     document_url: String,
     location_object: Rc<RefCell<Vec<(String, Value)>>>,
+    history_object: Rc<RefCell<Vec<(String, Value)>>>,
+    history_entries: Vec<HistoryEntry>,
+    history_index: usize,
+    history_scroll_restoration: String,
     location_mock_pages: HashMap<String, String>,
     location_navigations: Vec<LocationNavigation>,
     location_reload_count: usize,
@@ -5893,6 +5936,7 @@ pub struct Harness {
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
     rng_state: u64,
+    clipboard_text: String,
     fetch_mocks: HashMap<String, String>,
     fetch_calls: Vec<String>,
     match_media_mocks: HashMap<String, bool>,
@@ -6085,6 +6129,13 @@ impl Harness {
             script_env: HashMap::new(),
             document_url: "about:blank".to_string(),
             location_object: Rc::new(RefCell::new(Vec::new())),
+            history_object: Rc::new(RefCell::new(Vec::new())),
+            history_entries: vec![HistoryEntry {
+                url: "about:blank".to_string(),
+                state: Value::Null,
+            }],
+            history_index: 0,
+            history_scroll_restoration: "auto".to_string(),
             location_mock_pages: HashMap::new(),
             location_navigations: Vec::new(),
             location_reload_count: 0,
@@ -6102,6 +6153,7 @@ impl Harness {
             running_timer_id: None,
             running_timer_canceled: false,
             rng_state: 0x9E37_79B9_7F4A_7C15,
+            clipboard_text: String::new(),
             fetch_mocks: HashMap::new(),
             fetch_calls: Vec::new(),
             match_media_mocks: HashMap::new(),
@@ -6134,9 +6186,17 @@ impl Harness {
 
     fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
+        self.sync_history_object();
         let location = Value::Object(self.location_object.clone());
+        let history = Value::Object(self.history_object.clone());
+        let clipboard = Self::new_object_value(vec![
+            (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
+            ("readText".into(), Self::new_builtin_placeholder_function()),
+            ("writeText".into(), Self::new_builtin_placeholder_function()),
+        ]);
 
         let navigator = Self::new_object_value(vec![
+            (INTERNAL_NAVIGATOR_OBJECT_KEY.into(), Value::Bool(true)),
             ("language".into(), Value::String(DEFAULT_LOCALE.to_string())),
             (
                 "languages".into(),
@@ -6145,6 +6205,7 @@ impl Harness {
                     Value::String("en".to_string()),
                 ]),
             ),
+            ("clipboard".into(), clipboard),
         ]);
 
         let mut intl_entries = vec![
@@ -6202,6 +6263,7 @@ impl Harness {
             ("Intl".into(), intl.clone()),
             ("String".into(), Value::StringConstructor),
             ("location".into(), location.clone()),
+            ("history".into(), history.clone()),
         ]);
 
         self.script_env.insert("navigator".to_string(), navigator);
@@ -6209,6 +6271,7 @@ impl Harness {
         self.script_env
             .insert("String".to_string(), Value::StringConstructor);
         self.script_env.insert("location".to_string(), location);
+        self.script_env.insert("history".to_string(), history);
         self.script_env.insert("window".to_string(), window);
     }
 
@@ -6320,6 +6383,131 @@ impl Harness {
         )
     }
 
+    fn history_builtin_keys() -> &'static [&'static str] {
+        &[
+            "length",
+            "scrollRestoration",
+            "state",
+            "back",
+            "forward",
+            "go",
+            "pushState",
+            "replaceState",
+        ]
+    }
+
+    fn current_history_state(&self) -> Value {
+        self.history_entries
+            .get(self.history_index)
+            .map(|entry| entry.state.clone())
+            .unwrap_or(Value::Null)
+    }
+
+    fn sync_history_object(&mut self) {
+        let mut extras = Vec::new();
+        {
+            let entries = self.history_object.borrow();
+            for (key, value) in entries.iter() {
+                if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if Self::history_builtin_keys()
+                    .iter()
+                    .any(|builtin| builtin == key)
+                {
+                    continue;
+                }
+                extras.push((key.clone(), value.clone()));
+            }
+        }
+
+        let mut entries = vec![
+            (INTERNAL_HISTORY_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                "length".to_string(),
+                Value::Number(self.history_entries.len() as i64),
+            ),
+            (
+                "scrollRestoration".to_string(),
+                Value::String(self.history_scroll_restoration.clone()),
+            ),
+            ("state".to_string(), self.current_history_state()),
+            ("back".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "forward".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("go".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "pushState".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "replaceState".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ];
+        entries.extend(extras);
+        *self.history_object.borrow_mut() = entries;
+    }
+
+    fn is_history_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_HISTORY_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn is_navigator_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_NAVIGATOR_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn set_navigator_property(
+        &mut self,
+        navigator_object: &Rc<RefCell<Vec<(String, Value)>>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        match key {
+            "clipboard" => Err(Error::ScriptRuntime(
+                "navigator.clipboard is read-only".into(),
+            )),
+            _ => {
+                Self::object_set_entry(&mut navigator_object.borrow_mut(), key.to_string(), value);
+                Ok(())
+            }
+        }
+    }
+
+    fn set_history_property(&mut self, key: &str, value: Value) -> Result<()> {
+        match key {
+            "length" => Err(Error::ScriptRuntime("history.length is read-only".into())),
+            "state" => Err(Error::ScriptRuntime("history.state is read-only".into())),
+            "scrollRestoration" => {
+                let mode = value.as_string();
+                if mode != "auto" && mode != "manual" {
+                    return Err(Error::ScriptRuntime(
+                        "history.scrollRestoration must be 'auto' or 'manual'".into(),
+                    ));
+                }
+                self.history_scroll_restoration = mode;
+                self.sync_history_object();
+                Ok(())
+            }
+            _ => {
+                Self::object_set_entry(
+                    &mut self.history_object.borrow_mut(),
+                    key.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+        }
+    }
+
     fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
         if input.is_empty() {
@@ -6412,7 +6600,17 @@ impl Harness {
         let from = self.document_url.clone();
         let to = self.resolve_location_target_url(next_url);
         self.document_url = to.clone();
+        match kind {
+            LocationNavigationKind::Replace => {
+                self.history_replace_current_entry(&to, Value::Null);
+            }
+            LocationNavigationKind::Assign | LocationNavigationKind::HrefSet => {
+                self.history_push_entry(&to, Value::Null);
+            }
+            LocationNavigationKind::Reload => {}
+        }
         self.sync_location_object();
+        self.sync_history_object();
         self.location_navigations.push(LocationNavigation {
             kind,
             from,
@@ -6427,7 +6625,7 @@ impl Harness {
                 .unwrap_or_default(),
             &to,
         ) {
-            self.load_location_mock_page_if_exists(&to)?;
+            let _ = self.load_location_mock_page_if_exists(&to)?;
         }
         Ok(())
     }
@@ -6441,14 +6639,115 @@ impl Harness {
             to: current.clone(),
         });
         self.sync_location_object();
-        self.load_location_mock_page_if_exists(&current)
+        self.sync_history_object();
+        let _ = self.load_location_mock_page_if_exists(&current)?;
+        Ok(())
     }
 
-    fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<()> {
+    fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<bool> {
         let Some(html) = self.location_mock_pages.get(url).cloned() else {
-            return Ok(());
+            return Ok(false);
         };
-        self.replace_document_with_html(&html)
+        self.replace_document_with_html(&html)?;
+        Ok(true)
+    }
+
+    fn history_push_entry(&mut self, url: &str, state: Value) {
+        let next = self
+            .history_index
+            .saturating_add(1)
+            .min(self.history_entries.len());
+        self.history_entries.truncate(next);
+        self.history_entries.push(HistoryEntry {
+            url: url.to_string(),
+            state,
+        });
+        self.history_index = self.history_entries.len().saturating_sub(1);
+    }
+
+    fn history_replace_current_entry(&mut self, url: &str, state: Value) {
+        if self.history_entries.is_empty() {
+            self.history_entries.push(HistoryEntry {
+                url: url.to_string(),
+                state,
+            });
+            self.history_index = 0;
+            return;
+        }
+        let index = self
+            .history_index
+            .min(self.history_entries.len().saturating_sub(1));
+        self.history_entries[index] = HistoryEntry {
+            url: url.to_string(),
+            state,
+        };
+        self.history_index = index;
+    }
+
+    fn history_push_state(&mut self, state: Value, url: Option<&str>, replace: bool) -> Result<()> {
+        let cloned = Self::structured_clone_value(&state, &mut Vec::new(), &mut Vec::new())?;
+        let target_url = url.unwrap_or(&self.document_url);
+        let next_url = self.resolve_location_target_url(target_url);
+        self.document_url = next_url.clone();
+
+        if replace {
+            self.history_replace_current_entry(&next_url, cloned);
+        } else {
+            self.history_push_entry(&next_url, cloned);
+        }
+        self.sync_location_object();
+        self.sync_history_object();
+        Ok(())
+    }
+
+    fn history_go_with_env(&mut self, delta: i64) -> Result<()> {
+        if delta == 0 {
+            self.reload_location()?;
+            return Ok(());
+        }
+
+        let current = self.history_index as i64;
+        let target = current.saturating_add(delta);
+        if target < 0 || target >= self.history_entries.len() as i64 {
+            return Ok(());
+        }
+        let target = target as usize;
+        if target == self.history_index {
+            return Ok(());
+        }
+
+        let from = self.document_url.clone();
+        self.history_index = target;
+        let entry = self
+            .history_entries
+            .get(target)
+            .cloned()
+            .unwrap_or(HistoryEntry {
+                url: self.document_url.clone(),
+                state: Value::Null,
+            });
+        self.document_url = entry.url.clone();
+        self.sync_location_object();
+        self.sync_history_object();
+
+        if !Self::is_hash_only_navigation(&from, &entry.url) {
+            let _ = self.load_location_mock_page_if_exists(&entry.url)?;
+        }
+
+        let mut pop_env = self.script_env.clone();
+        let _ = self.dispatch_event_with_options(
+            self.dom.root,
+            "popstate",
+            &mut pop_env,
+            true,
+            false,
+            false,
+            Some(entry.state),
+            None,
+            None,
+        )?;
+        self.script_env = pop_env;
+        Ok(())
     }
 
     fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
@@ -6586,6 +6885,14 @@ impl Harness {
 
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
         self.fetch_mocks.insert(url.to_string(), body.to_string());
+    }
+
+    pub fn set_clipboard_text(&mut self, text: &str) {
+        self.clipboard_text = text.to_string();
+    }
+
+    pub fn clipboard_text(&self) -> String {
+        self.clipboard_text.clone()
     }
 
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
@@ -7433,6 +7740,7 @@ impl Harness {
         trusted: bool,
         bubbles: bool,
         cancelable: bool,
+        state: Option<Value>,
         old_state: Option<&str>,
         new_state: Option<&str>,
     ) -> Result<EventState> {
@@ -7443,6 +7751,7 @@ impl Harness {
         };
         event.bubbles = bubbles;
         event.cancelable = cancelable;
+        event.state = state;
         event.old_state = old_state.map(str::to_string);
         event.new_state = new_state.map(str::to_string);
         self.dispatch_prepared_event_with_env(event, env)
@@ -7641,8 +7950,9 @@ impl Harness {
         if !self.dom.has_attr(dialog, "open")? {
             return Ok(());
         }
-        let cancel_event =
-            self.dispatch_event_with_options(dialog, "cancel", env, true, false, true, None, None)?;
+        let cancel_event = self.dispatch_event_with_options(
+            dialog, "cancel", env, true, false, true, None, None, None,
+        )?;
         if cancel_event.default_prevented {
             return Ok(());
         }
@@ -7674,6 +7984,7 @@ impl Harness {
             true,
             false,
             true,
+            None,
             Some(old_state),
             Some(new_state),
         )?;
@@ -7694,13 +8005,14 @@ impl Harness {
             true,
             false,
             false,
+            None,
             Some(old_state),
             Some(new_state),
         )?;
 
         if !open && fire_close_event {
             let _ = self.dispatch_event_with_options(
-                dialog, "close", env, true, false, false, None, None,
+                dialog, "close", env, true, false, false, None, None, None,
             )?;
         }
 
@@ -8458,12 +8770,24 @@ impl Harness {
                     match env.get(target) {
                         Some(Value::Object(object)) => {
                             let key = self.property_key_to_storage_key(&key);
-                            let is_location = {
+                            let (is_location, is_history, is_navigator) = {
                                 let entries = object.borrow();
-                                Self::is_location_object(&entries)
+                                (
+                                    Self::is_location_object(&entries),
+                                    Self::is_history_object(&entries),
+                                    Self::is_navigator_object(&entries),
+                                )
                             };
                             if is_location {
                                 self.set_location_property(&key, value)?;
+                                continue;
+                            }
+                            if is_history {
+                                self.set_history_property(&key, value)?;
+                                continue;
+                            }
+                            if is_navigator {
+                                self.set_navigator_property(object, &key, value)?;
                                 continue;
                             }
                             Self::object_set_entry(&mut object.borrow_mut(), key, value);
@@ -8625,6 +8949,9 @@ impl Harness {
                         DomProp::LocationHash => {
                             self.set_location_property("hash", value.clone())?
                         }
+                        DomProp::HistoryScrollRestoration => {
+                            self.set_history_property("scrollRestoration", value.clone())?
+                        }
                         DomProp::OffsetWidth
                         | DomProp::OffsetHeight
                         | DomProp::OffsetLeft
@@ -8643,6 +8970,9 @@ impl Harness {
                         | DomProp::DocumentUri
                         | DomProp::LocationOrigin
                         | DomProp::LocationAncestorOrigins
+                        | DomProp::History
+                        | DomProp::HistoryLength
+                        | DomProp::HistoryState
                         | DomProp::DefaultView
                         | DomProp::Hidden
                         | DomProp::VisibilityState
@@ -10746,6 +11076,10 @@ impl Harness {
                 Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                 Some(Value::Object(entries)) => {
                     let entries = entries.borrow();
+                    if Self::is_history_object(&entries) {
+                        return Ok(Self::object_get_entry(&entries, "length")
+                            .unwrap_or(Value::Number(self.history_entries.len() as i64)));
+                    }
                     if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
                         Ok(Value::Number(value.chars().count() as i64))
                     } else {
@@ -12274,6 +12608,12 @@ impl Harness {
                         Ok(Value::String(self.current_location_parts().origin()))
                     }
                     DomProp::LocationAncestorOrigins => Ok(Self::new_array_value(Vec::new())),
+                    DomProp::History => Ok(Value::Object(self.history_object.clone())),
+                    DomProp::HistoryLength => Ok(Value::Number(self.history_entries.len() as i64)),
+                    DomProp::HistoryState => Ok(self.current_history_state()),
+                    DomProp::HistoryScrollRestoration => {
+                        Ok(Value::String(self.history_scroll_restoration.clone()))
+                    }
                     DomProp::DefaultView => {
                         Ok(env.get("window").cloned().unwrap_or(Value::Undefined))
                     }
@@ -12347,6 +12687,71 @@ impl Harness {
                     Ok(Value::Undefined)
                 }
                 LocationMethod::ToString => Ok(Value::String(self.document_url.clone())),
+            },
+            Expr::HistoryMethodCall { method, args } => match method {
+                HistoryMethod::Back => {
+                    let _ = args;
+                    self.history_go_with_env(-1)?;
+                    Ok(Value::Undefined)
+                }
+                HistoryMethod::Forward => {
+                    let _ = args;
+                    self.history_go_with_env(1)?;
+                    Ok(Value::Undefined)
+                }
+                HistoryMethod::Go => {
+                    let delta = if let Some(delta) = args.first() {
+                        let value = self.eval_expr(delta, env, event_param, event)?;
+                        Self::value_to_i64(&value)
+                    } else {
+                        0
+                    };
+                    self.history_go_with_env(delta)?;
+                    Ok(Value::Undefined)
+                }
+                HistoryMethod::PushState => {
+                    let state = self.eval_expr(&args[0], env, event_param, event)?;
+                    let url = if args.len() >= 3 {
+                        Some(
+                            self.eval_expr(&args[2], env, event_param, event)?
+                                .as_string(),
+                        )
+                    } else {
+                        None
+                    };
+                    self.history_push_state(state, url.as_deref(), false)?;
+                    Ok(Value::Undefined)
+                }
+                HistoryMethod::ReplaceState => {
+                    let state = self.eval_expr(&args[0], env, event_param, event)?;
+                    let url = if args.len() >= 3 {
+                        Some(
+                            self.eval_expr(&args[2], env, event_param, event)?
+                                .as_string(),
+                        )
+                    } else {
+                        None
+                    };
+                    self.history_push_state(state, url.as_deref(), true)?;
+                    Ok(Value::Undefined)
+                }
+            },
+            Expr::ClipboardMethodCall { method, args } => match method {
+                ClipboardMethod::ReadText => {
+                    let _ = args;
+                    let promise = self.new_pending_promise();
+                    self.promise_resolve(&promise, Value::String(self.clipboard_text.clone()))?;
+                    Ok(Value::Promise(promise))
+                }
+                ClipboardMethod::WriteText => {
+                    let text = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
+                    self.clipboard_text = text;
+                    let promise = self.new_pending_promise();
+                    self.promise_resolve(&promise, Value::Undefined)?;
+                    Ok(Value::Promise(promise))
+                }
             },
             Expr::DocumentHasFocus => Ok(Value::Bool(self.active_element.is_some())),
             Expr::DomMatches { target, selector } => {
@@ -12463,6 +12868,9 @@ impl Harness {
                     ),
                     EventExprProp::EventPhase => Value::Number(event.event_phase as i64),
                     EventExprProp::TimeStamp => Value::Number(event.time_stamp_ms),
+                    EventExprProp::State => {
+                        event.state.as_ref().cloned().unwrap_or(Value::Undefined)
+                    }
                     EventExprProp::OldState => event
                         .old_state
                         .as_ref()
@@ -13489,6 +13897,10 @@ impl Harness {
             | DomProp::LocationHash
             | DomProp::LocationOrigin
             | DomProp::LocationAncestorOrigins
+            | DomProp::History
+            | DomProp::HistoryLength
+            | DomProp::HistoryState
+            | DomProp::HistoryScrollRestoration
             | DomProp::DefaultView
             | DomProp::Hidden
             | DomProp::VisibilityState
@@ -19322,6 +19734,10 @@ impl Harness {
             DomProp::LocationHash => "location.hash".into(),
             DomProp::LocationOrigin => "location.origin".into(),
             DomProp::LocationAncestorOrigins => "location.ancestorOrigins".into(),
+            DomProp::History => "history".into(),
+            DomProp::HistoryLength => "history.length".into(),
+            DomProp::HistoryState => "history.state".into(),
+            DomProp::HistoryScrollRestoration => "history.scrollRestoration".into(),
             DomProp::DefaultView => "defaultView".into(),
             DomProp::Hidden => "hidden".into(),
             DomProp::VisibilityState => "visibilityState".into(),
@@ -23753,6 +24169,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_history_method_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_clipboard_method_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_string_method_expr(src)? {
         return Ok(expr);
     }
@@ -24269,6 +24693,243 @@ fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
         cursor.set_pos(start);
     }
 
+    false
+}
+
+fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if !parse_history_base(&mut cursor) {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method_name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let method = match method_name.as_str() {
+        "back" => HistoryMethod::Back,
+        "forward" => HistoryMethod::Forward,
+        "go" => HistoryMethod::Go,
+        "pushState" => HistoryMethod::PushState,
+        "replaceState" => HistoryMethod::ReplaceState,
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    let args = if args.len() == 1 && args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        args
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let mut parsed_args = Vec::new();
+    match method {
+        HistoryMethod::Back | HistoryMethod::Forward => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "history.{} takes no arguments",
+                    method_name
+                )));
+            }
+        }
+        HistoryMethod::Go => {
+            if args.len() > 1 {
+                return Err(Error::ScriptParse(
+                    "history.go accepts zero or one argument".into(),
+                ));
+            }
+            if let Some(arg) = args.first() {
+                if arg.trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "history.go argument cannot be empty".into(),
+                    ));
+                }
+                parsed_args.push(parse_expr(arg.trim())?);
+            }
+        }
+        HistoryMethod::PushState | HistoryMethod::ReplaceState => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(Error::ScriptParse(format!(
+                    "history.{} requires 2 or 3 arguments",
+                    method_name
+                )));
+            }
+            for arg in args {
+                let arg = arg.trim();
+                if arg.is_empty() {
+                    return Err(Error::ScriptParse(format!(
+                        "history.{} arguments cannot be empty",
+                        method_name
+                    )));
+                }
+                parsed_args.push(parse_expr(arg)?);
+            }
+        }
+    }
+
+    Ok(Some(Expr::HistoryMethodCall {
+        method,
+        args: parsed_args,
+    }))
+}
+
+fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+
+    if cursor.consume_ascii("history") {
+        if cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+        cursor.set_pos(start);
+    }
+
+    if cursor.consume_ascii("window") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_ascii("history") && cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+    }
+
+    cursor.set_pos(start);
+    false
+}
+
+fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if !parse_clipboard_base(&mut cursor) {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(method_name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    let method = match method_name.as_str() {
+        "readText" => ClipboardMethod::ReadText,
+        "writeText" => ClipboardMethod::WriteText,
+        _ => return Ok(None),
+    };
+
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    let args = if args.len() == 1 && args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        args
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let mut parsed_args = Vec::new();
+    match method {
+        ClipboardMethod::ReadText => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "navigator.clipboard.readText takes no arguments".into(),
+                ));
+            }
+        }
+        ClipboardMethod::WriteText => {
+            if args.len() != 1 {
+                return Err(Error::ScriptParse(
+                    "navigator.clipboard.writeText requires exactly one argument".into(),
+                ));
+            }
+            if args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "navigator.clipboard.writeText argument cannot be empty".into(),
+                ));
+            }
+            parsed_args.push(parse_expr(args[0].trim())?);
+        }
+    }
+
+    Ok(Some(Expr::ClipboardMethodCall {
+        method,
+        args: parsed_args,
+    }))
+}
+
+fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+
+    if cursor.consume_ascii("navigator") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            if cursor.consume_ascii("clipboard")
+                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            {
+                return true;
+            }
+        }
+        cursor.set_pos(start);
+    }
+
+    if cursor.consume_ascii("window") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_ascii("navigator") || cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_ascii("clipboard") && cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+    }
+
+    cursor.set_pos(start);
     false
 }
 
@@ -31123,6 +31784,23 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::LocationAncestorOrigins
         }
+        ("history", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::History,
+        ("history", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::HistoryLength
+        }
+        ("history", Some(state))
+            if matches!(target, DomQuery::DocumentRoot) && state == "state" =>
+        {
+            DomProp::HistoryState
+        }
+        ("history", Some(scroll_restoration))
+            if matches!(target, DomQuery::DocumentRoot)
+                && scroll_restoration == "scrollRestoration" =>
+        {
+            DomProp::HistoryScrollRestoration
+        }
         ("defaultView", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DefaultView,
         ("hidden", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Hidden,
         ("visibilityState", None) if matches!(target, DomQuery::DocumentRoot) => {
@@ -31173,6 +31851,9 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
+            if matches!(target, DomQuery::DocumentRoot) && head == "navigator" {
+                return Ok(None);
+            }
             if matches!(target, DomQuery::Var(_) | DomQuery::VarPath { .. }) {
                 return Ok(None);
             }
@@ -31373,6 +32054,15 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
         return Ok(None);
     }
 
+    if event_var == "history"
+        && matches!(
+            (head.as_str(), nested.as_deref()),
+            ("state", None) | ("oldState", None) | ("newState", None)
+        )
+    {
+        return Ok(None);
+    }
+
     let prop = match (head.as_str(), nested.as_deref()) {
         ("type", None) => EventExprProp::Type,
         ("target", None) => EventExprProp::Target,
@@ -31387,6 +32077,7 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
         ("currentTarget", Some("id")) => EventExprProp::CurrentTargetId,
         ("eventPhase", None) => EventExprProp::EventPhase,
         ("timeStamp", None) => EventExprProp::TimeStamp,
+        ("state", None) => EventExprProp::State,
         ("oldState", None) => EventExprProp::OldState,
         ("newState", None) => EventExprProp::NewState,
         _ => return Ok(None),

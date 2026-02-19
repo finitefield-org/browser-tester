@@ -56,14 +56,19 @@ cargo test
 - `fetch` is designed to be replaced with mocks during tests.
 - `confirm` / `prompt` provide APIs for injecting mocked return values.
 - `location` navigation can load mocked HTML for a target URL.
+- `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
 - Main APIs:
   - `Harness::set_fetch_mock(url, body)`
+  - `Harness::set_clipboard_text(text)`
+  - `Harness::clipboard_text()`
   - `Harness::enqueue_confirm_response(bool)`
   - `Harness::enqueue_prompt_response(Option<&str>)`
   - `Harness::set_location_mock_page(url, html)`
   - `Harness::clear_location_mock_pages()`
   - `Harness::take_location_navigations()`
   - `Harness::location_reload_count()`
+- For `History API` tests (`history.go(0)` / `history.back()` / `history.forward()`), you can reuse
+  `set_location_mock_page()` to provide deterministic page contents for URLs in the history stack.
 
 Location mock example:
 
@@ -93,6 +98,55 @@ fn main() -> browser_tester::Result<()> {
             to: "https://app.local/next".to_string(),
         }]
     );
+    Ok(())
+}
+```
+
+History reload test mock example:
+
+```rust
+use browser_tester::Harness;
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          history.go(0);
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("about:blank", "<p id='marker'>reloaded</p>");
+    h.click("#run")?;
+    h.assert_text("#marker", "reloaded")?;
+    Ok(())
+}
+```
+
+Clipboard mock example:
+
+```rust
+use browser_tester::Harness;
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          navigator.clipboard.readText().then((clipText) => {
+            document.getElementById('out').textContent = clipText;
+          });
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_text("seeded");
+    h.click("#run")?;
+    h.assert_text("#out", "seeded")?;
     Ok(())
 }
 ```
@@ -228,14 +282,19 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
   dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
+- History API: `history.length`, `history.state`, `history.scrollRestoration`,
+  `history.back()`, `history.forward()`, `history.go([delta])`,
+  `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
+- Clipboard API: `navigator.clipboard` (read-only),
+  `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
 - Timers: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   (returns timer ID. No real-time waiting; execute via `harness.advance_time(ms)` / `harness.flush()`),
   `clearTimeout(timerId)` / `clearInterval(timerId)`,
   `requestAnimationFrame` / `cancelAnimationFrame`, `queueMicrotask`
 - Time: `Date.now()` / `performance.now()` (returns current fake clock value `now_ms`)
 - Random: `Math.random()` (returns deterministic PRNG float `0.0 <= x < 1.0`)
-- Mock-oriented APIs: `fetch`, `matchMedia`, `alert`, `confirm`, `prompt`
-- Events: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`
+- Mock-oriented APIs: `fetch`, `matchMedia`, `navigator.clipboard`, `alert`, `confirm`, `prompt`
+- Events: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`, `popstate` (`event.state`)
 - `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft` (minimal implementation returns numeric values)
 
 #### 7.2.1 Priority for Unsupported DOM APIs
@@ -273,7 +332,7 @@ Simplified `FormData` spec (for testing):
 ### 8.1 Event Object
 Fields:
 - `type`, `target`, `currentTarget`, `bubbles`, `cancelable`, `defaultPrevented`, `isTrusted`
-- `eventPhase`, `timeStamp`, `oldState`, `newState` (for toggle events)
+- `eventPhase`, `timeStamp`, `state` (for `popstate`), `oldState`, `newState` (for toggle events)
 - Reference properties: `targetName`, `currentTargetName`, `targetId`, `currentTargetId`
 - Internal controls: `propagation_stopped`, `immediate_propagation_stopped`
 
@@ -369,6 +428,8 @@ impl Harness {
 
     // Mock / browser-like globals
     pub fn set_fetch_mock(&mut self, url: &str, body: &str);
+    pub fn set_clipboard_text(&mut self, text: &str);
+    pub fn clipboard_text(&self) -> String;
     pub fn clear_fetch_mocks(&mut self);
     pub fn take_fetch_calls(&mut self) -> Vec<String>;
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool);
