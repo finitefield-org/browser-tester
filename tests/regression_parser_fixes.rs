@@ -151,6 +151,28 @@ fn array_destructured_callback_params_supported() -> browser_tester::Result<()> 
 }
 
 #[test]
+fn add_event_listener_accepts_named_function_reference_callback() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="open-tool">open</button>
+    <div id="result"></div>
+    <script>
+      const el = {
+        openToolBtn: document.getElementById("open-tool"),
+      };
+      function openDialog() {
+        document.getElementById("result").textContent = "opened";
+      }
+      el.openToolBtn.addEventListener("click", openDialog);
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#open-tool")?;
+    harness.assert_text("#result", "opened")?;
+    Ok(())
+}
+
+#[test]
 fn real_world_picking_breakdown_smoke() -> browser_tester::Result<()> {
     let html = include_str!("fixtures/picking-breakdown-minimal.html");
     let harness = Harness::from_html(html)?;

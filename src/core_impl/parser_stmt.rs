@@ -434,6 +434,22 @@ fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
     out
 }
 
+fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
+    let mut out = String::from("{");
+    for (index, (source, target)) in pattern.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(source);
+        if source != target {
+            out.push_str(": ");
+            out.push_str(target);
+        }
+    }
+    out.push('}');
+    out
+}
+
 fn inject_callback_param_prologue(
     body: String,
     concise_body: bool,
@@ -504,10 +520,25 @@ fn parse_callback_parameter_list(
     let mut params = Vec::new();
     let mut prologue = Vec::new();
     let mut bound_names: Vec<String> = Vec::new();
+    let part_count = parts.len();
     for (index, raw) in parts.into_iter().enumerate() {
         let param = raw.trim();
         if param.is_empty() {
             return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+        }
+
+        if let Some(rest_name) = param.strip_prefix("...") {
+            let rest_name = rest_name.trim();
+            if index + 1 != part_count || !is_ident(rest_name) {
+                return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
+            }
+            params.push(FunctionParam {
+                name: rest_name.to_string(),
+                default: None,
+                is_rest: true,
+            });
+            bound_names.push(rest_name.to_string());
+            continue;
         }
 
         if let Some((eq_pos, op_len)) = find_top_level_assignment(param) {
@@ -516,21 +547,68 @@ fn parse_callback_parameter_list(
             }
             let name = param[..eq_pos].trim();
             let default_src = param[eq_pos + op_len..].trim();
-            if !is_ident(name) || default_src.is_empty() {
+            if default_src.is_empty() {
                 return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
             }
-            params.push(FunctionParam {
-                name: name.to_string(),
-                default: Some(parse_expr(default_src)?),
-            });
-            bound_names.push(name.to_string());
-            continue;
+
+            if is_ident(name) {
+                params.push(FunctionParam {
+                    name: name.to_string(),
+                    default: Some(parse_expr(default_src)?),
+                    is_rest: false,
+                });
+                bound_names.push(name.to_string());
+                continue;
+            }
+
+            if name.starts_with('[') && name.ends_with(']') {
+                let pattern = parse_array_destructure_pattern(name)?;
+                let temp = next_callback_temp_name(&params, index);
+                let pattern_src = format_array_destructure_pattern(&pattern);
+                for bound_name in pattern.iter().flatten() {
+                    if !bound_names.iter().any(|bound| bound == bound_name) {
+                        prologue.push(format!("let {bound_name} = undefined;"));
+                        bound_names.push(bound_name.clone());
+                    }
+                }
+                prologue.push(format!("{pattern_src} = {temp};"));
+                bound_names.push(temp.clone());
+                params.push(FunctionParam {
+                    name: temp,
+                    default: Some(parse_expr(default_src)?),
+                    is_rest: false,
+                });
+                continue;
+            }
+
+            if name.starts_with('{') && name.ends_with('}') {
+                let pattern = parse_object_destructure_pattern(name)?;
+                let temp = next_callback_temp_name(&params, index);
+                let pattern_src = format_object_destructure_pattern(&pattern);
+                for (_, bound_name) in &pattern {
+                    if !bound_names.iter().any(|bound| bound == bound_name) {
+                        prologue.push(format!("let {bound_name} = undefined;"));
+                        bound_names.push(bound_name.clone());
+                    }
+                }
+                prologue.push(format!("{pattern_src} = {temp};"));
+                bound_names.push(temp.clone());
+                params.push(FunctionParam {
+                    name: temp,
+                    default: Some(parse_expr(default_src)?),
+                    is_rest: false,
+                });
+                continue;
+            }
+
+            return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
         }
 
         if is_ident(param) {
             params.push(FunctionParam {
                 name: param.to_string(),
                 default: None,
+                is_rest: false,
             });
             bound_names.push(param.to_string());
             continue;
@@ -551,6 +629,27 @@ fn parse_callback_parameter_list(
             params.push(FunctionParam {
                 name: temp,
                 default: None,
+                is_rest: false,
+            });
+            continue;
+        }
+
+        if param.starts_with('{') && param.ends_with('}') {
+            let pattern = parse_object_destructure_pattern(param)?;
+            let temp = next_callback_temp_name(&params, index);
+            let pattern_src = format_object_destructure_pattern(&pattern);
+            for (_, name) in &pattern {
+                if !bound_names.iter().any(|bound| bound == name) {
+                    prologue.push(format!("let {name} = undefined;"));
+                    bound_names.push(name.clone());
+                }
+            }
+            prologue.push(format!("{pattern_src} = {temp};"));
+            bound_names.push(temp.clone());
+            params.push(FunctionParam {
+                name: temp,
+                default: None,
+                is_rest: false,
             });
             continue;
         }
@@ -595,6 +694,22 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
     }
 
     Err(Error::ScriptParse("expected callback body".into()))
+}
+
+fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
+    while let Some(ch) = cursor.peek() {
+        if ch == b' ' || ch == b'\t' || ch == 0x0B || ch == 0x0C {
+            cursor.set_pos(cursor.pos() + 1);
+            continue;
+        }
+        if ch == b'\n' || ch == b'\r' {
+            return Err(Error::ScriptParse(
+                "line break before => is not allowed".into(),
+            ));
+        }
+        break;
+    }
+    Ok(())
 }
 
 fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
@@ -646,6 +761,50 @@ fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
     }
 }
 
+fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+    if !cursor.consume_ascii("async") {
+        return false;
+    }
+    if cursor.peek().is_some_and(is_ident_char) {
+        cursor.set_pos(start);
+        return false;
+    }
+
+    let mut saw_separator = false;
+    while let Some(b) = cursor.peek() {
+        if b == b' ' || b == b'\t' || b == 0x0B || b == 0x0C {
+            saw_separator = true;
+            cursor.set_pos(cursor.pos() + 1);
+            continue;
+        }
+        if b == b'\n' || b == b'\r' {
+            cursor.set_pos(start);
+            return false;
+        }
+        break;
+    }
+    if !saw_separator {
+        cursor.set_pos(start);
+        return false;
+    }
+
+    let pos = cursor.pos();
+    if cursor
+        .src
+        .get(pos..)
+        .is_some_and(|rest| rest.starts_with("function"))
+        && !cursor
+            .bytes()
+            .get(pos + "function".len())
+            .is_some_and(|&b| is_ident_char(b))
+    {
+        cursor.set_pos(start);
+        return false;
+    }
+    true
+}
+
 pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     {
@@ -669,6 +828,31 @@ pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                 handler: ScriptHandler { params, stmts },
                 is_async: true,
             }));
+        }
+    }
+
+    {
+        let mut cursor = Cursor::new(src);
+        cursor.skip_ws();
+        if try_consume_async_arrow_prefix(&mut cursor) {
+            if let Ok((params, body, concise_body)) =
+                parse_callback(&mut cursor, usize::MAX, "function parameters")
+            {
+                cursor.skip_ws();
+                if cursor.eof() {
+                    let stmts = if concise_body {
+                        vec![Stmt::Return {
+                            value: Some(parse_expr(body.trim())?),
+                        }]
+                    } else {
+                        parse_block_statements(&body)?
+                    };
+                    return Ok(Some(Expr::Function {
+                        handler: ScriptHandler { params, stmts },
+                        is_async: true,
+                    }));
+                }
+            }
         }
     }
 
@@ -753,12 +937,13 @@ fn parse_callback(
             params: vec![FunctionParam {
                 name: ident,
                 default: None,
+                is_rest: false,
             }],
             prologue: Vec::new(),
         }
     };
 
-    cursor.skip_ws();
+    skip_arrow_whitespace_without_line_terminator(cursor)?;
     cursor.expect_ascii("=>")?;
     let (body, concise_body) = parse_arrow_or_block_body(cursor)?;
     let (body, concise_body) =
@@ -2608,10 +2793,10 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         if parsed_params
             .params
             .iter()
-            .any(|param| param.default.is_some())
+            .any(|param| param.default.is_some() || param.is_rest)
         {
             return Err(Error::ScriptParse(format!(
-                "forEach callback must not use default parameters: {src}"
+                "forEach callback must not use default or rest parameters: {src}"
             )));
         }
         let item_var = parsed_params
@@ -2653,10 +2838,10 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         if parsed_params
             .params
             .iter()
-            .any(|param| param.default.is_some())
+            .any(|param| param.default.is_some() || param.is_rest)
         {
             return Err(Error::ScriptParse(format!(
-                "forEach callback must not use default parameters: {src}"
+                "forEach callback must not use default or rest parameters: {src}"
             )));
         }
         param_prologue = parsed_params.prologue;
@@ -2680,7 +2865,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         (item, None)
     };
 
-    cursor.skip_ws();
+    skip_arrow_whitespace_without_line_terminator(&mut cursor)?;
     cursor.expect_ascii("=>")?;
     cursor.skip_ws();
     let (body, concise_body) = parse_arrow_or_block_body(&mut cursor)?;
@@ -3356,6 +3541,44 @@ fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DispatchEvent { target, event_type }))
 }
 
+enum ListenerCallbackParseResult {
+    Inline {
+        params: Vec<FunctionParam>,
+        body: String,
+    },
+    Reference(String),
+}
+
+fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallbackParseResult> {
+    let start = cursor.pos();
+    if let Some(name) = cursor.parse_identifier() {
+        cursor.skip_ws();
+        if matches!(cursor.peek(), Some(b',') | Some(b')')) {
+            return Ok(ListenerCallbackParseResult::Reference(name));
+        }
+        cursor.set_pos(start);
+    }
+
+    let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
+    Ok(ListenerCallbackParseResult::Inline { params, body })
+}
+
+fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
+    let mut event_param = String::from("__bt_listener_event");
+    while event_param == callback_name {
+        event_param.push('_');
+    }
+    let stmts = parse_block_statements(&format!("{callback_name}({event_param});"))?;
+    Ok(ScriptHandler {
+        params: vec![FunctionParam {
+            name: event_param,
+            default: None,
+            is_rest: false,
+        }],
+        stmts,
+    })
+}
+
 fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -3384,7 +3607,7 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.skip_ws();
     cursor.expect_byte(b',')?;
     cursor.skip_ws();
-    let (params, body, _) = parse_callback(&mut cursor, 1, "callback parameters")?;
+    let callback = parse_listener_callback_arg(&mut cursor)?;
 
     cursor.skip_ws();
     let capture = if cursor.consume_byte(b',') {
@@ -3413,9 +3636,12 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
-    let handler = ScriptHandler {
-        params,
-        stmts: parse_block_statements(&body)?,
+    let handler = match callback {
+        ListenerCallbackParseResult::Inline { params, body } => ScriptHandler {
+            params,
+            stmts: parse_block_statements(&body)?,
+        },
+        ListenerCallbackParseResult::Reference(name) => build_listener_reference_handler(&name)?,
     };
     Ok(Some(Stmt::ListenerMutation {
         target,

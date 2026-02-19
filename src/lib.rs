@@ -4066,6 +4066,7 @@ struct ScriptHandler {
 struct FunctionParam {
     name: String,
     default: Option<Expr>,
+    is_rest: bool,
 }
 
 impl ScriptHandler {

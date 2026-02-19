@@ -3475,6 +3475,79 @@ fn default_function_parameters_are_evaluated_left_to_right_at_call_time() -> Res
 }
 
 #[test]
+fn arrow_function_parameters_support_rest_and_destructuring() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const sum = (a, b, ...rest) => a + b + rest[0] + rest[1];
+          const pick = ({ x, y: z }) => x + ':' + z;
+          const pair = ([m, n] = [9, 8]) => m + ':' + n;
+          document.getElementById('result').textContent =
+            sum(1, 2, 3, 4) + '|' +
+            pick({ x: 'A', y: 'B' }) + '|' +
+            pair() + '|' +
+            pair([5, 6]);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "10|A:B|9:8|5:6")?;
+    Ok(())
+}
+
+#[test]
+fn async_arrow_function_expressions_are_supported() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const add = async (a, b) => a + b;
+            const inc = async value => {
+              return value + 1;
+            };
+            Promise.all([add(1, 2), inc(4)]).then((values) => {
+              document.getElementById('result').textContent = values.join(':');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.flush()?;
+    h.assert_text("#result", "3:5")?;
+    Ok(())
+}
+
+#[test]
+fn async_identifier_arrow_form_still_parses_as_normal_arrow() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const fn = async => async + 1;
+          document.getElementById('result').textContent = String(fn(3));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "4")?;
+    Ok(())
+}
+
+#[test]
+fn arrow_function_line_break_before_arrow_is_rejected() {
+    let err = Harness::from_html(
+        "<script>const fn = (a, b)\n=> a + b; document.body.textContent = String(fn(1, 2));</script>",
+    )
+    .expect_err("line break between parameter list and arrow should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("=>") || msg.contains("unsupported")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn default_parameter_initializer_cannot_access_function_body_bindings() {
     let err = Harness::from_html(
         "<script>function f(a = go()) { function go() { return ':P'; } } f();</script>",

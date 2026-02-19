@@ -2785,6 +2785,16 @@ impl Harness {
         event: &EventState,
     ) -> Result<()> {
         for (index, param) in handler.params.iter().enumerate() {
+            if param.is_rest {
+                let rest = if index < args.len() {
+                    args[index..].to_vec()
+                } else {
+                    Vec::new()
+                };
+                env.insert(param.name.clone(), Self::new_array_value(rest));
+                continue;
+            }
+
             let provided = args.get(index).cloned().unwrap_or(Value::Undefined);
             let value = if matches!(provided, Value::Undefined) {
                 if let Some(default_expr) = &param.default {

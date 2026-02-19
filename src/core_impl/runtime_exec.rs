@@ -2828,6 +2828,7 @@ impl Harness {
                     params.extend(names.into_iter().map(|name| FunctionParam {
                         name,
                         default: None,
+                        is_rest: false,
                     }));
                 }
 
