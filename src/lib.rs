@@ -33,6 +33,7 @@ const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
 const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
 const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
+const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
 const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
 const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
 const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
@@ -2207,6 +2208,8 @@ impl PartialEq for RegexValue {
 struct FunctionValue {
     handler: ScriptHandler,
     captured_env: HashMap<String, Value>,
+    captured_global_names: HashSet<String>,
+    local_bindings: HashSet<String>,
     global_scope: bool,
     is_async: bool,
 }
@@ -3938,6 +3941,10 @@ enum Stmt {
         target: String,
         callback: ScriptHandler,
     },
+    ArrayForEachExpr {
+        target: Expr,
+        callback: ScriptHandler,
+    },
     For {
         init: Option<Box<Stmt>>,
         cond: Option<Expr>,
@@ -4359,6 +4366,7 @@ fn ensure_hash_prefix(value: &str) -> String {
 struct Listener {
     capture: bool,
     handler: ScriptHandler,
+    captured_env: HashMap<String, Value>,
 }
 
 #[derive(Debug, Default, Clone)]

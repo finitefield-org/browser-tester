@@ -2846,7 +2846,7 @@ impl Harness {
                     return Err(Error::ScriptRuntime(format!("unknown variable: {target}")));
                 };
                 let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
-                self.execute_callable_value(&callee, &evaluated_args, event)
+                self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                             Error::ScriptRuntime(format!("'{target}' is not a function"))
@@ -2857,7 +2857,7 @@ impl Harness {
             Expr::Call { target, args } => {
                 let callee = self.eval_expr(target, env, event_param, event)?;
                 let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
-                self.execute_callable_value(&callee, &evaluated_args, event)
+                self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                             Error::ScriptRuntime("call target is not a function".into())
@@ -2944,7 +2944,7 @@ impl Harness {
                         }
                         other => other,
                     })?;
-                self.execute_callable_value(&callee, &evaluated_args, event)
+                self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                             Error::ScriptRuntime(format!("'{}' is not a function", member))
@@ -11727,6 +11727,95 @@ impl Harness {
                 "continue statement outside of loop".into(),
             )),
         }
+    }
+
+    pub(super) fn execute_array_like_foreach_in_env(
+        &mut self,
+        target_value: Value,
+        callback: &ScriptHandler,
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
+        target_label: &str,
+    ) -> Result<()> {
+        match target_value {
+            Value::NodeList(nodes) => {
+                let snapshot = nodes.clone();
+                for (idx, node) in snapshot.into_iter().enumerate() {
+                    self.execute_array_callback_in_env(
+                        callback,
+                        &[
+                            Value::Node(node),
+                            Value::Number(idx as i64),
+                            Value::NodeList(nodes.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                }
+            }
+            Value::Array(values) => {
+                let input = values.borrow().clone();
+                for (idx, item) in input.into_iter().enumerate() {
+                    self.execute_array_callback_in_env(
+                        callback,
+                        &[item, Value::Number(idx as i64), Value::Array(values.clone())],
+                        env,
+                        event,
+                    )?;
+                }
+            }
+            Value::Map(map) => {
+                let snapshot = map.borrow().entries.clone();
+                for (key, value) in snapshot {
+                    self.execute_array_callback_in_env(
+                        callback,
+                        &[value, key, Value::Map(map.clone())],
+                        env,
+                        event,
+                    )?;
+                }
+            }
+            Value::Set(set) => {
+                let snapshot = set.borrow().values.clone();
+                for value in snapshot {
+                    self.execute_array_callback_in_env(
+                        callback,
+                        &[value.clone(), value, Value::Set(set.clone())],
+                        env,
+                        event,
+                    )?;
+                }
+            }
+            Value::Object(entries) => {
+                if Self::is_url_search_params_object(&entries.borrow()) {
+                    let snapshot = Self::url_search_params_pairs_from_object_entries(&entries.borrow());
+                    for (key, value) in snapshot {
+                        self.execute_array_callback_in_env(
+                            callback,
+                            &[
+                                Value::String(value),
+                                Value::String(key),
+                                Value::Object(entries.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                    }
+                } else {
+                    return Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not an array",
+                        target_label
+                    )));
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target_label
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn normalize_slice_index(len: usize, index: i64) -> usize {

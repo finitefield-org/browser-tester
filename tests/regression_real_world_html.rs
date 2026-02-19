@@ -144,3 +144,52 @@ fn create_lot_row_seed_name_property_uses_object_semantics() -> browser_tester::
     harness.assert_text("#result", "true|true")?;
     Ok(())
 }
+
+#[test]
+fn function_reassignment_of_global_is_visible_across_functions() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let computedAllCandidates = [];
+
+      function buildCandidates() {
+        computedAllCandidates = [{ id: "one" }];
+      }
+
+      function candidateCount() {
+        return computedAllCandidates.length;
+      }
+
+      buildCandidates();
+      document.getElementById("result").textContent = String(candidateCount());
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn function_can_call_global_function_declared_later() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="btn">run</button>
+    <div id="result">init</div>
+    <script>
+      function openDialog() {
+        closePasteDialog();
+      }
+
+      function closePasteDialog() {
+        document.getElementById("result").textContent = "closed";
+      }
+
+      document.getElementById("btn").addEventListener("click", openDialog);
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#btn")?;
+    harness.assert_text("#result", "closed")?;
+    Ok(())
+}

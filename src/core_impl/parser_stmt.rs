@@ -2712,52 +2712,84 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
 fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
-    let mut cursor = Cursor::new(stmt);
-    cursor.skip_ws();
-    let Some(target) = cursor.parse_identifier() else {
-        return Ok(None);
-    };
+    let stmt_no_semi = stmt.strip_suffix(';').map(str::trim_end).unwrap_or(stmt);
 
+    let mut cursor = Cursor::new(stmt_no_semi);
     cursor.skip_ws();
-    if !cursor.consume_byte(b'.') {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    if !cursor.consume_ascii("forEach") {
-        return Ok(None);
-    }
-    if let Some(next) = cursor.peek() {
-        if is_ident_char(next) {
-            return Ok(None);
+    if let Some(target) = cursor.parse_identifier() {
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            if cursor.consume_ascii("forEach") {
+                if let Some(next) = cursor.peek() {
+                    if is_ident_char(next) {
+                        return Ok(None);
+                    }
+                }
+                cursor.skip_ws();
+
+                let args_src = cursor.read_balanced_block(b'(', b')')?;
+                let args = split_top_level_by_char(&args_src, b',');
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
+                }
+                let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+                if args.len() == 2 {
+                    let _ = parse_expr(args[1].trim())?;
+                }
+
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Err(Error::ScriptParse(format!(
+                        "unsupported forEach statement tail: {stmt}"
+                    )));
+                }
+                return Ok(Some(Stmt::ArrayForEach { target, callback }));
+            }
         }
     }
-    cursor.skip_ws();
 
-    let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let args = split_top_level_by_char(&args_src, b',');
-    if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+    if !stmt_no_semi.contains(".forEach(") {
+        return Ok(None);
+    }
+    if stmt_no_semi.contains(".classList.forEach(") {
+        return Ok(None);
+    }
+
+    let expr = parse_expr(stmt_no_semi)?;
+    let Expr::MemberCall {
+        target,
+        member,
+        args,
+    } = expr
+    else {
+        return Ok(None);
+    };
+    if member != "forEach" {
+        return Ok(None);
+    }
+    if args.is_empty() || args.len() > 2 {
         return Err(Error::ScriptParse(
             "forEach requires a callback and optional thisArg".into(),
         ));
     }
-    if args.len() == 2 && args[1].trim().is_empty() {
-        return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
-    }
-    let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
-    if args.len() == 2 {
-        let _ = parse_expr(args[1].trim())?;
-    }
+    let callback = match &args[0] {
+        Expr::Function {
+            handler,
+            is_async: false,
+        } => handler.clone(),
+        _ => return Ok(None),
+    };
 
-    cursor.skip_ws();
-    cursor.consume_byte(b';');
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported forEach statement tail: {stmt}"
-        )));
-    }
-
-    Ok(Some(Stmt::ArrayForEach { target, callback }))
+    Ok(Some(Stmt::ArrayForEachExpr {
+        target: *target,
+        callback,
+    }))
 }
 
 pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {

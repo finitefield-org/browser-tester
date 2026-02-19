@@ -284,6 +284,48 @@ fn add_event_listener_accepts_named_function_reference_callback() -> browser_tes
 }
 
 #[test]
+fn object_entries_foreach_updates_outer_variable() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function interpolate(template, params = {}) {
+        let out = String(template || "");
+        Object.entries(params).forEach(([key, value]) => {
+          out = out.replaceAll(`{${key}}`, String(value));
+        });
+        return out;
+      }
+      document.getElementById("result").textContent = interpolate("Shortage {value}", { value: 7 });
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "Shortage 7")?;
+    Ok(())
+}
+
+#[test]
+fn expression_foreach_listener_keeps_item_variable_scope() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="a">A</button>
+    <button id="b">B</button>
+    <div id="result"></div>
+    <script>
+      document.querySelectorAll("button").forEach((btn, idx) => {
+        btn.addEventListener("click", () => {
+          document.getElementById("result").textContent = btn.id + ":" + idx;
+        });
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#b")?;
+    harness.assert_text("#result", "b:1")?;
+    Ok(())
+}
+
+#[test]
 fn real_world_picking_breakdown_smoke() -> browser_tester::Result<()> {
     let html = include_str!("fixtures/picking-breakdown-minimal.html");
     let harness = Harness::from_html(html)?;

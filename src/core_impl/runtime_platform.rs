@@ -174,6 +174,8 @@ impl Harness {
         self.script_env.insert("top".to_string(), window.clone());
         self.script_env.insert("parent".to_string(), window.clone());
         self.script_env.insert("frames".to_string(), window);
+        self.script_env
+            .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
     }
 
     pub(super) fn current_location_parts(&self) -> LocationParts {
@@ -1456,7 +1458,7 @@ impl Harness {
 
     pub(super) fn click_node(&mut self, target: NodeId) -> Result<()> {
         let mut env = self.script_env.clone();
-        self.click_node_with_env(target, &mut env)
+        stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, &mut env))
     }
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
@@ -2401,6 +2403,16 @@ impl Harness {
     ) -> Result<()> {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
+            let mut listener_env = env.clone();
+            for (name, value) in &listener.captured_env {
+                if Self::is_internal_env_key(name) {
+                    continue;
+                }
+                if !listener_env.contains_key(name) {
+                    listener_env.insert(name.clone(), value.clone());
+                }
+            }
+            let current_keys = env.keys().cloned().collect::<Vec<_>>();
             if self.trace {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
@@ -2410,7 +2422,12 @@ impl Harness {
                     event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
             }
-            self.execute_handler(&listener.handler, event, env)?;
+            self.execute_handler(&listener.handler, event, &mut listener_env)?;
+            for key in current_keys {
+                if let Some(value) = listener_env.get(&key).cloned() {
+                    env.insert(key, value);
+                }
+            }
             if event.immediate_propagation_stopped {
                 break;
             }
@@ -2601,6 +2618,17 @@ impl Harness {
         }
     }
 
+    fn is_internal_env_key(name: &str) -> bool {
+        name.starts_with("\u{0}\u{0}bt_")
+    }
+
+    fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
+        match env.get(INTERNAL_SCOPE_DEPTH_KEY) {
+            Some(Value::Number(depth)) if *depth >= 0 => *depth,
+            _ => 0,
+        }
+    }
+
     pub(super) fn make_function_value(
         &self,
         handler: ScriptHandler,
@@ -2608,14 +2636,34 @@ impl Harness {
         global_scope: bool,
         is_async: bool,
     ) -> Value {
+        let local_bindings = Self::collect_function_scope_bindings(&handler);
+        let scope_depth = Self::env_scope_depth(env);
         let captured_env = if global_scope {
             self.script_env.clone()
         } else {
             env.clone()
         };
+        let mut captured_global_names = HashSet::new();
+        for (name, value) in &captured_env {
+            if Self::is_internal_env_key(name) || name == INTERNAL_RETURN_SLOT {
+                continue;
+            }
+            if scope_depth == 0 {
+                captured_global_names.insert(name.clone());
+                continue;
+            }
+            let Some(global_value) = self.script_env.get(name) else {
+                continue;
+            };
+            if global_scope || self.strict_equal(global_value, value) {
+                captured_global_names.insert(name.clone());
+            }
+        }
         Value::Function(Rc::new(FunctionValue {
             handler,
             captured_env,
+            captured_global_names,
+            local_bindings,
             global_scope,
             is_async,
         }))
@@ -2634,8 +2682,20 @@ impl Harness {
         args: &[Value],
         event: &EventState,
     ) -> Result<Value> {
+        self.execute_callable_value_with_env(callable, args, event, None)
+    }
+
+    pub(super) fn execute_callable_value_with_env(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
+    ) -> Result<Value> {
         match callable {
-            Value::Function(function) => self.execute_function_call(function.as_ref(), args, event),
+            Value::Function(function) => {
+                self.execute_function_call(function.as_ref(), args, event, caller_env)
+            }
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
             }
@@ -2828,14 +2888,50 @@ impl Harness {
         function: &FunctionValue,
         args: &[Value],
         event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
     ) -> Result<Value> {
-        let run = |this: &mut Self| -> Result<Value> {
+        let run = |this: &mut Self, caller_env: Option<&HashMap<String, Value>>| -> Result<Value> {
             let mut call_env = if function.global_scope {
                 this.script_env.clone()
             } else {
                 function.captured_env.clone()
             };
             call_env.remove(INTERNAL_RETURN_SLOT);
+            let scope_depth = Self::env_scope_depth(&call_env);
+            call_env.insert(
+                INTERNAL_SCOPE_DEPTH_KEY.to_string(),
+                Value::Number(scope_depth.saturating_add(1)),
+            );
+            let mut global_sync_keys = HashSet::new();
+            let caller_view = caller_env;
+            let caller_scope_depth = caller_view.map(Self::env_scope_depth).unwrap_or(0);
+            for name in &function.captured_global_names {
+                if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                    continue;
+                }
+                global_sync_keys.insert(name.clone());
+                if caller_scope_depth > 0 {
+                    if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
+                        call_env.insert(name.clone(), value);
+                        continue;
+                    }
+                }
+                if let Some(global_value) = this.script_env.get(name).cloned() {
+                    call_env.insert(name.clone(), global_value);
+                } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
+                    call_env.insert(name.clone(), value);
+                }
+            }
+            for (name, global_value) in &this.script_env {
+                if Self::is_internal_env_key(name)
+                    || function.local_bindings.contains(name)
+                    || call_env.contains_key(name)
+                {
+                    continue;
+                }
+                call_env.insert(name.clone(), global_value.clone());
+                global_sync_keys.insert(name.clone());
+            }
             let mut call_event = event.clone();
             let event_param = None;
             this.bind_handler_params(
@@ -2851,6 +2947,14 @@ impl Harness {
                 &mut call_event,
                 &mut call_env,
             )?;
+            for name in &global_sync_keys {
+                if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                    continue;
+                }
+                if let Some(next) = call_env.get(name).cloned() {
+                    this.script_env.insert(name.clone(), next);
+                }
+            }
             match flow {
                 ExecFlow::Continue => Ok(Value::Undefined),
                 ExecFlow::Break => Err(Error::ScriptRuntime(
@@ -2867,7 +2971,7 @@ impl Harness {
 
         if function.is_async {
             let promise = self.new_pending_promise();
-            match run(self) {
+            match run(self, caller_env) {
                 Ok(value) => {
                     if let Err(err) = self.promise_resolve(&promise, value) {
                         self.promise_reject(&promise, Self::promise_error_reason(err));
@@ -2877,7 +2981,7 @@ impl Harness {
             }
             Ok(Value::Promise(promise))
         } else {
-            run(self)
+            run(self, caller_env)
         }
     }
 
@@ -3003,6 +3107,110 @@ impl Harness {
             }
         }
         out
+    }
+
+    fn collect_function_scope_bindings(handler: &ScriptHandler) -> HashSet<String> {
+        let mut bindings = HashSet::new();
+        for param in &handler.params {
+            bindings.insert(param.name.clone());
+        }
+        Self::collect_scope_bindings_from_stmts(&handler.stmts, &mut bindings);
+        bindings
+    }
+
+    fn collect_scope_bindings_from_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in stmts {
+            Self::collect_scope_bindings_from_stmt(stmt, out);
+        }
+    }
+
+    fn collect_scope_bindings_from_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+        match stmt {
+            Stmt::VarDecl { name, .. } => {
+                out.insert(name.clone());
+            }
+            Stmt::FunctionDecl { name, .. } => {
+                out.insert(name.clone());
+            }
+            Stmt::ForEach {
+                item_var,
+                index_var,
+                body,
+                ..
+            }
+            | Stmt::ClassListForEach {
+                item_var,
+                index_var,
+                body,
+                ..
+            } => {
+                out.insert(item_var.clone());
+                if let Some(index_var) = index_var {
+                    out.insert(index_var.clone());
+                }
+                Self::collect_scope_bindings_from_stmts(body, out);
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init) = init {
+                    Self::collect_scope_bindings_from_stmt(init, out);
+                }
+                Self::collect_scope_bindings_from_stmts(body, out);
+            }
+            Stmt::ForIn { item_var, body, .. } | Stmt::ForOf { item_var, body, .. } => {
+                out.insert(item_var.clone());
+                Self::collect_scope_bindings_from_stmts(body, out);
+            }
+            Stmt::DoWhile { body, .. } | Stmt::While { body, .. } => {
+                Self::collect_scope_bindings_from_stmts(body, out);
+            }
+            Stmt::Try {
+                try_stmts,
+                catch_binding,
+                catch_stmts,
+                finally_stmts,
+            } => {
+                Self::collect_scope_bindings_from_stmts(try_stmts, out);
+                if let Some(catch_binding) = catch_binding {
+                    Self::collect_scope_bindings_from_catch_binding(catch_binding, out);
+                }
+                if let Some(catch_stmts) = catch_stmts {
+                    Self::collect_scope_bindings_from_stmts(catch_stmts, out);
+                }
+                if let Some(finally_stmts) = finally_stmts {
+                    Self::collect_scope_bindings_from_stmts(finally_stmts, out);
+                }
+            }
+            Stmt::If {
+                then_stmts,
+                else_stmts,
+                ..
+            } => {
+                Self::collect_scope_bindings_from_stmts(then_stmts, out);
+                Self::collect_scope_bindings_from_stmts(else_stmts, out);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_scope_bindings_from_catch_binding(
+        binding: &CatchBinding,
+        out: &mut HashSet<String>,
+    ) {
+        match binding {
+            CatchBinding::Identifier(name) => {
+                out.insert(name.clone());
+            }
+            CatchBinding::ArrayPattern(pattern) => {
+                for entry in pattern.iter().flatten() {
+                    out.insert(entry.clone());
+                }
+            }
+            CatchBinding::ObjectPattern(pattern) => {
+                for (_, target) in pattern {
+                    out.insert(target.clone());
+                }
+            }
+        }
     }
 
     pub(super) fn resolve_pending_function_decl(
@@ -3737,82 +3945,27 @@ impl Harness {
                     }
                 }
                 Stmt::ArrayForEach { target, callback } => {
-                    let target_value = env.get(target).cloned();
-                    match target_value {
-                        Some(Value::Array(values)) => {
-                            let input = values.borrow().clone();
-                            for (idx, item) in input.into_iter().enumerate() {
-                                self.execute_array_callback_in_env(
-                                    callback,
-                                    &[
-                                        item,
-                                        Value::Number(idx as i64),
-                                        Value::Array(values.clone()),
-                                    ],
-                                    env,
-                                    event,
-                                )?;
-                            }
-                        }
-                        Some(Value::Map(map)) => {
-                            let snapshot = map.borrow().entries.clone();
-                            for (key, value) in snapshot {
-                                self.execute_array_callback_in_env(
-                                    callback,
-                                    &[value, key, Value::Map(map.clone())],
-                                    env,
-                                    event,
-                                )?;
-                            }
-                        }
-                        Some(Value::Set(set)) => {
-                            let snapshot = set.borrow().values.clone();
-                            for value in snapshot {
-                                self.execute_array_callback_in_env(
-                                    callback,
-                                    &[value.clone(), value, Value::Set(set.clone())],
-                                    env,
-                                    event,
-                                )?;
-                            }
-                        }
-                        Some(Value::Object(entries)) => {
-                            if Self::is_url_search_params_object(&entries.borrow()) {
-                                let snapshot = Self::url_search_params_pairs_from_object_entries(
-                                    &entries.borrow(),
-                                );
-                                for (key, value) in snapshot {
-                                    self.execute_array_callback_in_env(
-                                        callback,
-                                        &[
-                                            Value::String(value),
-                                            Value::String(key),
-                                            Value::Object(entries.clone()),
-                                        ],
-                                        env,
-                                        event,
-                                    )?;
-                                }
-                            } else {
-                                return Err(Error::ScriptRuntime(format!(
-                                    "variable '{}' is not an array",
-                                    target
-                                )));
-                            }
-                        }
-                        Some(_) => {
-                            return Err(Error::ScriptRuntime(format!(
-                                "variable '{}' is not an array",
-                                target
-                            )));
-                        }
-                        None => {
-                            return Err(Error::ScriptRuntime(format!(
-                                "unknown variable: {}",
-                                target
-                            )));
-                        }
-                    }
+                    let target_value = env
+                        .get(target)
+                        .cloned()
+                        .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
+                    self.execute_array_like_foreach_in_env(
+                        target_value,
+                        callback,
+                        env,
+                        event,
+                        target,
+                    )?;
+                }
+                Stmt::ArrayForEachExpr { target, callback } => {
+                    let target_value = self.eval_expr(target, env, event_param, event)?;
+                    self.execute_array_like_foreach_in_env(
+                        target_value,
+                        callback,
+                        env,
+                        event,
+                        "<expression>",
+                    )?;
                 }
                 Stmt::For {
                     init,
@@ -4116,6 +4269,7 @@ impl Harness {
                                 Listener {
                                     capture: *capture,
                                     handler: handler.clone(),
+                                    captured_env: env.clone(),
                                 },
                             );
                         }

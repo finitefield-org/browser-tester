@@ -4127,6 +4127,8 @@ impl Harness {
                 stmts: Vec::new(),
             },
             captured_env: HashMap::new(),
+            captured_global_names: HashSet::new(),
+            local_bindings: HashSet::new(),
             global_scope: true,
             is_async: false,
         }))
