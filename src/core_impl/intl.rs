@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    fn intl_canonicalize_locale(raw: &str) -> Result<String> {
+    pub(super) fn intl_canonicalize_locale(raw: &str) -> Result<String> {
         let raw = raw.trim();
         let invalid_language_tag =
             || Error::ScriptRuntime(format!("RangeError: invalid language tag: \"{raw}\""));
@@ -96,11 +98,11 @@ impl Harness {
         Ok(canonical.join("-"))
     }
 
-    fn intl_locale_family(locale: &str) -> &str {
+    pub(super) fn intl_locale_family(locale: &str) -> &str {
         locale.split('-').next().unwrap_or_default()
     }
 
-    fn intl_locale_region(locale: &str) -> Option<&str> {
+    pub(super) fn intl_locale_region(locale: &str) -> Option<&str> {
         for subtag in locale.split('-').skip(1) {
             if subtag.len() == 2 && subtag.chars().all(|ch| ch.is_ascii_alphabetic()) {
                 return Some(subtag);
@@ -109,7 +111,7 @@ impl Harness {
         None
     }
 
-    fn intl_formatter_supports_locale(kind: IntlFormatterKind, locale: &str) -> bool {
+    pub(super) fn intl_formatter_supports_locale(kind: IntlFormatterKind, locale: &str) -> bool {
         match kind {
             IntlFormatterKind::Collator => {
                 matches!(Self::intl_locale_family(locale), "en" | "de" | "sv")
@@ -145,7 +147,7 @@ impl Harness {
         }
     }
 
-    fn intl_select_locale_for_formatter(
+    pub(super) fn intl_select_locale_for_formatter(
         kind: IntlFormatterKind,
         requested_locales: &[String],
     ) -> String {
@@ -157,7 +159,10 @@ impl Harness {
         DEFAULT_LOCALE.to_string()
     }
 
-    fn intl_supported_locales(kind: IntlFormatterKind, locales: Vec<String>) -> Vec<Value> {
+    pub(super) fn intl_supported_locales(
+        kind: IntlFormatterKind,
+        locales: Vec<String>,
+    ) -> Vec<Value> {
         locales
             .into_iter()
             .filter(|locale| Self::intl_formatter_supports_locale(kind, locale))
@@ -165,7 +170,7 @@ impl Harness {
             .collect::<Vec<_>>()
     }
 
-    fn intl_collect_locales(&self, locales: &Value) -> Result<Vec<String>> {
+    pub(super) fn intl_collect_locales(&self, locales: &Value) -> Result<Vec<String>> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
 
@@ -212,7 +217,7 @@ impl Harness {
         Ok(out)
     }
 
-    fn intl_format_number_for_locale(value: f64, locale: &str) -> String {
+    pub(super) fn intl_format_number_for_locale(value: f64, locale: &str) -> String {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
@@ -263,7 +268,7 @@ impl Harness {
         }
     }
 
-    fn intl_locale_unicode_extension_value(locale: &str, key: &str) -> Option<String> {
+    pub(super) fn intl_locale_unicode_extension_value(locale: &str, key: &str) -> Option<String> {
         let subtags = locale.split('-').collect::<Vec<_>>();
         let mut i = 0usize;
         while i < subtags.len() {
@@ -302,7 +307,7 @@ impl Harness {
         None
     }
 
-    fn intl_default_numbering_system_for_locale(locale: &str) -> String {
+    pub(super) fn intl_default_numbering_system_for_locale(locale: &str) -> String {
         if Self::intl_locale_family(locale) == "ar" {
             "arab".to_string()
         } else {
@@ -310,7 +315,7 @@ impl Harness {
         }
     }
 
-    fn intl_date_time_options_from_value(
+    pub(super) fn intl_date_time_options_from_value(
         &self,
         locale: &str,
         options: Option<&Value>,
@@ -517,7 +522,7 @@ impl Harness {
         Ok(out)
     }
 
-    fn intl_date_time_options_to_value(options: &IntlDateTimeOptions) -> Value {
+    pub(super) fn intl_date_time_options_to_value(options: &IntlDateTimeOptions) -> Value {
         let mut entries = vec![
             (
                 "calendar".to_string(),
@@ -577,7 +582,9 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn intl_date_time_options_from_internal(entries: &[(String, Value)]) -> IntlDateTimeOptions {
+    pub(super) fn intl_date_time_options_from_internal(
+        entries: &[(String, Value)],
+    ) -> IntlDateTimeOptions {
         if let Some(Value::Object(options)) =
             Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
         {
@@ -641,7 +648,7 @@ impl Harness {
         }
     }
 
-    fn intl_normalize_time_zone(input: &str) -> Option<String> {
+    pub(super) fn intl_normalize_time_zone(input: &str) -> Option<String> {
         let normalized = input.trim().to_ascii_lowercase();
         match normalized.as_str() {
             "utc" | "etc/utc" | "gmt" => Some("UTC".to_string()),
@@ -651,7 +658,7 @@ impl Harness {
         }
     }
 
-    fn intl_time_zone_offset_minutes(time_zone: &str, _timestamp_ms: i64) -> i64 {
+    pub(super) fn intl_time_zone_offset_minutes(time_zone: &str, _timestamp_ms: i64) -> i64 {
         match time_zone {
             "Australia/Sydney" => 11 * 60,
             "America/Los_Angeles" => -8 * 60,
@@ -659,7 +666,10 @@ impl Harness {
         }
     }
 
-    fn intl_date_time_components(timestamp_ms: i64, time_zone: &str) -> IntlDateTimeComponents {
+    pub(super) fn intl_date_time_components(
+        timestamp_ms: i64,
+        time_zone: &str,
+    ) -> IntlDateTimeComponents {
         let offset_minutes = Self::intl_time_zone_offset_minutes(time_zone, timestamp_ms);
         let adjusted = timestamp_ms.saturating_add(offset_minutes.saturating_mul(60_000));
         let (year, month, day, hour, minute, second, millisecond) =
@@ -679,7 +689,7 @@ impl Harness {
         }
     }
 
-    fn intl_default_hour12(locale: &str) -> bool {
+    pub(super) fn intl_default_hour12(locale: &str) -> bool {
         let family = Self::intl_locale_family(locale);
         if family != "en" {
             return false;
@@ -687,7 +697,7 @@ impl Harness {
         !matches!(Self::intl_locale_region(locale), Some("GB"))
     }
 
-    fn intl_month_name(locale: &str, month: u32, width: &str) -> String {
+    pub(super) fn intl_month_name(locale: &str, month: u32, width: &str) -> String {
         let idx = month.saturating_sub(1) as usize;
         let family = Self::intl_locale_family(locale);
         let value = match (family, width) {
@@ -731,7 +741,7 @@ impl Harness {
         value.get(idx).copied().unwrap_or_default().to_string()
     }
 
-    fn intl_weekday_name(locale: &str, weekday: u32, width: &str) -> String {
+    pub(super) fn intl_weekday_name(locale: &str, weekday: u32, width: &str) -> String {
         let idx = weekday as usize;
         let family = Self::intl_locale_family(locale);
         let value = match (family, width) {
@@ -761,7 +771,7 @@ impl Harness {
         value.get(idx).copied().unwrap_or_default().to_string()
     }
 
-    fn intl_apply_numbering_system(text: &str, numbering_system: &str) -> String {
+    pub(super) fn intl_apply_numbering_system(text: &str, numbering_system: &str) -> String {
         if numbering_system != "arab" {
             return text.to_string();
         }
@@ -785,7 +795,7 @@ impl Harness {
         out
     }
 
-    fn intl_format_date_component_year(
+    pub(super) fn intl_format_date_component_year(
         locale: &str,
         options: &IntlDateTimeOptions,
         components: &IntlDateTimeComponents,
@@ -800,7 +810,7 @@ impl Harness {
         }
     }
 
-    fn intl_format_date_component_month(
+    pub(super) fn intl_format_date_component_month(
         locale: &str,
         options: &IntlDateTimeOptions,
         components: &IntlDateTimeComponents,
@@ -816,7 +826,7 @@ impl Harness {
         }
     }
 
-    fn intl_format_date_component_day(
+    pub(super) fn intl_format_date_component_day(
         options: &IntlDateTimeOptions,
         components: &IntlDateTimeComponents,
     ) -> String {
@@ -826,7 +836,7 @@ impl Harness {
         }
     }
 
-    fn intl_append_date_parts(
+    pub(super) fn intl_append_date_parts(
         &self,
         parts: &mut Vec<IntlPart>,
         locale: &str,
@@ -943,7 +953,7 @@ impl Harness {
         }
     }
 
-    fn intl_day_period_label(hour: u32, width: &str) -> String {
+    pub(super) fn intl_day_period_label(hour: u32, width: &str) -> String {
         let base = if hour < 6 {
             "at night"
         } else if hour < 12 {
@@ -963,7 +973,7 @@ impl Harness {
         }
     }
 
-    fn intl_time_zone_name(
+    pub(super) fn intl_time_zone_name(
         locale: &str,
         time_zone: &str,
         offset_minutes: i64,
@@ -989,7 +999,7 @@ impl Harness {
         }
     }
 
-    fn intl_append_time_parts(
+    pub(super) fn intl_append_time_parts(
         &self,
         parts: &mut Vec<IntlPart>,
         locale: &str,
@@ -1124,7 +1134,7 @@ impl Harness {
         }
     }
 
-    fn intl_expand_date_time_styles(
+    pub(super) fn intl_expand_date_time_styles(
         locale: &str,
         options: &IntlDateTimeOptions,
     ) -> IntlDateTimeOptions {
@@ -1190,7 +1200,7 @@ impl Harness {
         expanded
     }
 
-    fn intl_format_date_time_to_parts(
+    pub(super) fn intl_format_date_time_to_parts(
         &self,
         timestamp_ms: i64,
         locale: &str,
@@ -1237,7 +1247,7 @@ impl Harness {
         parts
     }
 
-    fn intl_format_date_time(
+    pub(super) fn intl_format_date_time(
         &self,
         timestamp_ms: i64,
         locale: &str,
@@ -1249,7 +1259,7 @@ impl Harness {
             .collect::<String>()
     }
 
-    fn intl_format_date_time_range(
+    pub(super) fn intl_format_date_time_range(
         &self,
         start_ms: i64,
         end_ms: i64,
@@ -1265,7 +1275,7 @@ impl Harness {
         }
     }
 
-    fn intl_format_date_time_range_to_parts(
+    pub(super) fn intl_format_date_time_range_to_parts(
         &self,
         start_ms: i64,
         end_ms: i64,
@@ -1305,7 +1315,7 @@ impl Harness {
         (parts, sources)
     }
 
-    fn intl_date_time_parts_to_value(
+    pub(super) fn intl_date_time_parts_to_value(
         &self,
         parts: &[IntlPart],
         sources: Option<&[String]>,
@@ -1326,7 +1336,7 @@ impl Harness {
         Self::new_array_value(out)
     }
 
-    fn intl_date_time_resolved_options_value(
+    pub(super) fn intl_date_time_resolved_options_value(
         &self,
         locale: String,
         options: &IntlDateTimeOptions,
@@ -1391,7 +1401,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn intl_duration_options_from_value(
+    pub(super) fn intl_duration_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<IntlDurationOptions> {
@@ -1426,14 +1436,16 @@ impl Harness {
         Ok(IntlDurationOptions { style })
     }
 
-    fn intl_duration_options_to_value(options: &IntlDurationOptions) -> Value {
+    pub(super) fn intl_duration_options_to_value(options: &IntlDurationOptions) -> Value {
         Self::new_object_value(vec![(
             "style".to_string(),
             Value::String(options.style.clone()),
         )])
     }
 
-    fn intl_duration_options_from_internal(entries: &[(String, Value)]) -> IntlDurationOptions {
+    pub(super) fn intl_duration_options_from_internal(
+        entries: &[(String, Value)],
+    ) -> IntlDurationOptions {
         if let Some(Value::Object(options)) =
             Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
         {
@@ -1447,7 +1459,7 @@ impl Harness {
         }
     }
 
-    fn intl_duration_conjunction(locale: &str) -> &'static str {
+    pub(super) fn intl_duration_conjunction(locale: &str) -> &'static str {
         match Self::intl_locale_family(locale) {
             "fr" => " et ",
             "pt" => " e ",
@@ -1455,7 +1467,12 @@ impl Harness {
         }
     }
 
-    fn intl_duration_unit_label(locale: &str, style: &str, unit: &str, value: i64) -> String {
+    pub(super) fn intl_duration_unit_label(
+        locale: &str,
+        style: &str,
+        unit: &str,
+        value: i64,
+    ) -> String {
         let style = if style == "digital" { "short" } else { style };
         let singular = matches!(value, -1 | 1);
         let family = Self::intl_locale_family(locale);
@@ -1723,7 +1740,7 @@ impl Harness {
         }
     }
 
-    fn intl_format_duration_to_parts(
+    pub(super) fn intl_format_duration_to_parts(
         &self,
         locale: &str,
         options: &IntlDurationOptions,
@@ -1794,7 +1811,7 @@ impl Harness {
         Ok(parts)
     }
 
-    fn intl_format_duration(
+    pub(super) fn intl_format_duration(
         &self,
         locale: &str,
         options: &IntlDurationOptions,
@@ -1807,7 +1824,7 @@ impl Harness {
             .collect::<String>())
     }
 
-    fn intl_duration_resolved_options_value(
+    pub(super) fn intl_duration_resolved_options_value(
         &self,
         locale: String,
         options: &IntlDurationOptions,
@@ -1818,7 +1835,10 @@ impl Harness {
         ])
     }
 
-    fn intl_list_options_from_value(&self, options: Option<&Value>) -> Result<IntlListOptions> {
+    pub(super) fn intl_list_options_from_value(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<IntlListOptions> {
         let mut style = "long".to_string();
         let mut list_type = "conjunction".to_string();
         let Some(options) = options else {
@@ -1862,14 +1882,14 @@ impl Harness {
         Ok(IntlListOptions { style, list_type })
     }
 
-    fn intl_list_options_to_value(options: &IntlListOptions) -> Value {
+    pub(super) fn intl_list_options_to_value(options: &IntlListOptions) -> Value {
         Self::new_object_value(vec![
             ("style".to_string(), Value::String(options.style.clone())),
             ("type".to_string(), Value::String(options.list_type.clone())),
         ])
     }
 
-    fn intl_list_options_from_internal(entries: &[(String, Value)]) -> IntlListOptions {
+    pub(super) fn intl_list_options_from_internal(entries: &[(String, Value)]) -> IntlListOptions {
         if let Some(Value::Object(options)) =
             Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
         {
@@ -1890,7 +1910,7 @@ impl Harness {
         }
     }
 
-    fn intl_list_separator_before_last(
+    pub(super) fn intl_list_separator_before_last(
         locale: &str,
         options: &IntlListOptions,
         list_len: usize,
@@ -1933,7 +1953,7 @@ impl Harness {
         }
     }
 
-    fn intl_format_list_to_parts(
+    pub(super) fn intl_format_list_to_parts(
         &self,
         locale: &str,
         options: &IntlListOptions,
@@ -1968,7 +1988,7 @@ impl Harness {
         Ok(parts)
     }
 
-    fn intl_format_list(
+    pub(super) fn intl_format_list(
         &self,
         locale: &str,
         options: &IntlListOptions,
@@ -1981,7 +2001,11 @@ impl Harness {
             .collect::<String>())
     }
 
-    fn intl_list_resolved_options_value(&self, locale: String, options: &IntlListOptions) -> Value {
+    pub(super) fn intl_list_resolved_options_value(
+        &self,
+        locale: String,
+        options: &IntlListOptions,
+    ) -> Value {
         Self::new_object_value(vec![
             ("locale".to_string(), Value::String(locale)),
             ("style".to_string(), Value::String(options.style.clone())),
@@ -1989,7 +2013,7 @@ impl Harness {
         ])
     }
 
-    fn intl_plural_rules_options_from_value(
+    pub(super) fn intl_plural_rules_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<IntlPluralRulesOptions> {
@@ -2024,14 +2048,14 @@ impl Harness {
         Ok(IntlPluralRulesOptions { rule_type })
     }
 
-    fn intl_plural_rules_options_to_value(options: &IntlPluralRulesOptions) -> Value {
+    pub(super) fn intl_plural_rules_options_to_value(options: &IntlPluralRulesOptions) -> Value {
         Self::new_object_value(vec![(
             "type".to_string(),
             Value::String(options.rule_type.clone()),
         )])
     }
 
-    fn intl_plural_rules_options_from_internal(
+    pub(super) fn intl_plural_rules_options_from_internal(
         entries: &[(String, Value)],
     ) -> IntlPluralRulesOptions {
         if let Some(Value::Object(options)) =
@@ -2047,7 +2071,7 @@ impl Harness {
         }
     }
 
-    fn intl_plural_rules_categories(locale: &str, rule_type: &str) -> Vec<String> {
+    pub(super) fn intl_plural_rules_categories(locale: &str, rule_type: &str) -> Vec<String> {
         let family = Self::intl_locale_family(locale);
         match (family, rule_type) {
             ("ar", "cardinal") => vec![
@@ -2069,7 +2093,11 @@ impl Harness {
         }
     }
 
-    fn intl_plural_rules_select_tag(locale: &str, rule_type: &str, number: f64) -> String {
+    pub(super) fn intl_plural_rules_select_tag(
+        locale: &str,
+        rule_type: &str,
+        number: f64,
+    ) -> String {
         if !number.is_finite() {
             return "other".to_string();
         }
@@ -2128,7 +2156,7 @@ impl Harness {
         }
     }
 
-    fn intl_plural_rules_select(
+    pub(super) fn intl_plural_rules_select(
         &self,
         locale: &str,
         options: &IntlPluralRulesOptions,
@@ -2138,7 +2166,7 @@ impl Harness {
         Self::intl_plural_rules_select_tag(locale, &options.rule_type, number)
     }
 
-    fn intl_plural_rules_select_range(
+    pub(super) fn intl_plural_rules_select_range(
         &self,
         locale: &str,
         options: &IntlPluralRulesOptions,
@@ -2163,7 +2191,7 @@ impl Harness {
         }
     }
 
-    fn intl_plural_rules_resolved_options_value(
+    pub(super) fn intl_plural_rules_resolved_options_value(
         &self,
         locale: String,
         options: &IntlPluralRulesOptions,
@@ -2184,7 +2212,7 @@ impl Harness {
         ])
     }
 
-    fn intl_relative_time_options_from_value(
+    pub(super) fn intl_relative_time_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<IntlRelativeTimeOptions> {
@@ -2253,7 +2281,7 @@ impl Harness {
         })
     }
 
-    fn intl_relative_time_options_to_value(options: &IntlRelativeTimeOptions) -> Value {
+    pub(super) fn intl_relative_time_options_to_value(options: &IntlRelativeTimeOptions) -> Value {
         Self::new_object_value(vec![
             ("style".to_string(), Value::String(options.style.clone())),
             (
@@ -2267,7 +2295,7 @@ impl Harness {
         ])
     }
 
-    fn intl_relative_time_options_from_internal(
+    pub(super) fn intl_relative_time_options_from_internal(
         entries: &[(String, Value)],
     ) -> IntlRelativeTimeOptions {
         if let Some(Value::Object(options)) =
@@ -2300,7 +2328,7 @@ impl Harness {
         }
     }
 
-    fn intl_relative_time_normalize_unit(unit: &str) -> Option<String> {
+    pub(super) fn intl_relative_time_normalize_unit(unit: &str) -> Option<String> {
         let unit = unit.trim().to_ascii_lowercase();
         let canonical = match unit.as_str() {
             "year" | "years" => "year",
@@ -2316,7 +2344,11 @@ impl Harness {
         Some(canonical.to_string())
     }
 
-    fn intl_relative_time_auto_literal(locale: &str, unit: &str, value: f64) -> Option<String> {
+    pub(super) fn intl_relative_time_auto_literal(
+        locale: &str,
+        unit: &str,
+        value: f64,
+    ) -> Option<String> {
         if unit != "day" || !value.is_finite() || value.fract() != 0.0 {
             return None;
         }
@@ -2340,7 +2372,12 @@ impl Harness {
         }
     }
 
-    fn intl_relative_time_unit_label(locale: &str, style: &str, unit: &str, value: f64) -> String {
+    pub(super) fn intl_relative_time_unit_label(
+        locale: &str,
+        style: &str,
+        unit: &str,
+        value: f64,
+    ) -> String {
         let singular = value.abs() == 1.0;
         match Self::intl_locale_family(locale) {
             "es" => match style {
@@ -2548,7 +2585,7 @@ impl Harness {
         }
     }
 
-    fn intl_relative_time_parts(
+    pub(super) fn intl_relative_time_parts(
         locale: &str,
         options: &IntlRelativeTimeOptions,
         value: f64,
@@ -2630,7 +2667,7 @@ impl Harness {
         ]
     }
 
-    fn intl_format_relative_time(
+    pub(super) fn intl_format_relative_time(
         &self,
         locale: &str,
         options: &IntlRelativeTimeOptions,
@@ -2641,7 +2678,7 @@ impl Harness {
         Ok(parts.into_iter().map(|part| part.value).collect::<String>())
     }
 
-    fn intl_format_relative_time_to_parts(
+    pub(super) fn intl_format_relative_time_to_parts(
         &self,
         locale: &str,
         options: &IntlRelativeTimeOptions,
@@ -2661,7 +2698,10 @@ impl Harness {
         ))
     }
 
-    fn intl_relative_time_parts_to_value(&self, parts: &[IntlRelativeTimePart]) -> Value {
+    pub(super) fn intl_relative_time_parts_to_value(
+        &self,
+        parts: &[IntlRelativeTimePart],
+    ) -> Value {
         let mut out = Vec::with_capacity(parts.len());
         for part in parts {
             let mut entries = vec![
@@ -2676,7 +2716,7 @@ impl Harness {
         Self::new_array_value(out)
     }
 
-    fn intl_relative_time_resolved_options_value(
+    pub(super) fn intl_relative_time_resolved_options_value(
         &self,
         locale: String,
         options: &IntlRelativeTimeOptions,
@@ -2695,7 +2735,7 @@ impl Harness {
         ])
     }
 
-    fn intl_segmenter_options_from_value(
+    pub(super) fn intl_segmenter_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<IntlSegmenterOptions> {
@@ -2748,7 +2788,7 @@ impl Harness {
         })
     }
 
-    fn intl_segmenter_options_to_value(options: &IntlSegmenterOptions) -> Value {
+    pub(super) fn intl_segmenter_options_to_value(options: &IntlSegmenterOptions) -> Value {
         Self::new_object_value(vec![
             (
                 "granularity".to_string(),
@@ -2761,7 +2801,9 @@ impl Harness {
         ])
     }
 
-    fn intl_segmenter_options_from_internal(entries: &[(String, Value)]) -> IntlSegmenterOptions {
+    pub(super) fn intl_segmenter_options_from_internal(
+        entries: &[(String, Value)],
+    ) -> IntlSegmenterOptions {
         if let Some(Value::Object(options)) =
             Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
         {
@@ -2785,18 +2827,18 @@ impl Harness {
         }
     }
 
-    fn intl_segmenter_is_japanese_char(ch: char) -> bool {
+    pub(super) fn intl_segmenter_is_japanese_char(ch: char) -> bool {
         matches!(
             ch as u32,
             0x3040..=0x309F | 0x30A0..=0x30FF | 0x4E00..=0x9FFF | 0xFF66..=0xFF9D
         )
     }
 
-    fn intl_segmenter_is_sentence_terminal(ch: char) -> bool {
+    pub(super) fn intl_segmenter_is_sentence_terminal(ch: char) -> bool {
         matches!(ch, '.' | '!' | '?' | '。' | '！' | '？')
     }
 
-    fn intl_segmenter_make_segment_value(
+    pub(super) fn intl_segmenter_make_segment_value(
         segment: String,
         index: usize,
         input: &str,
@@ -2813,7 +2855,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn intl_segment_graphemes(&self, input: &str) -> Vec<Value> {
+    pub(super) fn intl_segment_graphemes(&self, input: &str) -> Vec<Value> {
         let mut out = Vec::new();
         for (index, ch) in input.chars().enumerate() {
             out.push(Self::intl_segmenter_make_segment_value(
@@ -2826,7 +2868,7 @@ impl Harness {
         out
     }
 
-    fn intl_segment_words(&self, locale: &str, input: &str) -> Vec<Value> {
+    pub(super) fn intl_segment_words(&self, locale: &str, input: &str) -> Vec<Value> {
         if input.is_empty() {
             return Vec::new();
         }
@@ -2913,7 +2955,7 @@ impl Harness {
         out
     }
 
-    fn intl_segment_sentences(&self, input: &str) -> Vec<Value> {
+    pub(super) fn intl_segment_sentences(&self, input: &str) -> Vec<Value> {
         if input.is_empty() {
             return Vec::new();
         }
@@ -2942,7 +2984,7 @@ impl Harness {
         out
     }
 
-    fn intl_segment_input(
+    pub(super) fn intl_segment_input(
         &self,
         locale: &str,
         options: &IntlSegmenterOptions,
@@ -2955,7 +2997,7 @@ impl Harness {
         }
     }
 
-    fn intl_segmenter_resolved_options_value(
+    pub(super) fn intl_segmenter_resolved_options_value(
         &self,
         locale: String,
         options: &IntlSegmenterOptions,
@@ -2973,7 +3015,7 @@ impl Harness {
         ])
     }
 
-    fn intl_locale_normalize_language(value: &str) -> Option<String> {
+    pub(super) fn intl_locale_normalize_language(value: &str) -> Option<String> {
         let value = value.trim();
         let len = value.len();
         if !(len == 2 || len == 3 || (5..=8).contains(&len)) {
@@ -2985,7 +3027,7 @@ impl Harness {
         Some(value.to_ascii_lowercase())
     }
 
-    fn intl_locale_normalize_script(value: &str) -> Option<String> {
+    pub(super) fn intl_locale_normalize_script(value: &str) -> Option<String> {
         let value = value.trim();
         if value.len() != 4 || !value.chars().all(|ch| ch.is_ascii_alphabetic()) {
             return None;
@@ -2995,7 +3037,7 @@ impl Harness {
         Some(format!("{first}{}", chars.as_str().to_ascii_lowercase()))
     }
 
-    fn intl_locale_normalize_region(value: &str) -> Option<String> {
+    pub(super) fn intl_locale_normalize_region(value: &str) -> Option<String> {
         let value = value.trim();
         if value.len() == 2 && value.chars().all(|ch| ch.is_ascii_alphabetic()) {
             return Some(value.to_ascii_uppercase());
@@ -3006,7 +3048,7 @@ impl Harness {
         None
     }
 
-    fn intl_locale_normalize_unicode_type(value: &str) -> Option<String> {
+    pub(super) fn intl_locale_normalize_unicode_type(value: &str) -> Option<String> {
         let value = value.trim();
         if value.is_empty() {
             return None;
@@ -3023,7 +3065,10 @@ impl Harness {
         Some(parts.join("-").to_ascii_lowercase())
     }
 
-    fn intl_locale_options_from_value(&self, options: Option<&Value>) -> Result<IntlLocaleOptions> {
+    pub(super) fn intl_locale_options_from_value(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<IntlLocaleOptions> {
         let mut out = IntlLocaleOptions {
             language: None,
             script: None,
@@ -3136,7 +3181,7 @@ impl Harness {
         Ok(out)
     }
 
-    fn intl_locale_data_from_canonical_tag(canonical: &str) -> IntlLocaleData {
+    pub(super) fn intl_locale_data_from_canonical_tag(canonical: &str) -> IntlLocaleData {
         let subtags = canonical.split('-').collect::<Vec<_>>();
         let language = subtags.first().copied().unwrap_or_default().to_string();
         let mut script = None;
@@ -3231,7 +3276,7 @@ impl Harness {
         }
     }
 
-    fn intl_locale_data_base_name(data: &IntlLocaleData) -> String {
+    pub(super) fn intl_locale_data_base_name(data: &IntlLocaleData) -> String {
         let mut out = vec![data.language.clone()];
         if let Some(script) = &data.script {
             out.push(script.clone());
@@ -3243,7 +3288,7 @@ impl Harness {
         out.join("-")
     }
 
-    fn intl_locale_data_to_string(data: &IntlLocaleData) -> String {
+    pub(super) fn intl_locale_data_to_string(data: &IntlLocaleData) -> String {
         let mut out = vec![Self::intl_locale_data_base_name(data)];
         let mut extension = Vec::new();
 
@@ -3281,7 +3326,7 @@ impl Harness {
         out.join("-")
     }
 
-    fn intl_locale_data_to_internal_value(data: &IntlLocaleData) -> Value {
+    pub(super) fn intl_locale_data_to_internal_value(data: &IntlLocaleData) -> Value {
         Self::new_object_value(vec![
             ("language".to_string(), Value::String(data.language.clone())),
             (
@@ -3343,7 +3388,7 @@ impl Harness {
         ])
     }
 
-    fn intl_locale_data_from_internal_value(value: &Value) -> Option<IntlLocaleData> {
+    pub(super) fn intl_locale_data_from_internal_value(value: &Value) -> Option<IntlLocaleData> {
         let Value::Object(entries) = value else {
             return None;
         };
@@ -3409,7 +3454,7 @@ impl Harness {
         })
     }
 
-    fn intl_locale_data_from_input_value(
+    pub(super) fn intl_locale_data_from_input_value(
         &self,
         tag: &Value,
         options: Option<&Value>,
@@ -3470,7 +3515,7 @@ impl Harness {
         Ok(data)
     }
 
-    fn intl_locale_prepend_unique(values: &mut Vec<String>, preferred: Option<&str>) {
+    pub(super) fn intl_locale_prepend_unique(values: &mut Vec<String>, preferred: Option<&str>) {
         let Some(preferred) = preferred else {
             return;
         };
@@ -3484,7 +3529,7 @@ impl Harness {
         values.insert(0, preferred.to_string());
     }
 
-    fn intl_locale_get_calendars(&self, data: &IntlLocaleData) -> Vec<String> {
+    pub(super) fn intl_locale_get_calendars(&self, data: &IntlLocaleData) -> Vec<String> {
         let mut out = match data.language.as_str() {
             "ja" => vec!["gregory".to_string(), "japanese".to_string()],
             "ar" => vec!["gregory".to_string(), "islamic-umalqura".to_string()],
@@ -3494,7 +3539,7 @@ impl Harness {
         out
     }
 
-    fn intl_locale_get_collations(&self, data: &IntlLocaleData) -> Vec<String> {
+    pub(super) fn intl_locale_get_collations(&self, data: &IntlLocaleData) -> Vec<String> {
         let mut out = if data.language == "de" {
             vec![
                 "default".to_string(),
@@ -3508,7 +3553,7 @@ impl Harness {
         out
     }
 
-    fn intl_locale_get_hour_cycles(&self, data: &IntlLocaleData) -> Vec<String> {
+    pub(super) fn intl_locale_get_hour_cycles(&self, data: &IntlLocaleData) -> Vec<String> {
         let mut out = if data.language == "en" || data.language == "ar" {
             vec!["h12".to_string(), "h23".to_string()]
         } else {
@@ -3518,7 +3563,7 @@ impl Harness {
         out
     }
 
-    fn intl_locale_get_numbering_systems(&self, data: &IntlLocaleData) -> Vec<String> {
+    pub(super) fn intl_locale_get_numbering_systems(&self, data: &IntlLocaleData) -> Vec<String> {
         let mut out = if data.language == "ar" {
             vec!["arab".to_string(), "latn".to_string()]
         } else {
@@ -3528,7 +3573,7 @@ impl Harness {
         out
     }
 
-    fn intl_locale_get_text_info(&self, data: &IntlLocaleData) -> Value {
+    pub(super) fn intl_locale_get_text_info(&self, data: &IntlLocaleData) -> Value {
         let direction = if matches!(data.language.as_str(), "ar" | "he" | "fa" | "ur") {
             "rtl"
         } else {
@@ -3540,7 +3585,7 @@ impl Harness {
         )])
     }
 
-    fn intl_locale_get_time_zones(&self, data: &IntlLocaleData) -> Vec<String> {
+    pub(super) fn intl_locale_get_time_zones(&self, data: &IntlLocaleData) -> Vec<String> {
         match data.region.as_deref() {
             Some("US") => vec![
                 "America/New_York".to_string(),
@@ -3564,7 +3609,7 @@ impl Harness {
         }
     }
 
-    fn intl_locale_get_week_info(&self, data: &IntlLocaleData) -> Value {
+    pub(super) fn intl_locale_get_week_info(&self, data: &IntlLocaleData) -> Value {
         let (first_day, weekend, minimal_days) = match data.region.as_deref() {
             Some("US") => (7, vec![6, 7], 1),
             Some("EG") => (6, vec![5, 6], 1),
@@ -3580,7 +3625,9 @@ impl Harness {
         ])
     }
 
-    fn intl_locale_likely_subtags(language: &str) -> (Option<&'static str>, Option<&'static str>) {
+    pub(super) fn intl_locale_likely_subtags(
+        language: &str,
+    ) -> (Option<&'static str>, Option<&'static str>) {
         match language {
             "en" => (Some("Latn"), Some("US")),
             "de" => (Some("Latn"), Some("DE")),
@@ -3597,7 +3644,7 @@ impl Harness {
         }
     }
 
-    fn intl_locale_maximize_data(&self, data: &IntlLocaleData) -> IntlLocaleData {
+    pub(super) fn intl_locale_maximize_data(&self, data: &IntlLocaleData) -> IntlLocaleData {
         let mut out = data.clone();
         let (default_script, default_region) = Self::intl_locale_likely_subtags(&out.language);
         if out.script.is_none() {
@@ -3609,7 +3656,7 @@ impl Harness {
         out
     }
 
-    fn intl_locale_minimize_data(&self, data: &IntlLocaleData) -> IntlLocaleData {
+    pub(super) fn intl_locale_minimize_data(&self, data: &IntlLocaleData) -> IntlLocaleData {
         let mut out = data.clone();
         let (default_script, default_region) = Self::intl_locale_likely_subtags(&out.language);
         if out.script.as_deref() == default_script {
@@ -3621,7 +3668,7 @@ impl Harness {
         out
     }
 
-    fn intl_display_names_options_from_value(
+    pub(super) fn intl_display_names_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<IntlDisplayNamesOptions> {
@@ -3694,7 +3741,7 @@ impl Harness {
         })
     }
 
-    fn intl_display_names_options_to_value(options: &IntlDisplayNamesOptions) -> Value {
+    pub(super) fn intl_display_names_options_to_value(options: &IntlDisplayNamesOptions) -> Value {
         let mut entries = vec![
             ("style".to_string(), Value::String(options.style.clone())),
             (
@@ -3715,7 +3762,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn intl_display_names_options_from_internal(
+    pub(super) fn intl_display_names_options_from_internal(
         entries: &[(String, Value)],
     ) -> IntlDisplayNamesOptions {
         if let Some(Value::Object(options)) =
@@ -3744,7 +3791,10 @@ impl Harness {
         }
     }
 
-    fn intl_canonicalize_display_names_code(display_type: &str, code: &str) -> Result<String> {
+    pub(super) fn intl_canonicalize_display_names_code(
+        display_type: &str,
+        code: &str,
+    ) -> Result<String> {
         let code = code.trim();
         if code.is_empty() {
             return Err(Error::ScriptRuntime(
@@ -3790,7 +3840,7 @@ impl Harness {
         }
     }
 
-    fn intl_display_names_lookup(
+    pub(super) fn intl_display_names_lookup(
         locale: &str,
         options: &IntlDisplayNamesOptions,
         code: &str,
@@ -3995,7 +4045,7 @@ impl Harness {
         }
     }
 
-    fn intl_display_names_of(
+    pub(super) fn intl_display_names_of(
         &self,
         locale: &str,
         options: &IntlDisplayNamesOptions,
@@ -4013,7 +4063,7 @@ impl Harness {
         }
     }
 
-    fn intl_display_names_resolved_options_value(
+    pub(super) fn intl_display_names_resolved_options_value(
         &self,
         locale: String,
         options: &IntlDisplayNamesOptions,
@@ -4039,7 +4089,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
+    pub(super) fn intl_supported_values_of(key: &str) -> Result<Vec<String>> {
         let key = key.trim();
         let mut values = match key.to_ascii_lowercase().as_str() {
             "calendar" => vec!["gregory", "islamic-umalqura", "japanese"],
@@ -4070,7 +4120,7 @@ impl Harness {
         Ok(values)
     }
 
-    fn new_builtin_placeholder_function() -> Value {
+    pub(super) fn new_builtin_placeholder_function() -> Value {
         Value::Function(Rc::new(FunctionValue {
             handler: ScriptHandler {
                 params: Vec::new(),
@@ -4082,7 +4132,7 @@ impl Harness {
         }))
     }
 
-    fn intl_constructor_value(&self, constructor_name: &str) -> Value {
+    pub(super) fn intl_constructor_value(&self, constructor_name: &str) -> Value {
         let Some(Value::Object(entries)) = self.script_env.get("Intl") else {
             return Self::new_builtin_placeholder_function();
         };
@@ -4090,7 +4140,7 @@ impl Harness {
             .unwrap_or_else(Self::new_builtin_placeholder_function)
     }
 
-    fn intl_collator_options_from_value(
+    pub(super) fn intl_collator_options_from_value(
         &self,
         options: Option<&Value>,
     ) -> Result<(String, String)> {
@@ -4137,7 +4187,7 @@ impl Harness {
         Ok((case_first, sensitivity))
     }
 
-    fn new_intl_collator_compare_callable(
+    pub(super) fn new_intl_collator_compare_callable(
         &self,
         locale: String,
         case_first: String,
@@ -4164,7 +4214,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_collator_value(
+    pub(super) fn new_intl_collator_value(
         &self,
         locale: String,
         case_first: String,
@@ -4197,7 +4247,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_date_time_format_callable(
+    pub(super) fn new_intl_date_time_format_callable(
         &self,
         locale: String,
         options: IntlDateTimeOptions,
@@ -4219,7 +4269,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_date_time_formatter_value(
+    pub(super) fn new_intl_date_time_formatter_value(
         &self,
         locale: String,
         options: IntlDateTimeOptions,
@@ -4243,7 +4293,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_display_names_value(
+    pub(super) fn new_intl_display_names_value(
         &self,
         locale: String,
         options: IntlDisplayNamesOptions,
@@ -4265,7 +4315,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_duration_format_callable(
+    pub(super) fn new_intl_duration_format_callable(
         &self,
         locale: String,
         options: IntlDurationOptions,
@@ -4287,7 +4337,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_duration_formatter_value(
+    pub(super) fn new_intl_duration_formatter_value(
         &self,
         locale: String,
         options: IntlDurationOptions,
@@ -4311,7 +4361,11 @@ impl Harness {
         ])
     }
 
-    fn new_intl_list_format_callable(&self, locale: String, options: IntlListOptions) -> Value {
+    pub(super) fn new_intl_list_format_callable(
+        &self,
+        locale: String,
+        options: IntlListOptions,
+    ) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -4329,7 +4383,11 @@ impl Harness {
         ])
     }
 
-    fn new_intl_list_formatter_value(&self, locale: String, options: IntlListOptions) -> Value {
+    pub(super) fn new_intl_list_formatter_value(
+        &self,
+        locale: String,
+        options: IntlListOptions,
+    ) -> Value {
         let format = self.new_intl_list_format_callable(locale.clone(), options.clone());
         Self::new_object_value(vec![
             (
@@ -4349,7 +4407,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_plural_rules_value(
+    pub(super) fn new_intl_plural_rules_value(
         &self,
         locale: String,
         options: IntlPluralRulesOptions,
@@ -4371,7 +4429,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_relative_time_formatter_value(
+    pub(super) fn new_intl_relative_time_formatter_value(
         &self,
         locale: String,
         options: IntlRelativeTimeOptions,
@@ -4397,7 +4455,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_segmenter_segments_iterator_callable(&self, segments: Value) -> Value {
+    pub(super) fn new_intl_segmenter_segments_iterator_callable(&self, segments: Value) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -4407,7 +4465,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_segmenter_iterator_next_callable(&self, segments: Value) -> Value {
+    pub(super) fn new_intl_segmenter_iterator_next_callable(&self, segments: Value) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -4421,12 +4479,12 @@ impl Harness {
         ])
     }
 
-    fn new_intl_segmenter_iterator_value(&self, segments: Value) -> Value {
+    pub(super) fn new_intl_segmenter_iterator_value(&self, segments: Value) -> Value {
         let next = self.new_intl_segmenter_iterator_next_callable(segments);
         Self::new_object_value(vec![("next".to_string(), next)])
     }
 
-    fn new_intl_segments_value(&mut self, segments: Vec<Value>) -> Value {
+    pub(super) fn new_intl_segments_value(&mut self, segments: Vec<Value>) -> Value {
         let segments_array = Self::new_array_value(segments.clone());
         let iterator = self.new_intl_segmenter_segments_iterator_callable(segments_array);
         let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
@@ -4441,7 +4499,11 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn new_intl_segmenter_value(&self, locale: String, options: IntlSegmenterOptions) -> Value {
+    pub(super) fn new_intl_segmenter_value(
+        &self,
+        locale: String,
+        options: IntlSegmenterOptions,
+    ) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_INTL_KIND_KEY.to_string(),
@@ -4459,7 +4521,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_locale_value(&self, data: IntlLocaleData) -> Value {
+    pub(super) fn new_intl_locale_value(&self, data: IntlLocaleData) -> Value {
         let base_name = Self::intl_locale_data_base_name(&data);
         Self::new_object_value(vec![
             (
@@ -4531,7 +4593,7 @@ impl Harness {
         ])
     }
 
-    fn new_intl_number_format_callable(&self, locale: String) -> Value {
+    pub(super) fn new_intl_number_format_callable(&self, locale: String) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -4545,7 +4607,11 @@ impl Harness {
         ])
     }
 
-    fn new_intl_formatter_value(&self, kind: IntlFormatterKind, locale: String) -> Value {
+    pub(super) fn new_intl_formatter_value(
+        &self,
+        kind: IntlFormatterKind,
+        locale: String,
+    ) -> Value {
         let mut entries = vec![
             (
                 INTERNAL_INTL_KIND_KEY.to_string(),
@@ -4572,7 +4638,10 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn resolve_intl_formatter(&self, value: &Value) -> Result<(IntlFormatterKind, String)> {
+    pub(super) fn resolve_intl_formatter(
+        &self,
+        value: &Value,
+    ) -> Result<(IntlFormatterKind, String)> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl formatter format requires an Intl formatter instance".into(),
@@ -4598,7 +4667,7 @@ impl Harness {
         Ok((kind, locale))
     }
 
-    fn resolve_intl_date_time_options(
+    pub(super) fn resolve_intl_date_time_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlDateTimeOptions)> {
@@ -4633,7 +4702,7 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_duration_options(
+    pub(super) fn resolve_intl_duration_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlDurationOptions)> {
@@ -4668,7 +4737,10 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_list_options(&self, value: &Value) -> Result<(String, IntlListOptions)> {
+    pub(super) fn resolve_intl_list_options(
+        &self,
+        value: &Value,
+    ) -> Result<(String, IntlListOptions)> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl.ListFormat method requires an Intl.ListFormat instance".into(),
@@ -4700,7 +4772,7 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_plural_rules_options(
+    pub(super) fn resolve_intl_plural_rules_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlPluralRulesOptions)> {
@@ -4735,7 +4807,7 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_relative_time_options(
+    pub(super) fn resolve_intl_relative_time_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlRelativeTimeOptions)> {
@@ -4773,7 +4845,7 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_segmenter_options(
+    pub(super) fn resolve_intl_segmenter_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlSegmenterOptions)> {
@@ -4808,7 +4880,7 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_locale_data(&self, value: &Value) -> Result<IntlLocaleData> {
+    pub(super) fn resolve_intl_locale_data(&self, value: &Value) -> Result<IntlLocaleData> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl.Locale method requires an Intl.Locale instance".into(),
@@ -4824,7 +4896,7 @@ impl Harness {
         })
     }
 
-    fn resolve_intl_display_names_options(
+    pub(super) fn resolve_intl_display_names_options(
         &self,
         value: &Value,
     ) -> Result<(String, IntlDisplayNamesOptions)> {
@@ -4859,7 +4931,10 @@ impl Harness {
         Ok((locale, options))
     }
 
-    fn resolve_intl_collator_options(&self, value: &Value) -> Result<(String, String, String)> {
+    pub(super) fn resolve_intl_collator_options(
+        &self,
+        value: &Value,
+    ) -> Result<(String, String, String)> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl.Collator.compare requires an Intl.Collator instance".into(),
@@ -4902,7 +4977,7 @@ impl Harness {
         Ok((locale, case_first, sensitivity))
     }
 
-    fn intl_collator_compare_strings(
+    pub(super) fn intl_collator_compare_strings(
         left: &str,
         right: &str,
         locale: &str,
@@ -4939,7 +5014,11 @@ impl Harness {
         }
     }
 
-    fn intl_collator_char_key(ch: char, locale: &str, case_priority: i32) -> (i32, i32, i32) {
+    pub(super) fn intl_collator_char_key(
+        ch: char,
+        locale: &str,
+        case_priority: i32,
+    ) -> (i32, i32, i32) {
         let lower = ch.to_ascii_lowercase();
         let is_upper = ch.is_ascii_uppercase();
 
@@ -4971,5 +5050,4 @@ impl Harness {
         };
         (primary, secondary, case_rank)
     }
-
 }
