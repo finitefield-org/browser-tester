@@ -4871,6 +4871,11 @@ enum Expr {
         target: String,
         args: Vec<Expr>,
     },
+    MemberCall {
+        target: Box<Expr>,
+        member: String,
+        args: Vec<Expr>,
+    },
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -12667,6 +12672,35 @@ impl Harness {
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                             Error::ScriptRuntime(format!("'{target}' is not a function"))
+                        }
+                        other => other,
+                    })
+            }
+            Expr::MemberCall {
+                target,
+                member,
+                args,
+            } => {
+                let receiver = self.eval_expr(target, env, event_param, event)?;
+                let callee = self
+                    .object_property_from_value(&receiver, member)
+                    .map_err(|err| match err {
+                        Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                            Error::ScriptRuntime(format!(
+                                "member call target does not support property '{}'",
+                                member
+                            ))
+                        }
+                        other => other,
+                    })?;
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                self.execute_callable_value(&callee, &evaluated_args, event)
+                    .map_err(|err| match err {
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime(format!("'{}' is not a function", member))
                         }
                         other => other,
                     })
@@ -24517,6 +24551,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_member_call_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_object_get_expr(src)? {
         return Ok(expr);
     }
@@ -29712,6 +29750,63 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
         }));
     }
     Ok(Some(Expr::ObjectPathGet { target, path }))
+}
+
+fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = src.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+        let mut cursor = Cursor::new(tail_src);
+        let Some(member) = cursor.parse_identifier() else {
+            continue;
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            continue;
+        }
+
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        let mut parsed_args = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(
+                    "member call arguments cannot be empty".into(),
+                ));
+            }
+            parsed_args.push(parse_expr(arg)?);
+        }
+
+        return Ok(Some(Expr::MemberCall {
+            target: Box::new(parse_expr(base_src)?),
+            member,
+            args: parsed_args,
+        }));
+    }
+    Ok(None)
 }
 
 fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {

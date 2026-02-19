@@ -11366,6 +11366,58 @@ fn object_property_access_missing_key_returns_undefined() -> Result<()> {
 }
 
 #[test]
+fn member_call_expression_on_nested_object_path_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const api = {
+              a: {
+                b: {
+                  method: (x, y) => x + y,
+                  tag: 'ok'
+                }
+              }
+            };
+            const first = api.a.b.method(2, 3);
+            const second = api.a.b.method(10, -4);
+            document.getElementById('result').textContent =
+              api.a.b.tag + ':' + first + ':' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok:5:6")?;
+    Ok(())
+}
+
+#[test]
+fn member_call_expression_reports_non_function_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const api = { a: { b: { method: 1 } } };
+            api.a.b.method('x');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("member call on non-function should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("'method' is not a function")),
+        other => panic!("unexpected member call error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn object_method_runtime_type_errors_are_reported() -> Result<()> {
     let html = r#"
         <button id='keys'>keys</button>
