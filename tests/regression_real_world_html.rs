@@ -99,3 +99,27 @@ fn nested_object_path_access_on_runtime_objects_is_supported() -> browser_tester
     harness.assert_text("#result", "Lot")?;
     Ok(())
 }
+
+#[test]
+fn function_declaration_can_be_called_before_its_definition() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = {
+        lots: [createLotRow()],
+      };
+
+      function createLotRow(seed = {}) {
+        return {
+          name: seed.name || "lot-1",
+        };
+      }
+
+      document.getElementById("result").textContent = String(state.lots.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}

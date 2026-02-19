@@ -2838,10 +2838,13 @@ impl Harness {
                 Ok(self.make_function_value(ScriptHandler { params, stmts }, env, true, false))
             }
             Expr::FunctionCall { target, args } => {
-                let callee = env
-                    .get(target)
-                    .cloned()
-                    .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
+                let callee = if let Some(callee) = env.get(target).cloned() {
+                    callee
+                } else if let Some(callee) = self.resolve_pending_function_decl(target, env) {
+                    callee
+                } else {
+                    return Err(Error::ScriptRuntime(format!("unknown variable: {target}")));
+                };
                 let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
                 self.execute_callable_value(&callee, &evaluated_args, event)
                     .map_err(|err| match err {
@@ -2957,10 +2960,15 @@ impl Harness {
                         other => other,
                     })
             }
-            Expr::Var(name) => env
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}"))),
+            Expr::Var(name) => {
+                if let Some(value) = env.get(name).cloned() {
+                    Ok(value)
+                } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
+                    Ok(value)
+                } else {
+                    Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
+                }
+            }
             Expr::DomRef(target) => {
                 let is_list_query = matches!(
                     target,

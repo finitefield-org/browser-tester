@@ -57,6 +57,7 @@ impl Harness {
             trace_logs: Vec::new(),
             trace_log_limit: 10_000,
             trace_to_stderr: true,
+            pending_function_decls: Vec::new(),
         };
 
         harness.initialize_global_bindings();
@@ -2977,6 +2978,35 @@ impl Harness {
         Ok(params)
     }
 
+    fn collect_function_decls(stmts: &[Stmt]) -> HashMap<String, (ScriptHandler, bool)> {
+        let mut out = HashMap::new();
+        for stmt in stmts {
+            if let Stmt::FunctionDecl {
+                name,
+                handler,
+                is_async,
+            } = stmt
+            {
+                out.insert(name.clone(), (handler.clone(), *is_async));
+            }
+        }
+        out
+    }
+
+    pub(super) fn resolve_pending_function_decl(
+        &self,
+        name: &str,
+        env: &HashMap<String, Value>,
+    ) -> Option<Value> {
+        for scope in self.pending_function_decls.iter().rev() {
+            let Some((handler, is_async)) = scope.get(name) else {
+                continue;
+            };
+            return Some(self.make_function_value(handler.clone(), env, false, *is_async));
+        }
+        None
+    }
+
     pub(super) fn execute_stmts(
         &mut self,
         stmts: &[Stmt],
@@ -2984,8 +3014,12 @@ impl Harness {
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
     ) -> Result<ExecFlow> {
-        for stmt in stmts {
-            match stmt {
+        let pending = Self::collect_function_decls(stmts);
+        self.pending_function_decls.push(pending);
+
+        let result = (|| -> Result<ExecFlow> {
+            for stmt in stmts {
+                match stmt {
                 Stmt::VarDecl { name, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
                     env.insert(name.clone(), value.clone());
@@ -4120,10 +4154,14 @@ impl Harness {
                 Stmt::Expr(expr) => {
                     let _ = self.eval_expr(expr, env, event_param, event)?;
                 }
+                }
             }
-        }
 
-        Ok(ExecFlow::Continue)
+            Ok(ExecFlow::Continue)
+        })();
+
+        self.pending_function_decls.pop();
+        result
     }
 
 }

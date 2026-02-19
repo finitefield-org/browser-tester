@@ -4581,6 +4581,7 @@ pub struct Harness {
     trace_logs: Vec<String>,
     trace_log_limit: usize,
     trace_to_stderr: bool,
+    pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
 }
 
 #[derive(Debug)]
