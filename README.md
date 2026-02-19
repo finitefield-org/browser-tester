@@ -287,6 +287,9 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
 - Clipboard API: `navigator.clipboard` (read-only),
   `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
+- Window API (core subset): `window`, `self`, `top`, `parent`, `frames`,
+  `window.length`, `window.closed`, `window.document`, `document.defaultView`,
+  `window.navigator`, `window.clientInformation`, `window.origin`, `window.isSecureContext`
 - Timers: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   (returns timer ID. No real-time waiting; execute via `harness.advance_time(ms)` / `harness.flush()`),
   `clearTimeout(timerId)` / `clearInterval(timerId)`,

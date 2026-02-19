@@ -83,6 +83,77 @@ fn window_aliases_document_in_script_parser() -> Result<()> {
 }
 
 #[test]
+fn window_core_aliases_and_document_default_view_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              (window === window.window) + ':' +
+              (window === self) + ':' +
+              (window === top) + ':' +
+              (window === parent) + ':' +
+              (window.frames === window) + ':' +
+              window.length + ':' +
+              window.closed + ':' +
+              (window.clientInformation === window.navigator) + ':' +
+              (clientInformation === navigator) + ':' +
+              (window.document === document) + ':' +
+              (document.defaultView === window) + ':' +
+              window.origin + ':' +
+              window.isSecureContext;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:0:false:true:true:true:true:null:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn window_origin_and_secure_context_follow_location_changes() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.assign('https://app.local/path');
+            document.getElementById('result').textContent =
+              window.origin + ':' + window.isSecureContext;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "https://app.local:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_read_only_core_properties_are_rejected() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.closed = true;
+        </script>
+        "#,
+    )
+    .expect_err("window.closed should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.closed is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn html_entities_in_text_nodes_are_decoded() -> Result<()> {
     let html = "<p id='result'>&lt;A &amp; B&gt;&nbsp;&copy;</p>";
     let h = Harness::from_html(html)?;

@@ -31,6 +31,8 @@ const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
 const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
 const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
 const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
+const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
+const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
 const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
 const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
 const DEFAULT_LOCALE: &str = "en-US";
@@ -5914,6 +5916,8 @@ pub struct Harness {
     listeners: ListenerStore,
     script_env: HashMap<String, Value>,
     document_url: String,
+    window_object: Rc<RefCell<Vec<(String, Value)>>>,
+    document_object: Rc<RefCell<Vec<(String, Value)>>>,
     location_object: Rc<RefCell<Vec<(String, Value)>>>,
     history_object: Rc<RefCell<Vec<(String, Value)>>>,
     history_entries: Vec<HistoryEntry>,
@@ -6128,6 +6132,8 @@ impl Harness {
             listeners: ListenerStore::default(),
             script_env: HashMap::new(),
             document_url: "about:blank".to_string(),
+            window_object: Rc::new(RefCell::new(Vec::new())),
+            document_object: Rc::new(RefCell::new(Vec::new())),
             location_object: Rc::new(RefCell::new(Vec::new())),
             history_object: Rc::new(RefCell::new(Vec::new())),
             history_entries: vec![HistoryEntry {
@@ -6187,13 +6193,15 @@ impl Harness {
     fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
         self.sync_history_object();
-        let location = Value::Object(self.location_object.clone());
-        let history = Value::Object(self.history_object.clone());
+        self.window_object = Rc::new(RefCell::new(Vec::new()));
+        self.document_object = Rc::new(RefCell::new(Vec::new()));
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
             ("readText".into(), Self::new_builtin_placeholder_function()),
             ("writeText".into(), Self::new_builtin_placeholder_function()),
         ]);
+        let location = Value::Object(self.location_object.clone());
+        let history = Value::Object(self.history_object.clone());
 
         let navigator = Self::new_object_value(vec![
             (INTERNAL_NAVIGATOR_OBJECT_KEY.into(), Value::Bool(true)),
@@ -6258,21 +6266,27 @@ impl Harness {
         );
         let intl = Self::new_object_value(intl_entries);
 
-        let window = Self::new_object_value(vec![
-            ("navigator".into(), navigator.clone()),
-            ("Intl".into(), intl.clone()),
-            ("String".into(), Value::StringConstructor),
-            ("location".into(), location.clone()),
-            ("history".into(), history.clone()),
-        ]);
+        self.sync_document_object();
+        self.sync_window_object(&navigator, &intl);
 
-        self.script_env.insert("navigator".to_string(), navigator);
+        let window = Value::Object(self.window_object.clone());
+        let document = Value::Object(self.document_object.clone());
+
+        self.script_env.insert("document".to_string(), document);
+        self.script_env
+            .insert("navigator".to_string(), navigator.clone());
+        self.script_env
+            .insert("clientInformation".to_string(), navigator.clone());
         self.script_env.insert("Intl".to_string(), intl);
         self.script_env
             .insert("String".to_string(), Value::StringConstructor);
         self.script_env.insert("location".to_string(), location);
         self.script_env.insert("history".to_string(), history);
-        self.script_env.insert("window".to_string(), window);
+        self.script_env.insert("window".to_string(), window.clone());
+        self.script_env.insert("self".to_string(), window.clone());
+        self.script_env.insert("top".to_string(), window.clone());
+        self.script_env.insert("parent".to_string(), window.clone());
+        self.script_env.insert("frames".to_string(), window);
     }
 
     fn current_location_parts(&self) -> LocationParts {
@@ -6286,6 +6300,154 @@ impl Harness {
             search: String::new(),
             hash: String::new(),
         })
+    }
+
+    fn window_is_secure_context(&self) -> bool {
+        matches!(
+            self.current_location_parts().scheme.as_str(),
+            "https" | "wss"
+        )
+    }
+
+    fn document_builtin_keys() -> &'static [&'static str] {
+        &["defaultView", "location", "URL", "documentURI"]
+    }
+
+    fn sync_document_object(&mut self) {
+        let mut extras = Vec::new();
+        {
+            let entries = self.document_object.borrow();
+            for (key, value) in entries.iter() {
+                if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if Self::document_builtin_keys()
+                    .iter()
+                    .any(|builtin| builtin == key)
+                {
+                    continue;
+                }
+                extras.push((key.clone(), value.clone()));
+            }
+        }
+
+        let mut entries = vec![
+            (INTERNAL_DOCUMENT_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                "defaultView".to_string(),
+                Value::Object(self.window_object.clone()),
+            ),
+            (
+                "location".to_string(),
+                Value::Object(self.location_object.clone()),
+            ),
+            ("URL".to_string(), Value::String(self.document_url.clone())),
+            (
+                "documentURI".to_string(),
+                Value::String(self.document_url.clone()),
+            ),
+        ];
+        entries.extend(extras);
+        *self.document_object.borrow_mut() = entries;
+    }
+
+    fn window_builtin_keys() -> &'static [&'static str] {
+        &[
+            "window",
+            "self",
+            "top",
+            "parent",
+            "frames",
+            "length",
+            "closed",
+            "location",
+            "history",
+            "navigator",
+            "clientInformation",
+            "document",
+            "origin",
+            "isSecureContext",
+            "Intl",
+            "String",
+            "name",
+        ]
+    }
+
+    fn sync_window_object(&mut self, navigator: &Value, intl: &Value) {
+        let mut extras = Vec::new();
+        let mut name_value = Value::String(String::new());
+        {
+            let entries = self.window_object.borrow();
+            for (key, value) in entries.iter() {
+                if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if key == "name" {
+                    name_value = Value::String(value.as_string());
+                    continue;
+                }
+                if Self::window_builtin_keys()
+                    .iter()
+                    .any(|builtin| builtin == key)
+                {
+                    continue;
+                }
+                extras.push((key.clone(), value.clone()));
+            }
+        }
+
+        let window_ref = Value::Object(self.window_object.clone());
+        let mut entries = vec![
+            (INTERNAL_WINDOW_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("window".to_string(), window_ref.clone()),
+            ("self".to_string(), window_ref.clone()),
+            ("top".to_string(), window_ref.clone()),
+            ("parent".to_string(), window_ref.clone()),
+            ("frames".to_string(), window_ref),
+            ("length".to_string(), Value::Number(0)),
+            ("closed".to_string(), Value::Bool(false)),
+            (
+                "location".to_string(),
+                Value::Object(self.location_object.clone()),
+            ),
+            (
+                "history".to_string(),
+                Value::Object(self.history_object.clone()),
+            ),
+            ("navigator".to_string(), navigator.clone()),
+            ("clientInformation".to_string(), navigator.clone()),
+            (
+                "document".to_string(),
+                Value::Object(self.document_object.clone()),
+            ),
+            (
+                "origin".to_string(),
+                Value::String(self.current_location_parts().origin()),
+            ),
+            (
+                "isSecureContext".to_string(),
+                Value::Bool(self.window_is_secure_context()),
+            ),
+            ("Intl".to_string(), intl.clone()),
+            ("String".to_string(), Value::StringConstructor),
+            ("name".to_string(), name_value),
+        ];
+        entries.extend(extras);
+        *self.window_object.borrow_mut() = entries;
+    }
+
+    fn sync_window_runtime_properties(&mut self) {
+        let mut entries = self.window_object.borrow_mut();
+        Self::object_set_entry(
+            &mut entries,
+            "origin".to_string(),
+            Value::String(self.current_location_parts().origin()),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "isSecureContext".to_string(),
+            Value::Bool(self.window_is_secure_context()),
+        );
     }
 
     fn location_builtin_keys() -> &'static [&'static str] {
@@ -6458,6 +6620,13 @@ impl Harness {
         )
     }
 
+    fn is_window_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_WINDOW_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     fn is_navigator_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_NAVIGATOR_OBJECT_KEY),
@@ -6482,6 +6651,32 @@ impl Harness {
         }
     }
 
+    fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {
+        match key {
+            "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
+            | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext" => {
+                Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
+            }
+            "location" => self.set_location_property("href", value),
+            "name" => {
+                Self::object_set_entry(
+                    &mut self.window_object.borrow_mut(),
+                    "name".to_string(),
+                    Value::String(value.as_string()),
+                );
+                Ok(())
+            }
+            _ => {
+                Self::object_set_entry(
+                    &mut self.window_object.borrow_mut(),
+                    key.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+        }
+    }
+
     fn set_history_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "length" => Err(Error::ScriptRuntime("history.length is read-only".into())),
@@ -6495,6 +6690,7 @@ impl Harness {
                 }
                 self.history_scroll_restoration = mode;
                 self.sync_history_object();
+                self.sync_window_runtime_properties();
                 Ok(())
             }
             _ => {
@@ -6611,6 +6807,8 @@ impl Harness {
         }
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_document_object();
+        self.sync_window_runtime_properties();
         self.location_navigations.push(LocationNavigation {
             kind,
             from,
@@ -6640,6 +6838,8 @@ impl Harness {
         });
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_document_object();
+        self.sync_window_runtime_properties();
         let _ = self.load_location_mock_page_if_exists(&current)?;
         Ok(())
     }
@@ -6697,6 +6897,8 @@ impl Harness {
         }
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_document_object();
+        self.sync_window_runtime_properties();
         Ok(())
     }
 
@@ -6729,6 +6931,8 @@ impl Harness {
         self.document_url = entry.url.clone();
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_document_object();
+        self.sync_window_runtime_properties();
 
         if !Self::is_hash_only_navigation(&from, &entry.url) {
             let _ = self.load_location_mock_page_if_exists(&entry.url)?;
@@ -8770,11 +8974,12 @@ impl Harness {
                     match env.get(target) {
                         Some(Value::Object(object)) => {
                             let key = self.property_key_to_storage_key(&key);
-                            let (is_location, is_history, is_navigator) = {
+                            let (is_location, is_history, is_window, is_navigator) = {
                                 let entries = object.borrow();
                                 (
                                     Self::is_location_object(&entries),
                                     Self::is_history_object(&entries),
+                                    Self::is_window_object(&entries),
                                     Self::is_navigator_object(&entries),
                                 )
                             };
@@ -8784,6 +8989,10 @@ impl Harness {
                             }
                             if is_history {
                                 self.set_history_property(&key, value)?;
+                                continue;
+                            }
+                            if is_window {
+                                self.set_window_property(&key, value)?;
                                 continue;
                             }
                             if is_navigator {
@@ -11079,6 +11288,11 @@ impl Harness {
                     if Self::is_history_object(&entries) {
                         return Ok(Self::object_get_entry(&entries, "length")
                             .unwrap_or(Value::Number(self.history_entries.len() as i64)));
+                    }
+                    if Self::is_window_object(&entries) {
+                        return Ok(
+                            Self::object_get_entry(&entries, "length").unwrap_or(Value::Number(0))
+                        );
                     }
                     if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
                         Ok(Value::Number(value.chars().count() as i64))
@@ -24467,7 +24681,7 @@ fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     if !cursor.eof() {
         return Ok(None);
     }
-    if matches!(target, DomQuery::Var(_)) {
+    if matches!(target, DomQuery::Var(_) | DomQuery::DocumentRoot) {
         return Ok(None);
     }
     Ok(Some(target))
@@ -31851,7 +32065,26 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
-            if matches!(target, DomQuery::DocumentRoot) && head == "navigator" {
+            let src_trimmed = src.trim_start();
+            if matches!(target, DomQuery::DocumentRoot)
+                && src_trimmed.starts_with("window.")
+                && matches!(
+                    head.as_str(),
+                    "window"
+                        | "self"
+                        | "top"
+                        | "parent"
+                        | "frames"
+                        | "length"
+                        | "closed"
+                        | "document"
+                        | "navigator"
+                        | "clientInformation"
+                        | "origin"
+                        | "isSecureContext"
+                        | "name"
+                )
+            {
                 return Ok(None);
             }
             if matches!(target, DomQuery::Var(_) | DomQuery::VarPath { .. }) {
