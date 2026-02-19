@@ -36587,6 +36587,11 @@ fn parse_html(html: &str) -> Result<ParseOutput> {
                 continue;
             }
 
+            if starts_with_at(bytes, i, b"<!") {
+                i = parse_declaration_tag(html, i)?;
+                continue;
+            }
+
             let (tag, attrs, self_closing, next) = parse_start_tag(html, i)?;
             i = next;
             let executable_script = tag.eq_ignore_ascii_case("script")
@@ -36740,6 +36745,53 @@ fn parse_start_tag(
     }
 
     Ok((tag, attrs, self_closing, i))
+}
+
+fn parse_declaration_tag(html: &str, at: usize) -> Result<usize> {
+    let bytes = html.as_bytes();
+    let mut i = at;
+
+    if !(bytes.get(i) == Some(&b'<') && bytes.get(i + 1) == Some(&b'!')) {
+        return Err(Error::HtmlParse("expected declaration tag".into()));
+    }
+    i += 2;
+
+    let mut single_quoted = false;
+    let mut double_quoted = false;
+    let mut bracket_depth = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if single_quoted {
+            if b == b'\'' {
+                single_quoted = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if double_quoted {
+            if b == b'"' {
+                double_quoted = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match b {
+            b'\'' => single_quoted = true,
+            b'"' => double_quoted = true,
+            b'[' => bracket_depth += 1,
+            b']' if bracket_depth > 0 => bracket_depth -= 1,
+            b'>' if bracket_depth == 0 => return Ok(i + 1),
+            _ => {}
+        }
+
+        i += 1;
+    }
+
+    Err(Error::HtmlParse("unclosed declaration tag".into()))
 }
 
 fn parse_end_tag(html: &str, at: usize) -> Result<(String, usize)> {

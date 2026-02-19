@@ -7209,6 +7209,18 @@ fn script_extractor_handles_regex_literals_with_quotes_for_end_tag_scan() -> Res
 }
 
 #[test]
+fn doctype_declaration_is_ignored_during_html_parse() -> Result<()> {
+    let html = r#"
+        <!DOCTYPE html>
+        <p id="result">ok</p>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
 fn set_interval_repeats_and_clear_interval_stops_requeue() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
