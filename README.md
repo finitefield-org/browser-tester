@@ -281,6 +281,10 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `getComputedStyle(element).getPropertyValue(property)`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
+  Element base properties/methods: `attributes`, `children`, `childElementCount`, `firstElementChild`, `lastElementChild`,
+  `nextElementSibling`, `previousElementSibling`, `tagName`, `localName`, `namespaceURI`, `outerHTML`,
+  `slot`, `role`, `elementTiming`, reflected `aria*` properties, `getAttributeNames()`, `hasAttributes()`,
+  `toggleAttribute(name[, force])`, `checkVisibility()`, `getElementsByClassName()`, `getElementsByTagName()`,
   dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
 - HTMLAnchorElement API: `href`, `protocol`, `host`, `hostname`, `port`, `pathname`, `search`, `hash`,
   `origin` (read-only), `username`, `password`, `download`, `hreflang`, `ping`, `referrerPolicy`,

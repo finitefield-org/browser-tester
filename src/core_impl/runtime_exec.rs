@@ -2889,6 +2889,14 @@ impl Harness {
                     }
                 }
 
+                if let Value::Node(node) = &receiver {
+                    if let Some(value) =
+                        self.eval_node_member_call(*node, member, &evaluated_args, event)?
+                    {
+                        return Ok(value);
+                    }
+                }
+
                 if let Value::TypedArray(array) = &receiver {
                     if let Some(value) =
                         self.eval_typed_array_member_call(array, member, &evaluated_args)?
@@ -3099,6 +3107,20 @@ impl Harness {
                 }
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 match prop {
+                    DomProp::Attributes => {
+                        let element = self.dom.element(node).ok_or_else(|| {
+                            Error::ScriptRuntime("attributes target is not an element".into())
+                        })?;
+                        let mut attrs = element
+                            .attrs
+                            .iter()
+                            .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                            .collect::<Vec<_>>();
+                        attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                        attrs.insert(0, ("length".to_string(), Value::Number(attrs.len() as i64)));
+                        Ok(Self::new_object_value(attrs))
+                    }
+                    DomProp::AssignedSlot => Ok(Value::Null),
                     DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
                     DomProp::ValueLength => {
                         Ok(Value::Number(self.dom.value(node)?.chars().count() as i64))
@@ -3115,16 +3137,75 @@ impl Harness {
                     DomProp::TextContent => Ok(Value::String(self.dom.text_content(node))),
                     DomProp::InnerText => Ok(Value::String(self.dom.text_content(node))),
                     DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
+                    DomProp::OuterHtml => Ok(Value::String(self.dom.outer_html(node)?)),
                     DomProp::ClassName => Ok(Value::String(
                         self.dom.attr(node, "class").unwrap_or_default(),
                     )),
+                    DomProp::ClassList => Ok(Self::new_array_value(
+                        class_tokens(self.dom.attr(node, "class").as_deref())
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    DomProp::ClassListLength => Ok(Value::Number(
+                        class_tokens(self.dom.attr(node, "class").as_deref()).len() as i64,
+                    )),
+                    DomProp::Part => Ok(Self::new_array_value(
+                        class_tokens(self.dom.attr(node, "part").as_deref())
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    DomProp::PartLength => Ok(Value::Number(
+                        class_tokens(self.dom.attr(node, "part").as_deref()).len() as i64,
+                    )),
                     DomProp::Id => Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default())),
+                    DomProp::TagName => Ok(Value::String(
+                        self.dom
+                            .tag_name(node)
+                            .map(|name| name.to_ascii_uppercase())
+                            .unwrap_or_default(),
+                    )),
+                    DomProp::LocalName => Ok(Value::String(
+                        self.dom
+                            .tag_name(node)
+                            .map(|name| name.to_ascii_lowercase())
+                            .unwrap_or_default(),
+                    )),
+                    DomProp::NamespaceUri => {
+                        if self.dom.element(node).is_some() {
+                            Ok(Value::String("http://www.w3.org/1999/xhtml".to_string()))
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    DomProp::Prefix => Ok(Value::Null),
+                    DomProp::NextElementSibling => Ok(self
+                        .dom
+                        .next_element_sibling(node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    DomProp::PreviousElementSibling => Ok(self
+                        .dom
+                        .previous_element_sibling(node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    DomProp::Slot => Ok(Value::String(self.dom.attr(node, "slot").unwrap_or_default())),
+                    DomProp::Role => Ok(Value::String(self.dom.attr(node, "role").unwrap_or_default())),
+                    DomProp::ElementTiming => Ok(Value::String(
+                        self.dom.attr(node, "elementtiming").unwrap_or_default(),
+                    )),
                     DomProp::Name => Ok(Value::String(
                         self.dom.attr(node, "name").unwrap_or_default(),
                     )),
                     DomProp::Lang => Ok(Value::String(
                         self.dom.attr(node, "lang").unwrap_or_default(),
                     )),
+                    DomProp::ClientWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
+                    DomProp::ClientHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
+                    DomProp::ClientLeft => Ok(Value::Number(self.dom.offset_left(node)?)),
+                    DomProp::ClientTop => Ok(Value::Number(self.dom.offset_top(node)?)),
+                    DomProp::CurrentCssZoom => Ok(Value::Number(1)),
                     DomProp::Dataset(key) => Ok(Value::String(self.dom.dataset_get(node, key)?)),
                     DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
                     DomProp::OffsetWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
@@ -3135,6 +3216,9 @@ impl Harness {
                     DomProp::ScrollHeight => Ok(Value::Number(self.dom.scroll_height(node)?)),
                     DomProp::ScrollLeft => Ok(Value::Number(self.dom.scroll_left(node)?)),
                     DomProp::ScrollTop => Ok(Value::Number(self.dom.scroll_top(node)?)),
+                    DomProp::ScrollLeftMax => Ok(Value::Number(0)),
+                    DomProp::ScrollTopMax => Ok(Value::Number(0)),
+                    DomProp::ShadowRoot => Ok(Value::Null),
                     DomProp::ActiveElement => Ok(self
                         .dom
                         .active_element()
@@ -3230,6 +3314,18 @@ impl Harness {
                     DomProp::ChildrenLength => {
                         Ok(Value::Number(self.dom.child_element_count(node) as i64))
                     }
+                    DomProp::AriaString(prop_name) => Ok(Value::String(
+                        self.dom
+                            .attr(node, &Self::aria_property_to_attr_name(prop_name))
+                            .unwrap_or_default(),
+                    )),
+                    DomProp::AriaElementRefSingle(prop_name) => Ok(self
+                        .resolve_aria_single_element_property(node, prop_name)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    DomProp::AriaElementRefList(prop_name) => Ok(Value::NodeList(
+                        self.resolve_aria_element_list_property(node, prop_name),
+                    )),
                     DomProp::AnchorAttributionSrc => Ok(Value::String(
                         self.dom.attr(node, "attributionsrc").unwrap_or_default(),
                     )),
@@ -4117,6 +4213,223 @@ impl Harness {
                         ],
                         event,
                     )?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_node_member_call(
+        &mut self,
+        node: NodeId,
+        member: &str,
+        evaluated_args: &[Value],
+        _event: &EventState,
+    ) -> Result<Option<Value>> {
+        match member {
+            "getAttribute" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getAttribute requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                Ok(Some(Value::String(
+                    self.dom.attr(node, &name).unwrap_or_default(),
+                )))
+            }
+            "setAttribute" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "setAttribute requires exactly two arguments".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let value = evaluated_args[1].as_string();
+                self.dom.set_attr(node, &name, &value)?;
+                Ok(Some(Value::Undefined))
+            }
+            "hasAttribute" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "hasAttribute requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                Ok(Some(Value::Bool(self.dom.has_attr(node, &name)?)))
+            }
+            "hasAttributes" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "hasAttributes takes no arguments".into(),
+                    ));
+                }
+                let has_attributes = self
+                    .dom
+                    .element(node)
+                    .map(|element| !element.attrs.is_empty())
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime("hasAttributes target is not an element".into())
+                    })?;
+                Ok(Some(Value::Bool(has_attributes)))
+            }
+            "removeAttribute" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "removeAttribute requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                self.dom.remove_attr(node, &name)?;
+                Ok(Some(Value::Undefined))
+            }
+            "getAttributeNames" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getAttributeNames takes no arguments".into(),
+                    ));
+                }
+                let element = self.dom.element(node).ok_or_else(|| {
+                    Error::ScriptRuntime("getAttributeNames target is not an element".into())
+                })?;
+                let mut names = element.attrs.keys().cloned().collect::<Vec<_>>();
+                names.sort();
+                Ok(Some(Self::new_array_value(
+                    names.into_iter().map(Value::String).collect(),
+                )))
+            }
+            "toggleAttribute" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "toggleAttribute requires one or two arguments".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let has = self.dom.has_attr(node, &name)?;
+                let next = if evaluated_args.len() == 2 {
+                    evaluated_args[1].truthy()
+                } else {
+                    !has
+                };
+                if next {
+                    self.dom.set_attr(node, &name, "")?;
+                } else {
+                    self.dom.remove_attr(node, &name)?;
+                }
+                Ok(Some(Value::Bool(next)))
+            }
+            "matches" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "matches requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(Value::Bool(self.dom.matches_selector(node, &selector)?)))
+            }
+            "closest" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "closest requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(
+                    self.dom
+                        .closest(node, &selector)?
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "querySelector" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "querySelector requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(
+                    self.dom
+                        .query_selector_from(&node, &selector)?
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "querySelectorAll" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "querySelectorAll requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(Value::NodeList(
+                    self.dom.query_selector_all_from(&node, &selector)?,
+                )))
+            }
+            "getElementsByClassName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByClassName requires exactly one argument".into(),
+                    ));
+                }
+                let classes = evaluated_args[0]
+                    .as_string()
+                    .split_whitespace()
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>();
+                if classes.is_empty() {
+                    return Ok(Some(Value::NodeList(Vec::new())));
+                }
+                let selector = classes
+                    .iter()
+                    .map(|class_name| format!(".{class_name}"))
+                    .collect::<String>();
+                Ok(Some(Value::NodeList(
+                    self.dom.query_selector_all_from(&node, &selector)?,
+                )))
+            }
+            "getElementsByTagName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByTagName requires exactly one argument".into(),
+                    ));
+                }
+                let tag_name = evaluated_args[0].as_string();
+                if tag_name == "*" {
+                    let mut nodes = Vec::new();
+                    self.dom.collect_elements_descendants_dfs(node, &mut nodes);
+                    return Ok(Some(Value::NodeList(nodes)));
+                }
+                Ok(Some(Value::NodeList(
+                    self.dom.query_selector_all_from(&node, &tag_name)?,
+                )))
+            }
+            "checkVisibility" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "checkVisibility supports at most one argument".into(),
+                    ));
+                }
+                Ok(Some(Value::Bool(!self.dom.has_attr(node, "hidden")?)))
+            }
+            "scrollIntoView" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "scrollIntoView takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "scroll" | "scrollTo" | "scrollBy" => {
+                if !(evaluated_args.is_empty()
+                    || evaluated_args.len() == 1
+                    || evaluated_args.len() == 2)
+                {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} supports zero, one, or two arguments"
+                    )));
                 }
                 Ok(Some(Value::Undefined))
             }
@@ -5033,8 +5346,58 @@ impl Harness {
         }
     }
 
+    pub(super) fn aria_property_to_attr_name(prop_name: &str) -> String {
+        if !prop_name.starts_with("aria") || prop_name.len() <= 4 {
+            return prop_name.to_ascii_lowercase();
+        }
+        format!("aria-{}", prop_name[4..].to_ascii_lowercase())
+    }
+
+    pub(super) fn aria_element_ref_attr_name(prop_name: &str) -> Option<&'static str> {
+        match prop_name {
+            "ariaActiveDescendantElement" => Some("aria-activedescendant"),
+            "ariaControlsElements" => Some("aria-controls"),
+            "ariaDescribedByElements" => Some("aria-describedby"),
+            "ariaDetailsElements" => Some("aria-details"),
+            "ariaErrorMessageElements" => Some("aria-errormessage"),
+            "ariaFlowToElements" => Some("aria-flowto"),
+            "ariaLabelledByElements" => Some("aria-labelledby"),
+            "ariaOwnsElements" => Some("aria-owns"),
+            _ => None,
+        }
+    }
+
+    pub(super) fn resolve_aria_single_element_property(
+        &self,
+        node: NodeId,
+        prop_name: &str,
+    ) -> Option<NodeId> {
+        let attr_name = Self::aria_element_ref_attr_name(prop_name)?;
+        let raw = self.dom.attr(node, attr_name)?;
+        let id_ref = raw.split_whitespace().next()?;
+        self.dom.by_id(id_ref)
+    }
+
+    pub(super) fn resolve_aria_element_list_property(
+        &self,
+        node: NodeId,
+        prop_name: &str,
+    ) -> Vec<NodeId> {
+        let Some(attr_name) = Self::aria_element_ref_attr_name(prop_name) else {
+            return Vec::new();
+        };
+        let Some(raw) = self.dom.attr(node, attr_name) else {
+            return Vec::new();
+        };
+        raw.split_whitespace()
+            .filter_map(|id_ref| self.dom.by_id(id_ref))
+            .collect()
+    }
+
     pub(super) fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
         match prop {
+            DomProp::Attributes => Some("attributes"),
+            DomProp::AssignedSlot => Some("assignedSlot"),
             DomProp::Value => Some("value"),
             DomProp::Checked => Some("checked"),
             DomProp::Open => Some("open"),
@@ -5046,10 +5409,27 @@ impl Harness {
             DomProp::TextContent => Some("textContent"),
             DomProp::InnerText => Some("innerText"),
             DomProp::InnerHtml => Some("innerHTML"),
+            DomProp::OuterHtml => Some("outerHTML"),
             DomProp::ClassName => Some("className"),
+            DomProp::ClassList => Some("classList"),
+            DomProp::Part => Some("part"),
             DomProp::Id => Some("id"),
+            DomProp::TagName => Some("tagName"),
+            DomProp::LocalName => Some("localName"),
+            DomProp::NamespaceUri => Some("namespaceURI"),
+            DomProp::Prefix => Some("prefix"),
+            DomProp::NextElementSibling => Some("nextElementSibling"),
+            DomProp::PreviousElementSibling => Some("previousElementSibling"),
+            DomProp::Slot => Some("slot"),
+            DomProp::Role => Some("role"),
+            DomProp::ElementTiming => Some("elementTiming"),
             DomProp::Name => Some("name"),
             DomProp::Lang => Some("lang"),
+            DomProp::ClientWidth => Some("clientWidth"),
+            DomProp::ClientHeight => Some("clientHeight"),
+            DomProp::ClientLeft => Some("clientLeft"),
+            DomProp::ClientTop => Some("clientTop"),
+            DomProp::CurrentCssZoom => Some("currentCSSZoom"),
             DomProp::OffsetWidth => Some("offsetWidth"),
             DomProp::OffsetHeight => Some("offsetHeight"),
             DomProp::OffsetLeft => Some("offsetLeft"),
@@ -5058,6 +5438,13 @@ impl Harness {
             DomProp::ScrollHeight => Some("scrollHeight"),
             DomProp::ScrollLeft => Some("scrollLeft"),
             DomProp::ScrollTop => Some("scrollTop"),
+            DomProp::ScrollLeftMax => Some("scrollLeftMax"),
+            DomProp::ScrollTopMax => Some("scrollTopMax"),
+            DomProp::ShadowRoot => Some("shadowRoot"),
+            DomProp::Children => Some("children"),
+            DomProp::ChildElementCount => Some("childElementCount"),
+            DomProp::FirstElementChild => Some("firstElementChild"),
+            DomProp::LastElementChild => Some("lastElementChild"),
             DomProp::Title => Some("title"),
             DomProp::AnchorAttributionSrc => Some("attributionSrc"),
             DomProp::AnchorDownload => Some("download"),
@@ -5087,6 +5474,11 @@ impl Harness {
             DomProp::AnchorShape => Some("shape"),
             DomProp::Dataset(_)
             | DomProp::Style(_)
+            | DomProp::ClassListLength
+            | DomProp::PartLength
+            | DomProp::AriaString(_)
+            | DomProp::AriaElementRefSingle(_)
+            | DomProp::AriaElementRefList(_)
             | DomProp::ValueLength
             | DomProp::ActiveElement
             | DomProp::CharacterSet
@@ -5118,10 +5510,6 @@ impl Harness {
             | DomProp::Images
             | DomProp::Links
             | DomProp::Scripts
-            | DomProp::Children
-            | DomProp::ChildElementCount
-            | DomProp::FirstElementChild
-            | DomProp::LastElementChild
             | DomProp::CurrentScript
             | DomProp::FormsLength
             | DomProp::ImagesLength
@@ -12468,6 +12856,29 @@ impl Harness {
                     ))),
                 }
             }
+            DomQuery::QuerySelectorAll {
+                target: query_target,
+                selector,
+            } => {
+                let Some(target_node) = self.resolve_dom_query_runtime(query_target, env)? else {
+                    return Ok(None);
+                };
+                Ok(Some(
+                    self.dom.query_selector_all_from(&target_node, selector)?,
+                ))
+            }
+            DomQuery::QuerySelectorAllIndex {
+                target: query_target,
+                selector,
+                index,
+            } => {
+                let Some(target_node) = self.resolve_dom_query_runtime(query_target, env)? else {
+                    return Ok(None);
+                };
+                let all = self.dom.query_selector_all_from(&target_node, selector)?;
+                let index = self.resolve_runtime_dom_index(index, Some(env))?;
+                Ok(all.get(index).copied().map(|node| vec![node]))
+            }
             _ => self.resolve_dom_query_list_static(target),
         }
     }
@@ -12651,6 +13062,8 @@ impl Harness {
 
     pub(super) fn describe_dom_prop(&self, prop: &DomProp) -> String {
         match prop {
+            DomProp::Attributes => "attributes".into(),
+            DomProp::AssignedSlot => "assignedSlot".into(),
             DomProp::Value => "value".into(),
             DomProp::ValueLength => "value.length".into(),
             DomProp::Checked => "checked".into(),
@@ -12663,10 +13076,29 @@ impl Harness {
             DomProp::TextContent => "textContent".into(),
             DomProp::InnerText => "innerText".into(),
             DomProp::InnerHtml => "innerHTML".into(),
+            DomProp::OuterHtml => "outerHTML".into(),
             DomProp::ClassName => "className".into(),
+            DomProp::ClassList => "classList".into(),
+            DomProp::ClassListLength => "classList.length".into(),
+            DomProp::Part => "part".into(),
+            DomProp::PartLength => "part.length".into(),
             DomProp::Id => "id".into(),
+            DomProp::TagName => "tagName".into(),
+            DomProp::LocalName => "localName".into(),
+            DomProp::NamespaceUri => "namespaceURI".into(),
+            DomProp::Prefix => "prefix".into(),
+            DomProp::NextElementSibling => "nextElementSibling".into(),
+            DomProp::PreviousElementSibling => "previousElementSibling".into(),
+            DomProp::Slot => "slot".into(),
+            DomProp::Role => "role".into(),
+            DomProp::ElementTiming => "elementTiming".into(),
             DomProp::Name => "name".into(),
             DomProp::Lang => "lang".into(),
+            DomProp::ClientWidth => "clientWidth".into(),
+            DomProp::ClientHeight => "clientHeight".into(),
+            DomProp::ClientLeft => "clientLeft".into(),
+            DomProp::ClientTop => "clientTop".into(),
+            DomProp::CurrentCssZoom => "currentCSSZoom".into(),
             DomProp::OffsetWidth => "offsetWidth".into(),
             DomProp::OffsetHeight => "offsetHeight".into(),
             DomProp::OffsetLeft => "offsetLeft".into(),
@@ -12675,8 +13107,14 @@ impl Harness {
             DomProp::ScrollHeight => "scrollHeight".into(),
             DomProp::ScrollLeft => "scrollLeft".into(),
             DomProp::ScrollTop => "scrollTop".into(),
+            DomProp::ScrollLeftMax => "scrollLeftMax".into(),
+            DomProp::ScrollTopMax => "scrollTopMax".into(),
+            DomProp::ShadowRoot => "shadowRoot".into(),
             DomProp::Dataset(_) => "dataset".into(),
             DomProp::Style(_) => "style".into(),
+            DomProp::AriaString(prop_name) => prop_name.clone(),
+            DomProp::AriaElementRefSingle(prop_name) => prop_name.clone(),
+            DomProp::AriaElementRefList(prop_name) => prop_name.clone(),
             DomProp::ActiveElement => "activeElement".into(),
             DomProp::CharacterSet => "characterSet".into(),
             DomProp::CompatMode => "compatMode".into(),

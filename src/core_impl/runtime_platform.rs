@@ -3468,6 +3468,7 @@ impl Harness {
                             self.dom.set_text_content(node, &value.as_string())?
                         }
                         DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
+                        DomProp::OuterHtml => self.dom.set_outer_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
                         DomProp::Open => {
@@ -3519,6 +3520,11 @@ impl Harness {
                             self.dom.set_attr(node, "class", &value.as_string())?
                         }
                         DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
+                        DomProp::Slot => self.dom.set_attr(node, "slot", &value.as_string())?,
+                        DomProp::Role => self.dom.set_attr(node, "role", &value.as_string())?,
+                        DomProp::ElementTiming => {
+                            self.dom.set_attr(node, "elementtiming", &value.as_string())?
+                        }
                         DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                         DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                         DomProp::Title => self.dom.set_document_title(&value.as_string())?,
@@ -3620,7 +3626,33 @@ impl Harness {
                         DomProp::AnchorShape => {
                             self.dom.set_attr(node, "shape", &value.as_string())?
                         }
-                        DomProp::OffsetWidth
+                        DomProp::AriaString(prop_name) => {
+                            let attr_name = Self::aria_property_to_attr_name(prop_name);
+                            self.dom.set_attr(node, &attr_name, &value.as_string())?
+                        }
+                        DomProp::Attributes
+                        | DomProp::AssignedSlot
+                        | DomProp::ClassList
+                        | DomProp::ClassListLength
+                        | DomProp::Part
+                        | DomProp::PartLength
+                        | DomProp::TagName
+                        | DomProp::LocalName
+                        | DomProp::NamespaceUri
+                        | DomProp::Prefix
+                        | DomProp::NextElementSibling
+                        | DomProp::PreviousElementSibling
+                        | DomProp::ClientWidth
+                        | DomProp::ClientHeight
+                        | DomProp::ClientLeft
+                        | DomProp::ClientTop
+                        | DomProp::CurrentCssZoom
+                        | DomProp::ScrollLeftMax
+                        | DomProp::ScrollTopMax
+                        | DomProp::ShadowRoot
+                        | DomProp::AriaElementRefSingle(_)
+                        | DomProp::AriaElementRefList(_)
+                        | DomProp::OffsetWidth
                         | DomProp::ValueLength
                         | DomProp::OffsetHeight
                         | DomProp::OffsetLeft

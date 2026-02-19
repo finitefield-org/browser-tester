@@ -198,6 +198,15 @@ impl Dom {
         Ok(out)
     }
 
+    pub(super) fn outer_html(&self, node_id: NodeId) -> Result<String> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "outerHTML target is not an element".into(),
+            ));
+        }
+        Ok(self.dump_node(node_id))
+    }
+
     pub(super) fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
@@ -215,6 +224,42 @@ impl Dom {
         let children = fragment.nodes[fragment.root.0].children.clone();
         for child in children {
             let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id), true)?;
+        }
+
+        self.rebuild_id_index();
+        Ok(())
+    }
+
+    pub(super) fn set_outer_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+        if self.element(node_id).is_none() {
+            return Err(Error::ScriptRuntime(
+                "outerHTML target is not an element".into(),
+            ));
+        }
+
+        let Some(parent) = self.parent(node_id) else {
+            return Err(Error::ScriptRuntime("outerHTML target is detached".into()));
+        };
+
+        let index = self.nodes[parent.0]
+            .children
+            .iter()
+            .position(|id| *id == node_id)
+            .ok_or_else(|| Error::ScriptRuntime("outerHTML target is detached".into()))?;
+
+        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+
+        self.nodes[parent.0].children.remove(index);
+        self.nodes[node_id.0].parent = None;
+
+        let mut insert_at = index;
+        let children = fragment.nodes[fragment.root.0].children.clone();
+        for child in children {
+            if let Some(cloned) = self.clone_subtree_from_dom(&fragment, child, None, true)? {
+                self.nodes[cloned.0].parent = Some(parent);
+                self.nodes[parent.0].children.insert(insert_at, cloned);
+                insert_at += 1;
+            }
         }
 
         self.rebuild_id_index();

@@ -9033,6 +9033,8 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         );
 
     let prop = match (head.as_str(), nested.as_ref()) {
+        ("attributes", None) => DomProp::Attributes,
+        ("assignedSlot", None) => DomProp::AssignedSlot,
         ("value", None) => DomProp::Value,
         ("value", Some(length)) if length == "length" => DomProp::ValueLength,
         ("checked", None) => DomProp::Checked,
@@ -9045,10 +9047,29 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("textContent", None) => DomProp::TextContent,
         ("innerText", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::InnerText,
         ("innerHTML", None) => DomProp::InnerHtml,
+        ("outerHTML", None) => DomProp::OuterHtml,
         ("className", None) => DomProp::ClassName,
+        ("classList", None) => DomProp::ClassList,
+        ("classList", Some(length)) if length == "length" => DomProp::ClassListLength,
+        ("part", None) => DomProp::Part,
+        ("part", Some(length)) if length == "length" => DomProp::PartLength,
         ("id", None) => DomProp::Id,
+        ("tagName", None) => DomProp::TagName,
+        ("localName", None) => DomProp::LocalName,
+        ("namespaceURI", None) => DomProp::NamespaceUri,
+        ("prefix", None) => DomProp::Prefix,
+        ("nextElementSibling", None) => DomProp::NextElementSibling,
+        ("previousElementSibling", None) => DomProp::PreviousElementSibling,
+        ("slot", None) => DomProp::Slot,
+        ("role", None) => DomProp::Role,
+        ("elementTiming", None) => DomProp::ElementTiming,
         ("name", None) => DomProp::Name,
         ("lang", None) => DomProp::Lang,
+        ("clientWidth", None) => DomProp::ClientWidth,
+        ("clientHeight", None) => DomProp::ClientHeight,
+        ("clientLeft", None) => DomProp::ClientLeft,
+        ("clientTop", None) => DomProp::ClientTop,
+        ("currentCSSZoom", None) => DomProp::CurrentCssZoom,
         ("offsetWidth", None) => DomProp::OffsetWidth,
         ("offsetHeight", None) => DomProp::OffsetHeight,
         ("offsetLeft", None) => DomProp::OffsetLeft,
@@ -9057,6 +9078,9 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("scrollHeight", None) => DomProp::ScrollHeight,
         ("scrollLeft", None) => DomProp::ScrollLeft,
         ("scrollTop", None) => DomProp::ScrollTop,
+        ("scrollLeftMax", None) => DomProp::ScrollLeftMax,
+        ("scrollTopMax", None) => DomProp::ScrollTopMax,
+        ("shadowRoot", None) => DomProp::ShadowRoot,
         ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => {
             DomProp::ActiveElement
         }
@@ -9142,16 +9166,10 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("images", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Images,
         ("links", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Links,
         ("scripts", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Scripts,
-        ("children", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Children,
-        ("childElementCount", None) if matches!(target, DomQuery::DocumentRoot) => {
-            DomProp::ChildElementCount
-        }
-        ("firstElementChild", None) if matches!(target, DomQuery::DocumentRoot) => {
-            DomProp::FirstElementChild
-        }
-        ("lastElementChild", None) if matches!(target, DomQuery::DocumentRoot) => {
-            DomProp::LastElementChild
-        }
+        ("children", None) => DomProp::Children,
+        ("childElementCount", None) => DomProp::ChildElementCount,
+        ("firstElementChild", None) => DomProp::FirstElementChild,
+        ("lastElementChild", None) => DomProp::LastElementChild,
         ("currentScript", None) if matches!(target, DomQuery::DocumentRoot) => {
             DomProp::CurrentScript
         }
@@ -9175,9 +9193,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::ScriptsLength
         }
-        ("children", Some(length))
-            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
-        {
+        ("children", Some(length)) if length == "length" => {
             DomProp::ChildrenLength
         }
         ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
@@ -9213,6 +9229,15 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         ("shape", None) if is_anchor_target => DomProp::AnchorShape,
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
+        (prop_name, None) if is_aria_element_ref_single_property(prop_name) => {
+            DomProp::AriaElementRefSingle(prop_name.to_string())
+        }
+        (prop_name, None) if is_aria_element_ref_list_property(prop_name) => {
+            DomProp::AriaElementRefList(prop_name.to_string())
+        }
+        (prop_name, None) if is_aria_string_property(prop_name) => {
+            DomProp::AriaString(prop_name.to_string())
+        }
         _ => {
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {
                 return Ok(None);
@@ -9251,6 +9276,9 @@ fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     if !cursor.consume_ascii("getAttribute") {
         return Ok(None);
     }
+    if cursor.peek().is_some_and(is_ident_char) {
+        return Ok(None);
+    }
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
     cursor.skip_ws();
@@ -9263,6 +9291,30 @@ fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     }
 
     Ok(Some((target, name)))
+}
+
+fn is_aria_string_property(prop: &str) -> bool {
+    if !prop.starts_with("aria") || prop.len() <= 4 {
+        return false;
+    }
+    !is_aria_element_ref_single_property(prop) && !is_aria_element_ref_list_property(prop)
+}
+
+fn is_aria_element_ref_single_property(prop: &str) -> bool {
+    matches!(prop, "ariaActiveDescendantElement")
+}
+
+fn is_aria_element_ref_list_property(prop: &str) -> bool {
+    matches!(
+        prop,
+        "ariaControlsElements"
+            | "ariaDescribedByElements"
+            | "ariaDetailsElements"
+            | "ariaErrorMessageElements"
+            | "ariaFlowToElements"
+            | "ariaLabelledByElements"
+            | "ariaOwnsElements"
+    )
 }
 
 fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
@@ -9279,6 +9331,9 @@ fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     }
     cursor.skip_ws();
     if !cursor.consume_ascii("hasAttribute") {
+        return Ok(None);
+    }
+    if cursor.peek().is_some_and(is_ident_char) {
         return Ok(None);
     }
     cursor.skip_ws();

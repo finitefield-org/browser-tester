@@ -3853,6 +3853,194 @@ fn dataset_camel_case_mapping_works() -> Result<()> {
 }
 
 #[test]
+fn element_core_properties_and_aria_reflection_work() -> Result<()> {
+    let html = r#"
+        <div id='box' class='x y'>
+          <span id='a'>A</span>
+          <span id='b'>B</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.slot = 'hero';
+            box.role = 'region';
+            box.ariaLabel = 'Main panel';
+            box.ariaBusy = 'true';
+            box.elementTiming = 'paint';
+
+            const first = box.firstElementChild;
+            const last = box.lastElementChild;
+            const next = first.nextElementSibling;
+            const prev = last.previousElementSibling;
+
+            document.getElementById('result').textContent =
+              box.tagName + ':' +
+              box.localName + ':' +
+              box.namespaceURI + ':' +
+              box.childElementCount + ':' +
+              box.children.length + ':' +
+              first.id + ':' +
+              last.id + ':' +
+              next.id + ':' +
+              prev.id + ':' +
+              box.clientWidth + ':' +
+              box.clientHeight + ':' +
+              box.clientLeft + ':' +
+              box.clientTop + ':' +
+              box.currentCSSZoom + ':' +
+              box.scrollLeftMax + ':' +
+              box.scrollTopMax + ':' +
+              (box.shadowRoot === null) + ':' +
+              (box.assignedSlot === null) + ':' +
+              (box.prefix === null) + ':' +
+              box.slot + ':' +
+              box.getAttribute('slot') + ':' +
+              box.role + ':' +
+              box.getAttribute('role') + ':' +
+              box.ariaLabel + ':' +
+              box.getAttribute('aria-label') + ':' +
+              box.ariaBusy + ':' +
+              box.getAttribute('aria-busy') + ':' +
+              box.elementTiming + ':' +
+              box.getAttribute('elementtiming') + ':' +
+              box.classList.length + ':' +
+              box.part.length + ':' +
+              !!box.attributes;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "DIV:div:http://www.w3.org/1999/xhtml:2:2:a:b:b:a:0:0:0:0:1:0:0:true:true:true:hero:hero:region:region:Main panel:Main panel:true:true:paint:paint:2:0:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn aria_element_reference_properties_resolve_id_refs() -> Result<()> {
+    let html = r#"
+        <input
+          id='field'
+          aria-activedescendant='opt2'
+          aria-controls='panel1 panel2'
+          aria-describedby='desc'
+          aria-details='detail'
+          aria-errormessage='err'
+          aria-flowto='next1 next2'
+          aria-labelledby='lbl'
+          aria-owns='owned1 owned2'
+        >
+        <div id='panel1'></div>
+        <div id='panel2'></div>
+        <p id='desc'></p>
+        <div id='detail'></div>
+        <p id='err'></p>
+        <span id='next1'></span>
+        <span id='next2'></span>
+        <label id='lbl'></label>
+        <div id='owned1'></div>
+        <div id='owned2'></div>
+        <div id='opt2'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const field = document.getElementById('field');
+            const active = field.ariaActiveDescendantElement;
+            const controls = field.ariaControlsElements;
+            const described = field.ariaDescribedByElements;
+            const details = field.ariaDetailsElements;
+            const errors = field.ariaErrorMessageElements;
+            const flow = field.ariaFlowToElements;
+            const labelled = field.ariaLabelledByElements;
+            const owns = field.ariaOwnsElements;
+
+            document.getElementById('result').textContent =
+              active.id + ':' +
+              controls.length + ':' +
+              controls[0].id + ':' +
+              controls[1].id + ':' +
+              described[0].id + ':' +
+              details[0].id + ':' +
+              errors[0].id + ':' +
+              flow[0].id + ':' +
+              flow[1].id + ':' +
+              labelled[0].id + ':' +
+              owns.length + ':' +
+              owns[1].id;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "opt2:2:panel1:panel2:desc:detail:err:next1:next2:lbl:2:owned2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn outer_html_and_element_member_methods_work() -> Result<()> {
+    let html = r#"
+        <div id='box' data-x='1'>
+          <span class='item' id='i1'>A</span>
+          <span class='item' id='i2'>B</span>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const names = box.getAttributeNames();
+            const hasBefore = box.hasAttributes();
+            const toggledOn = box.toggleAttribute('hidden');
+            const toggledOff = box.toggleAttribute('hidden', false);
+            const picked = box.querySelector('.item').id;
+            const allItems = box.querySelectorAll('.item');
+            const total = allItems.length;
+            const byClassNodes = box.getElementsByClassName('item');
+            const byTagNodes = box.getElementsByTagName('span');
+            const byClass = byClassNodes.length;
+            const byTag = byTagNodes.length;
+            const visible = box.checkVisibility();
+            const beforeOuter = box.outerHTML.includes('id="box"');
+
+            box.outerHTML = '<section id="box" data-next="1"><em id="neo">N</em></section>';
+            const after = document.getElementById('box');
+            const afterOuter = after.outerHTML.includes('data-next="1"');
+
+            document.getElementById('result').textContent =
+              hasBefore + ':' +
+              names.length + ':' +
+              toggledOn + ':' +
+              toggledOff + ':' +
+              picked + ':' +
+              total + ':' +
+              byClass + ':' +
+              byTag + ':' +
+              visible + ':' +
+              beforeOuter + ':' +
+              document.getElementById('neo').textContent + ':' +
+              afterOuter + ':' +
+              after.getAttribute('data-next');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:2:true:false:i1:2:2:2:true:true:N:true:1")?;
+    Ok(())
+}
+
+#[test]
 fn focus_and_blur_update_active_element_and_events() -> Result<()> {
     let html = r#"
         <input id='a'>
