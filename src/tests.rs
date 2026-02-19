@@ -3392,6 +3392,22 @@ fn arrow_function_value_can_be_called() -> Result<()> {
 }
 
 #[test]
+fn iife_arrow_function_expression_can_be_called() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          (() => {
+            document.getElementById('result').textContent = 'ok';
+          })();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
 fn default_function_parameters_apply_for_missing_or_undefined() -> Result<()> {
     let html = r#"
         <p id='result'></p>

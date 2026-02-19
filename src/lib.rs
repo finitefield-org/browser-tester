@@ -5122,6 +5122,10 @@ enum Expr {
         target: String,
         args: Vec<Expr>,
     },
+    Call {
+        target: Box<Expr>,
+        args: Vec<Expr>,
+    },
     MemberCall {
         target: Box<Expr>,
         member: String,
@@ -13312,6 +13316,20 @@ impl Harness {
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                             Error::ScriptRuntime(format!("'{target}' is not a function"))
+                        }
+                        other => other,
+                    })
+            }
+            Expr::Call { target, args } => {
+                let callee = self.eval_expr(target, env, event_param, event)?;
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                self.execute_callable_value(&callee, &evaluated_args, event)
+                    .map_err(|err| match err {
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime("call target is not a function".into())
                         }
                         other => other,
                     })
@@ -32815,43 +32833,73 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
 }
 
 fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
+    let parse_args = |args_src: &str| -> Result<Vec<Expr>> {
+        let raw_args = split_top_level_by_char(args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(
+                    "function call arguments cannot be empty".into(),
+                ));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+        Ok(parsed)
+    };
+
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
-    let Some(target) = cursor.parse_identifier() else {
-        return Ok(None);
-    };
+    if let Some(target) = cursor.parse_identifier() {
+        cursor.skip_ws();
+        if cursor.peek() == Some(b'(') {
+            let args_src = cursor.read_balanced_block(b'(', b')')?;
+            let parsed = parse_args(&args_src)?;
+
+            cursor.skip_ws();
+            if cursor.eof() {
+                return Ok(Some(Expr::FunctionCall {
+                    target,
+                    args: parsed,
+                }));
+            }
+            return Ok(None);
+        }
+    }
+
+    let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'(') {
         return Ok(None);
     }
 
-    let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let raw_args = split_top_level_by_char(&args_src, b',');
-    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-        Vec::new()
-    } else {
-        raw_args
-    };
-
-    let mut parsed = Vec::with_capacity(args.len());
-    for arg in args {
-        let arg = arg.trim();
-        if arg.is_empty() {
-            return Err(Error::ScriptParse(
-                "function call arguments cannot be empty".into(),
-            ));
-        }
-        parsed.push(parse_expr(arg)?);
+    let target_src = cursor.read_balanced_block(b'(', b')')?;
+    let target_src = target_src.trim();
+    if target_src.is_empty() {
+        return Ok(None);
     }
+
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = parse_args(&args_src)?;
 
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
 
-    Ok(Some(Expr::FunctionCall {
-        target,
-        args: parsed,
+    Ok(Some(Expr::Call {
+        target: Box::new(parse_expr(target_src)?),
+        args,
     }))
 }
 
