@@ -1,5 +1,9 @@
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self> {
+        stacker::grow(32 * 1024 * 1024, || Self::from_html_impl(html))
+    }
+
+    fn from_html_impl(html: &str) -> Result<Self> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         let mut harness = Self {
             dom,

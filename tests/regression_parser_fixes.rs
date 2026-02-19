@@ -133,6 +133,39 @@ fn nested_object_property_compound_assignment_supported() -> browser_tester::Res
 }
 
 #[test]
+fn logical_or_returns_operand_value_for_object_defaulting() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function createLotRow(seed) {
+        seed = seed || {};
+        return seed.name;
+      }
+      document.getElementById("result").textContent = String(createLotRow() === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn logical_and_returns_last_truthy_operand_value() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const value = "x" && 7;
+      document.getElementById("result").textContent = String(value);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
 fn array_destructured_callback_params_supported() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
@@ -147,6 +180,49 @@ fn array_destructured_callback_params_supported() -> browser_tester::Result<()> 
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "axby")?;
+    Ok(())
+}
+
+#[test]
+fn nodelist_foreach_member_call_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <ul>
+      <li class="item">A</li>
+      <li class="item">B</li>
+    </ul>
+    <div id="result"></div>
+    <script>
+      let out = "";
+      document.querySelectorAll(".item").forEach((node, index) => {
+        out += node.textContent + String(index);
+      });
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "A0B1")?;
+    Ok(())
+}
+
+#[test]
+fn array_member_calls_via_object_path_are_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { lots: [{ qty: 2 }, { qty: 3 }] };
+      const total = state.lots
+        .map((lot) => lot.qty)
+        .reduce((sum, value) => sum + value, 0);
+      state.lots.push({ qty: 4 });
+      const filtered = state.lots.filter((lot) => lot.qty >= 3);
+      document.getElementById("result").textContent =
+        String(total) + "|" + String(filtered.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "5|2")?;
     Ok(())
 }
 

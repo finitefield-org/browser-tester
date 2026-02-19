@@ -26,3 +26,4 @@ include = [
 regex = "1"
 num-bigint = "0.4"
 num-traits = "0.2"
+stacker = "0.1"
