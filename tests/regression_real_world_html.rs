@@ -193,3 +193,155 @@ fn function_can_call_global_function_declared_later() -> browser_tester::Result<
     harness.assert_text("#result", "closed")?;
     Ok(())
 }
+
+#[test]
+fn a_then_b_reads_updated_global_binding() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let x = 0;
+      function a() {
+        x = 1;
+      }
+      function b() {
+        return x;
+      }
+      a();
+      document.getElementById("result").textContent = String(b());
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn function_a_update_is_visible_to_function_b_in_same_event() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="btn">run</button>
+    <div id="result"></div>
+    <script>
+      let shared = 0;
+      function a() {
+        shared = 7;
+      }
+      function b() {
+        return shared;
+      }
+      document.getElementById("btn").addEventListener("click", () => {
+        a();
+        document.getElementById("result").textContent = String(b());
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#btn")?;
+    harness.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
+fn bind_function_listener_closure_can_call_local_close() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="btn">run</button>
+    <div id="result">init</div>
+    <script>
+      const btn = document.getElementById("btn");
+      function bind() {
+        const close = () => {
+          document.getElementById("result").textContent = "closed";
+        };
+        btn.addEventListener("click", () => close());
+      }
+      bind();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#btn")?;
+    harness.assert_text("#result", "closed")?;
+    Ok(())
+}
+
+#[test]
+fn foreach_map_reduce_sort_callbacks_reflect_outer_updates() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [3, 1, 2];
+      const stats = { forEachCount: 0, mapSum: 0, reduceSum: 0, sortCalls: 0 };
+
+      const mapped = values.map((v) => {
+        stats.mapSum += v;
+        return v * 2;
+      });
+      values.forEach(() => {
+        stats.forEachCount += 1;
+      });
+      values.reduce((acc, v) => {
+        stats.reduceSum += v;
+        return acc + v;
+      }, 0);
+      values.sort((a, b) => {
+        stats.sortCalls += 1;
+        return a - b;
+      });
+
+      document.getElementById("result").textContent =
+        String(stats.forEachCount) + "|" +
+        String(stats.mapSum) + "|" +
+        String(stats.reduceSum) + "|" +
+        String(stats.sortCalls > 0) + "|" +
+        values.join(",") + "|" +
+        mapped.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "3|6|6|true|1,2,3|6,2,4")?;
+    Ok(())
+}
+
+#[test]
+fn run_calculation_pipeline_keeps_candidates_for_render_outputs() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="run">run</button>
+    <div id="result"></div>
+    <script>
+      let computedAllCandidates = [];
+      const state = { selectedCandidate: 0 };
+
+      function buildCandidates(requiredQty, unitsPerCase) {
+        if (requiredQty === 125 && unitsPerCase === 24) {
+          return [{ caseTotal: 4, eachTotal: 29, totalUnits: 125 }];
+        }
+        return [];
+      }
+
+      function renderOutputs() {
+        if (!computedAllCandidates.length) {
+          document.getElementById("result").textContent = "No candidate";
+          return;
+        }
+        const candidate = computedAllCandidates[state.selectedCandidate];
+        document.getElementById("result").textContent =
+          String(candidate.caseTotal) + ":" + String(candidate.eachTotal) + ":" + String(candidate.totalUnits);
+      }
+
+      function runCalculation() {
+        computedAllCandidates = buildCandidates(125, 24);
+        state.selectedCandidate = 0;
+        renderOutputs();
+      }
+
+      document.getElementById("run").addEventListener("click", runCalculation);
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#result", "4:29:125")?;
+    Ok(())
+}
