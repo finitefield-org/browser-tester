@@ -145,9 +145,14 @@ struct Element {
     attrs: HashMap<String, String>,
     value: String,
     checked: bool,
+    indeterminate: bool,
     disabled: bool,
     readonly: bool,
     required: bool,
+    custom_validity_message: String,
+    selection_start: usize,
+    selection_end: usize,
+    selection_direction: String,
 }
 
 #[derive(Debug, Clone)]
@@ -182,10 +187,16 @@ fn sanitize_inner_html_element_attrs(element: &mut Element) {
         true
     });
     element.checked = element.attrs.contains_key("checked");
+    element.indeterminate = false;
     element.disabled = element.attrs.contains_key("disabled");
     element.readonly = element.attrs.contains_key("readonly");
     element.required = element.attrs.contains_key("required");
     element.value = element.attrs.get("value").cloned().unwrap_or_default();
+    let len = element.value.chars().count();
+    element.custom_validity_message.clear();
+    element.selection_start = len;
+    element.selection_end = len;
+    element.selection_direction = "none".to_string();
 }
 
 fn is_javascript_url_attr(name: &str) -> bool {
@@ -1001,6 +1012,7 @@ enum SelectorPseudoClass {
     OnlyChild,
     OnlyOfType,
     Checked,
+    Indeterminate,
     Disabled,
     Enabled,
     Required,
@@ -1370,6 +1382,13 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
         if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
             let consumed = start + "checked".len();
             return Some((SelectorPseudoClass::Checked, consumed));
+        }
+    }
+
+    if let Some(rest) = tail.strip_prefix("indeterminate") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "indeterminate".len();
+            return Some((SelectorPseudoClass::Indeterminate, consumed));
         }
     }
 
@@ -2410,7 +2429,24 @@ enum DomProp {
     AssignedSlot,
     Value,
     ValueLength,
+    ValidationMessage,
+    Validity,
+    ValidityValueMissing,
+    ValidityTypeMismatch,
+    ValidityPatternMismatch,
+    ValidityTooLong,
+    ValidityTooShort,
+    ValidityRangeUnderflow,
+    ValidityRangeOverflow,
+    ValidityStepMismatch,
+    ValidityBadInput,
+    ValidityValid,
+    ValidityCustomError,
+    SelectionStart,
+    SelectionEnd,
+    SelectionDirection,
     Checked,
+    Indeterminate,
     Open,
     ReturnValue,
     ClosedBy,

@@ -696,6 +696,7 @@ impl Harness {
             "outerHTML" => self.dom.set_outer_html(node, &value.as_string())?,
             "value" => self.dom.set_value(node, &value.as_string())?,
             "checked" => self.dom.set_checked(node, value.truthy())?,
+            "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
             "open" => {
                 if value.truthy() {
                     self.dom.set_attr(node, "open", "true")?;
@@ -1513,9 +1514,83 @@ impl Harness {
         Ok(())
     }
 
+    fn input_supports_required(kind: &str) -> bool {
+        !matches!(
+            kind,
+            "hidden" | "range" | "color" | "button" | "submit" | "reset" | "image"
+        )
+    }
+
+    fn is_labelable_control(&self, node: NodeId) -> bool {
+        let Some(tag) = self.dom.tag_name(node) else {
+            return false;
+        };
+
+        if tag.eq_ignore_ascii_case("input") {
+            let input_type = self
+                .dom
+                .attr(node, "type")
+                .unwrap_or_else(|| "text".to_string())
+                .to_ascii_lowercase();
+            return input_type != "hidden";
+        }
+
+        tag.eq_ignore_ascii_case("button")
+            || tag.eq_ignore_ascii_case("select")
+            || tag.eq_ignore_ascii_case("textarea")
+    }
+
+    fn resolve_label_control(&self, label: NodeId) -> Option<NodeId> {
+        if !self
+            .dom
+            .tag_name(label)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("label"))
+        {
+            return None;
+        }
+
+        if let Some(target_id) = self.dom.attr(label, "for") {
+            if let Some(target) = self.dom.by_id(&target_id) {
+                if self.is_labelable_control(target) {
+                    return Some(target);
+                }
+            }
+        }
+
+        let mut descendants = Vec::new();
+        self.dom.collect_elements_descendants_dfs(label, &mut descendants);
+        descendants
+            .into_iter()
+            .find(|candidate| self.is_labelable_control(*candidate))
+    }
+
+    pub(super) fn is_effectively_disabled(&self, node: NodeId) -> bool {
+        if self.dom.disabled(node) {
+            return true;
+        }
+        if !is_form_control(&self.dom, node) {
+            return false;
+        }
+
+        let mut cursor = self.dom.parent(node);
+        while let Some(parent) = cursor {
+            if self
+                .dom
+                .tag_name(parent)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("fieldset"))
+                && self.dom.disabled(parent)
+            {
+                return true;
+            }
+            cursor = self.dom.parent(parent);
+        }
+
+        false
+    }
+
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        if self.dom.disabled(target) {
+        if self.is_effectively_disabled(target) {
             return Ok(());
         }
         if self.dom.readonly(target) {
@@ -1547,7 +1622,7 @@ impl Harness {
 
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
         let target = self.select_one(selector)?;
-        if self.dom.disabled(target) {
+        if self.is_effectively_disabled(target) {
             return Ok(());
         }
         let tag = self
@@ -1596,7 +1671,7 @@ impl Harness {
         target: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        if self.dom.disabled(target) {
+        if self.is_effectively_disabled(target) {
             return Ok(());
         }
 
@@ -1607,8 +1682,16 @@ impl Harness {
                 return Ok(());
             }
 
+            if let Some(control) = self.resolve_label_control(target) {
+                if control != target {
+                    self.click_node_with_env(control, env)?;
+                    return Ok(());
+                }
+            }
+
             if is_checkbox_input(&self.dom, target) {
                 let current = self.dom.checked(target)?;
+                self.dom.set_indeterminate(target, false)?;
                 self.dom.set_checked(target, !current)?;
                 self.dispatch_event_with_env(target, "input", env, true)?;
                 self.dispatch_event_with_env(target, "change", env, true)?;
@@ -1748,6 +1831,7 @@ impl Harness {
             if is_checkbox_input(&self.dom, control) || is_radio_input(&self.dom, control) {
                 let default_checked = self.dom.attr(control, "checked").is_some();
                 self.dom.set_checked(control, default_checked)?;
+                self.dom.set_indeterminate(control, false)?;
                 continue;
             }
 
@@ -2118,7 +2202,7 @@ impl Harness {
     }
 
     pub(super) fn is_successful_form_data_control(&self, control: NodeId) -> Result<bool> {
-        if self.dom.disabled(control) {
+        if self.is_effectively_disabled(control) {
             return Ok(false);
         }
         let name = self.dom.attr(control, "name").unwrap_or_default();
@@ -2156,13 +2240,7 @@ impl Harness {
     }
 
     pub(super) fn form_data_control_value(&self, control: NodeId) -> Result<String> {
-        let mut value = self.dom.value(control)?;
-        if value.is_empty()
-            && (is_checkbox_input(&self.dom, control) || is_radio_input(&self.dom, control))
-        {
-            value = "on".into();
-        }
-        Ok(value)
+        self.dom.value(control)
     }
 
     pub(super) fn form_is_valid_for_submit(&self, form: NodeId) -> Result<bool> {
@@ -2180,7 +2258,7 @@ impl Harness {
         control: NodeId,
         controls: &[NodeId],
     ) -> Result<bool> {
-        if self.dom.disabled(control) || !self.dom.required(control) {
+        if self.is_effectively_disabled(control) || !self.dom.required(control) {
             return Ok(true);
         }
 
@@ -2193,8 +2271,11 @@ impl Harness {
             let kind = self
                 .dom
                 .attr(control, "type")
-                .unwrap_or_default()
+                .unwrap_or_else(|| "text".into())
                 .to_ascii_lowercase();
+            if !Self::input_supports_required(kind.as_str()) {
+                return Ok(true);
+            }
             if kind == "checkbox" {
                 return self.dom.checked(control);
             }
@@ -2397,7 +2478,7 @@ impl Harness {
         node: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        if self.dom.disabled(node) {
+        if self.is_effectively_disabled(node) {
             return Ok(());
         }
 
@@ -3716,7 +3797,30 @@ impl Harness {
                         DomProp::InnerHtml => self.dom.set_inner_html(node, &value.as_string())?,
                         DomProp::OuterHtml => self.dom.set_outer_html(node, &value.as_string())?,
                         DomProp::Value => self.dom.set_value(node, &value.as_string())?,
+                        DomProp::SelectionStart => {
+                            let next_start = Self::value_to_i64(&value).max(0) as usize;
+                            let end = self.dom.selection_end(node).unwrap_or_default();
+                            self.dom
+                                .set_selection_range(node, next_start, end, "none")?;
+                        }
+                        DomProp::SelectionEnd => {
+                            let start = self.dom.selection_start(node).unwrap_or_default();
+                            let next_end = Self::value_to_i64(&value).max(0) as usize;
+                            self.dom
+                                .set_selection_range(node, start, next_end, "none")?;
+                        }
+                        DomProp::SelectionDirection => {
+                            let start = self.dom.selection_start(node).unwrap_or_default();
+                            let end = self.dom.selection_end(node).unwrap_or_default();
+                            let direction = value.as_string();
+                            let direction =
+                                Self::normalize_selection_direction(direction.as_str());
+                            self.dom.set_selection_range(node, start, end, direction)?;
+                        }
                         DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
+                        DomProp::Indeterminate => {
+                            self.dom.set_indeterminate(node, value.truthy())?
+                        }
                         DomProp::Open => {
                             if value.truthy() {
                                 self.dom.set_attr(node, "open", "true")?;
@@ -3878,6 +3982,19 @@ impl Harness {
                         }
                         DomProp::Attributes
                         | DomProp::AssignedSlot
+                        | DomProp::ValidationMessage
+                        | DomProp::Validity
+                        | DomProp::ValidityValueMissing
+                        | DomProp::ValidityTypeMismatch
+                        | DomProp::ValidityPatternMismatch
+                        | DomProp::ValidityTooLong
+                        | DomProp::ValidityTooShort
+                        | DomProp::ValidityRangeUnderflow
+                        | DomProp::ValidityRangeOverflow
+                        | DomProp::ValidityStepMismatch
+                        | DomProp::ValidityBadInput
+                        | DomProp::ValidityValid
+                        | DomProp::ValidityCustomError
                         | DomProp::ClassList
                         | DomProp::ClassListLength
                         | DomProp::Part

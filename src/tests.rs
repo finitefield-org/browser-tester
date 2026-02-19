@@ -4210,6 +4210,438 @@ fn html_dom_input_event_toggles_submit_button_disabled_state() -> Result<()> {
 }
 
 #[test]
+fn html_input_check_validity_and_validity_state_work() -> Result<()> {
+    let html = r#"
+        <input id='name' type='text' required minlength='4' maxlength='8' pattern='[A-Za-z]+'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const input = document.getElementById('name');
+          document.getElementById('run').addEventListener('click', () => {
+            const r1 = input.checkValidity() + ':' + input.validity.valueMissing;
+            input.value = 'ab1';
+            const r2 = input.checkValidity() + ':' + input.validity.patternMismatch;
+            input.value = 'Abcd';
+            const r3 = input.checkValidity() + ':' + input.validity.valid;
+            document.getElementById('result').textContent = r1 + '|' + r2 + '|' + r3;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true|false:true|true:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_custom_validity_and_report_validity_work() -> Result<()> {
+    let html = r#"
+        <input id='email' type='email' required>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const input = document.getElementById('email');
+          document.getElementById('run').addEventListener('click', () => {
+            input.setCustomValidity('Need fix');
+            const first = input.reportValidity() + ':' + input.validity.customError + ':' + input.validationMessage;
+            input.setCustomValidity('');
+            input.value = 'a@example.com';
+            const second = input.reportValidity() + ':' + input.validity.customError + ':' + input.validationMessage;
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:Need fix|true:false:")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_selection_and_range_text_methods_work() -> Result<()> {
+    let html = r#"
+        <input id='text' type='text' value='abcdef'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const input = document.getElementById('text');
+          document.getElementById('run').addEventListener('click', () => {
+            input.setSelectionRange(1, 4, 'forward');
+            const a = input.selectionStart + ':' + input.selectionEnd + ':' + input.selectionDirection;
+
+            input.setRangeText('ZZ');
+            const b = input.value + ':' + input.selectionStart + ':' + input.selectionEnd;
+
+            input.setSelectionRange(2, 2);
+            input.setRangeText('Q', 1, 3, 'select');
+            const c = input.value + ':' + input.selectionStart + ':' + input.selectionEnd;
+
+            input.select();
+            const d = input.selectionStart + ':' + input.selectionEnd;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:4:forward|aZZef:3:3|aQef:1:2|0:4")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_step_methods_and_numeric_validity_work() -> Result<()> {
+    let html = r#"
+        <input id='num' type='number' min='2' max='10' step='2' value='4'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const input = document.getElementById('num');
+          document.getElementById('run').addEventListener('click', () => {
+            input.stepUp();
+            const a = input.value;
+
+            input.stepDown(2);
+            const b = input.value;
+
+            input.value = '5';
+            const c = input.validity.stepMismatch + ':' + input.checkValidity();
+
+            input.value = '11';
+            const d = input.validity.rangeOverflow + ':' + input.reportValidity();
+
+            input.value = '1';
+            const e = input.validity.rangeUnderflow + ':' + input.reportValidity();
+
+            input.value = '8';
+            input.showPicker();
+            const f = input.checkValidity() + ':' + input.validity.valid + ':' + document.getElementById('num').validity.valid;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "6|2|true:false|true:false|true:false|true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_button_value_property_defaults_and_updates() -> Result<()> {
+    let html = r#"
+        <input id='empty' type='button'>
+        <input id='named' type='button' value='Click Me'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const empty = document.getElementById('empty');
+          const named = document.getElementById('named');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = '[' + empty.value + ']:' + named.value;
+            empty.value = 'Start machine';
+            const second = empty.value;
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]:Click Me|Start machine")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_button_click_handler_runs_custom_logic() -> Result<()> {
+    let html = r#"
+        <input id='btn' type='button' value='Start machine'>
+        <p id='result'>stopped</p>
+        <script>
+          const btn = document.getElementById('btn');
+          const result = document.getElementById('result');
+          btn.addEventListener('click', () => {
+            if (btn.value === 'Start machine') {
+              btn.value = 'Stop machine';
+              result.textContent = 'started';
+            } else {
+              btn.value = 'Start machine';
+              result.textContent = 'stopped';
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.assert_text("#result", "stopped")?;
+    h.assert_value("#btn", "Start machine")?;
+    h.click("#btn")?;
+    h.assert_text("#result", "started")?;
+    h.assert_value("#btn", "Stop machine")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_button_click_has_no_default_submit_behavior() -> Result<()> {
+    let html = r#"
+        <form id='f' action=''>
+          <input id='btn' type='button' value='Action'>
+          <button id='submit' type='submit'>Submit</button>
+        </form>
+        <p id='result'></p>
+        <script>
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent = 'submitted';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.assert_text("#result", "")?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.click("#submit")?;
+    h.assert_text("#result", "submitted")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_button_does_not_participate_in_constraint_validation() -> Result<()> {
+    let html = r#"
+        <input id='button' type='button' required>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const button = document.getElementById('button');
+          document.getElementById('run').addEventListener('click', () => {
+            button.setCustomValidity('custom');
+            const a = button.checkValidity() + ':' + button.reportValidity();
+            const b = button.validity.valid + ':' + button.validity.valueMissing + ':' + button.validity.customError;
+            const c = '[' + button.validationMessage + ']';
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true|true:false:false|[]")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_button_inherits_disabled_state_from_disabled_fieldset() -> Result<()> {
+    let html = r#"
+        <fieldset id='group' disabled>
+          <input id='btn' type='button' value='Action'>
+        </fieldset>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const group = document.getElementById('group');
+          const btn = document.getElementById('btn');
+          document.getElementById('run').addEventListener('click', () => {
+            btn.focus();
+            const before = document.activeElement === btn;
+            group.disabled = false;
+            btn.focus();
+            const after = document.activeElement === btn;
+            document.getElementById('result').textContent =
+              before + ':' + after + ':' + btn.disabled + ':' + group.disabled;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_form_data_uses_on_default_and_omits_unchecked() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='subscribe' type='checkbox' name='subscribe' checked>
+          <input id='empty' type='checkbox' name='empty' value='' checked>
+          <input id='off' type='checkbox' name='off'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            document.getElementById('result').textContent =
+              '[' + fd.get('subscribe') + ']:' +
+              fd.has('off') + ':' +
+              '[' + fd.get('empty') + ']';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[on]:false:[]")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_multiple_same_name_values_are_all_submitted() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='coding' type='checkbox' name='interest' value='coding' checked>
+          <input id='music' type='checkbox' name='interest' value='music' checked>
+          <input id='art' type='checkbox' name='interest' value='art'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            const values = fd.getAll('interest');
+            document.getElementById('result').textContent =
+              values.length + ':' + values[0] + ':' + values[1] + ':' + values.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:coding:music:coding|music")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_required_validity_uses_value_missing() -> Result<()> {
+    let html = r#"
+        <input id='agree' type='checkbox' required>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const agree = document.getElementById('agree');
+          document.getElementById('run').addEventListener('click', () => {
+            const first =
+              agree.checkValidity() + ':' + agree.validity.valueMissing + ':' + agree.validity.valid;
+            agree.checked = true;
+            const second =
+              agree.checkValidity() + ':' + agree.validity.valueMissing + ':' + agree.validity.valid;
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:false|true:false:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_indeterminate_is_visual_only_and_click_clears_it() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='flag' type='checkbox' name='flag'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const flag = document.getElementById('flag');
+          document.getElementById('run').addEventListener('click', () => {
+            flag.indeterminate = true;
+            const first = flag.indeterminate + ':' + flag.checked;
+            const beforeSubmit = new FormData(form).has('flag');
+            flag.click();
+            const second = flag.indeterminate + ':' + flag.checked;
+            const submitted = new FormData(form).get('flag');
+            document.getElementById('result').textContent =
+              first + '|' + beforeSubmit + '|' + second + '|[' + submitted + ']';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false|false|false:true|[on]")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_label_click_toggles_associated_checkbox() -> Result<()> {
+    let html = r#"
+        <input id='opt' type='checkbox'>
+        <label id='opt-label' for='opt'>Option</label>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.assert_checked("#opt", false)?;
+    h.click("#opt-label")?;
+    h.assert_checked("#opt", true)?;
+    h.click("#opt-label")?;
+    h.assert_checked("#opt", false)?;
+    Ok(())
+}
+
+#[test]
+fn html_input_checkbox_switch_keeps_checkbox_behavior() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='theme' type='checkbox' name='theme' switch>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const theme = document.getElementById('theme');
+          const form = document.getElementById('f');
+          document.getElementById('run').addEventListener('click', () => {
+            theme.click();
+            const submitted = new FormData(form).get('theme');
+            document.getElementById('result').textContent = theme.checked + ':[' + submitted + ']';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:[on]")?;
+    Ok(())
+}
+
+#[test]
+fn selector_indeterminate_matches_checkbox_and_ignores_switch() -> Result<()> {
+    let html = r#"
+        <input id='a' type='checkbox'>
+        <input id='b' type='checkbox' switch>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const a = document.getElementById('a');
+          const b = document.getElementById('b');
+          document.getElementById('run').addEventListener('click', () => {
+            a.indeterminate = true;
+            b.indeterminate = true;
+            const matched = document.querySelectorAll('input:indeterminate');
+            document.getElementById('result').textContent =
+              matched.length + ':' + (matched.length ? matched[0].id : 'none');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:a")?;
+    Ok(())
+}
+
+#[test]
 fn html_element_hidden_and_inner_text_properties_work() -> Result<()> {
     let html = r#"
         <div id='box'>Hello <span>DOM</span></div>
@@ -9457,9 +9889,14 @@ fn selector_parse_supports_only_child_and_only_of_type() {
 #[test]
 fn selector_parse_supports_checked_disabled_enabled() {
     let checked = parse_selector_step("input:checked").expect("parse should succeed");
+    let indeterminate = parse_selector_step("input:indeterminate").expect("parse should succeed");
     let disabled = parse_selector_step("input:disabled").expect("parse should succeed");
     let enabled = parse_selector_step("input:enabled").expect("parse should succeed");
     assert_eq!(checked.pseudo_classes, vec![SelectorPseudoClass::Checked]);
+    assert_eq!(
+        indeterminate.pseudo_classes,
+        vec![SelectorPseudoClass::Indeterminate]
+    );
     assert_eq!(disabled.pseudo_classes, vec![SelectorPseudoClass::Disabled]);
     assert_eq!(enabled.pseudo_classes, vec![SelectorPseudoClass::Enabled]);
 }
