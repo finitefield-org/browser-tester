@@ -8,6 +8,7 @@ impl Harness {
         let mut harness = Self {
             dom,
             listeners: ListenerStore::default(),
+            node_event_handler_props: HashMap::new(),
             script_env: HashMap::new(),
             document_url: "about:blank".to_string(),
             window_object: Rc::new(RefCell::new(Vec::new())),
@@ -148,9 +149,22 @@ impl Harness {
             Value::String("Intl".to_string()),
         );
         let intl = Self::new_object_value(intl_entries);
+        let string_constructor = Value::StringConstructor;
+        let boolean_constructor = Self::new_boolean_constructor_callable();
+        let url_constructor = Value::UrlConstructor;
+        let html_element_constructor = Self::new_builtin_placeholder_function();
+        let html_input_element_constructor = Self::new_builtin_placeholder_function();
 
         self.sync_document_object();
-        self.sync_window_object(&navigator, &intl);
+        self.sync_window_object(
+            &navigator,
+            &intl,
+            &string_constructor,
+            &boolean_constructor,
+            &url_constructor,
+            &html_element_constructor,
+            &html_input_element_constructor,
+        );
 
         let window = Value::Object(self.window_object.clone());
         let document = Value::Object(self.document_object.clone());
@@ -162,11 +176,16 @@ impl Harness {
             .insert("clientInformation".to_string(), navigator.clone());
         self.script_env.insert("Intl".to_string(), intl);
         self.script_env
-            .insert("String".to_string(), Value::StringConstructor);
+            .insert("String".to_string(), string_constructor);
         self.script_env
-            .insert("Boolean".to_string(), Self::new_boolean_constructor_callable());
+            .insert("Boolean".to_string(), boolean_constructor);
+        self.script_env.insert("URL".to_string(), url_constructor);
         self.script_env
-            .insert("URL".to_string(), Value::UrlConstructor);
+            .insert("HTMLElement".to_string(), html_element_constructor);
+        self.script_env.insert(
+            "HTMLInputElement".to_string(),
+            html_input_element_constructor,
+        );
         self.script_env.insert("location".to_string(), location);
         self.script_env.insert("history".to_string(), history);
         self.script_env.insert("window".to_string(), window.clone());
@@ -262,11 +281,22 @@ impl Harness {
             "String",
             "Boolean",
             "URL",
+            "HTMLElement",
+            "HTMLInputElement",
             "name",
         ]
     }
 
-    pub(super) fn sync_window_object(&mut self, navigator: &Value, intl: &Value) {
+    pub(super) fn sync_window_object(
+        &mut self,
+        navigator: &Value,
+        intl: &Value,
+        string_constructor: &Value,
+        boolean_constructor: &Value,
+        url_constructor: &Value,
+        html_element_constructor: &Value,
+        html_input_element_constructor: &Value,
+    ) {
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
         {
@@ -322,9 +352,17 @@ impl Harness {
                 Value::Bool(self.window_is_secure_context()),
             ),
             ("Intl".to_string(), intl.clone()),
-            ("String".to_string(), Value::StringConstructor),
-            ("Boolean".to_string(), Self::new_boolean_constructor_callable()),
-            ("URL".to_string(), Value::UrlConstructor),
+            ("String".to_string(), string_constructor.clone()),
+            ("Boolean".to_string(), boolean_constructor.clone()),
+            ("URL".to_string(), url_constructor.clone()),
+            (
+                "HTMLElement".to_string(),
+                html_element_constructor.clone(),
+            ),
+            (
+                "HTMLInputElement".to_string(),
+                html_input_element_constructor.clone(),
+            ),
             ("name".to_string(), name_value),
         ];
         entries.extend(extras);
@@ -550,7 +588,9 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "URL" => Err(Error::ScriptRuntime(format!("window.{key} is read-only"))),
+            | "URL" | "HTMLElement" | "HTMLInputElement" => {
+                Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
+            }
             "location" => self.set_location_property("href", value),
             "name" => {
                 Self::object_set_entry(
@@ -598,6 +638,144 @@ impl Harness {
         }
     }
 
+    pub(super) fn set_node_event_handler_property(
+        &mut self,
+        node: NodeId,
+        key: &str,
+        value: Value,
+    ) -> Result<bool> {
+        let Some(raw_event_type) = key.strip_prefix("on") else {
+            return Ok(false);
+        };
+        if raw_event_type.is_empty() {
+            return Ok(false);
+        }
+
+        let event_type = raw_event_type.to_ascii_lowercase();
+        if let Some(previous_handler) = self
+            .node_event_handler_props
+            .remove(&(node, event_type.clone()))
+        {
+            let _ = self
+                .listeners
+                .remove(node, &event_type, false, &previous_handler);
+        }
+
+        if let Value::Function(function) = value {
+            let handler = function.handler.clone();
+            self.listeners.add(
+                node,
+                event_type.clone(),
+                Listener {
+                    capture: false,
+                    handler: handler.clone(),
+                    captured_env: function.captured_env.clone(),
+                },
+            );
+            self.node_event_handler_props
+                .insert((node, event_type), handler);
+        }
+        Ok(true)
+    }
+
+    pub(super) fn set_node_assignment_property(
+        &mut self,
+        node: NodeId,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        if self.set_node_event_handler_property(node, key, value.clone())? {
+            return Ok(());
+        }
+
+        match key {
+            "textContent" | "innerText" | "text" => {
+                self.dom.set_text_content(node, &value.as_string())?
+            }
+            "innerHTML" => self.dom.set_inner_html(node, &value.as_string())?,
+            "outerHTML" => self.dom.set_outer_html(node, &value.as_string())?,
+            "value" => self.dom.set_value(node, &value.as_string())?,
+            "checked" => self.dom.set_checked(node, value.truthy())?,
+            "open" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "open", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "open")?;
+                }
+            }
+            "returnValue" => {
+                self.set_dialog_return_value(node, value.as_string())?;
+            }
+            "closedBy" | "closedby" => self.dom.set_attr(node, "closedby", &value.as_string())?,
+            "readOnly" | "readonly" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "readonly", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "readonly")?;
+                }
+            }
+            "required" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "required", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "required")?;
+                }
+            }
+            "disabled" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "disabled", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "disabled")?;
+                }
+            }
+            "hidden" => {
+                if node == self.dom.root {
+                    return Err(Error::ScriptRuntime("hidden is read-only".into()));
+                }
+                if value.truthy() {
+                    self.dom.set_attr(node, "hidden", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "hidden")?;
+                }
+            }
+            "className" => self.dom.set_attr(node, "class", &value.as_string())?,
+            "id" => self.dom.set_attr(node, "id", &value.as_string())?,
+            "slot" => self.dom.set_attr(node, "slot", &value.as_string())?,
+            "role" => self.dom.set_attr(node, "role", &value.as_string())?,
+            "elementTiming" => self.dom.set_attr(node, "elementtiming", &value.as_string())?,
+            "name" => self.dom.set_attr(node, "name", &value.as_string())?,
+            "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
+            "title" => self.dom.set_document_title(&value.as_string())?,
+            "attributionSrc" | "attributionsrc" => {
+                self.dom.set_attr(node, "attributionsrc", &value.as_string())?
+            }
+            "download" => self.dom.set_attr(node, "download", &value.as_string())?,
+            "hash" => self.set_anchor_url_property(node, "hash", value.clone())?,
+            "host" => self.set_anchor_url_property(node, "host", value.clone())?,
+            "hostname" => self.set_anchor_url_property(node, "hostname", value.clone())?,
+            "href" => self.set_anchor_url_property(node, "href", value.clone())?,
+            "hreflang" => self.dom.set_attr(node, "hreflang", &value.as_string())?,
+            "interestForElement" => self.dom.set_attr(node, "interestfor", &value.as_string())?,
+            "password" => self.set_anchor_url_property(node, "password", value.clone())?,
+            "pathname" => self.set_anchor_url_property(node, "pathname", value.clone())?,
+            "ping" => self.dom.set_attr(node, "ping", &value.as_string())?,
+            "port" => self.set_anchor_url_property(node, "port", value.clone())?,
+            "protocol" => self.set_anchor_url_property(node, "protocol", value.clone())?,
+            "referrerPolicy" => self.dom.set_attr(node, "referrerpolicy", &value.as_string())?,
+            "rel" => self.dom.set_attr(node, "rel", &value.as_string())?,
+            "search" => self.set_anchor_url_property(node, "search", value.clone())?,
+            "target" => self.dom.set_attr(node, "target", &value.as_string())?,
+            "type" => self.dom.set_attr(node, "type", &value.as_string())?,
+            "username" => self.set_anchor_url_property(node, "username", value.clone())?,
+            "charset" => self.dom.set_attr(node, "charset", &value.as_string())?,
+            "coords" => self.dom.set_attr(node, "coords", &value.as_string())?,
+            "rev" => self.dom.set_attr(node, "rev", &value.as_string())?,
+            "shape" => self.dom.set_attr(node, "shape", &value.as_string())?,
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub(super) fn read_object_assignment_property(
         &self,
         container: &Value,
@@ -609,7 +787,10 @@ impl Harness {
             .object_property_from_value(container, &key)
             .map_err(|err| match err {
                 Error::ScriptRuntime(msg) if msg == "value is not an object" => {
-                    Error::ScriptRuntime(format!("variable '{}' is not an object", target))
+                    Error::ScriptRuntime(format!(
+                        "variable '{}' is not an object (key '{}')",
+                        target, key
+                    ))
                 }
                 other => other,
             })?;
@@ -709,8 +890,12 @@ impl Harness {
                 }
                 Ok(())
             }
+            Value::Node(node) => {
+                let key = self.property_key_to_storage_key(key_value);
+                self.set_node_assignment_property(*node, &key, value)
+            }
             _ => Err(Error::ScriptRuntime(format!(
-                "variable '{}' is not an object",
+                "variable '{}' is not an object (assignment target)",
                 target
             ))),
         }
@@ -1017,6 +1202,7 @@ impl Harness {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         self.dom = dom;
         self.listeners = ListenerStore::default();
+        self.node_event_handler_props.clear();
         self.script_env.clear();
         self.task_queue.clear();
         self.microtask_queue.clear();
@@ -1424,16 +1610,16 @@ impl Harness {
             if is_checkbox_input(&self.dom, target) {
                 let current = self.dom.checked(target)?;
                 self.dom.set_checked(target, !current)?;
-                self.dispatch_event(target, "input")?;
-                self.dispatch_event(target, "change")?;
+                self.dispatch_event_with_env(target, "input", env, true)?;
+                self.dispatch_event_with_env(target, "change", env, true)?;
             }
 
             if is_radio_input(&self.dom, target) {
                 let current = self.dom.checked(target)?;
                 if !current {
                     self.dom.set_checked(target, true)?;
-                    self.dispatch_event(target, "input")?;
-                    self.dispatch_event(target, "change")?;
+                    self.dispatch_event_with_env(target, "input", env, true)?;
+                    self.dispatch_event_with_env(target, "change", env, true)?;
                 }
             }
 
@@ -1458,7 +1644,9 @@ impl Harness {
 
     pub(super) fn click_node(&mut self, target: NodeId) -> Result<()> {
         let mut env = self.script_env.clone();
-        stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, &mut env))
+        let result = stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, &mut env));
+        self.script_env = env;
+        result
     }
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
@@ -2413,6 +2601,12 @@ impl Harness {
                 }
             }
             let current_keys = env.keys().cloned().collect::<Vec<_>>();
+            let mut script_env_before = HashMap::new();
+            for key in &current_keys {
+                if let Some(value) = self.script_env.get(key).cloned() {
+                    script_env_before.insert(key.clone(), value);
+                }
+            }
             if self.trace {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
@@ -2424,7 +2618,21 @@ impl Harness {
             }
             self.execute_handler(&listener.handler, event, &mut listener_env)?;
             for key in current_keys {
-                if let Some(value) = listener_env.get(&key).cloned() {
+                let listener_value = listener_env.get(&key).cloned();
+                let before = script_env_before.get(&key);
+                let after = self.script_env.get(&key).cloned();
+                let script_changed = match (before, after.as_ref()) {
+                    (Some(prev), Some(next)) => !self.strict_equal(prev, next),
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                if script_changed {
+                    if let Some(value) = after {
+                        env.insert(key, value);
+                    } else if let Some(value) = listener_value {
+                        env.insert(key, value);
+                    }
+                } else if let Some(value) = listener_value {
                     env.insert(key, value);
                 }
             }
@@ -2626,6 +2834,27 @@ impl Harness {
         match env.get(INTERNAL_SCOPE_DEPTH_KEY) {
             Some(Value::Number(depth)) if *depth >= 0 => *depth,
             _ => 0,
+        }
+    }
+
+    fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
+        match env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
+            Some(Value::Array(names)) => names
+                .borrow()
+                .iter()
+                .any(|entry| matches!(entry, Value::String(value) if value == name)),
+            _ => false,
+        }
+    }
+
+    pub(super) fn sync_global_binding_if_needed(
+        &mut self,
+        env: &HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        if Self::env_should_sync_global_name(env, name) {
+            self.script_env.insert(name.to_string(), value.clone());
         }
     }
 
@@ -2904,18 +3133,11 @@ impl Harness {
             );
             let mut global_sync_keys = HashSet::new();
             let caller_view = caller_env;
-            let caller_scope_depth = caller_view.map(Self::env_scope_depth).unwrap_or(0);
             for name in &function.captured_global_names {
                 if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
                     continue;
                 }
                 global_sync_keys.insert(name.clone());
-                if caller_scope_depth > 0 {
-                    if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
-                        call_env.insert(name.clone(), value);
-                        continue;
-                    }
-                }
                 if let Some(global_value) = this.script_env.get(name).cloned() {
                     call_env.insert(name.clone(), global_value);
                 } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
@@ -2931,6 +3153,20 @@ impl Harness {
                 }
                 call_env.insert(name.clone(), global_value.clone());
                 global_sync_keys.insert(name.clone());
+            }
+            if !global_sync_keys.is_empty() {
+                let mut sync_names = global_sync_keys.iter().cloned().collect::<Vec<_>>();
+                sync_names.sort();
+                call_env.insert(
+                    INTERNAL_GLOBAL_SYNC_NAMES_KEY.to_string(),
+                    Self::new_array_value(sync_names.into_iter().map(Value::String).collect()),
+                );
+            }
+            let mut global_values_before_call = HashMap::new();
+            for name in &global_sync_keys {
+                if let Some(value) = this.script_env.get(name).cloned() {
+                    global_values_before_call.insert(name.clone(), value);
+                }
             }
             let mut call_event = event.clone();
             let event_param = None;
@@ -2951,7 +3187,25 @@ impl Harness {
                 if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
                     continue;
                 }
-                if let Some(next) = call_env.get(name).cloned() {
+                let before = global_values_before_call.get(name);
+                let global_after = this.script_env.get(name).cloned();
+                let call_after = call_env.get(name).cloned();
+                let global_changed = match (before, global_after.as_ref()) {
+                    (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                    (None, Some(_)) => true,
+                    (Some(_), None) => true,
+                    (None, None) => false,
+                };
+                let call_changed = match (before, call_after.as_ref()) {
+                    (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                    (None, Some(_)) => true,
+                    (Some(_), None) => true,
+                    (None, None) => false,
+                };
+                if global_changed && !call_changed {
+                    continue;
+                }
+                if let Some(next) = call_after {
                     this.script_env.insert(name.clone(), next);
                 }
             }
@@ -3332,6 +3586,7 @@ impl Harness {
                         }
                     };
                     env.insert(name.clone(), next.clone());
+                    self.sync_global_binding_if_needed(env, name, &next);
                     self.bind_timer_id_to_task_env(name, expr, &next);
                 }
                 Stmt::VarUpdate { name, delta } => {
@@ -3356,7 +3611,8 @@ impl Harness {
                             )));
                         }
                     };
-                    env.insert(name.clone(), next);
+                    env.insert(name.clone(), next.clone());
+                    self.sync_global_binding_if_needed(env, name, &next);
                 }
                 Stmt::ArrayDestructureAssign { targets, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -3365,14 +3621,9 @@ impl Harness {
                         let Some(target_name) = target_name else {
                             continue;
                         };
-                        if !env.contains_key(target_name) {
-                            return Err(Error::ScriptRuntime(format!(
-                                "unknown variable: {}",
-                                target_name
-                            )));
-                        }
                         let next = values.get(index).cloned().unwrap_or(Value::Undefined);
-                        env.insert(target_name.clone(), next);
+                        env.insert(target_name.clone(), next.clone());
+                        self.sync_global_binding_if_needed(env, target_name, &next);
                     }
                 }
                 Stmt::ObjectDestructureAssign { bindings, expr } => {
@@ -3384,15 +3635,10 @@ impl Harness {
                     };
                     let entries = entries.borrow();
                     for (source_key, target_name) in bindings {
-                        if !env.contains_key(target_name) {
-                            return Err(Error::ScriptRuntime(format!(
-                                "unknown variable: {}",
-                                target_name
-                            )));
-                        }
                         let next = Self::object_get_entry(&entries, source_key)
                             .unwrap_or(Value::Undefined);
-                        env.insert(target_name.clone(), next);
+                        env.insert(target_name.clone(), next.clone());
+                        self.sync_global_binding_if_needed(env, target_name, &next);
                     }
                 }
                 Stmt::ObjectAssign { target, path, expr } => {
@@ -3753,9 +3999,13 @@ impl Harness {
                     let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
 
                     for (idx, class_name) in classes.iter().enumerate() {
-                        env.insert(item_var.clone(), Value::String(class_name.clone()));
+                        let item_value = Value::String(class_name.clone());
+                        env.insert(item_var.clone(), item_value.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &item_value);
                         if let Some(index_var) = index_var {
-                            env.insert(index_var.clone(), Value::Number(idx as i64));
+                            let index_value = Value::Number(idx as i64);
+                            env.insert(index_var.clone(), index_value.clone());
+                            self.sync_global_binding_if_needed(env, index_var, &index_value);
                         }
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
@@ -3766,13 +4016,15 @@ impl Harness {
                     }
 
                     if let Some(prev) = prev_item {
-                        env.insert(item_var.clone(), prev);
+                        env.insert(item_var.clone(), prev.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &prev);
                     } else {
                         env.remove(item_var);
                     }
                     if let Some(index_var) = index_var {
                         if let Some(prev) = prev_index {
-                            env.insert(index_var.clone(), prev);
+                            env.insert(index_var.clone(), prev.clone());
+                            self.sync_global_binding_if_needed(env, index_var, &prev);
                         } else {
                             env.remove(index_var);
                         }
@@ -3951,9 +4203,13 @@ impl Harness {
                     let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
 
                     for (idx, node) in items.iter().enumerate() {
-                        env.insert(item_var.clone(), Value::Node(*node));
+                        let item_value = Value::Node(*node);
+                        env.insert(item_var.clone(), item_value.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &item_value);
                         if let Some(index_var) = index_var {
-                            env.insert(index_var.clone(), Value::Number(idx as i64));
+                            let index_value = Value::Number(idx as i64);
+                            env.insert(index_var.clone(), index_value.clone());
+                            self.sync_global_binding_if_needed(env, index_var, &index_value);
                         }
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
@@ -3964,13 +4220,15 @@ impl Harness {
                     }
 
                     if let Some(prev) = prev_item {
-                        env.insert(item_var.clone(), prev);
+                        env.insert(item_var.clone(), prev.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &prev);
                     } else {
                         env.remove(item_var);
                     }
                     if let Some(index_var) = index_var {
                         if let Some(prev) = prev_index {
-                            env.insert(index_var.clone(), prev);
+                            env.insert(index_var.clone(), prev.clone());
+                            self.sync_global_binding_if_needed(env, index_var, &prev);
                         } else {
                             env.remove(index_var);
                         }
@@ -4101,7 +4359,9 @@ impl Harness {
 
                     let prev_item = env.get(item_var).cloned();
                     for idx in items {
-                        env.insert(item_var.clone(), Value::Number(idx as i64));
+                        let item_value = Value::Number(idx as i64);
+                        env.insert(item_var.clone(), item_value.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &item_value);
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
                             ExecFlow::ContinueLoop => continue,
@@ -4110,7 +4370,8 @@ impl Harness {
                         }
                     }
                     if let Some(prev) = prev_item {
-                        env.insert(item_var.clone(), prev);
+                        env.insert(item_var.clone(), prev.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &prev);
                     } else {
                         env.remove(item_var);
                     }
@@ -4157,7 +4418,8 @@ impl Harness {
 
                     let prev_item = env.get(item_var).cloned();
                     for item in nodes {
-                        env.insert(item_var.clone(), item);
+                        env.insert(item_var.clone(), item.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &item);
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
                             ExecFlow::ContinueLoop => continue,
@@ -4166,7 +4428,8 @@ impl Harness {
                         }
                     }
                     if let Some(prev) = prev_item {
-                        env.insert(item_var.clone(), prev);
+                        env.insert(item_var.clone(), prev.clone());
+                        self.sync_global_binding_if_needed(env, item_var, &prev);
                     } else {
                         env.remove(item_var);
                     }

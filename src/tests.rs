@@ -2066,28 +2066,40 @@ fn element_scroll_into_view_method_from_script_works() -> Result<()> {
 }
 
 #[test]
-fn element_scroll_into_view_rejects_arguments() {
+fn element_scroll_into_view_accepts_optional_argument() -> Result<()> {
     let html = r#"
         <button id='trigger'>target</button>
+        <p id='result'></p>
         <script>
-          document.getElementById('trigger').scrollIntoView('smooth');
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('trigger').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            document.getElementById('result').textContent = 'ok';
+          });
         </script>
         "#;
 
-    let err = match Harness::from_html(html) {
-        Ok(_) => panic!("scrollIntoView should reject arguments"),
-        Err(err) => err,
-    };
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
 
-    match err {
-        Error::ScriptParse(msg) => {
-            assert_eq!(
-                msg,
-                "scrollIntoView takes no arguments: document.getElementById('trigger').scrollIntoView('smooth')"
-            );
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+#[test]
+fn add_event_listener_accepts_async_arrow_callback() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', async () => {
+            document.getElementById('result').textContent = 'ok';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
 }
 
 #[test]
@@ -3064,6 +3076,30 @@ fn catch_without_binding_and_pattern_binding_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "true:false:TypeError:oops:AB")?;
+    Ok(())
+}
+
+#[test]
+fn throw_new_error_is_supported() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'init';
+            try {
+              throw new Error('boom');
+            } catch (e) {
+              out = String(e);
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "boom")?;
     Ok(())
 }
 
@@ -7486,6 +7522,85 @@ fn script_extractor_handles_regex_literals_with_quotes_for_end_tag_scan() -> Res
 }
 
 #[test]
+fn script_extractor_handles_nested_template_literals_for_end_tag_scan() -> Result<()> {
+    let html = r##"
+        <script>
+          const markup = `${true ? `<span class="chip">${"ok"}</span>` : ""}`;
+        </script>
+        <p id="result"></p>
+        "##;
+
+    let parsed = parse_html(html)?;
+    assert_eq!(parsed.scripts.len(), 1);
+    assert!(parsed.scripts[0].contains("class=\"chip\""));
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_member_get_after_call_and_null_target_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const plans = [{ key: "none", selectable: false }, { key: "up", selectable: true }];
+          document.getElementById('btn').addEventListener('click', () => {
+            const selected = plans.find((plan) => plan.selectable)?.key || "";
+            const fromNull = null?.key || "missing";
+            document.getElementById('result').textContent = selected + ":" + fromNull;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "up:missing")?;
+    Ok(())
+}
+
+#[test]
+fn textarea_select_member_call_is_not_treated_as_intl_plural_rules_select() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const tmp = document.createElement('textarea');
+            tmp.value = 'x';
+            tmp.select();
+            document.getElementById('result').textContent = 'ok';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn member_get_after_index_on_plain_object_chain_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const state = { rows: [{ selectedPlan: 'round_up' }] };
+            const index = 0;
+            const staticValue = state.rows[0].selectedPlan;
+            const dynamicValue = state.rows[index].selectedPlan;
+            document.getElementById('result').textContent = staticValue + ':' + dynamicValue;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "round_up:round_up")?;
+    Ok(())
+}
+
+#[test]
 fn doctype_declaration_is_ignored_during_html_parse() -> Result<()> {
     let html = r#"
         <!DOCTYPE html>
@@ -10446,6 +10561,27 @@ fn destructuring_assignment_for_array_and_object_work() -> Result<()> {
 }
 
 #[test]
+fn destructuring_declaration_for_array_and_object_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const [first, , third] = [10, 20, 30];
+            const { a, b: renamed } = { a: 'A', b: 'B', c: 'C' };
+            document.getElementById('result').textContent =
+              first + ':' + third + ':' + a + ':' + renamed;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "10:30:A:B")?;
+    Ok(())
+}
+
+#[test]
 fn yield_and_yield_star_operators_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -10560,6 +10696,322 @@ fn instanceof_operator_works_with_node_membership_and_identity() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_html_element_constructors_work_for_dom_nodes() -> Result<()> {
+    let html = r#"
+        <input id='name' value='A'>
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const input = document.getElementById('name');
+            const box = document.getElementById('box');
+            document.getElementById('result').textContent =
+              (input instanceof HTMLInputElement) + ':' +
+              (box instanceof HTMLInputElement) + ':' +
+              (input instanceof HTMLElement) + ':' +
+              (box instanceof HTMLElement) + ':' +
+              (window.HTMLInputElement === HTMLInputElement);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn array_find_index_uses_array_runtime_not_typed_array_runtime() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const normalized = ['sku', 'name', 'moq'];
+            const found = normalized.findIndex((field) => field === 'name');
+            const missing = normalized.findIndex((field) => field === 'none');
+            document.getElementById('result').textContent = found + ':' + missing;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:-1")?;
+    Ok(())
+}
+
+#[test]
+fn object_property_access_supports_ascii_case_fallback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const page = {
+              plans: {
+                minexcess: { title: 'Min' },
+                roundup: { title: 'Up' },
+                rounddown: { title: 'Down' },
+              },
+            };
+            document.getElementById('result').textContent =
+              page.plans.minExcess.title + ':' +
+              page.plans.roundUp.title + ':' +
+              page.plans.roundDown.title;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "Min:Up:Down")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_html_input_element_works_for_input_event_target() -> Result<()> {
+    let html = r#"
+        <input id='name' value=''>
+        <p id='result'></p>
+        <script>
+          document.getElementById('name').addEventListener('input', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) {
+              document.getElementById('result').textContent = 'ng';
+              return;
+            }
+            document.getElementById('result').textContent = 'ok';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#name", "A")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn input_event_handler_updates_row_via_closest_and_dataset() -> Result<()> {
+    let html = r#"
+        <table>
+          <tbody id='rows-tbody'>
+            <tr data-row-id='r1'>
+              <td><input id='moq' data-field='moq' value=''></td>
+            </tr>
+          </tbody>
+        </table>
+        <p id='result'></p>
+        <script>
+          const state = { rows: [{ id: 'r1', moq: '' }] };
+          const tbody = document.getElementById('rows-tbody');
+
+          tbody.addEventListener('input', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            const rowEl = target.closest('tr[data-row-id]');
+            if (!rowEl) {
+              document.getElementById('result').textContent = 'no-row';
+              return;
+            }
+            const rowID = rowEl.getAttribute('data-row-id');
+            const field = target.dataset.field;
+            const row = state.rows.find((item) => item.id === rowID);
+            if (!row) {
+              document.getElementById('result').textContent = 'no-match';
+              return;
+            }
+            row[field] = target.value;
+            document.getElementById('result').textContent = row.moq;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#moq", "100")?;
+    h.assert_text("#result", "100")?;
+    Ok(())
+}
+
+#[test]
+fn input_event_handler_keeps_dataset_camel_case_keys() -> Result<()> {
+    let html = r#"
+        <table>
+          <tbody id='rows-tbody'>
+            <tr data-row-id='r1'>
+              <td><input id='case' data-field='casePack' value=''></td>
+              <td><input id='desired' data-field='desiredQty' value=''></td>
+            </tr>
+          </tbody>
+        </table>
+        <p id='result'></p>
+        <script>
+          const state = { rows: [{ id: 'r1', casePack: '', desiredQty: '' }] };
+          const tbody = document.getElementById('rows-tbody');
+
+          function paint() {
+            const row = state.rows[0];
+            document.getElementById('result').textContent = row.casePack + ':' + row.desiredQty;
+          }
+
+          tbody.addEventListener('input', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            const rowEl = target.closest('tr[data-row-id]');
+            if (!rowEl) return;
+            const rowID = rowEl.getAttribute('data-row-id');
+            const field = target.dataset.field;
+            const row = state.rows.find((item) => item.id === rowID);
+            if (!row || !field) return;
+            row[field] = target.value;
+            paint();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#case", "24")?;
+    h.type_text("#desired", "100")?;
+    h.assert_text("#result", "24:100")?;
+    Ok(())
+}
+
+#[test]
+fn array_map_on_object_path_keeps_elements() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const state = { rows: [{ id: 'r1', moq: '100' }] };
+            const computed = state.rows.map((row) => ({ id: row.id, moq: row.moq }));
+            document.getElementById('result').textContent = computed.length + ':' + computed[0].moq;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:100")?;
+    Ok(())
+}
+
+#[test]
+fn state_rows_initialized_with_empty_row_and_computed_rows() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let uid = 0;
+            function nextRowID() {
+              uid += 1;
+              return `row-${uid}`;
+            }
+            function emptyRow() {
+              return {
+                id: nextRowID(),
+                sku: "",
+                moq: "",
+              };
+            }
+
+            const state = { rows: [] };
+            let computedRows = [];
+            if (!state.rows.length) {
+              state.rows = [emptyRow()];
+            }
+            computedRows = state.rows.map((row) => row);
+            const first = computedRows.find((row) => true);
+            document.getElementById('result').textContent =
+              state.rows.length + ':' + computedRows.length + ':' + first.id;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:1:row-1")?;
+    Ok(())
+}
+
+#[test]
+fn compute_rows_map_and_find_from_object_path_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const state = { rows: [{ id: 'r1', moq: '100', casePack: '24', desiredQty: '100' }] };
+
+            function computeRow(row) {
+              return {
+                row,
+                status: "ok",
+                message: "",
+                plans: [{ key: "min_excess", selectable: true }],
+              };
+            }
+
+            const computedRows = state.rows.map((row) => computeRow(row));
+            const first = computedRows.find((item) => item.status === "ok");
+            document.getElementById('result').textContent =
+              computedRows.length + ':' + (first ? first.status : 'none');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:ok")?;
+    Ok(())
+}
+
+#[test]
+fn computed_rows_global_is_visible_in_later_click_event() -> Result<()> {
+    let html = r#"
+        <input id='moq' />
+        <button id='copy'>copy</button>
+        <p id='result'></p>
+        <script>
+          let computedRows = [];
+
+          function computeAll() {
+            computedRows = [{ status: 'ok' }];
+          }
+
+          function renderAll() {
+            computeAll();
+          }
+
+          document.getElementById('moq').addEventListener('input', () => {
+            renderAll();
+          });
+
+          document.getElementById('copy').addEventListener('click', () => {
+            let status = '';
+            computedRows.forEach((item) => {
+              if (!status) status = item.status;
+            });
+            document.getElementById('result').textContent =
+              String(computedRows.length) + ':' + status;
+          });
+
+          renderAll();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#moq", "100")?;
+    h.click("#copy")?;
+    h.assert_text("#result", "1:ok")?;
     Ok(())
 }
 

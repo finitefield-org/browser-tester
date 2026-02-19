@@ -90,14 +90,16 @@ pub(super) enum JsLexMode {
     Single,
     Double,
     Backtick,
+    TemplateExpr { brace_depth: usize },
     Regex { in_class: bool },
     LineComment,
     BlockComment,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(super) struct JsLexScanner {
     mode: JsLexMode,
+    mode_stack: Vec<JsLexMode>,
     paren: usize,
     bracket: usize,
     brace: usize,
@@ -108,6 +110,7 @@ impl JsLexScanner {
     pub(super) fn new() -> Self {
         Self {
             mode: JsLexMode::Normal,
+            mode_stack: Vec::new(),
             paren: 0,
             bracket: 0,
             brace: 0,
@@ -152,6 +155,15 @@ impl JsLexScanner {
         self.previous_significant = Some(b);
     }
 
+    fn push_mode(&mut self, next: JsLexMode) {
+        self.mode_stack.push(self.mode);
+        self.mode = next;
+    }
+
+    fn pop_mode(&mut self) {
+        self.mode = self.mode_stack.pop().unwrap_or(JsLexMode::Normal);
+    }
+
     pub(super) fn advance(&mut self, bytes: &[u8], i: usize) -> usize {
         let b = bytes[i];
         match self.mode {
@@ -161,26 +173,26 @@ impl JsLexScanner {
                 }
                 match b {
                     b'\'' => {
-                        self.mode = JsLexMode::Single;
+                        self.push_mode(JsLexMode::Single);
                         i + 1
                     }
                     b'"' => {
-                        self.mode = JsLexMode::Double;
+                        self.push_mode(JsLexMode::Double);
                         i + 1
                     }
                     b'`' => {
-                        self.mode = JsLexMode::Backtick;
+                        self.push_mode(JsLexMode::Backtick);
                         i + 1
                     }
                     b'/' => {
                         if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                            self.mode = JsLexMode::LineComment;
+                            self.push_mode(JsLexMode::LineComment);
                             i + 2
                         } else if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                            self.mode = JsLexMode::BlockComment;
+                            self.push_mode(JsLexMode::BlockComment);
                             i + 2
                         } else if can_start_regex_literal(self.previous_significant) {
-                            self.mode = JsLexMode::Regex { in_class: false };
+                            self.push_mode(JsLexMode::Regex { in_class: false });
                             i + 1
                         } else {
                             self.note_significant_byte(b'/');
@@ -198,7 +210,7 @@ impl JsLexScanner {
                     (i + 2).min(bytes.len())
                 } else {
                     if b == b'\'' {
-                        self.mode = JsLexMode::Normal;
+                        self.pop_mode();
                         self.previous_significant = Some(b'\'');
                     }
                     i + 1
@@ -209,7 +221,7 @@ impl JsLexScanner {
                     (i + 2).min(bytes.len())
                 } else {
                     if b == b'"' {
-                        self.mode = JsLexMode::Normal;
+                        self.pop_mode();
                         self.previous_significant = Some(b'"');
                     }
                     i + 1
@@ -218,23 +230,81 @@ impl JsLexScanner {
             JsLexMode::Backtick => {
                 if b == b'\\' {
                     (i + 2).min(bytes.len())
+                } else if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    self.push_mode(JsLexMode::TemplateExpr { brace_depth: 1 });
+                    i + 2
                 } else {
                     if b == b'`' {
-                        self.mode = JsLexMode::Normal;
+                        self.pop_mode();
                         self.previous_significant = Some(b'`');
                     }
                     i + 1
                 }
             }
+            JsLexMode::TemplateExpr { mut brace_depth } => {
+                if b.is_ascii_whitespace() {
+                    return i + 1;
+                }
+                match b {
+                    b'\'' => {
+                        self.push_mode(JsLexMode::Single);
+                        i + 1
+                    }
+                    b'"' => {
+                        self.push_mode(JsLexMode::Double);
+                        i + 1
+                    }
+                    b'`' => {
+                        self.push_mode(JsLexMode::Backtick);
+                        i + 1
+                    }
+                    b'/' => {
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                            self.push_mode(JsLexMode::LineComment);
+                            i + 2
+                        } else if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                            self.push_mode(JsLexMode::BlockComment);
+                            i + 2
+                        } else if can_start_regex_literal(self.previous_significant) {
+                            self.push_mode(JsLexMode::Regex { in_class: false });
+                            i + 1
+                        } else {
+                            self.note_significant_byte(b'/');
+                            i + 1
+                        }
+                    }
+                    b'{' => {
+                        brace_depth += 1;
+                        self.note_significant_byte(b'{');
+                        self.mode = JsLexMode::TemplateExpr { brace_depth };
+                        i + 1
+                    }
+                    b'}' => {
+                        if brace_depth == 1 {
+                            self.pop_mode();
+                            self.previous_significant = Some(b'}');
+                        } else {
+                            brace_depth -= 1;
+                            self.note_significant_byte(b'}');
+                            self.mode = JsLexMode::TemplateExpr { brace_depth };
+                        }
+                        i + 1
+                    }
+                    _ => {
+                        self.note_significant_byte(b);
+                        i + 1
+                    }
+                }
+            }
             JsLexMode::LineComment => {
                 if b == b'\n' || b == b'\r' {
-                    self.mode = JsLexMode::Normal;
+                    self.pop_mode();
                 }
                 i + 1
             }
             JsLexMode::BlockComment => {
                 if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    self.mode = JsLexMode::Normal;
+                    self.pop_mode();
                     i + 2
                 } else {
                     i + 1
@@ -255,7 +325,7 @@ impl JsLexScanner {
                     return i + 1;
                 }
                 if b == b'/' && !in_class {
-                    self.mode = JsLexMode::Normal;
+                    self.pop_mode();
                     self.previous_significant = Some(b'/');
                     return i + 1;
                 }

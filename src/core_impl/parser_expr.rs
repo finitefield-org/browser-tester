@@ -642,6 +642,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_new_error_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_new_callee_expr(src)? {
         return Ok(expr);
     }
@@ -1010,6 +1014,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_member_index_get_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_member_get_expr(src)? {
+        return Ok(expr);
+    }
+
     if is_ident(src) {
         return Ok(Expr::Var(src.to_string()));
     }
@@ -1162,7 +1174,7 @@ fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     if !cursor.eof() {
         return Ok(None);
     }
-    if matches!(target, DomQuery::Var(_) | DomQuery::DocumentRoot) {
+    if matches!(target, DomQuery::DocumentRoot) || is_non_dom_var_target(&target) {
         return Ok(None);
     }
     Ok(Some(target))
@@ -5428,6 +5440,69 @@ fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ArrayBufferConstructor))
 }
 
+fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("new") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("Error") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.eof() {
+        return Ok(Some(Expr::String("Error".to_string())));
+    }
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() > 2 {
+        return Err(Error::ScriptParse(
+            "Error constructor supports up to two arguments".into(),
+        ));
+    }
+    if args.first().is_some_and(|arg| arg.trim().is_empty()) {
+        return Err(Error::ScriptParse(
+            "Error message argument cannot be empty".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Error options argument cannot be empty".into(),
+        ));
+    }
+
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    if let Some(message) = args.first() {
+        return Ok(Some(parse_expr(message.trim())?));
+    }
+    Ok(Some(Expr::String("Error".to_string())))
+}
+
 fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -6697,6 +6772,111 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
+fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let dots = collect_top_level_char_positions(src, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(mut base_src) = src.get(..dot) else {
+            continue;
+        };
+        let Some(tail_src) = src.get(dot + 1..) else {
+            continue;
+        };
+        let tail_src = tail_src.trim();
+        if tail_src.is_empty() {
+            continue;
+        }
+
+        let mut cursor = Cursor::new(tail_src);
+        let Some(member) = cursor.parse_identifier() else {
+            continue;
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let mut optional = false;
+        base_src = base_src.trim_end();
+        if let Some(stripped) = base_src.strip_suffix('?') {
+            optional = true;
+            base_src = stripped.trim_end();
+        }
+        if base_src.is_empty() {
+            continue;
+        }
+
+        return Ok(Some(Expr::MemberGet {
+            target: Box::new(parse_expr(base_src)?),
+            member,
+            optional,
+        }));
+    }
+    Ok(None)
+}
+
+fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let bytes = src.as_bytes();
+    let mut brackets = Vec::new();
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+    while i < bytes.len() {
+        if scanner.is_top_level() && bytes[i] == b'[' {
+            brackets.push(i);
+        }
+        i = scanner.advance(bytes, i);
+    }
+
+    for open in brackets.into_iter().rev() {
+        let Some(base_src) = src.get(..open) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+
+        let Some(rest) = src.get(open..) else {
+            continue;
+        };
+        let mut cursor = Cursor::new(rest);
+        let index_src = cursor.read_balanced_block(b'[', b']')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let index = index_src.trim();
+        if index.is_empty() {
+            return Err(Error::ScriptParse("array index cannot be empty".into()));
+        }
+
+        if (index.starts_with('\'') && index.ends_with('\''))
+            || (index.starts_with('"') && index.ends_with('"'))
+        {
+            return Ok(Some(Expr::MemberGet {
+                target: Box::new(parse_expr(base_src)?),
+                member: parse_string_literal_exact(index)?,
+                optional: false,
+            }));
+        }
+        if index.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return Ok(Some(Expr::MemberGet {
+                target: Box::new(parse_expr(base_src)?),
+                member: index.to_string(),
+                optional: false,
+            }));
+        }
+
+        return Ok(Some(Expr::IndexGet {
+            target: Box::new(parse_expr(base_src)?),
+            index: Box::new(parse_expr(index)?),
+        }));
+    }
+    Ok(None)
+}
+
 fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     let parse_args = |args_src: &str| -> Result<Vec<Expr>> {
         let args = parse_call_args(args_src, "function call arguments cannot be empty")?;
@@ -7247,6 +7427,29 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                 }
             };
             Expr::ArrayFind { target, callback }
+        }
+        "findIndex" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "findIndex requires exactly one callback argument".into(),
+                ));
+            }
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
+            {
+                Ok(callback) => callback,
+                Err(_) => {
+                    let mut parsed_args = Vec::with_capacity(args.len());
+                    for arg in &args {
+                        parsed_args.push(parse_call_arg_expr(arg)?);
+                    }
+                    return Ok(Some(Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.clone())),
+                        member: method.clone(),
+                        args: parsed_args,
+                    }));
+                }
+            };
+            Expr::ArrayFindIndex { target, callback }
         }
         "some" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -7837,9 +8040,8 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
                 raw_args
             };
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse(
-                    "Intl.PluralRules.select requires exactly one argument".into(),
-                ));
+                // Avoid hijacking non-Intl methods such as HTMLTextAreaElement.select().
+                continue;
             }
             return Ok(Some(Expr::IntlPluralRulesSelect {
                 plural_rules: Box::new(parse_expr(base_src)?),
@@ -7864,9 +8066,7 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
                 raw_args
             };
             if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
-                return Err(Error::ScriptParse(
-                    "Intl.PluralRules.selectRange requires exactly two arguments".into(),
-                ));
+                continue;
             }
             return Ok(Some(Expr::IntlPluralRulesSelectRange {
                 plural_rules: Box::new(parse_expr(base_src)?),
@@ -8986,6 +9186,14 @@ fn starts_with_window_member_access(src: &str) -> bool {
     cursor.consume_byte(b'.')
 }
 
+fn is_non_dom_var_target(target: &DomQuery) -> bool {
+    match target {
+        DomQuery::Var(_) | DomQuery::VarPath { .. } => true,
+        DomQuery::Index { target, .. } => is_non_dom_var_target(target),
+        _ => false,
+    }
+}
+
 fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -9242,7 +9450,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {
                 return Ok(None);
             }
-            if matches!(target, DomQuery::Var(_) | DomQuery::VarPath { .. }) {
+            if is_non_dom_var_target(&target) {
                 return Ok(None);
             }
             let prop_label = if let Some(nested) = nested {
@@ -9986,7 +10194,7 @@ fn find_top_level_ternary_question(src: &str) -> Option<usize> {
                 b'{' => brace += 1,
                 b'}' => brace = brace.saturating_sub(1),
                 b'?' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+                    if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
                         i += 1;
                     } else {
                         return Some(i);
@@ -10055,7 +10263,7 @@ fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
                 b'{' => brace += 1,
                 b'}' => brace = brace.saturating_sub(1),
                 b'?' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+                    if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
                         i += 1;
                     } else {
                         nested_ternary += 1;
@@ -10183,56 +10391,27 @@ fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, V
 fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
     let bytes = src.as_bytes();
     let mut i = start;
-    let mut depth = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner {
+        mode: JsLexMode::TemplateExpr { brace_depth: 1 },
+        mode_stack: vec![JsLexMode::Backtick],
+        paren: 0,
+        bracket: 0,
+        brace: 0,
+        previous_significant: None,
+    };
 
     while i < bytes.len() {
         let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'{' => depth += 1,
-                b'}' => {
-                    if depth == 0 {
-                        return Ok(i);
-                    }
-                    depth -= 1;
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+        let before_mode = scanner.mode;
+        i = scanner.advance(bytes, i);
+
+        if b == b'}'
+            && matches!(before_mode, JsLexMode::TemplateExpr { brace_depth: 1 })
+            && matches!(scanner.mode, JsLexMode::Backtick)
+            && scanner.mode_stack.is_empty()
+        {
+            return Ok(i - 1);
         }
-        i += 1;
     }
 
     Err(Error::ScriptParse("unclosed template expression".into()))

@@ -34,6 +34,7 @@ const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
 const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
 const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
+const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
 const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
 const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
 const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
@@ -3289,6 +3290,10 @@ enum Expr {
         target: String,
         callback: ScriptHandler,
     },
+    ArrayFindIndex {
+        target: String,
+        callback: ScriptHandler,
+    },
     ArraySome {
         target: String,
         callback: ScriptHandler,
@@ -3457,6 +3462,15 @@ enum Expr {
         target: Box<Expr>,
         member: String,
         args: Vec<Expr>,
+    },
+    MemberGet {
+        target: Box<Expr>,
+        member: String,
+        optional: bool,
+    },
+    IndexGet {
+        target: Box<Expr>,
+        index: Box<Expr>,
     },
     Var(String),
     DomRef(DomQuery),
@@ -4566,6 +4580,7 @@ struct HistoryEntry {
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
+    node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
     script_env: HashMap<String, Value>,
     document_url: String,
     window_object: Rc<RefCell<Vec<(String, Value)>>>,

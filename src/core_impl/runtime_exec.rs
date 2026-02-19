@@ -1240,8 +1240,8 @@ impl Harness {
                         .map_err(|err| match err {
                             Error::ScriptRuntime(msg) if msg == "value is not an object" => {
                                 Error::ScriptRuntime(format!(
-                                    "variable '{}' is not an object",
-                                    target
+                                    "variable '{}' is not an object (key '{}')",
+                                    target, key
                                 ))
                             }
                             other => other,
@@ -1808,6 +1808,54 @@ impl Harness {
                         }
                     }
                     Ok(Value::Undefined)
+                }
+                Some(_) => Err(Error::ScriptRuntime(format!(
+                    "variable '{}' is not an array",
+                    target
+                ))),
+                None => Err(Error::ScriptRuntime(format!(
+                    "unknown variable: {}",
+                    target
+                ))),
+            },
+            Expr::ArrayFindIndex { target, callback } => match env.get(target) {
+                Some(Value::Array(values)) => {
+                    let input = values.borrow().clone();
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::Array(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(Value::Number(idx as i64));
+                        }
+                    }
+                    Ok(Value::Number(-1))
+                }
+                Some(Value::TypedArray(values)) => {
+                    let input = self.typed_array_snapshot(values)?;
+                    for (idx, item) in input.into_iter().enumerate() {
+                        let matched = self.execute_array_callback(
+                            callback,
+                            &[
+                                item,
+                                Value::Number(idx as i64),
+                                Value::TypedArray(values.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                        if matched.truthy() {
+                            return Ok(Value::Number(idx as i64));
+                        }
+                    }
+                    Ok(Value::Number(-1))
                 }
                 Some(_) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not an array",
@@ -2960,6 +3008,30 @@ impl Harness {
                         other => other,
                     })
             }
+            Expr::MemberGet {
+                target,
+                member,
+                optional,
+            } => {
+                let receiver = self.eval_expr(target, env, event_param, event)?;
+                if *optional && matches!(receiver, Value::Null | Value::Undefined) {
+                    return Ok(Value::Undefined);
+                }
+                self.object_property_from_value(&receiver, member)
+            }
+            Expr::IndexGet { target, index } => {
+                let receiver = self.eval_expr(target, env, event_param, event)?;
+                let index_value = self.eval_expr(index, env, event_param, event)?;
+                let key = match index_value {
+                    Value::Number(value) => value.to_string(),
+                    Value::BigInt(value) => value.to_string(),
+                    Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                        format!("{:.0}", value)
+                    }
+                    other => other.as_string(),
+                };
+                self.object_property_from_value(&receiver, &key)
+            }
             Expr::Var(name) => {
                 if let Some(value) = env.get(name).cloned() {
                     Ok(value)
@@ -3975,6 +4047,32 @@ impl Harness {
                 }
                 found
             }
+            "findIndex" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "findIndex requires exactly one callback argument".into(),
+                    ));
+                }
+                let callback = evaluated_args[0].clone();
+                let snapshot = values.borrow().clone();
+                let mut found = -1i64;
+                for (idx, item) in snapshot.into_iter().enumerate() {
+                    let matched = self.execute_callback_value(
+                        &callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        event,
+                    )?;
+                    if matched.truthy() {
+                        found = idx as i64;
+                        break;
+                    }
+                }
+                Value::Number(found)
+            }
             "some" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -4433,6 +4531,12 @@ impl Harness {
                 }
                 Ok(Some(Value::Undefined))
             }
+            "select" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("select takes no arguments".into()));
+                }
+                Ok(Some(Value::Undefined))
+            }
             _ => Ok(None),
         }
     }
@@ -4826,6 +4930,19 @@ impl Harness {
     }
 
     pub(super) fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
+        if let Value::Node(node) = left {
+            if self.is_named_constructor_value(right, "HTMLElement") {
+                return self.dom.element(*node).is_some();
+            }
+            if self.is_named_constructor_value(right, "HTMLInputElement") {
+                return self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("input"))
+                    .unwrap_or(false);
+            }
+        }
+
         match (left, right) {
             (Value::Node(left), Value::Node(right)) => left == right,
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
@@ -4848,6 +4965,12 @@ impl Harness {
             }
             _ => false,
         }
+    }
+
+    fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
+        self.script_env
+            .get(name)
+            .is_some_and(|expected| self.strict_equal(value, expected))
     }
 
     pub(super) fn value_as_index(&self, value: &Value) -> Option<usize> {
@@ -5125,6 +5248,18 @@ impl Harness {
             .find_map(|(name, value)| (name == key).then(|| value.clone()))
     }
 
+    fn object_get_entry_with_case_fallback(
+        entries: &[(String, Value)],
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(value) = Self::object_get_entry(entries, key) {
+            return Some(value);
+        }
+        entries
+            .iter()
+            .find_map(|(name, value)| name.eq_ignore_ascii_case(key).then(|| value.clone()))
+    }
+
     pub(super) fn callable_kind_from_value(value: &Value) -> Option<&str> {
         let Value::Object(entries) = value else {
             return None;
@@ -5200,7 +5335,8 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
+                Ok(Self::object_get_entry_with_case_fallback(&entries, key)
+                    .unwrap_or(Value::Undefined))
             }
             Value::Promise(promise) => {
                 if key == "constructor" {
@@ -5300,7 +5436,10 @@ impl Harness {
         self.object_property_from_value(value, key)
             .map_err(|err| match err {
                 Error::ScriptRuntime(msg) if msg == "value is not an object" => {
-                    Error::ScriptRuntime(format!("variable '{}' is not an object", variable_name))
+                    Error::ScriptRuntime(format!(
+                        "variable '{}' is not an object (key '{}')",
+                        variable_name, key
+                    ))
                 }
                 other => other,
             })

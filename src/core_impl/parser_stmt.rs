@@ -1958,135 +1958,51 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
 fn split_top_level_statements(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut out = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
     let mut brace_open_stack = Vec::new();
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-        Regex { in_class: bool },
-    }
-    let mut state = StrState::None;
-    let mut previous_significant = None;
-
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => {
-                if b.is_ascii_whitespace() {
-                    i += 1;
-                    continue;
-                }
-                match b {
-                    b'\'' => state = StrState::Single,
-                    b'"' => state = StrState::Double,
-                    b'`' => state = StrState::Backtick,
-                    b'/' => {
-                        if can_start_regex_literal(previous_significant) {
-                            state = StrState::Regex { in_class: false };
-                        } else {
-                            previous_significant = Some(b);
-                        }
-                    }
-                    b'(' => {
-                        paren += 1;
-                        previous_significant = Some(b);
-                    }
-                    b')' => {
-                        paren = paren.saturating_sub(1);
-                        previous_significant = Some(b);
-                    }
-                    b'[' => {
-                        bracket += 1;
-                        previous_significant = Some(b);
-                    }
-                    b']' => {
-                        bracket = bracket.saturating_sub(1);
-                        previous_significant = Some(b);
-                    }
-                    b'{' => {
-                        brace += 1;
-                        brace_open_stack.push(i);
-                        previous_significant = Some(b);
-                    }
-                    b'}' => {
-                        brace = brace.saturating_sub(1);
-                        let block_open = brace_open_stack.pop();
-                        if paren == 0 && bracket == 0 && brace == 0 {
-                            let tail = body.get(i + 1..).unwrap_or_default();
-                            if should_split_after_closing_brace(body, block_open, tail) {
-                                if let Some(part) = body.get(start..=i) {
-                                    out.push(part.to_string());
-                                }
-                                start = i + 1;
-                            }
-                        }
-                        previous_significant = Some(b);
-                    }
-                    b';' => {
-                        if paren == 0 && bracket == 0 && brace == 0 {
-                            if let Some(part) = body.get(start..i) {
-                                out.push(part.to_string());
-                            }
-                            start = i + 1;
-                        }
-                        previous_significant = Some(b);
-                    }
-                    _ => {
-                        previous_significant = Some(b);
-                    }
-                }
-            }
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                    previous_significant = Some(b'\'');
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                    previous_significant = Some(b'"');
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                    previous_significant = Some(b'`');
-                }
-            }
-            StrState::Regex { mut in_class } => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'[' {
-                    in_class = true;
-                    state = StrState::Regex { in_class };
-                } else if b == b']' && in_class {
-                    in_class = false;
-                    state = StrState::Regex { in_class };
-                } else if b == b'/' && !in_class {
-                    state = StrState::None;
-                    previous_significant = Some(b'/');
-                } else {
-                    state = StrState::Regex { in_class };
-                }
-            }
+        let current = i;
+        let b = bytes[current];
+        let was_normal = scanner.in_normal();
+        let paren_before = scanner.paren;
+        let bracket_before = scanner.bracket;
+        let brace_before = scanner.brace;
+
+        i = scanner.advance(bytes, current);
+
+        if !was_normal {
+            continue;
         }
-        i += 1;
+
+        match b {
+            b'{' => {
+                brace_open_stack.push(current);
+            }
+            b'}' => {
+                let block_open = brace_open_stack.pop();
+                if scanner.is_top_level() {
+                    let tail = body.get(i..).unwrap_or_default();
+                    if should_split_after_closing_brace(body, block_open, tail) {
+                        if let Some(part) = body.get(start..i) {
+                            out.push(part.to_string());
+                        }
+                        start = i;
+                    }
+                }
+            }
+            b';' => {
+                if paren_before == 0 && bracket_before == 0 && brace_before == 0 {
+                    if let Some(part) = body.get(start..current) {
+                        out.push(part.to_string());
+                    }
+                    start = i;
+                }
+            }
+            _ => {}
+        }
     }
 
     if let Some(tail) = body.get(start..) {
@@ -2219,18 +2135,37 @@ fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     };
 
-    let (name, expr_src) = rest
-        .split_once('=')
-        .ok_or_else(|| Error::ScriptParse(format!("invalid variable declaration: {stmt}")))?;
+    let Some((eq_pos, op_len)) = find_top_level_assignment(rest) else {
+        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+    };
+    if op_len != 1 {
+        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+    }
 
-    let name = name.trim();
+    let name = rest[..eq_pos].trim();
+    let expr_src = rest[eq_pos + op_len..].trim();
+    if name.is_empty() || expr_src.is_empty() {
+        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+    }
+
+    if name.starts_with('[') && name.ends_with(']') {
+        let targets = parse_array_destructure_pattern(name)?;
+        let expr = parse_expr(expr_src)?;
+        return Ok(Some(Stmt::ArrayDestructureAssign { targets, expr }));
+    }
+    if name.starts_with('{') && name.ends_with('}') {
+        let bindings = parse_object_destructure_pattern(name)?;
+        let expr = parse_expr(expr_src)?;
+        return Ok(Some(Stmt::ObjectDestructureAssign { bindings, expr }));
+    }
+
     if !is_ident(name) {
         return Err(Error::ScriptParse(format!(
             "invalid variable name '{name}' in: {stmt}"
         )));
     }
 
-    let expr = parse_expr(expr_src.trim())?;
+    let expr = parse_expr(expr_src)?;
     Ok(Some(Stmt::VarDecl {
         name: name.to_string(),
         expr,
@@ -2478,7 +2413,7 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "focus" => (DomMethod::Focus, false),
         "blur" => (DomMethod::Blur, false),
         "click" => (DomMethod::Click, false),
-        "scrollIntoView" => (DomMethod::ScrollIntoView, false),
+        "scrollIntoView" => (DomMethod::ScrollIntoView, true),
         "submit" => (DomMethod::Submit, false),
         "reset" => (DomMethod::Reset, false),
         "show" => (DomMethod::Show, false),
@@ -3627,6 +3562,12 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
         }
         cursor.set_pos(start);
     }
+
+    if try_consume_async_function_prefix(cursor) || try_consume_async_arrow_prefix(cursor) {
+        let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
+        return Ok(ListenerCallbackParseResult::Inline { params, body });
+    }
+    cursor.set_pos(start);
 
     let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
     Ok(ListenerCallbackParseResult::Inline { params, body })
