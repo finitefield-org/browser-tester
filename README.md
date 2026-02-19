@@ -282,11 +282,25 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
   dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
+- HTMLAnchorElement API: `href`, `protocol`, `host`, `hostname`, `port`, `pathname`, `search`, `hash`,
+  `origin` (read-only), `username`, `password`, `download`, `hreflang`, `ping`, `referrerPolicy`,
+  `rel`, `relList`, `target`, `text` (`textContent` alias), `type`, `attributionSrc`, `interestForElement`,
+  obsolete reflected properties (`charset`, `coords`, `rev`, `shape`), and `toString()` (same as `href`)
 - History API: `history.length`, `history.state`, `history.scrollRestoration`,
   `history.back()`, `history.forward()`, `history.go([delta])`,
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
 - Clipboard API: `navigator.clipboard` (read-only),
   `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
+- URLSearchParams API: `new URLSearchParams(init)`, `size`,
+  `append(name, value)`, `delete(name[, value])`, `entries()`, `forEach(callback[, thisArg])`,
+  `get(name)`, `getAll(name)`, `has(name[, value])`, `keys()`, `set(name, value)`,
+  `sort()`, `toString()`, `values()`, and direct `for...of` iteration
+- URL API: `new URL(url[, base])`, `href`, `protocol`, `host`, `hostname`, `port`,
+  `pathname`, `search`, `hash`, `origin` (read-only), `username`, `password`,
+  `searchParams` (read-only live `URLSearchParams`), `toString()`, `toJSON()`,
+  static `URL.canParse()`, `URL.parse()`, `URL.createObjectURL()`, `URL.revokeObjectURL()`
+- Blob API: `new Blob(blobParts[, options])`, `size`, `type`,
+  `arrayBuffer()`, `bytes()`, `slice(start?, end?)`, `stream()`, `text()`
 - Window API (core subset): `window`, `self`, `top`, `parent`, `frames`,
   `window.length`, `window.closed`, `window.document`, `document.defaultView`,
   `window.navigator`, `window.clientInformation`, `window.origin`, `window.isSecureContext`

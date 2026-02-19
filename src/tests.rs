@@ -1641,6 +1641,159 @@ fn hash_only_location_navigation_does_not_trigger_mock_page_swap() -> Result<()>
 }
 
 #[test]
+fn anchor_properties_and_to_string_work() -> Result<()> {
+    let html = r#"
+        <a id='link' href='/docs/page?x=1#intro'>hello</a>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://example.com/base/index.html?doc=1#docfrag';
+            document.getElementById('link').download = 'report.txt';
+            document.getElementById('link').hreflang = 'ja';
+            document.getElementById('link').ping = 'https://p1.test https://p2.test';
+            document.getElementById('link').referrerPolicy = 'no-referrer';
+            document.getElementById('link').rel = 'noopener noreferrer';
+            document.getElementById('link').target = '_blank';
+            document.getElementById('link').type = 'text/plain';
+            document.getElementById('link').attributionSrc = 'https://attr.test/src';
+            document.getElementById('link').interestForElement = 'panel';
+            document.getElementById('link').charset = 'utf-8';
+            document.getElementById('link').coords = '0,0,10,10';
+            document.getElementById('link').rev = 'prev';
+            document.getElementById('link').shape = 'rect';
+
+            document.getElementById('result').textContent =
+              document.getElementById('link').href + '|' +
+              document.getElementById('link').protocol + '|' +
+              document.getElementById('link').host + '|' +
+              document.getElementById('link').hostname + '|' +
+              document.getElementById('link').port + '|' +
+              document.getElementById('link').pathname + '|' +
+              document.getElementById('link').search + '|' +
+              document.getElementById('link').hash + '|' +
+              document.getElementById('link').origin + '|' +
+              document.getElementById('link').download + '|' +
+              document.getElementById('link').hreflang + '|' +
+              document.getElementById('link').ping + '|' +
+              document.getElementById('link').referrerPolicy + '|' +
+              document.getElementById('link').rel + '|' +
+              document.getElementById('link').relList.length + '|' +
+              document.getElementById('link').target + '|' +
+              document.getElementById('link').type + '|' +
+              document.getElementById('link').attributionSrc + '|' +
+              document.getElementById('link').interestForElement + '|' +
+              document.getElementById('link').charset + '|' +
+              document.getElementById('link').coords + '|' +
+              document.getElementById('link').rev + '|' +
+              document.getElementById('link').shape + '|' +
+              document.getElementById('link').toString();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com/docs/page?x=1#intro|https:|example.com|example.com||/docs/page|?x=1|#intro|https://example.com|report.txt|ja|https://p1.test https://p2.test|no-referrer|noopener noreferrer|2|_blank|text/plain|https://attr.test/src|panel|utf-8|0,0,10,10|prev|rect|https://example.com/docs/page?x=1#intro",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn anchor_username_password_and_url_part_setters_work() -> Result<()> {
+    let html = r#"
+        <a id='cred' href='https://u:p@example.com:8443/p?q=1#h'>cred</a>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const initial =
+              document.getElementById('cred').username + ':' +
+              document.getElementById('cred').password + ':' +
+              document.getElementById('cred').host + ':' +
+              document.getElementById('cred').origin;
+
+            document.getElementById('cred').username = 'alice';
+            document.getElementById('cred').password = 'secret';
+            document.getElementById('cred').protocol = 'http:';
+            document.getElementById('cred').hostname = 'api.example.test';
+            document.getElementById('cred').port = '9090';
+            document.getElementById('cred').pathname = 'docs';
+            document.getElementById('cred').search = 'k=v';
+            document.getElementById('cred').hash = 'frag';
+
+            document.getElementById('result').textContent =
+              initial + '|' +
+              document.getElementById('cred').href + '|' +
+              document.getElementById('cred').username + '|' +
+              document.getElementById('cred').password + '|' +
+              document.getElementById('cred').protocol + '|' +
+              document.getElementById('cred').host + '|' +
+              document.getElementById('cred').pathname + '|' +
+              document.getElementById('cred').search + '|' +
+              document.getElementById('cred').hash + '|' +
+              document.getElementById('cred').origin + '|' +
+              document.getElementById('cred').toString();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "u:p:example.com:8443:https://example.com:8443|http://alice:secret@api.example.test:9090/docs?k=v#frag|alice|secret|http:|api.example.test:9090|/docs|?k=v|#frag|http://api.example.test:9090|http://alice:secret@api.example.test:9090/docs?k=v#frag",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn anchor_text_alias_and_read_only_properties_work() -> Result<()> {
+    let html = r#"
+        <a id='link' href='https://example.com/start' rel='noopener'>old</a>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('link').text = 'Updated text';
+
+            let originReadOnly = 'no';
+            try {
+              document.getElementById('link').origin = 'https://evil.example';
+            } catch (e) {
+              originReadOnly = 'yes';
+            }
+
+            let relListReadOnly = 'no';
+            try {
+              document.getElementById('link').relList = 'x';
+            } catch (e) {
+              relListReadOnly = 'yes';
+            }
+
+            document.getElementById('result').textContent =
+              document.getElementById('link').textContent + ':' +
+              document.getElementById('link').text + ':' +
+              originReadOnly + ':' +
+              relListReadOnly + ':' +
+              document.getElementById('link').origin + ':' +
+              document.getElementById('link').relList.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "Updated text:Updated text:yes:yes:https://example.com:1",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn history_properties_push_state_and_replace_state_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -12373,6 +12526,419 @@ fn set_constructor_and_composition_errors_work() {
         .expect_err("Set method target must be a Set");
     match err {
         Error::ScriptRuntime(msg) => assert!(msg.contains("is not a Set")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn url_search_params_basic_methods_and_iteration_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const params = new URLSearchParams("q=URLUtils.searchParams&topic=api");
+
+            let forOfOut = '';
+            for (const pair of params) {
+              forOfOut = forOfOut + pair[0] + '=' + pair[1] + ';';
+            }
+
+            const entries = params.entries();
+            let entriesOut = '';
+            for (const pair of entries) {
+              entriesOut = entriesOut + pair[0] + '=' + pair[1] + ';';
+            }
+
+            const hasTopic = params.has('topic');
+            const hasTopicFish = params.has('topic', 'fish');
+            const topic = params.get('topic');
+            const allTopic = params.getAll('topic');
+            const missingIsNull = params.get('foo') === null;
+
+            params.append('topic', 'webdev');
+            const afterAppend = params.toString();
+
+            params.set('topic', 'More webdev');
+            const afterSet = params.toString();
+
+            params.append('topic', 'fish');
+            const hasFish = params.has('topic', 'fish');
+            params.delete('topic', 'fish');
+            const afterDeletePair = params.toString();
+
+            params.delete('topic');
+            const afterDelete = params.toString();
+
+            document.getElementById('result').textContent =
+              forOfOut + '|' +
+              entriesOut + '|' +
+              hasTopic + ':' + hasTopicFish + ':' + topic + ':' + allTopic.join(',') + ':' + missingIsNull + '|' +
+              afterAppend + '|' +
+              afterSet + '|' +
+              hasFish + '|' +
+              afterDeletePair + '|' +
+              afterDelete + '|' +
+              params.size;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "q=URLUtils.searchParams;topic=api;|q=URLUtils.searchParams;topic=api;|true:false:api:api:true|q=URLUtils.searchParams&topic=api&topic=webdev|q=URLUtils.searchParams&topic=More+webdev|true|q=URLUtils.searchParams&topic=More+webdev|q=URLUtils.searchParams|1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_object_and_location_parsing_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const paramsObj = { foo: 'bar', baz: 'bar' };
+            const fromObj = new URLSearchParams(paramsObj);
+
+            location.href = 'https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams?foo=a';
+            const fromLocation = new URLSearchParams(window.location.search);
+
+            const full = new URLSearchParams('http://example.com/search?query=%40');
+            const leading = new URLSearchParams('?query=value');
+            const dup = new URLSearchParams('foo=bar&foo=baz');
+            const dupAll = dup.getAll('foo');
+            const emptyVal = new URLSearchParams('foo=&bar=baz');
+            const noEquals = new URLSearchParams('foo&bar=baz');
+
+            document.getElementById('result').textContent =
+              fromObj.toString() + ':' +
+              fromObj.has('foo') + ':' +
+              fromObj.get('foo') + ':' +
+              fromLocation.get('foo') + ':' +
+              full.has('query') + ':' +
+              full.has('http://example.com/search?query') + ':' +
+              full.get('query') + ':' +
+              full.get('http://example.com/search?query') + ':' +
+              leading.has('query') + ':' +
+              dup.get('foo') + ':' +
+              dupAll.join(',') + ':' +
+              emptyVal.get('foo') + ':' +
+              noEquals.get('foo') + ':' +
+              noEquals.toString();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "foo=bar&baz=bar:true:bar:a:false:true:null:@:true:bar:bar,baz:::foo=&bar=baz",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_percent_encoding_and_plus_behavior_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const params = new URLSearchParams('%24%25%26=%28%29%2B');
+            const decoded = params.get('$%&');
+            const encodedKeyMiss = params.get('%24%25%26') === null;
+            params.append('$%&$#@+', '$#&*@#()+');
+            const encoded = params.toString();
+
+            const plusBrokenParams = new URLSearchParams('bin=E+AXQB+A');
+            const plusBroken = plusBrokenParams.get('bin');
+            const plusPreservedParams = new URLSearchParams();
+            plusPreservedParams.append('bin', 'E+AXQB+A');
+            const plusPreserved = plusPreservedParams.get('bin');
+            const plusSerialized = plusPreservedParams.toString();
+
+            const encodedKeyParams = new URLSearchParams();
+            encodedKeyParams.append('%24%26', 'value');
+
+            document.getElementById('result').textContent =
+              decoded + ':' +
+              encodedKeyMiss + ':' +
+              encoded + ':' +
+              plusBroken + ':' +
+              plusPreserved + ':' +
+              plusSerialized + ':' +
+              encodedKeyParams.toString();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "()+:true:%24%25%26=%28%29%2B&%24%25%26%24%23%40%2B=%24%23%26*%40%23%28%29%2B:E AXQB A:E+AXQB+A:bin=E%2BAXQB%2BA:%2524%2526=value",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_constructor_requires_new() {
+    let err = Harness::from_html("<script>URLSearchParams('a=1');</script>")
+        .expect_err("calling URLSearchParams constructor without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("URLSearchParams constructor must be called with new"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn url_constructor_properties_setters_and_methods_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://some.site/?id=123';
+
+            const url = new URL('../cats', 'http://www.example.com/dogs');
+            const initial =
+              url.href + '|' +
+              url.hostname + '|' +
+              url.pathname + '|' +
+              url.origin;
+
+            url['hash'] = 'tabby';
+            url['username'] = 'alice';
+            url['password'] = 'secret';
+            url['port'] = '8080';
+            url['protocol'] = 'https:';
+            url['pathname'] = 'démonstration.html';
+            url['search'] = 'q=space value';
+
+            const parsedLocation = new URL(window.location.href);
+            const fromLocation = parsedLocation.searchParams.get('id');
+
+            document.getElementById('result').textContent =
+              initial + '|' +
+              url.href + '|' +
+              url.hash + '|' +
+              url.search + '|' +
+              url.searchParams.get('q') + '|' +
+              url.toString() + '|' +
+              url.toJSON() + '|' +
+              (window.URL === URL) + '|' +
+              (typeof URL) + '|' +
+              fromLocation;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "http://www.example.com/cats|www.example.com|/cats|http://www.example.com|https://alice:secret@www.example.com:8080/d%C3%A9monstration.html?q=space%20value#tabby|#tabby|?q=space%20value|space value|https://alice:secret@www.example.com:8080/d%C3%A9monstration.html?q=space%20value#tabby|https://alice:secret@www.example.com:8080/d%C3%A9monstration.html?q=space%20value#tabby|true|function|123",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_live_sync_with_url_search_and_href_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const url = new URL('https://example.com/?a=b ~');
+            const before = url.href;
+
+            const params = url.searchParams;
+            const appended = params.append('topic', 'web dev');
+            const afterAppend = url.href;
+
+            url['search'] = '?x=1';
+            const afterSearch = url.href;
+
+            const topicCleared = url.searchParams.get('topic') === null;
+            const xValue = url.searchParams.get('x');
+
+            document.getElementById('result').textContent =
+              before + '|' +
+              afterAppend + '|' +
+              afterSearch + '|' +
+              topicCleared + ':' + xValue;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com/?a=b%20~|https://example.com/?a=b+%7E&topic=web+dev|https://example.com/?x=1|true:1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_static_methods_and_blob_object_urls_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const blob = new Blob(['abc'], { type: 'text/plain' });
+
+            const objectUrl1 = URL.createObjectURL(blob);
+            URL.revokeObjectURL(objectUrl1);
+            const objectUrl2 = window.URL.createObjectURL(blob);
+            URL.revokeObjectURL('blob:bt-999');
+
+            const canRel = URL.canParse('../cats', 'http://www.example.com/dogs');
+            const canBad = URL.canParse('/cats');
+
+            const parsed = URL.parse('../cats', 'http://www.example.com/dogs');
+            const parsedHref = parsed === null ? 'null' : parsed.href;
+            const parsedBad = URL.parse('/cats') === null;
+
+            const C = URL;
+            const viaAlias = C.canParse('https://example.com/path');
+
+            document.getElementById('result').textContent =
+              objectUrl1 + '|' +
+              objectUrl2 + '|' +
+              canRel + ':' + canBad + '|' +
+              parsedHref + ':' + parsedBad + ':' + viaAlias;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "blob:bt-1|blob:bt-2|true:false|http://www.example.com/cats:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_constructor_requires_new() {
+    let err = Harness::from_html("<script>URL('https://example.com');</script>")
+        .expect_err("calling URL constructor without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("URL constructor must be called with new"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn url_constructor_without_base_rejects_relative_urls() {
+    let err = Harness::from_html("<script>new URL('/cats');</script>")
+        .expect_err("relative URL without base should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Invalid URL")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn url_href_setter_rejects_relative_urls() {
+    let err = Harness::from_html(
+        "<script>const u = new URL('https://example.com/a'); u['href'] = '/cats';</script>",
+    )
+    .expect_err("setting URL.href to a relative URL should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Invalid URL")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn blob_constructor_properties_and_text_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { hello: 'world' };
+            const blob = new Blob([JSON.stringify(obj)], { type: 'Application/JSON' });
+            const promise = blob.text();
+            promise.then((text) => {
+              document.getElementById('result').textContent =
+                blob.size + ':' +
+                blob.type + ':' +
+                text + ':' +
+                (blob.constructor === Blob);
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "17:application/json:{\"hello\":\"world\"}:true")?;
+    Ok(())
+}
+
+#[test]
+fn blob_array_buffer_bytes_slice_and_stream_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = new Uint8Array([65, 66, 67, 68]);
+            const blob = new Blob([source.buffer], { type: 'text/plain' });
+            const sliced = blob.slice(1, 3);
+            const p1 = blob.arrayBuffer();
+            const p2 = blob.bytes();
+            const p3 = sliced.text();
+
+            Promise.all([p1, p2, p3]).then((values) => {
+              const fromAb = new Uint8Array(values[0]).join(',');
+              const fromBytes = values[1].join(',');
+              const streamObj = blob.stream();
+              document.getElementById('result').textContent =
+                fromAb + '|' +
+                fromBytes + '|' +
+                values[2] + '|' +
+                (typeof streamObj) + ':' +
+                (streamObj ? 'y' : 'n');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "65,66,67,68|65,66,67,68|BC|object:y")?;
+    Ok(())
+}
+
+#[test]
+fn blob_constructor_and_method_errors_work() {
+    let err = Harness::from_html("<script>Blob(['x']);</script>")
+        .expect_err("calling Blob constructor without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("Blob constructor must be called with new"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>const b = new Blob(['x']); b.text('oops');</script>")
+        .expect_err("Blob.text should reject extra arguments");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Blob.text does not take arguments")),
         other => panic!("unexpected error: {other:?}"),
     }
 }

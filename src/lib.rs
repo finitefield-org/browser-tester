@@ -35,6 +35,13 @@ const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
 const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
 const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
+const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
+const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";
+const INTERNAL_URL_OBJECT_ID_KEY: &str = "\u{0}\u{0}bt_url:id";
+const INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX: &str = "\u{0}\u{0}bt_url_search_params:";
+const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str = "\u{0}\u{0}bt_url_search_params:object";
+const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_url_search_params:entries";
+const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str = "\u{0}\u{0}bt_url_search_params:owner_id";
 const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -2342,6 +2349,40 @@ fn encode_uri_like(src: &str, component: bool) -> String {
     out
 }
 
+fn encode_uri_like_preserving_percent(src: &str, component: bool) -> String {
+    let mut out = String::new();
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && from_hex_digit(bytes[i + 1]).is_some()
+            && from_hex_digit(bytes[i + 2]).is_some()
+        {
+            out.push('%');
+            out.push((bytes[i + 1] as char).to_ascii_uppercase());
+            out.push((bytes[i + 2] as char).to_ascii_uppercase());
+            i += 3;
+            continue;
+        }
+
+        let ch = src[i..].chars().next().unwrap_or_default();
+        let mut encoded = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut encoded);
+        for b in encoded.as_bytes() {
+            if is_unescaped_uri_byte(*b, component) {
+                out.push(*b as char);
+            } else {
+                out.push('%');
+                out.push(to_hex_upper((*b >> 4) & 0x0F));
+                out.push(to_hex_upper(*b & 0x0F));
+            }
+        }
+        i += ch.len_utf8();
+    }
+    out
+}
+
 fn decode_uri_like(src: &str, component: bool) -> Result<String> {
     let preserve_reserved = !component;
     let bytes = src.as_bytes();
@@ -2393,6 +2434,97 @@ fn decode_uri_like(src: &str, component: bool) -> Result<String> {
     }
 
     Ok(out)
+}
+
+fn parse_url_search_params_pairs_from_query_string(query: &str) -> Result<Vec<(String, String)>> {
+    let query = query.strip_prefix('?').unwrap_or(query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut pairs = Vec::new();
+    for part in query.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let (raw_name, raw_value) = if let Some((name, value)) = part.split_once('=') {
+            (name, value)
+        } else {
+            (part, "")
+        };
+        let name = decode_form_urlencoded_component(raw_name)?;
+        let value = decode_form_urlencoded_component(raw_value)?;
+        pairs.push((name, value));
+    }
+    Ok(pairs)
+}
+
+fn serialize_url_search_params_pairs(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                encode_form_urlencoded_component(name),
+                encode_form_urlencoded_component(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn encode_form_urlencoded_component(src: &str) -> String {
+    let mut out = String::new();
+    for b in src.as_bytes() {
+        if is_form_urlencoded_unescaped_byte(*b) {
+            out.push(*b as char);
+        } else if *b == b' ' {
+            out.push('+');
+        } else {
+            out.push('%');
+            out.push(to_hex_upper((*b >> 4) & 0x0F));
+            out.push(to_hex_upper(*b & 0x0F));
+        }
+    }
+    out
+}
+
+fn decode_form_urlencoded_component(src: &str) -> Result<String> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                if i + 2 >= bytes.len() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams malformed percent-encoding".into(),
+                    ));
+                }
+                let hi = from_hex_digit(bytes[i + 1]).ok_or_else(|| {
+                    Error::ScriptRuntime("URLSearchParams malformed percent-encoding".into())
+                })?;
+                let lo = from_hex_digit(bytes[i + 2]).ok_or_else(|| {
+                    Error::ScriptRuntime("URLSearchParams malformed percent-encoding".into())
+                })?;
+                out.push((hi << 4) | lo);
+                i += 3;
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out)
+        .map_err(|_| Error::ScriptRuntime("URLSearchParams malformed UTF-8 sequence".into()))
+}
+
+fn is_form_urlencoded_unescaped_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_')
 }
 
 fn js_escape(src: &str) -> String {
@@ -3458,6 +3590,12 @@ struct ArrayBufferValue {
     detached: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlobValue {
+    bytes: Vec<u8>,
+    mime_type: String,
+}
+
 impl ArrayBufferValue {
     fn byte_length(&self) -> usize {
         if self.detached { 0 } else { self.bytes.len() }
@@ -3713,9 +3851,12 @@ enum Value {
     Promise(Rc<RefCell<PromiseValue>>),
     Map(Rc<RefCell<MapValue>>),
     Set(Rc<RefCell<SetValue>>),
+    Blob(Rc<RefCell<BlobValue>>),
     ArrayBuffer(Rc<RefCell<ArrayBufferValue>>),
     TypedArray(Rc<RefCell<TypedArrayValue>>),
     TypedArrayConstructor(TypedArrayConstructorKind),
+    BlobConstructor,
+    UrlConstructor,
     ArrayBufferConstructor,
     PromiseConstructor,
     MapConstructor,
@@ -3807,9 +3948,12 @@ impl Value {
             Self::Promise(_) => true,
             Self::Map(_) => true,
             Self::Set(_) => true,
+            Self::Blob(_) => true,
             Self::ArrayBuffer(_) => true,
             Self::TypedArray(_) => true,
             Self::TypedArrayConstructor(_) => true,
+            Self::BlobConstructor => true,
+            Self::UrlConstructor => true,
             Self::ArrayBufferConstructor => true,
             Self::PromiseConstructor => true,
             Self::MapConstructor => true,
@@ -3863,12 +4007,63 @@ impl Value {
                     (key == INTERNAL_STRING_WRAPPER_VALUE_KEY).then(|| value)
                 }) {
                     Some(Value::String(value)) => value.clone(),
-                    _ => "[object Object]".into(),
+                    _ => {
+                        let is_url = entries.iter().any(|(key, value)| {
+                            key == INTERNAL_URL_OBJECT_KEY && matches!(value, Value::Bool(true))
+                        });
+                        if is_url {
+                            if let Some(Value::String(href)) = entries
+                                .iter()
+                                .find_map(|(key, value)| (key == "href").then(|| value))
+                            {
+                                return href.clone();
+                            }
+                        }
+                        let is_url_search_params = entries.iter().any(|(key, value)| {
+                            key == INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY
+                                && matches!(value, Value::Bool(true))
+                        });
+                        if is_url_search_params {
+                            let mut pairs = Vec::new();
+                            if let Some(Value::Array(list)) =
+                                entries.iter().find_map(|(key, value)| {
+                                    (key == INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY).then(|| value)
+                                })
+                            {
+                                let list = list.borrow();
+                                for item in list.iter() {
+                                    let Value::Array(pair) = item else {
+                                        continue;
+                                    };
+                                    let pair = pair.borrow();
+                                    if pair.is_empty() {
+                                        continue;
+                                    }
+                                    let name = pair[0].as_string();
+                                    let value =
+                                        pair.get(1).map(Value::as_string).unwrap_or_default();
+                                    pairs.push((name, value));
+                                }
+                            }
+                            serialize_url_search_params_pairs(&pairs)
+                        } else {
+                            let is_readable_stream = entries.iter().any(|(key, value)| {
+                                key == INTERNAL_READABLE_STREAM_OBJECT_KEY
+                                    && matches!(value, Value::Bool(true))
+                            });
+                            if is_readable_stream {
+                                "[object ReadableStream]".into()
+                            } else {
+                                "[object Object]".into()
+                            }
+                        }
+                    }
                 }
             }
             Self::Promise(_) => "[object Promise]".into(),
             Self::Map(_) => "[object Map]".into(),
             Self::Set(_) => "[object Set]".into(),
+            Self::Blob(_) => "[object Blob]".into(),
             Self::ArrayBuffer(_) => "[object ArrayBuffer]".into(),
             Self::TypedArray(value) => {
                 let value = value.borrow();
@@ -3878,6 +4073,8 @@ impl Value {
                 TypedArrayConstructorKind::Concrete(kind) => kind.name().to_string(),
                 TypedArrayConstructorKind::Abstract => "TypedArray".to_string(),
             },
+            Self::BlobConstructor => "Blob".to_string(),
+            Self::UrlConstructor => "URL".to_string(),
             Self::ArrayBufferConstructor => "ArrayBuffer".to_string(),
             Self::PromiseConstructor => "Promise".to_string(),
             Self::MapConstructor => "Map".to_string(),
@@ -3973,6 +4170,33 @@ enum DomProp {
     LinksLength,
     ScriptsLength,
     ChildrenLength,
+    AnchorAttributionSrc,
+    AnchorDownload,
+    AnchorHash,
+    AnchorHost,
+    AnchorHostname,
+    AnchorHref,
+    AnchorHreflang,
+    AnchorInterestForElement,
+    AnchorOrigin,
+    AnchorPassword,
+    AnchorPathname,
+    AnchorPing,
+    AnchorPort,
+    AnchorProtocol,
+    AnchorReferrerPolicy,
+    AnchorRel,
+    AnchorRelList,
+    AnchorRelListLength,
+    AnchorSearch,
+    AnchorTarget,
+    AnchorText,
+    AnchorType,
+    AnchorUsername,
+    AnchorCharset,
+    AnchorCoords,
+    AnchorRev,
+    AnchorShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4529,6 +4753,22 @@ enum Expr {
         method: BigIntInstanceMethod,
         args: Vec<Expr>,
     },
+    BlobConstruct {
+        parts: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    BlobConstructor,
+    UrlConstruct {
+        input: Option<Box<Expr>>,
+        base: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    UrlConstructor,
+    UrlStaticMethod {
+        method: UrlStaticMethod,
+        args: Vec<Expr>,
+    },
     ArrayBufferConstruct {
         byte_length: Option<Box<Expr>>,
         options: Option<Box<Expr>>,
@@ -4589,6 +4829,15 @@ enum Expr {
     MapMethod {
         target: String,
         method: MapInstanceMethod,
+        args: Vec<Expr>,
+    },
+    UrlSearchParamsConstruct {
+        init: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    UrlSearchParamsMethod {
+        target: String,
+        method: UrlSearchParamsInstanceMethod,
         args: Vec<Expr>,
     },
     SetConstruct {
@@ -5147,6 +5396,14 @@ enum MapStaticMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UrlStaticMethod {
+    CanParse,
+    Parse,
+    CreateObjectUrl,
+    RevokeObjectUrl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SymbolStaticMethod {
     For,
     KeyFor,
@@ -5197,6 +5454,14 @@ enum MapInstanceMethod {
     ForEach,
     GetOrInsert,
     GetOrInsertComputed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UrlSearchParamsInstanceMethod {
+    Append,
+    Delete,
+    GetAll,
+    Has,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5516,6 +5781,8 @@ struct TimerInvocation {
 struct LocationParts {
     scheme: String,
     has_authority: bool,
+    username: String,
+    password: String,
     hostname: String,
     port: String,
     pathname: String,
@@ -5552,9 +5819,17 @@ impl LocationParts {
             } else {
                 self.pathname.clone()
             };
+            let credentials = if self.username.is_empty() && self.password.is_empty() {
+                String::new()
+            } else if self.password.is_empty() {
+                format!("{}@", self.username)
+            } else {
+                format!("{}:{}@", self.username, self.password)
+            };
             format!(
-                "{}//{}{}{}{}",
+                "{}//{}{}{}{}{}",
                 self.protocol(),
+                credentials,
                 self.host(),
                 path,
                 self.search,
@@ -5585,7 +5860,7 @@ impl LocationParts {
                 .unwrap_or(without_slashes.len());
             let authority = &without_slashes[..authority_end];
             let tail = &without_slashes[authority_end..];
-            let (hostname, port) = split_hostname_and_port(authority);
+            let (username, password, hostname, port) = split_authority_components(authority);
             let (pathname, search, hash) = split_path_search_hash(tail);
             let pathname = if pathname.is_empty() {
                 "/".to_string()
@@ -5595,6 +5870,8 @@ impl LocationParts {
             Some(Self {
                 scheme,
                 has_authority: true,
+                username,
+                password,
                 hostname,
                 port,
                 pathname,
@@ -5607,6 +5884,8 @@ impl LocationParts {
             Some(Self {
                 scheme,
                 has_authority: false,
+                username: String::new(),
+                password: String::new(),
                 hostname: String::new(),
                 port: String::new(),
                 pathname: String::new(),
@@ -5653,6 +5932,29 @@ fn split_hostname_and_port(authority: &str) -> (String, String) {
         }
     }
     (authority.to_string(), String::new())
+}
+
+fn split_authority_components(authority: &str) -> (String, String, String, String) {
+    if authority.is_empty() {
+        return (String::new(), String::new(), String::new(), String::new());
+    }
+
+    let (userinfo, hostport) = if let Some(at) = authority.rfind('@') {
+        (&authority[..at], &authority[at + 1..])
+    } else {
+        ("", authority)
+    };
+
+    let (username, password) = if userinfo.is_empty() {
+        (String::new(), String::new())
+    } else if let Some((username, password)) = userinfo.split_once(':') {
+        (username.to_string(), password.to_string())
+    } else {
+        (userinfo.to_string(), String::new())
+    };
+
+    let (hostname, port) = split_hostname_and_port(hostport);
+    (username, password, hostname, port)
 }
 
 fn split_path_search_hash(tail: &str) -> (String, String, String) {
@@ -5941,6 +6243,10 @@ pub struct Harness {
     next_task_order: i64,
     next_promise_id: usize,
     next_symbol_id: usize,
+    next_url_object_id: usize,
+    url_objects: HashMap<usize, Rc<RefCell<Vec<(String, Value)>>>>,
+    next_blob_url_id: usize,
+    blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
     task_depth: usize,
     running_timer_id: Option<i64>,
     running_timer_canceled: bool,
@@ -6160,6 +6466,10 @@ impl Harness {
             next_task_order: 0,
             next_promise_id: 1,
             next_symbol_id: 1,
+            next_url_object_id: 1,
+            url_objects: HashMap::new(),
+            next_blob_url_id: 1,
+            blob_url_objects: HashMap::new(),
             task_depth: 0,
             running_timer_id: None,
             running_timer_canceled: false,
@@ -6285,6 +6595,8 @@ impl Harness {
         self.script_env.insert("Intl".to_string(), intl);
         self.script_env
             .insert("String".to_string(), Value::StringConstructor);
+        self.script_env
+            .insert("URL".to_string(), Value::UrlConstructor);
         self.script_env.insert("location".to_string(), location);
         self.script_env.insert("history".to_string(), history);
         self.script_env.insert("window".to_string(), window.clone());
@@ -6298,6 +6610,8 @@ impl Harness {
         LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
             scheme: "about".to_string(),
             has_authority: false,
+            username: String::new(),
+            password: String::new(),
             hostname: String::new(),
             port: String::new(),
             pathname: String::new(),
@@ -6374,6 +6688,7 @@ impl Harness {
             "isSecureContext",
             "Intl",
             "String",
+            "URL",
             "name",
         ]
     }
@@ -6435,6 +6750,7 @@ impl Harness {
             ),
             ("Intl".to_string(), intl.clone()),
             ("String".to_string(), Value::StringConstructor),
+            ("URL".to_string(), Value::UrlConstructor),
             ("name".to_string(), name_value),
         ];
         entries.extend(extras);
@@ -6659,7 +6975,8 @@ impl Harness {
     fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
-            | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext" => {
+            | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
+            | "URL" => {
                 Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
             }
             "location" => self.set_location_property("href", value),
@@ -6789,6 +7106,8 @@ impl Harness {
         };
         from_parts.scheme == to_parts.scheme
             && from_parts.has_authority == to_parts.has_authority
+            && from_parts.username == to_parts.username
+            && from_parts.password == to_parts.password
             && from_parts.hostname == to_parts.hostname
             && from_parts.port == to_parts.port
             && from_parts.pathname == to_parts.pathname
@@ -7049,6 +7368,97 @@ impl Harness {
                 Ok(())
             }
         }
+    }
+
+    fn anchor_rel_tokens(&self, node: NodeId) -> Vec<String> {
+        self.dom
+            .attr(node, "rel")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|token| token.to_string())
+            .collect::<Vec<_>>()
+    }
+
+    fn resolve_anchor_href(&self, node: NodeId) -> String {
+        let raw = self.dom.attr(node, "href").unwrap_or_default();
+        self.resolve_location_target_url(&raw)
+    }
+
+    fn anchor_location_parts(&self, node: NodeId) -> LocationParts {
+        let href = self.resolve_anchor_href(node);
+        LocationParts::parse(&href).unwrap_or_else(|| self.current_location_parts())
+    }
+
+    fn set_anchor_url_property(&mut self, node: NodeId, key: &str, value: Value) -> Result<()> {
+        match key {
+            "href" => {
+                self.dom.set_attr(node, "href", &value.as_string())?;
+                return Ok(());
+            }
+            "origin" | "relList" => {
+                return Err(Error::ScriptRuntime(format!("anchor.{key} is read-only")));
+            }
+            _ => {}
+        }
+
+        let mut parts = self.anchor_location_parts(node);
+        match key {
+            "protocol" => {
+                let protocol = value.as_string();
+                let protocol = protocol.trim_end_matches(':').to_ascii_lowercase();
+                if !is_valid_url_scheme(&protocol) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "invalid anchor.protocol value: {}",
+                        value.as_string()
+                    )));
+                }
+                parts.scheme = protocol;
+            }
+            "host" => {
+                let host = value.as_string();
+                let (hostname, port) = split_hostname_and_port(host.trim());
+                parts.hostname = hostname;
+                parts.port = port;
+            }
+            "hostname" => {
+                parts.hostname = value.as_string();
+            }
+            "port" => {
+                parts.port = value.as_string();
+            }
+            "pathname" => {
+                let raw = value.as_string();
+                if parts.has_authority {
+                    let normalized_input = if raw.starts_with('/') {
+                        raw
+                    } else {
+                        format!("/{raw}")
+                    };
+                    parts.pathname = normalize_pathname(&normalized_input);
+                } else {
+                    parts.opaque_path = raw;
+                }
+            }
+            "search" => {
+                parts.search = ensure_search_prefix(&value.as_string());
+            }
+            "hash" => {
+                parts.hash = ensure_hash_prefix(&value.as_string());
+            }
+            "username" => {
+                parts.username = value.as_string();
+            }
+            "password" => {
+                parts.password = value.as_string();
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(format!(
+                    "unsupported anchor URL property: {key}"
+                )));
+            }
+        }
+
+        self.dom.set_attr(node, "href", &parts.href())
     }
 
     pub fn enable_trace(&mut self, enabled: bool) {
@@ -8979,13 +9389,14 @@ impl Harness {
                     match env.get(target) {
                         Some(Value::Object(object)) => {
                             let key = self.property_key_to_storage_key(&key);
-                            let (is_location, is_history, is_window, is_navigator) = {
+                            let (is_location, is_history, is_window, is_navigator, is_url) = {
                                 let entries = object.borrow();
                                 (
                                     Self::is_location_object(&entries),
                                     Self::is_history_object(&entries),
                                     Self::is_window_object(&entries),
                                     Self::is_navigator_object(&entries),
+                                    Self::is_url_object(&entries),
                                 )
                             };
                             if is_location {
@@ -9002,6 +9413,10 @@ impl Harness {
                             }
                             if is_navigator {
                                 self.set_navigator_property(object, &key, value)?;
+                                continue;
+                            }
+                            if is_url {
+                                self.set_url_object_property(object, &key, value)?;
                                 continue;
                             }
                             Self::object_set_entry(&mut object.borrow_mut(), key, value);
@@ -9065,16 +9480,38 @@ impl Harness {
                 } => {
                     let name = self.eval_expr(name, env, event_param, event)?;
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    let entries = env.get_mut(target_var).ok_or_else(|| {
+                    let name = name.as_string();
+                    let value = value.as_string();
+                    let target = env.get_mut(target_var).ok_or_else(|| {
                         Error::ScriptRuntime(format!("unknown FormData variable: {}", target_var))
                     })?;
-                    let Value::FormData(entries) = entries else {
-                        return Err(Error::ScriptRuntime(format!(
-                            "variable '{}' is not a FormData instance",
-                            target_var
-                        )));
-                    };
-                    entries.push((name.as_string(), value.as_string()));
+                    match target {
+                        Value::FormData(entries) => {
+                            entries.push((name, value));
+                        }
+                        Value::Object(entries) => {
+                            if !Self::is_url_search_params_object(&entries.borrow()) {
+                                return Err(Error::ScriptRuntime(format!(
+                                    "variable '{}' is not a FormData instance",
+                                    target_var
+                                )));
+                            }
+                            {
+                                let mut object_ref = entries.borrow_mut();
+                                let mut pairs =
+                                    Self::url_search_params_pairs_from_object_entries(&object_ref);
+                                pairs.push((name, value));
+                                Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                            }
+                            self.sync_url_search_params_owner(entries);
+                        }
+                        _ => {
+                            return Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not a FormData instance",
+                                target_var
+                            )));
+                        }
+                    }
                 }
                 Stmt::DomAssign { target, prop, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -9166,6 +9603,76 @@ impl Harness {
                         DomProp::HistoryScrollRestoration => {
                             self.set_history_property("scrollRestoration", value.clone())?
                         }
+                        DomProp::AnchorAttributionSrc => {
+                            self.dom
+                                .set_attr(node, "attributionsrc", &value.as_string())?
+                        }
+                        DomProp::AnchorDownload => {
+                            self.dom.set_attr(node, "download", &value.as_string())?
+                        }
+                        DomProp::AnchorHash => {
+                            self.set_anchor_url_property(node, "hash", value.clone())?
+                        }
+                        DomProp::AnchorHost => {
+                            self.set_anchor_url_property(node, "host", value.clone())?
+                        }
+                        DomProp::AnchorHostname => {
+                            self.set_anchor_url_property(node, "hostname", value.clone())?
+                        }
+                        DomProp::AnchorHref => {
+                            self.set_anchor_url_property(node, "href", value.clone())?
+                        }
+                        DomProp::AnchorHreflang => {
+                            self.dom.set_attr(node, "hreflang", &value.as_string())?
+                        }
+                        DomProp::AnchorInterestForElement => {
+                            self.dom.set_attr(node, "interestfor", &value.as_string())?
+                        }
+                        DomProp::AnchorPassword => {
+                            self.set_anchor_url_property(node, "password", value.clone())?
+                        }
+                        DomProp::AnchorPathname => {
+                            self.set_anchor_url_property(node, "pathname", value.clone())?
+                        }
+                        DomProp::AnchorPing => {
+                            self.dom.set_attr(node, "ping", &value.as_string())?
+                        }
+                        DomProp::AnchorPort => {
+                            self.set_anchor_url_property(node, "port", value.clone())?
+                        }
+                        DomProp::AnchorProtocol => {
+                            self.set_anchor_url_property(node, "protocol", value.clone())?
+                        }
+                        DomProp::AnchorReferrerPolicy => {
+                            self.dom
+                                .set_attr(node, "referrerpolicy", &value.as_string())?
+                        }
+                        DomProp::AnchorRel => self.dom.set_attr(node, "rel", &value.as_string())?,
+                        DomProp::AnchorSearch => {
+                            self.set_anchor_url_property(node, "search", value.clone())?
+                        }
+                        DomProp::AnchorTarget => {
+                            self.dom.set_attr(node, "target", &value.as_string())?
+                        }
+                        DomProp::AnchorText => {
+                            self.dom.set_text_content(node, &value.as_string())?
+                        }
+                        DomProp::AnchorType => {
+                            self.dom.set_attr(node, "type", &value.as_string())?
+                        }
+                        DomProp::AnchorUsername => {
+                            self.set_anchor_url_property(node, "username", value.clone())?
+                        }
+                        DomProp::AnchorCharset => {
+                            self.dom.set_attr(node, "charset", &value.as_string())?
+                        }
+                        DomProp::AnchorCoords => {
+                            self.dom.set_attr(node, "coords", &value.as_string())?
+                        }
+                        DomProp::AnchorRev => self.dom.set_attr(node, "rev", &value.as_string())?,
+                        DomProp::AnchorShape => {
+                            self.dom.set_attr(node, "shape", &value.as_string())?
+                        }
                         DomProp::OffsetWidth
                         | DomProp::OffsetHeight
                         | DomProp::OffsetLeft
@@ -9203,7 +9710,10 @@ impl Harness {
                         | DomProp::ImagesLength
                         | DomProp::LinksLength
                         | DomProp::ScriptsLength
-                        | DomProp::ChildrenLength => {
+                        | DomProp::ChildrenLength
+                        | DomProp::AnchorOrigin
+                        | DomProp::AnchorRelList
+                        | DomProp::AnchorRelListLength => {
                             let call = self.describe_dom_prop(prop);
                             return Err(Error::ScriptRuntime(format!("{call} is read-only")));
                         }
@@ -9527,6 +10037,30 @@ impl Harness {
                                 )?;
                             }
                         }
+                        Some(Value::Object(entries)) => {
+                            if Self::is_url_search_params_object(&entries.borrow()) {
+                                let snapshot = Self::url_search_params_pairs_from_object_entries(
+                                    &entries.borrow(),
+                                );
+                                for (key, value) in snapshot {
+                                    self.execute_array_callback_in_env(
+                                        callback,
+                                        &[
+                                            Value::String(value),
+                                            Value::String(key),
+                                            Value::Object(entries.clone()),
+                                        ],
+                                        env,
+                                        event,
+                                    )?;
+                                }
+                            } else {
+                                return Err(Error::ScriptRuntime(format!(
+                                    "variable '{}' is not an array",
+                                    target
+                                )));
+                            }
+                        }
                         Some(_) => {
                             return Err(Error::ScriptRuntime(format!(
                                 "variable '{}' is not an array",
@@ -9670,10 +10204,29 @@ impl Harness {
                         Value::Array(values) => values.borrow().clone(),
                         Value::Map(map) => self.map_entries_array(&map),
                         Value::Set(set) => set.borrow().values.clone(),
+                        Value::Object(entries) => {
+                            if Self::is_url_search_params_object(&entries.borrow()) {
+                                Self::url_search_params_pairs_from_object_entries(&entries.borrow())
+                                    .into_iter()
+                                    .map(|(key, value)| {
+                                        Self::new_array_value(vec![
+                                            Value::String(key),
+                                            Value::String(value),
+                                        ])
+                                    })
+                                    .collect::<Vec<_>>()
+                            } else {
+                                return Err(Error::ScriptRuntime(
+                                    "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
+                                        .into(),
+                                ));
+                            }
+                        }
                         Value::Null | Value::Undefined => Vec::new(),
                         _ => {
                             return Err(Error::ScriptRuntime(
-                                "for...of iterable must be a NodeList, Array, Map, or Set".into(),
+                                "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
+                                    .into(),
                             ));
                         }
                     };
@@ -10741,6 +11294,23 @@ impl Harness {
                 method,
                 args,
             } => self.eval_bigint_instance_method(*method, value, args, env, event_param, event),
+            Expr::BlobConstruct {
+                parts,
+                options,
+                called_with_new,
+            } => {
+                self.eval_blob_construct(parts, options, *called_with_new, env, event_param, event)
+            }
+            Expr::BlobConstructor => Ok(Value::BlobConstructor),
+            Expr::UrlConstruct {
+                input,
+                base,
+                called_with_new,
+            } => self.eval_url_construct(input, base, *called_with_new, env, event_param, event),
+            Expr::UrlConstructor => Ok(Value::UrlConstructor),
+            Expr::UrlStaticMethod { method, args } => {
+                self.eval_url_static_method(*method, args, env, event_param, event)
+            }
             Expr::ArrayBufferConstruct {
                 byte_length,
                 options,
@@ -10864,6 +11434,21 @@ impl Harness {
                 method,
                 args,
             } => self.eval_map_method(target, *method, args, env, event_param, event),
+            Expr::UrlSearchParamsConstruct {
+                init,
+                called_with_new,
+            } => self.eval_url_search_params_construct(
+                init,
+                *called_with_new,
+                env,
+                event_param,
+                event,
+            ),
+            Expr::UrlSearchParamsMethod {
+                target,
+                method,
+                args,
+            } => self.eval_url_search_params_method(target, *method, args, env, event_param, event),
             Expr::SetConstruct {
                 iterable,
                 called_with_new,
@@ -11012,6 +11597,7 @@ impl Harness {
                     Value::Date(date) => Ok(Value::Date(date)),
                     Value::Map(map) => Ok(Value::Map(map)),
                     Value::Set(set) => Ok(Value::Set(set)),
+                    Value::Blob(blob) => Ok(Value::Blob(blob)),
                     Value::ArrayBuffer(buffer) => Ok(Value::ArrayBuffer(buffer)),
                     Value::TypedArray(array) => Ok(Value::TypedArray(array)),
                     Value::Promise(promise) => Ok(Value::Promise(promise)),
@@ -11914,6 +12500,29 @@ impl Harness {
                         },
                     ))))
                 }
+                Some(Value::Blob(blob)) => {
+                    let source = blob.borrow();
+                    let len = source.bytes.len();
+                    let start = start
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(0);
+                    let end = end
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .map(|value| Self::value_to_i64(&value))
+                        .map(|value| Self::normalize_slice_index(len, value))
+                        .unwrap_or(len);
+                    let end = end.max(start);
+                    Ok(Self::new_blob_value(
+                        source.bytes[start..end].to_vec(),
+                        String::new(),
+                    ))
+                }
                 Some(Value::String(value)) => {
                     let len = value.chars().count();
                     let start = start
@@ -12555,8 +13164,23 @@ impl Harness {
                 }
             }
             Expr::StringToString(value) => {
-                let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                Ok(Value::String(value))
+                let value = self.eval_expr(value, env, event_param, event)?;
+                if let Value::Node(node) = &value {
+                    if let Some(tag_name) = self.dom.tag_name(*node) {
+                        if tag_name.eq_ignore_ascii_case("a") {
+                            return Ok(Value::String(self.resolve_anchor_href(*node)));
+                        }
+                    }
+                    return Ok(Value::String(Value::Node(*node).as_string()));
+                }
+                if let Value::Object(entries) = &value {
+                    if Self::is_url_search_params_object(&entries.borrow()) {
+                        let pairs =
+                            Self::url_search_params_pairs_from_object_entries(&entries.borrow());
+                        return Ok(Value::String(serialize_url_search_params_pairs(&pairs)));
+                    }
+                }
+                Ok(Value::String(value.as_string()))
             }
             Expr::StructuredClone(value) => {
                 let value = self.eval_expr(value, env, event_param, event)?;
@@ -12682,6 +13306,54 @@ impl Harness {
                 args,
             } => {
                 let receiver = self.eval_expr(target, env, event_param, event)?;
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+
+                if let Value::TypedArray(array) = &receiver {
+                    if let Some(value) =
+                        self.eval_typed_array_member_call(array, member, &evaluated_args)?
+                    {
+                        return Ok(value);
+                    }
+                }
+
+                if let Value::Blob(blob) = &receiver {
+                    if let Some(value) =
+                        self.eval_blob_member_call(blob, member, &evaluated_args)?
+                    {
+                        return Ok(value);
+                    }
+                }
+
+                if let Value::UrlConstructor = &receiver {
+                    if let Some(value) =
+                        self.eval_url_static_member_call_from_values(member, &evaluated_args)?
+                    {
+                        return Ok(value);
+                    }
+                }
+
+                if let Value::Object(object) = &receiver {
+                    if Self::is_url_object(&object.borrow()) {
+                        if let Some(value) = self.eval_url_member_call(object, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                    }
+                    if Self::is_url_search_params_object(&object.borrow()) {
+                        if let Some(value) = self.eval_url_search_params_member_call(
+                            object,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
+                }
+
                 let callee = self
                     .object_property_from_value(&receiver, member)
                     .map_err(|err| match err {
@@ -12693,10 +13365,6 @@ impl Harness {
                         }
                         other => other,
                     })?;
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
                 self.execute_callable_value(&callee, &evaluated_args, event)
                     .map_err(|err| match err {
                         Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
@@ -12770,9 +13438,54 @@ impl Harness {
                 Ok(Value::Null)
             }
             Expr::Binary { left, op, right } => {
-                let left = self.eval_expr(left, env, event_param, event)?;
-                let right = self.eval_expr(right, env, event_param, event)?;
-                self.eval_binary(op, &left, &right)
+                match op {
+                    BinaryOp::And => {
+                        for operand in Self::collect_left_associative_binary_operands(
+                            expr,
+                            BinaryOp::And,
+                        ) {
+                            let value = self.eval_expr(operand, env, event_param, event)?;
+                            if !value.truthy() {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                        Ok(Value::Bool(true))
+                    }
+                    BinaryOp::Or => {
+                        for operand in Self::collect_left_associative_binary_operands(
+                            expr,
+                            BinaryOp::Or,
+                        ) {
+                            let value = self.eval_expr(operand, env, event_param, event)?;
+                            if value.truthy() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    BinaryOp::Nullish => {
+                        let mut operands =
+                            Self::collect_left_associative_binary_operands(expr, BinaryOp::Nullish)
+                                .into_iter();
+                        let Some(first) = operands.next() else {
+                            return Ok(Value::Undefined);
+                        };
+                        let mut current = self.eval_expr(first, env, event_param, event)?;
+                        for operand in operands {
+                            if matches!(current, Value::Null | Value::Undefined) {
+                                current = self.eval_expr(operand, env, event_param, event)?;
+                            } else {
+                                break;
+                            }
+                        }
+                        Ok(current)
+                    }
+                    _ => {
+                        let left = self.eval_expr(left, env, event_param, event)?;
+                        let right = self.eval_expr(right, env, event_param, event)?;
+                        self.eval_binary(op, &left, &right)
+                    }
+                }
             }
             Expr::DomRead { target, prop } => {
                 if let DomQuery::Var(name) = target {
@@ -12780,6 +13493,11 @@ impl Harness {
                         if let Some(key) = Self::object_key_from_dom_prop(prop) {
                             return Ok(Self::object_get_entry(&entries.borrow(), key)
                                 .unwrap_or(Value::Undefined));
+                        }
+                    }
+                    if let Some(Value::Blob(blob)) = env.get(name) {
+                        if matches!(prop, DomProp::AnchorType) {
+                            return Ok(Value::String(blob.borrow().mime_type.clone()));
                         }
                     }
                 }
@@ -12903,6 +13621,87 @@ impl Harness {
                     DomProp::ChildrenLength => {
                         Ok(Value::Number(self.dom.child_element_count(node) as i64))
                     }
+                    DomProp::AnchorAttributionSrc => Ok(Value::String(
+                        self.dom.attr(node, "attributionsrc").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorDownload => Ok(Value::String(
+                        self.dom.attr(node, "download").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorHash => Ok(Value::String(self.anchor_location_parts(node).hash)),
+                    DomProp::AnchorHost => {
+                        Ok(Value::String(self.anchor_location_parts(node).host()))
+                    }
+                    DomProp::AnchorHostname => {
+                        Ok(Value::String(self.anchor_location_parts(node).hostname))
+                    }
+                    DomProp::AnchorHref => Ok(Value::String(self.resolve_anchor_href(node))),
+                    DomProp::AnchorHreflang => Ok(Value::String(
+                        self.dom.attr(node, "hreflang").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorInterestForElement => Ok(Value::String(
+                        self.dom.attr(node, "interestfor").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorOrigin => {
+                        Ok(Value::String(self.anchor_location_parts(node).origin()))
+                    }
+                    DomProp::AnchorPassword => {
+                        Ok(Value::String(self.anchor_location_parts(node).password))
+                    }
+                    DomProp::AnchorPathname => {
+                        let parts = self.anchor_location_parts(node);
+                        Ok(Value::String(if parts.has_authority {
+                            parts.pathname
+                        } else {
+                            parts.opaque_path
+                        }))
+                    }
+                    DomProp::AnchorPing => Ok(Value::String(
+                        self.dom.attr(node, "ping").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorPort => Ok(Value::String(self.anchor_location_parts(node).port)),
+                    DomProp::AnchorProtocol => {
+                        Ok(Value::String(self.anchor_location_parts(node).protocol()))
+                    }
+                    DomProp::AnchorReferrerPolicy => Ok(Value::String(
+                        self.dom.attr(node, "referrerpolicy").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorRel => Ok(Value::String(
+                        self.dom.attr(node, "rel").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorRelList => Ok(Self::new_array_value(
+                        self.anchor_rel_tokens(node)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    DomProp::AnchorRelListLength => {
+                        Ok(Value::Number(self.anchor_rel_tokens(node).len() as i64))
+                    }
+                    DomProp::AnchorSearch => {
+                        Ok(Value::String(self.anchor_location_parts(node).search))
+                    }
+                    DomProp::AnchorTarget => Ok(Value::String(
+                        self.dom.attr(node, "target").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorText => Ok(Value::String(self.dom.text_content(node))),
+                    DomProp::AnchorType => Ok(Value::String(
+                        self.dom.attr(node, "type").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorUsername => {
+                        Ok(Value::String(self.anchor_location_parts(node).username))
+                    }
+                    DomProp::AnchorCharset => Ok(Value::String(
+                        self.dom.attr(node, "charset").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorCoords => Ok(Value::String(
+                        self.dom.attr(node, "coords").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorRev => Ok(Value::String(
+                        self.dom.attr(node, "rev").unwrap_or_default(),
+                    )),
+                    DomProp::AnchorShape => Ok(Value::String(
+                        self.dom.attr(node, "shape").unwrap_or_default(),
+                    )),
                 }
             }
             Expr::LocationMethodCall { method, url } => match method {
@@ -13075,62 +13874,70 @@ impl Harness {
                 Ok(Value::Bool(self.dom.has_attr(node, name)?))
             }
             Expr::EventProp { event_var, prop } => {
-                let Some(param) = event_param else {
+                if let Some(param) = event_param {
+                    if param == event_var {
+                        let value = match prop {
+                            EventExprProp::Type => Value::String(event.event_type.clone()),
+                            EventExprProp::Target => {
+                                Value::String(self.event_node_label(event.target))
+                            }
+                            EventExprProp::CurrentTarget => {
+                                Value::String(self.event_node_label(event.current_target))
+                            }
+                            EventExprProp::TargetName => Value::String(
+                                self.dom.attr(event.target, "name").unwrap_or_default(),
+                            ),
+                            EventExprProp::CurrentTargetName => Value::String(
+                                self.dom
+                                    .attr(event.current_target, "name")
+                                    .unwrap_or_default(),
+                            ),
+                            EventExprProp::DefaultPrevented => Value::Bool(event.default_prevented),
+                            EventExprProp::IsTrusted => Value::Bool(event.is_trusted),
+                            EventExprProp::Bubbles => Value::Bool(event.bubbles),
+                            EventExprProp::Cancelable => Value::Bool(event.cancelable),
+                            EventExprProp::TargetId => {
+                                Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
+                            }
+                            EventExprProp::CurrentTargetId => Value::String(
+                                self.dom
+                                    .attr(event.current_target, "id")
+                                    .unwrap_or_default(),
+                            ),
+                            EventExprProp::EventPhase => Value::Number(event.event_phase as i64),
+                            EventExprProp::TimeStamp => Value::Number(event.time_stamp_ms),
+                            EventExprProp::State => {
+                                event.state.as_ref().cloned().unwrap_or(Value::Undefined)
+                            }
+                            EventExprProp::OldState => event
+                                .old_state
+                                .as_ref()
+                                .map(|value| Value::String(value.clone()))
+                                .unwrap_or(Value::Undefined),
+                            EventExprProp::NewState => event
+                                .new_state
+                                .as_ref()
+                                .map(|value| Value::String(value.clone()))
+                                .unwrap_or(Value::Undefined),
+                        };
+                        return Ok(value);
+                    }
+                }
+
+                if let Some(value) = env.get(event_var) {
+                    return self.eval_event_prop_fallback(event_var, value, *prop);
+                }
+
+                if event_param.is_none() {
                     return Err(Error::ScriptRuntime(format!(
                         "event variable '{}' is not available in this handler",
                         event_var
                     )));
-                };
-                if param != event_var {
-                    return Err(Error::ScriptRuntime(format!(
-                        "unknown event variable: {}",
-                        event_var
-                    )));
                 }
-
-                let value = match prop {
-                    EventExprProp::Type => Value::String(event.event_type.clone()),
-                    EventExprProp::Target => Value::String(self.event_node_label(event.target)),
-                    EventExprProp::CurrentTarget => {
-                        Value::String(self.event_node_label(event.current_target))
-                    }
-                    EventExprProp::TargetName => {
-                        Value::String(self.dom.attr(event.target, "name").unwrap_or_default())
-                    }
-                    EventExprProp::CurrentTargetName => Value::String(
-                        self.dom
-                            .attr(event.current_target, "name")
-                            .unwrap_or_default(),
-                    ),
-                    EventExprProp::DefaultPrevented => Value::Bool(event.default_prevented),
-                    EventExprProp::IsTrusted => Value::Bool(event.is_trusted),
-                    EventExprProp::Bubbles => Value::Bool(event.bubbles),
-                    EventExprProp::Cancelable => Value::Bool(event.cancelable),
-                    EventExprProp::TargetId => {
-                        Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
-                    }
-                    EventExprProp::CurrentTargetId => Value::String(
-                        self.dom
-                            .attr(event.current_target, "id")
-                            .unwrap_or_default(),
-                    ),
-                    EventExprProp::EventPhase => Value::Number(event.event_phase as i64),
-                    EventExprProp::TimeStamp => Value::Number(event.time_stamp_ms),
-                    EventExprProp::State => {
-                        event.state.as_ref().cloned().unwrap_or(Value::Undefined)
-                    }
-                    EventExprProp::OldState => event
-                        .old_state
-                        .as_ref()
-                        .map(|value| Value::String(value.clone()))
-                        .unwrap_or(Value::Undefined),
-                    EventExprProp::NewState => event
-                        .new_state
-                        .as_ref()
-                        .map(|value| Value::String(value.clone()))
-                        .unwrap_or(Value::Undefined),
-                };
-                Ok(value)
+                Err(Error::ScriptRuntime(format!(
+                    "unknown event variable: {}",
+                    event_var
+                )))
             }
             Expr::Neg(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
@@ -13199,6 +14006,8 @@ impl Harness {
                         Value::String(_) => "string",
                         Value::StringConstructor => "function",
                         Value::TypedArrayConstructor(_)
+                        | Value::BlobConstructor
+                        | Value::UrlConstructor
                         | Value::ArrayBufferConstructor
                         | Value::PromiseConstructor
                         | Value::MapConstructor
@@ -13214,6 +14023,7 @@ impl Harness {
                         | Value::Object(_)
                         | Value::Map(_)
                         | Value::Set(_)
+                        | Value::Blob(_)
                         | Value::Promise(_)
                         | Value::ArrayBuffer(_)
                         | Value::TypedArray(_)
@@ -13232,6 +14042,8 @@ impl Harness {
                             Value::String(_) => "string",
                             Value::StringConstructor => "function",
                             Value::TypedArrayConstructor(_)
+                            | Value::BlobConstructor
+                            | Value::UrlConstructor
                             | Value::ArrayBufferConstructor
                             | Value::PromiseConstructor
                             | Value::MapConstructor
@@ -13247,6 +14059,7 @@ impl Harness {
                             | Value::Object(_)
                             | Value::Map(_)
                             | Value::Set(_)
+                            | Value::Blob(_)
                             | Value::Promise(_)
                             | Value::ArrayBuffer(_)
                             | Value::TypedArray(_)
@@ -13323,6 +14136,34 @@ impl Harness {
                 }
             }
         }
+    }
+
+    fn collect_left_associative_binary_operands<'a>(
+        expr: &'a Expr,
+        op: BinaryOp,
+    ) -> Vec<&'a Expr> {
+        let mut right_operands = Vec::new();
+        let mut cursor = expr;
+        loop {
+            match cursor {
+                Expr::Binary {
+                    left,
+                    op: inner_op,
+                    right,
+                } if *inner_op == op => {
+                    right_operands.push(right.as_ref());
+                    cursor = left.as_ref();
+                }
+                _ => break,
+            }
+        }
+
+        let mut out = Vec::with_capacity(right_operands.len() + 1);
+        out.push(cursor);
+        while let Some(operand) = right_operands.pop() {
+            out.push(operand);
+        }
+        out
     }
 
     fn eval_binary(&self, op: &BinaryOp, left: &Value, right: &Value) -> Result<Value> {
@@ -13586,10 +14427,13 @@ impl Harness {
                 | Value::Promise(_)
                 | Value::Map(_)
                 | Value::Set(_)
+                | Value::Blob(_)
                 | Value::ArrayBuffer(_)
                 | Value::TypedArray(_)
                 | Value::StringConstructor
                 | Value::TypedArrayConstructor(_)
+                | Value::BlobConstructor
+                | Value::UrlConstructor
                 | Value::ArrayBufferConstructor
                 | Value::PromiseConstructor
                 | Value::MapConstructor
@@ -13623,10 +14467,13 @@ impl Harness {
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -13676,12 +14523,15 @@ impl Harness {
             (Value::Set(left), Value::Set(right)) => Rc::ptr_eq(left, right),
             (Value::Promise(left), Value::Promise(right)) => Rc::ptr_eq(left, right),
             (Value::TypedArray(left), Value::TypedArray(right)) => Rc::ptr_eq(left, right),
+            (Value::Blob(left), Value::Blob(right)) => Rc::ptr_eq(left, right),
             (Value::ArrayBuffer(left), Value::ArrayBuffer(right)) => Rc::ptr_eq(left, right),
             (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
             (Value::RegExp(left), Value::RegExp(right)) => Rc::ptr_eq(left, right),
             (Value::Symbol(left), Value::Symbol(right)) => left.id == right.id,
             (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
             (Value::FormData(left), Value::FormData(right)) => left == right,
+            (Value::Blob(_), Value::BlobConstructor) => true,
+            (Value::Object(left), Value::UrlConstructor) => Self::is_url_object(&left.borrow()),
             (Value::Object(left), Value::StringConstructor) => {
                 Self::string_wrapper_value_from_object(&left.borrow()).is_some()
             }
@@ -13733,9 +14583,12 @@ impl Harness {
             (Value::Set(l), Value::Set(r)) => Rc::ptr_eq(l, r),
             (Value::Promise(l), Value::Promise(r)) => Rc::ptr_eq(l, r),
             (Value::TypedArray(l), Value::TypedArray(r)) => Rc::ptr_eq(l, r),
+            (Value::Blob(l), Value::Blob(r)) => Rc::ptr_eq(l, r),
             (Value::ArrayBuffer(l), Value::ArrayBuffer(r)) => Rc::ptr_eq(l, r),
             (Value::StringConstructor, Value::StringConstructor) => true,
             (Value::TypedArrayConstructor(l), Value::TypedArrayConstructor(r)) => l == r,
+            (Value::BlobConstructor, Value::BlobConstructor) => true,
+            (Value::UrlConstructor, Value::UrlConstructor) => true,
             (Value::ArrayBufferConstructor, Value::ArrayBufferConstructor) => true,
             (Value::PromiseConstructor, Value::PromiseConstructor) => true,
             (Value::MapConstructor, Value::MapConstructor) => true,
@@ -14018,6 +14871,16 @@ impl Harness {
                             .unwrap_or(Value::Undefined));
                     }
                 }
+                if Self::is_url_search_params_object(&entries) {
+                    if key == "size" {
+                        let size =
+                            Self::url_search_params_pairs_from_object_entries(&entries).len();
+                        return Ok(Value::Number(size as i64));
+                    }
+                }
+                if Self::is_url_object(&entries) && key == "constructor" {
+                    return Ok(Value::UrlConstructor);
+                }
                 Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
             }
             Value::Promise(promise) => {
@@ -14055,6 +14918,15 @@ impl Harness {
                     Ok(Value::SetConstructor)
                 } else {
                     Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
+                }
+            }
+            Value::Blob(blob) => {
+                let blob = blob.borrow();
+                match key {
+                    "size" => Ok(Value::Number(blob.bytes.len() as i64)),
+                    "type" => Ok(Value::String(blob.mime_type.clone())),
+                    "constructor" => Ok(Value::BlobConstructor),
+                    _ => Ok(Value::Undefined),
                 }
             }
             Value::ArrayBuffer(_) => {
@@ -14100,6 +14972,61 @@ impl Harness {
         }
     }
 
+    fn object_property_from_named_value(
+        &self,
+        variable_name: &str,
+        value: &Value,
+        key: &str,
+    ) -> Result<Value> {
+        self.object_property_from_value(value, key)
+            .map_err(|err| match err {
+                Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                    Error::ScriptRuntime(format!("variable '{}' is not an object", variable_name))
+                }
+                other => other,
+            })
+    }
+
+    fn eval_event_prop_fallback(
+        &self,
+        event_var: &str,
+        value: &Value,
+        prop: EventExprProp,
+    ) -> Result<Value> {
+        let read =
+            |value: &Value, key: &str| self.object_property_from_named_value(event_var, value, key);
+        match prop {
+            EventExprProp::Type => read(value, "type"),
+            EventExprProp::Target => read(value, "target"),
+            EventExprProp::CurrentTarget => read(value, "currentTarget"),
+            EventExprProp::TargetName => {
+                let target = read(value, "target")?;
+                read(&target, "name")
+            }
+            EventExprProp::CurrentTargetName => {
+                let target = read(value, "currentTarget")?;
+                read(&target, "name")
+            }
+            EventExprProp::DefaultPrevented => read(value, "defaultPrevented"),
+            EventExprProp::IsTrusted => read(value, "isTrusted"),
+            EventExprProp::Bubbles => read(value, "bubbles"),
+            EventExprProp::Cancelable => read(value, "cancelable"),
+            EventExprProp::TargetId => {
+                let target = read(value, "target")?;
+                read(&target, "id")
+            }
+            EventExprProp::CurrentTargetId => {
+                let target = read(value, "currentTarget")?;
+                read(&target, "id")
+            }
+            EventExprProp::EventPhase => read(value, "eventPhase"),
+            EventExprProp::TimeStamp => read(value, "timeStamp"),
+            EventExprProp::State => read(value, "state"),
+            EventExprProp::OldState => read(value, "oldState"),
+            EventExprProp::NewState => read(value, "newState"),
+        }
+    }
+
     fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
         match prop {
             DomProp::Value => Some("value"),
@@ -14124,6 +15051,32 @@ impl Harness {
             DomProp::ScrollLeft => Some("scrollLeft"),
             DomProp::ScrollTop => Some("scrollTop"),
             DomProp::Title => Some("title"),
+            DomProp::AnchorAttributionSrc => Some("attributionSrc"),
+            DomProp::AnchorDownload => Some("download"),
+            DomProp::AnchorHash => Some("hash"),
+            DomProp::AnchorHost => Some("host"),
+            DomProp::AnchorHostname => Some("hostname"),
+            DomProp::AnchorHref => Some("href"),
+            DomProp::AnchorHreflang => Some("hreflang"),
+            DomProp::AnchorInterestForElement => Some("interestForElement"),
+            DomProp::AnchorOrigin => Some("origin"),
+            DomProp::AnchorPassword => Some("password"),
+            DomProp::AnchorPathname => Some("pathname"),
+            DomProp::AnchorPing => Some("ping"),
+            DomProp::AnchorPort => Some("port"),
+            DomProp::AnchorProtocol => Some("protocol"),
+            DomProp::AnchorReferrerPolicy => Some("referrerPolicy"),
+            DomProp::AnchorRel => Some("rel"),
+            DomProp::AnchorRelList => Some("relList"),
+            DomProp::AnchorSearch => Some("search"),
+            DomProp::AnchorTarget => Some("target"),
+            DomProp::AnchorText => Some("text"),
+            DomProp::AnchorType => Some("type"),
+            DomProp::AnchorUsername => Some("username"),
+            DomProp::AnchorCharset => Some("charset"),
+            DomProp::AnchorCoords => Some("coords"),
+            DomProp::AnchorRev => Some("rev"),
+            DomProp::AnchorShape => Some("shape"),
             DomProp::Dataset(_)
             | DomProp::Style(_)
             | DomProp::ActiveElement
@@ -14165,7 +15118,8 @@ impl Harness {
             | DomProp::ImagesLength
             | DomProp::LinksLength
             | DomProp::ScriptsLength
-            | DomProp::ChildrenLength => None,
+            | DomProp::ChildrenLength
+            | DomProp::AnchorRelListLength => None,
         }
     }
 
@@ -14561,6 +15515,8 @@ impl Harness {
             | Value::FormData(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -14578,6 +15534,7 @@ impl Harness {
             Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_) => Ok(Some("{}".to_string())),
             Value::Array(values) => {
@@ -14714,6 +15671,13 @@ impl Harness {
                     fixed_length: array.fixed_length,
                 }))))
             }
+            Value::Blob(blob) => {
+                let blob = blob.borrow();
+                Ok(Self::new_blob_value(
+                    blob.bytes.clone(),
+                    blob.mime_type.clone(),
+                ))
+            }
             Value::Map(map) => {
                 let map = map.borrow();
                 Ok(Value::Map(Rc::new(RefCell::new(MapValue {
@@ -14776,6 +15740,8 @@ impl Harness {
             | Value::Symbol(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -15330,10 +16296,13 @@ impl Harness {
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -15371,10 +16340,13 @@ impl Harness {
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -15536,10 +16508,13 @@ impl Harness {
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -16010,6 +16985,225 @@ impl Harness {
         }
     }
 
+    fn normalize_blob_type(raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.as_bytes().iter().all(|b| (0x20..=0x7e).contains(b)) {
+            trimmed.to_ascii_lowercase()
+        } else {
+            String::new()
+        }
+    }
+
+    fn new_blob_value(bytes: Vec<u8>, mime_type: String) -> Value {
+        Value::Blob(Rc::new(RefCell::new(BlobValue { bytes, mime_type })))
+    }
+
+    fn new_readable_stream_placeholder_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_READABLE_STREAM_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])
+    }
+
+    fn new_uint8_typed_array_from_bytes(bytes: &[u8]) -> Value {
+        let buffer = Rc::new(RefCell::new(ArrayBufferValue {
+            bytes: bytes.to_vec(),
+            max_byte_length: None,
+            detached: false,
+        }));
+        Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
+            kind: TypedArrayKind::Uint8,
+            buffer,
+            byte_offset: 0,
+            fixed_length: Some(bytes.len()),
+        })))
+    }
+
+    fn typed_array_raw_bytes(&self, array: &Rc<RefCell<TypedArrayValue>>) -> Vec<u8> {
+        let (buffer, byte_offset, byte_length) = {
+            let array = array.borrow();
+            (
+                array.buffer.clone(),
+                array.byte_offset,
+                array.observed_byte_length(),
+            )
+        };
+        if byte_length == 0 {
+            return Vec::new();
+        }
+        let buffer = buffer.borrow();
+        let start = byte_offset.min(buffer.byte_length());
+        let end = start.saturating_add(byte_length).min(buffer.byte_length());
+        if end <= start {
+            Vec::new()
+        } else {
+            buffer.bytes[start..end].to_vec()
+        }
+    }
+
+    fn blob_part_bytes(&self, part: &Value) -> Vec<u8> {
+        match part {
+            Value::Blob(blob) => blob.borrow().bytes.clone(),
+            Value::ArrayBuffer(buffer) => buffer.borrow().bytes.clone(),
+            Value::TypedArray(array) => self.typed_array_raw_bytes(array),
+            Value::String(text) => text.as_bytes().to_vec(),
+            other => other.as_string().into_bytes(),
+        }
+    }
+
+    fn eval_blob_construct(
+        &mut self,
+        parts: &Option<Box<Expr>>,
+        options: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "Blob constructor must be called with new".into(),
+            ));
+        }
+
+        let mut bytes = Vec::new();
+        if let Some(parts) = parts {
+            let parts_value = self.eval_expr(parts, env, event_param, event)?;
+            if !matches!(parts_value, Value::Undefined | Value::Null) {
+                let items = self
+                    .array_like_values_from_value(&parts_value)
+                    .map_err(|_| {
+                        Error::ScriptRuntime(
+                            "Blob constructor first argument must be an array-like or iterable"
+                                .into(),
+                        )
+                    })?;
+                for item in items {
+                    bytes.extend(self.blob_part_bytes(&item));
+                }
+            }
+        }
+
+        let mut mime_type = String::new();
+        if let Some(options) = options {
+            let options = self.eval_expr(options, env, event_param, event)?;
+            match options {
+                Value::Undefined | Value::Null => {}
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::object_get_entry(&entries, "type") {
+                        mime_type = Self::normalize_blob_type(&value.as_string());
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "Blob options must be an object".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self::new_blob_value(bytes, mime_type))
+    }
+
+    fn eval_blob_member_call(
+        &mut self,
+        blob: &Rc<RefCell<BlobValue>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "text" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Blob.text does not take arguments".into(),
+                    ));
+                }
+                let text = String::from_utf8_lossy(&blob.borrow().bytes).to_string();
+                let promise = self.new_pending_promise();
+                self.promise_resolve(&promise, Value::String(text))?;
+                Ok(Some(Value::Promise(promise)))
+            }
+            "arrayBuffer" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Blob.arrayBuffer does not take arguments".into(),
+                    ));
+                }
+                let bytes = blob.borrow().bytes.clone();
+                let promise = self.new_pending_promise();
+                self.promise_resolve(
+                    &promise,
+                    Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+                        bytes,
+                        max_byte_length: None,
+                        detached: false,
+                    }))),
+                )?;
+                Ok(Some(Value::Promise(promise)))
+            }
+            "bytes" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Blob.bytes does not take arguments".into(),
+                    ));
+                }
+                let bytes = blob.borrow().bytes.clone();
+                let promise = self.new_pending_promise();
+                self.promise_resolve(&promise, Self::new_uint8_typed_array_from_bytes(&bytes))?;
+                Ok(Some(Value::Promise(promise)))
+            }
+            "stream" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Blob.stream does not take arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_readable_stream_placeholder_value()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_typed_array_member_call(
+        &mut self,
+        array: &Rc<RefCell<TypedArrayValue>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "join" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.join supports at most one argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let separator = if let Some(first) = args.first() {
+                    if matches!(first, Value::Undefined) {
+                        ",".to_string()
+                    } else {
+                        first.as_string()
+                    }
+                } else {
+                    ",".to_string()
+                };
+                let joined = self
+                    .typed_array_snapshot(array)?
+                    .into_iter()
+                    .map(|value| value.as_string())
+                    .collect::<Vec<_>>()
+                    .join(&separator);
+                Ok(Some(Value::String(joined)))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn to_non_negative_usize(value: &Value, label: &str) -> Result<usize> {
         let n = Self::value_to_i64(value);
         if n < 0 {
@@ -16040,6 +17234,14 @@ impl Harness {
             Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if Self::is_url_search_params_object(&entries) {
+                    return Ok(Self::url_search_params_pairs_from_object_entries(&entries)
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Self::new_array_value(vec![Value::String(name), Value::String(value)])
+                        })
+                        .collect::<Vec<_>>());
+                }
                 let length_value =
                     Self::object_get_entry(&entries, "length").unwrap_or(Value::Number(0));
                 let length = Self::to_non_negative_usize(&length_value, "array-like length")?;
@@ -16732,6 +17934,1088 @@ impl Harness {
         }
     }
 
+    fn is_url_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_URL_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn url_object_id_from_entries(entries: &[(String, Value)]) -> Option<usize> {
+        match Self::object_get_entry(entries, INTERNAL_URL_OBJECT_ID_KEY) {
+            Some(Value::Number(id)) if id > 0 => usize::try_from(id).ok(),
+            _ => None,
+        }
+    }
+
+    fn normalize_url_parts_for_serialization(parts: &mut LocationParts) {
+        parts.scheme = parts.scheme.to_ascii_lowercase();
+        if parts.has_authority {
+            parts.hostname = parts.hostname.to_ascii_lowercase();
+            let path = if parts.pathname.is_empty() {
+                "/".to_string()
+            } else if parts.pathname.starts_with('/') {
+                parts.pathname.clone()
+            } else {
+                format!("/{}", parts.pathname)
+            };
+            parts.pathname = normalize_pathname(&path);
+            parts.pathname = encode_uri_like_preserving_percent(&parts.pathname, false);
+        } else {
+            parts.opaque_path = encode_uri_like_preserving_percent(&parts.opaque_path, false);
+        }
+
+        if !parts.search.is_empty() {
+            let body = parts.search.strip_prefix('?').unwrap_or(parts.search.as_str());
+            parts.search = format!("?{}", encode_uri_like_preserving_percent(body, false));
+        }
+        if !parts.hash.is_empty() {
+            let body = parts.hash.strip_prefix('#').unwrap_or(parts.hash.as_str());
+            parts.hash = format!("#{}", encode_uri_like_preserving_percent(body, false));
+        }
+    }
+
+    fn resolve_url_against_base_parts(input: &str, base: &LocationParts) -> String {
+        let input = input.trim();
+        if input.is_empty() {
+            return base.href();
+        }
+
+        if input.starts_with("//") {
+            return LocationParts::parse(&format!("{}{}", base.protocol(), input))
+                .map(|parts| parts.href())
+                .unwrap_or_else(|| input.to_string());
+        }
+
+        let mut next = base.clone();
+        if input.starts_with('#') {
+            next.hash = ensure_hash_prefix(input);
+            return next.href();
+        }
+
+        if input.starts_with('?') {
+            next.search = ensure_search_prefix(input);
+            next.hash.clear();
+            return next.href();
+        }
+
+        if input.starts_with('/') {
+            if next.has_authority {
+                next.pathname = normalize_pathname(input);
+            } else {
+                next.opaque_path = input.to_string();
+            }
+            next.search.clear();
+            next.hash.clear();
+            return next.href();
+        }
+
+        let mut relative = input;
+        let mut next_search = String::new();
+        let mut next_hash = String::new();
+        if let Some(hash_pos) = relative.find('#') {
+            next_hash = ensure_hash_prefix(&relative[hash_pos + 1..]);
+            relative = &relative[..hash_pos];
+        }
+        if let Some(search_pos) = relative.find('?') {
+            next_search = ensure_search_prefix(&relative[search_pos + 1..]);
+            relative = &relative[..search_pos];
+        }
+
+        if next.has_authority {
+            let base_dir = if let Some((prefix, _)) = next.pathname.rsplit_once('/') {
+                if prefix.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("{prefix}/")
+                }
+            } else {
+                "/".to_string()
+            };
+            next.pathname = normalize_pathname(&format!("{base_dir}{relative}"));
+        } else {
+            next.opaque_path = relative.to_string();
+        }
+        next.search = next_search;
+        next.hash = next_hash;
+        next.href()
+    }
+
+    fn resolve_url_string(input: &str, base: Option<&str>) -> Option<String> {
+        let input = input.trim();
+        if let Some(mut absolute) = LocationParts::parse(input) {
+            Self::normalize_url_parts_for_serialization(&mut absolute);
+            return Some(absolute.href());
+        }
+
+        let base = base?;
+        let mut base_parts = LocationParts::parse(base)?;
+        Self::normalize_url_parts_for_serialization(&mut base_parts);
+        let resolved = Self::resolve_url_against_base_parts(input, &base_parts);
+        let mut resolved_parts = LocationParts::parse(&resolved)?;
+        Self::normalize_url_parts_for_serialization(&mut resolved_parts);
+        Some(resolved_parts.href())
+    }
+
+    fn sync_url_object_entries_from_parts(
+        &self,
+        entries: &mut Vec<(String, Value)>,
+        parts: &LocationParts,
+    ) {
+        let href = parts.href();
+        Self::object_set_entry(
+            entries,
+            INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
+            Value::String(href.clone()),
+        );
+        Self::object_set_entry(entries, "href".to_string(), Value::String(href));
+        Self::object_set_entry(
+            entries,
+            "protocol".to_string(),
+            Value::String(parts.protocol()),
+        );
+        Self::object_set_entry(entries, "host".to_string(), Value::String(parts.host()));
+        Self::object_set_entry(
+            entries,
+            "hostname".to_string(),
+            Value::String(parts.hostname.clone()),
+        );
+        Self::object_set_entry(entries, "port".to_string(), Value::String(parts.port.clone()));
+        Self::object_set_entry(
+            entries,
+            "pathname".to_string(),
+            Value::String(if parts.has_authority {
+                parts.pathname.clone()
+            } else {
+                parts.opaque_path.clone()
+            }),
+        );
+        Self::object_set_entry(
+            entries,
+            "search".to_string(),
+            Value::String(parts.search.clone()),
+        );
+        Self::object_set_entry(entries, "hash".to_string(), Value::String(parts.hash.clone()));
+        Self::object_set_entry(
+            entries,
+            "username".to_string(),
+            Value::String(parts.username.clone()),
+        );
+        Self::object_set_entry(
+            entries,
+            "password".to_string(),
+            Value::String(parts.password.clone()),
+        );
+        Self::object_set_entry(entries, "origin".to_string(), Value::String(parts.origin()));
+
+        let owner_id = Self::url_object_id_from_entries(entries);
+        let pairs = parse_url_search_params_pairs_from_query_string(&parts.search).unwrap_or_default();
+        if let Some(Value::Object(search_params_object)) = Self::object_get_entry(entries, "searchParams")
+        {
+            let mut search_params_entries = search_params_object.borrow_mut();
+            Self::set_url_search_params_pairs(&mut search_params_entries, &pairs);
+            if let Some(owner_id) = owner_id {
+                Self::object_set_entry(
+                    &mut search_params_entries,
+                    INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY.to_string(),
+                    Value::Number(owner_id as i64),
+                );
+            }
+        } else {
+            Self::object_set_entry(
+                entries,
+                "searchParams".to_string(),
+                self.new_url_search_params_value(pairs, owner_id),
+            );
+        }
+    }
+
+    fn new_url_value_from_href(&mut self, href: &str) -> Result<Value> {
+        let mut parts = LocationParts::parse(href)
+            .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+        Self::normalize_url_parts_for_serialization(&mut parts);
+        let id = self.next_url_object_id;
+        self.next_url_object_id = self.next_url_object_id.saturating_add(1);
+
+        let mut entries = vec![
+            (INTERNAL_URL_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (INTERNAL_URL_OBJECT_ID_KEY.to_string(), Value::Number(id as i64)),
+        ];
+        self.sync_url_object_entries_from_parts(&mut entries, &parts);
+        let object = Rc::new(RefCell::new(entries));
+        self.url_objects.insert(id, object.clone());
+        Ok(Value::Object(object))
+    }
+
+    fn set_url_object_property(
+        &mut self,
+        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        if matches!(key, "origin" | "searchParams") {
+            return Err(Error::ScriptRuntime(format!("URL.{key} is read-only")));
+        }
+
+        let current_href = {
+            let entries = object.borrow();
+            Self::object_get_entry(&entries, "href")
+                .map(|value| value.as_string())
+                .unwrap_or_default()
+        };
+        let mut parts = LocationParts::parse(&current_href)
+            .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+        match key {
+            "href" => {
+                let href = Self::resolve_url_string(&value.as_string(), None)
+                    .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+                parts = LocationParts::parse(&href)
+                    .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+            }
+            "protocol" => {
+                let protocol = value.as_string();
+                let protocol = protocol.trim_end_matches(':').to_ascii_lowercase();
+                if !is_valid_url_scheme(&protocol) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "invalid URL.protocol value: {}",
+                        value.as_string()
+                    )));
+                }
+                parts.scheme = protocol;
+            }
+            "host" => {
+                let host = value.as_string();
+                let (hostname, port) = split_hostname_and_port(host.trim());
+                parts.hostname = hostname;
+                parts.port = port;
+            }
+            "hostname" => {
+                parts.hostname = value.as_string();
+            }
+            "port" => {
+                parts.port = value.as_string();
+            }
+            "pathname" => {
+                let raw = value.as_string();
+                if parts.has_authority {
+                    let normalized_input = if raw.starts_with('/') {
+                        raw
+                    } else {
+                        format!("/{raw}")
+                    };
+                    parts.pathname = normalize_pathname(&normalized_input);
+                } else {
+                    parts.opaque_path = raw;
+                }
+            }
+            "search" => {
+                parts.search = ensure_search_prefix(&value.as_string());
+            }
+            "hash" => {
+                parts.hash = ensure_hash_prefix(&value.as_string());
+            }
+            "username" => {
+                parts.username = value.as_string();
+            }
+            "password" => {
+                parts.password = value.as_string();
+            }
+            _ => {
+                Self::object_set_entry(&mut object.borrow_mut(), key.to_string(), value);
+                return Ok(());
+            }
+        }
+
+        Self::normalize_url_parts_for_serialization(&mut parts);
+        self.sync_url_object_entries_from_parts(&mut object.borrow_mut(), &parts);
+        Ok(())
+    }
+
+    fn sync_url_search_params_owner(
+        &mut self,
+        object: &Rc<RefCell<Vec<(String, Value)>>>,
+    ) {
+        let (owner_id, pairs) = {
+            let entries = object.borrow();
+            let owner_id = match Self::object_get_entry(&entries, INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY)
+            {
+                Some(Value::Number(id)) if id > 0 => usize::try_from(id).ok(),
+                _ => None,
+            };
+            let pairs = Self::url_search_params_pairs_from_object_entries(&entries);
+            (owner_id, pairs)
+        };
+        let Some(owner_id) = owner_id else {
+            return;
+        };
+        let Some(url_object) = self.url_objects.get(&owner_id).cloned() else {
+            return;
+        };
+
+        let current_href = {
+            let entries = url_object.borrow();
+            Self::object_get_entry(&entries, "href")
+                .map(|value| value.as_string())
+                .unwrap_or_default()
+        };
+        let Some(mut parts) = LocationParts::parse(&current_href) else {
+            return;
+        };
+
+        let serialized = serialize_url_search_params_pairs(&pairs);
+        parts.search = if serialized.is_empty() {
+            String::new()
+        } else {
+            format!("?{serialized}")
+        };
+        Self::normalize_url_parts_for_serialization(&mut parts);
+        self.sync_url_object_entries_from_parts(&mut url_object.borrow_mut(), &parts);
+    }
+
+    fn is_url_search_params_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn url_search_params_pairs_to_value(pairs: &[(String, String)]) -> Value {
+        Self::new_array_value(
+            pairs
+                .iter()
+                .map(|(name, value)| {
+                    Self::new_array_value(vec![
+                        Value::String(name.clone()),
+                        Value::String(value.clone()),
+                    ])
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn url_search_params_pairs_from_object_entries(
+        entries: &[(String, Value)],
+    ) -> Vec<(String, String)> {
+        let Some(Value::Array(list)) =
+            Self::object_get_entry(entries, INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY)
+        else {
+            return Vec::new();
+        };
+        let snapshot = list.borrow().clone();
+        let mut pairs = Vec::new();
+        for item in snapshot {
+            let Value::Array(pair) = item else {
+                continue;
+            };
+            let pair = pair.borrow();
+            if pair.is_empty() {
+                continue;
+            }
+            let name = pair[0].as_string();
+            let value = pair.get(1).map(Value::as_string).unwrap_or_default();
+            pairs.push((name, value));
+        }
+        pairs
+    }
+
+    fn set_url_search_params_pairs(entries: &mut Vec<(String, Value)>, pairs: &[(String, String)]) {
+        Self::object_set_entry(
+            entries,
+            INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY.to_string(),
+            Self::url_search_params_pairs_to_value(pairs),
+        );
+    }
+
+    fn new_url_search_params_value(
+        &self,
+        pairs: Vec<(String, String)>,
+        owner_id: Option<usize>,
+    ) -> Value {
+        let mut entries = vec![(
+            INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )];
+        if let Some(owner_id) = owner_id {
+            entries.push((
+                INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY.to_string(),
+                Value::Number(owner_id as i64),
+            ));
+        }
+        Self::set_url_search_params_pairs(&mut entries, &pairs);
+        Self::new_object_value(entries)
+    }
+
+    fn resolve_url_search_params_object_from_env(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Result<Rc<RefCell<Vec<(String, Value)>>>> {
+        match env.get(target) {
+            Some(Value::Object(entries)) => {
+                if Self::is_url_search_params_object(&entries.borrow()) {
+                    Ok(entries.clone())
+                } else {
+                    Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a URLSearchParams",
+                        target
+                    )))
+                }
+            }
+            Some(_) => Err(Error::ScriptRuntime(format!(
+                "variable '{}' is not a URLSearchParams",
+                target
+            ))),
+            None => Err(Error::ScriptRuntime(format!(
+                "unknown variable: {}",
+                target
+            ))),
+        }
+    }
+
+    fn url_search_params_pairs_from_init_value(
+        &self,
+        init: &Value,
+    ) -> Result<Vec<(String, String)>> {
+        match init {
+            Value::Undefined | Value::Null => Ok(Vec::new()),
+            Value::String(text) => parse_url_search_params_pairs_from_query_string(text),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if Self::is_url_search_params_object(&entries) {
+                    Ok(Self::url_search_params_pairs_from_object_entries(&entries))
+                } else {
+                    let mut pairs = Vec::new();
+                    for (name, value) in entries.iter() {
+                        if Self::is_internal_object_key(name) {
+                            continue;
+                        }
+                        pairs.push((name.clone(), value.as_string()));
+                    }
+                    Ok(pairs)
+                }
+            }
+            Value::Array(_) | Value::Map(_) | Value::Set(_) | Value::TypedArray(_) => {
+                let iterable = self.array_like_values_from_value(init)?;
+                let mut pairs = Vec::new();
+                for entry in iterable {
+                    let pair = self.array_like_values_from_value(&entry).map_err(|_| {
+                        Error::ScriptRuntime(
+                            "URLSearchParams iterable values must be [name, value] pairs".into(),
+                        )
+                    })?;
+                    if pair.len() < 2 {
+                        return Err(Error::ScriptRuntime(
+                            "URLSearchParams iterable values must be [name, value] pairs".into(),
+                        ));
+                    }
+                    pairs.push((pair[0].as_string(), pair[1].as_string()));
+                }
+                Ok(pairs)
+            }
+            other => parse_url_search_params_pairs_from_query_string(&other.as_string()),
+        }
+    }
+
+    fn eval_url_construct(
+        &mut self,
+        input: &Option<Box<Expr>>,
+        base: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "URL constructor must be called with new".into(),
+            ));
+        }
+
+        let input = input
+            .as_ref()
+            .map(|expr| self.eval_expr(expr, env, event_param, event))
+            .transpose()?
+            .unwrap_or(Value::Undefined)
+            .as_string();
+        let base = base
+            .as_ref()
+            .map(|expr| self.eval_expr(expr, env, event_param, event))
+            .transpose()?
+            .map(|value| value.as_string());
+
+        let href = Self::resolve_url_string(&input, base.as_deref())
+            .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+        self.new_url_value_from_href(&href)
+    }
+
+    fn eval_url_static_method(
+        &mut self,
+        method: UrlStaticMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        match method {
+            UrlStaticMethod::CanParse => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.canParse requires a URL argument and optional base".into(),
+                    ));
+                }
+                let input = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                let base = if args.len() == 2 {
+                    Some(self.eval_expr(&args[1], env, event_param, event)?.as_string())
+                } else {
+                    None
+                };
+                Ok(Value::Bool(
+                    Self::resolve_url_string(&input, base.as_deref()).is_some(),
+                ))
+            }
+            UrlStaticMethod::Parse => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.parse requires a URL argument and optional base".into(),
+                    ));
+                }
+                let input = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                let base = if args.len() == 2 {
+                    Some(self.eval_expr(&args[1], env, event_param, event)?.as_string())
+                } else {
+                    None
+                };
+                if let Some(href) = Self::resolve_url_string(&input, base.as_deref()) {
+                    self.new_url_value_from_href(&href)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            UrlStaticMethod::CreateObjectUrl => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.createObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                let value = self.eval_expr(&args[0], env, event_param, event)?;
+                let Value::Blob(blob) = value else {
+                    return Err(Error::ScriptRuntime(
+                        "URL.createObjectURL requires a Blob argument".into(),
+                    ));
+                };
+                let object_url = format!("blob:bt-{}", self.next_blob_url_id);
+                self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
+                self.blob_url_objects.insert(object_url.clone(), blob);
+                Ok(Value::String(object_url))
+            }
+            UrlStaticMethod::RevokeObjectUrl => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.revokeObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                let object_url = self.eval_expr(&args[0], env, event_param, event)?.as_string();
+                self.blob_url_objects.remove(&object_url);
+                Ok(Value::Undefined)
+            }
+        }
+    }
+
+    fn eval_url_static_member_call_from_values(
+        &mut self,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "canParse" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.canParse requires a URL argument and optional base".into(),
+                    ));
+                }
+                let input = args[0].as_string();
+                let base = args.get(1).map(Value::as_string);
+                Ok(Some(Value::Bool(
+                    Self::resolve_url_string(&input, base.as_deref()).is_some(),
+                )))
+            }
+            "parse" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.parse requires a URL argument and optional base".into(),
+                    ));
+                }
+                let input = args[0].as_string();
+                let base = args.get(1).map(Value::as_string);
+                if let Some(href) = Self::resolve_url_string(&input, base.as_deref()) {
+                    Ok(Some(self.new_url_value_from_href(&href)?))
+                } else {
+                    Ok(Some(Value::Null))
+                }
+            }
+            "createObjectURL" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.createObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                let Value::Blob(blob) = args[0].clone() else {
+                    return Err(Error::ScriptRuntime(
+                        "URL.createObjectURL requires a Blob argument".into(),
+                    ));
+                };
+                let object_url = format!("blob:bt-{}", self.next_blob_url_id);
+                self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
+                self.blob_url_objects.insert(object_url.clone(), blob);
+                Ok(Some(Value::String(object_url)))
+            }
+            "revokeObjectURL" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URL.revokeObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                self.blob_url_objects.remove(&args[0].as_string());
+                Ok(Some(Value::Undefined))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_url_member_call(
+        &self,
+        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "toString" | "toJSON" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(format!(
+                        "URL.{member} does not take arguments"
+                    )));
+                }
+                let href = {
+                    let entries = object.borrow();
+                    Self::object_get_entry(&entries, "href")
+                        .map(|value| value.as_string())
+                        .unwrap_or_default()
+                };
+                Ok(Some(Value::String(href)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_url_search_params_member_call(
+        &mut self,
+        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        member: &str,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        match member {
+            "append" => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.append requires exactly two arguments".into(),
+                    ));
+                }
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&entries);
+                    pairs.push((args[0].as_string(), args[1].as_string()));
+                    Self::set_url_search_params_pairs(&mut entries, &pairs);
+                }
+                self.sync_url_search_params_owner(object);
+                Ok(Some(Value::Undefined))
+            }
+            "delete" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.delete requires one or two arguments".into(),
+                    ));
+                }
+                let name = args[0].as_string();
+                let value = args.get(1).map(Value::as_string);
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&entries);
+                    pairs.retain(|(entry_name, entry_value)| {
+                        if entry_name != &name {
+                            return true;
+                        }
+                        if let Some(value) = value.as_ref() {
+                            entry_value != value
+                        } else {
+                            false
+                        }
+                    });
+                    Self::set_url_search_params_pairs(&mut entries, &pairs);
+                }
+                self.sync_url_search_params_owner(object);
+                Ok(Some(Value::Undefined))
+            }
+            "get" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.get requires exactly one argument".into(),
+                    ));
+                }
+                let name = args[0].as_string();
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                let value = pairs
+                    .into_iter()
+                    .find_map(|(entry_name, entry_value)| (entry_name == name).then_some(entry_value))
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
+                Ok(Some(value))
+            }
+            "getAll" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.getAll requires exactly one argument".into(),
+                    ));
+                }
+                let name = args[0].as_string();
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Some(Self::new_array_value(
+                    pairs
+                        .into_iter()
+                        .filter_map(|(entry_name, entry_value)| {
+                            (entry_name == name).then(|| Value::String(entry_value))
+                        })
+                        .collect::<Vec<_>>(),
+                )))
+            }
+            "has" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.has requires one or two arguments".into(),
+                    ));
+                }
+                let name = args[0].as_string();
+                let value = args.get(1).map(Value::as_string);
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                let has = pairs.into_iter().any(|(entry_name, entry_value)| {
+                    if entry_name != name {
+                        return false;
+                    }
+                    if let Some(value) = value.as_ref() {
+                        &entry_value == value
+                    } else {
+                        true
+                    }
+                });
+                Ok(Some(Value::Bool(has)))
+            }
+            "set" => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.set requires exactly two arguments".into(),
+                    ));
+                }
+                let name = args[0].as_string();
+                let value = args[1].as_string();
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&entries);
+                    if let Some(first_match) =
+                        pairs.iter().position(|(entry_name, _)| entry_name == &name)
+                    {
+                        pairs[first_match].1 = value;
+                        let mut index = pairs.len();
+                        while index > 0 {
+                            index -= 1;
+                            if index != first_match && pairs[index].0 == name {
+                                pairs.remove(index);
+                            }
+                        }
+                    } else {
+                        pairs.push((name, value));
+                    }
+                    Self::set_url_search_params_pairs(&mut entries, &pairs);
+                }
+                self.sync_url_search_params_owner(object);
+                Ok(Some(Value::Undefined))
+            }
+            "entries" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.entries does not take arguments".into(),
+                    ));
+                }
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Some(Self::new_array_value(
+                    pairs
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Self::new_array_value(vec![Value::String(name), Value::String(value)])
+                        })
+                        .collect::<Vec<_>>(),
+                )))
+            }
+            "keys" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.keys does not take arguments".into(),
+                    ));
+                }
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Some(Self::new_array_value(
+                    pairs
+                        .into_iter()
+                        .map(|(name, _)| Value::String(name))
+                        .collect::<Vec<_>>(),
+                )))
+            }
+            "values" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.values does not take arguments".into(),
+                    ));
+                }
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Some(Self::new_array_value(
+                    pairs
+                        .into_iter()
+                        .map(|(_, value)| Value::String(value))
+                        .collect::<Vec<_>>(),
+                )))
+            }
+            "sort" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.sort does not take arguments".into(),
+                    ));
+                }
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&entries);
+                    pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                    Self::set_url_search_params_pairs(&mut entries, &pairs);
+                }
+                self.sync_url_search_params_owner(object);
+                Ok(Some(Value::Undefined))
+            }
+            "forEach" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                for (entry_name, entry_value) in snapshot {
+                    let _ = self.execute_callback_value(
+                        &callback,
+                        &[
+                            Value::String(entry_value),
+                            Value::String(entry_name),
+                            Value::Object(object.clone()),
+                        ],
+                        event,
+                    )?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.toString does not take arguments".into(),
+                    ));
+                }
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Some(Value::String(serialize_url_search_params_pairs(&pairs))))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_url_search_params_construct(
+        &mut self,
+        init: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "URLSearchParams constructor must be called with new".into(),
+            ));
+        }
+        let init = init
+            .as_ref()
+            .map(|expr| self.eval_expr(expr, env, event_param, event))
+            .transpose()?
+            .unwrap_or(Value::Undefined);
+        let pairs = self.url_search_params_pairs_from_init_value(&init)?;
+        Ok(self.new_url_search_params_value(pairs, None))
+    }
+
+    fn eval_url_search_params_method(
+        &mut self,
+        target: &str,
+        method: UrlSearchParamsInstanceMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if matches!(method, UrlSearchParamsInstanceMethod::GetAll) {
+            match env.get(target) {
+                Some(Value::FormData(entries)) => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "FormData.getAll requires exactly one argument".into(),
+                        ));
+                    }
+                    let name = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
+                    return Ok(Self::new_array_value(
+                        entries
+                            .iter()
+                            .filter_map(|(entry_name, entry_value)| {
+                                (entry_name == &name).then(|| Value::String(entry_value.clone()))
+                            })
+                            .collect::<Vec<_>>(),
+                    ));
+                }
+                Some(Value::Object(entries)) => {
+                    if !Self::is_url_search_params_object(&entries.borrow()) {
+                        return Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a FormData instance",
+                            target
+                        )));
+                    }
+                }
+                Some(_) => {
+                    return Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a FormData instance",
+                        target
+                    )));
+                }
+                None => {
+                    return Err(Error::ScriptRuntime(format!(
+                        "unknown FormData variable: {}",
+                        target
+                    )));
+                }
+            }
+        }
+
+        let object = self.resolve_url_search_params_object_from_env(env, target)?;
+        match method {
+            UrlSearchParamsInstanceMethod::Append => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.append requires exactly two arguments".into(),
+                    ));
+                }
+                let name = self
+                    .eval_expr(&args[0], env, event_param, event)?
+                    .as_string();
+                let value = self
+                    .eval_expr(&args[1], env, event_param, event)?
+                    .as_string();
+                {
+                    let mut object_ref = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&object_ref);
+                    pairs.push((name, value));
+                    Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                }
+                self.sync_url_search_params_owner(&object);
+                Ok(Value::Undefined)
+            }
+            UrlSearchParamsInstanceMethod::Delete => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.delete requires one or two arguments".into(),
+                    ));
+                }
+                let name = self
+                    .eval_expr(&args[0], env, event_param, event)?
+                    .as_string();
+                let value = if args.len() == 2 {
+                    Some(
+                        self.eval_expr(&args[1], env, event_param, event)?
+                            .as_string(),
+                    )
+                } else {
+                    None
+                };
+                {
+                    let mut object_ref = object.borrow_mut();
+                    let mut pairs = Self::url_search_params_pairs_from_object_entries(&object_ref);
+                    pairs.retain(|(entry_name, entry_value)| {
+                        if entry_name != &name {
+                            return true;
+                        }
+                        if let Some(value) = value.as_ref() {
+                            entry_value != value
+                        } else {
+                            false
+                        }
+                    });
+                    Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                }
+                self.sync_url_search_params_owner(&object);
+                Ok(Value::Undefined)
+            }
+            UrlSearchParamsInstanceMethod::GetAll => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.getAll requires exactly one argument".into(),
+                    ));
+                }
+                let name = self
+                    .eval_expr(&args[0], env, event_param, event)?
+                    .as_string();
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                Ok(Self::new_array_value(
+                    pairs
+                        .into_iter()
+                        .filter_map(|(entry_name, entry_value)| {
+                            (entry_name == name).then(|| Value::String(entry_value))
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            UrlSearchParamsInstanceMethod::Has => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "URLSearchParams.has requires one or two arguments".into(),
+                    ));
+                }
+                let name = self
+                    .eval_expr(&args[0], env, event_param, event)?
+                    .as_string();
+                let value = if args.len() == 2 {
+                    Some(
+                        self.eval_expr(&args[1], env, event_param, event)?
+                            .as_string(),
+                    )
+                } else {
+                    None
+                };
+                let pairs = Self::url_search_params_pairs_from_object_entries(&object.borrow());
+                let has = pairs.into_iter().any(|(entry_name, entry_value)| {
+                    if entry_name != name {
+                        return false;
+                    }
+                    if let Some(value) = value.as_ref() {
+                        &entry_value == value
+                    } else {
+                        true
+                    }
+                });
+                Ok(Value::Bool(has))
+            }
+        }
+    }
+
     fn eval_map_construct(
         &mut self,
         iterable: &Option<Box<Expr>>,
@@ -16946,6 +19230,98 @@ impl Harness {
                     target
                 ))),
             };
+        }
+
+        if let Value::Object(entries) = target_value {
+            let entries = entries.clone();
+            if Self::is_url_search_params_object(&entries.borrow()) {
+                return match method {
+                    MapInstanceMethod::Get => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "URLSearchParams.get requires exactly one argument".into(),
+                            ));
+                        }
+                        let name = self
+                            .eval_expr(&args[0], env, event_param, event)?
+                            .as_string();
+                        let pairs =
+                            Self::url_search_params_pairs_from_object_entries(&entries.borrow());
+                        let value = pairs
+                            .into_iter()
+                            .find_map(|(entry_name, entry_value)| {
+                                (entry_name == name).then_some(entry_value)
+                            })
+                            .map(Value::String)
+                            .unwrap_or(Value::Null);
+                        Ok(value)
+                    }
+                    MapInstanceMethod::Has => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "URLSearchParams.has requires exactly one argument".into(),
+                            ));
+                        }
+                        let name = self
+                            .eval_expr(&args[0], env, event_param, event)?
+                            .as_string();
+                        let pairs =
+                            Self::url_search_params_pairs_from_object_entries(&entries.borrow());
+                        Ok(Value::Bool(
+                            pairs.into_iter().any(|(entry_name, _)| entry_name == name),
+                        ))
+                    }
+                    MapInstanceMethod::Delete => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "URLSearchParams.delete requires exactly one argument".into(),
+                            ));
+                        }
+                        let name = self
+                            .eval_expr(&args[0], env, event_param, event)?
+                            .as_string();
+                        {
+                            let mut object_ref = entries.borrow_mut();
+                            let mut pairs =
+                                Self::url_search_params_pairs_from_object_entries(&object_ref);
+                            pairs.retain(|(entry_name, _)| entry_name != &name);
+                            Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                        }
+                        self.sync_url_search_params_owner(&entries);
+                        Ok(Value::Undefined)
+                    }
+                    MapInstanceMethod::ForEach => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "URLSearchParams.forEach requires a callback and optional thisArg"
+                                    .into(),
+                            ));
+                        }
+                        let callback = self.eval_expr(&args[0], env, event_param, event)?;
+                        if args.len() == 2 {
+                            let _ = self.eval_expr(&args[1], env, event_param, event)?;
+                        }
+                        let snapshot =
+                            Self::url_search_params_pairs_from_object_entries(&entries.borrow());
+                        for (entry_name, entry_value) in snapshot {
+                            let _ = self.execute_callback_value(
+                                &callback,
+                                &[
+                                    Value::String(entry_value),
+                                    Value::String(entry_name),
+                                    Value::Object(entries.clone()),
+                                ],
+                                event,
+                            )?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a Map",
+                        target
+                    ))),
+                };
+            }
         }
 
         let Value::Map(map) = target_value else {
@@ -17290,6 +19666,7 @@ impl Harness {
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX)
     }
 
     fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
@@ -18414,6 +20791,121 @@ impl Harness {
                         target
                     ))),
                 };
+            }
+
+            if let Value::Object(entries) = target_value {
+                if Self::is_url_search_params_object(&entries.borrow()) {
+                    return match method {
+                        TypedArrayInstanceMethod::Set => {
+                            if args.len() != 2 {
+                                return Err(Error::ScriptRuntime(
+                                    "URLSearchParams.set requires exactly two arguments".into(),
+                                ));
+                            }
+                            let name = self
+                                .eval_expr(&args[0], env, event_param, event)?
+                                .as_string();
+                            let value = self
+                                .eval_expr(&args[1], env, event_param, event)?
+                                .as_string();
+                            {
+                                let mut object_ref = entries.borrow_mut();
+                                let mut pairs =
+                                    Self::url_search_params_pairs_from_object_entries(&object_ref);
+                                if let Some(first_match) =
+                                    pairs.iter().position(|(entry_name, _)| entry_name == &name)
+                                {
+                                    pairs[first_match].1 = value;
+                                    let mut index = pairs.len();
+                                    while index > 0 {
+                                        index -= 1;
+                                        if index != first_match && pairs[index].0 == name {
+                                            pairs.remove(index);
+                                        }
+                                    }
+                                } else {
+                                    pairs.push((name, value));
+                                }
+                                Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                            }
+                            self.sync_url_search_params_owner(entries);
+                            Ok(Value::Undefined)
+                        }
+                        TypedArrayInstanceMethod::Entries => {
+                            if !args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "URLSearchParams.entries does not take arguments".into(),
+                                ));
+                            }
+                            let pairs = Self::url_search_params_pairs_from_object_entries(
+                                &entries.borrow(),
+                            );
+                            Ok(Self::new_array_value(
+                                pairs
+                                    .into_iter()
+                                    .map(|(name, value)| {
+                                        Self::new_array_value(vec![
+                                            Value::String(name),
+                                            Value::String(value),
+                                        ])
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ))
+                        }
+                        TypedArrayInstanceMethod::Keys => {
+                            if !args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "URLSearchParams.keys does not take arguments".into(),
+                                ));
+                            }
+                            let pairs = Self::url_search_params_pairs_from_object_entries(
+                                &entries.borrow(),
+                            );
+                            Ok(Self::new_array_value(
+                                pairs
+                                    .into_iter()
+                                    .map(|(name, _)| Value::String(name))
+                                    .collect::<Vec<_>>(),
+                            ))
+                        }
+                        TypedArrayInstanceMethod::Values => {
+                            if !args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "URLSearchParams.values does not take arguments".into(),
+                                ));
+                            }
+                            let pairs = Self::url_search_params_pairs_from_object_entries(
+                                &entries.borrow(),
+                            );
+                            Ok(Self::new_array_value(
+                                pairs
+                                    .into_iter()
+                                    .map(|(_, value)| Value::String(value))
+                                    .collect::<Vec<_>>(),
+                            ))
+                        }
+                        TypedArrayInstanceMethod::Sort => {
+                            if !args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "URLSearchParams.sort does not take arguments".into(),
+                                ));
+                            }
+                            {
+                                let mut object_ref = entries.borrow_mut();
+                                let mut pairs =
+                                    Self::url_search_params_pairs_from_object_entries(&object_ref);
+                                pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                                Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                            }
+                            self.sync_url_search_params_owner(entries);
+                            Ok(Value::Undefined)
+                        }
+                        _ => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a TypedArray",
+                            target
+                        ))),
+                    };
+                }
             }
 
             if matches!(method, TypedArrayInstanceMethod::At) {
@@ -19599,10 +22091,13 @@ impl Harness {
             | Value::Promise(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
             | Value::StringConstructor
             | Value::TypedArrayConstructor(_)
+            | Value::BlobConstructor
+            | Value::UrlConstructor
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
@@ -20003,6 +22498,33 @@ impl Harness {
             DomProp::LinksLength => "links.length".into(),
             DomProp::ScriptsLength => "scripts.length".into(),
             DomProp::ChildrenLength => "children.length".into(),
+            DomProp::AnchorAttributionSrc => "attributionSrc".into(),
+            DomProp::AnchorDownload => "download".into(),
+            DomProp::AnchorHash => "hash".into(),
+            DomProp::AnchorHost => "host".into(),
+            DomProp::AnchorHostname => "hostname".into(),
+            DomProp::AnchorHref => "href".into(),
+            DomProp::AnchorHreflang => "hreflang".into(),
+            DomProp::AnchorInterestForElement => "interestForElement".into(),
+            DomProp::AnchorOrigin => "origin".into(),
+            DomProp::AnchorPassword => "password".into(),
+            DomProp::AnchorPathname => "pathname".into(),
+            DomProp::AnchorPing => "ping".into(),
+            DomProp::AnchorPort => "port".into(),
+            DomProp::AnchorProtocol => "protocol".into(),
+            DomProp::AnchorReferrerPolicy => "referrerPolicy".into(),
+            DomProp::AnchorRel => "rel".into(),
+            DomProp::AnchorRelList => "relList".into(),
+            DomProp::AnchorRelListLength => "relList.length".into(),
+            DomProp::AnchorSearch => "search".into(),
+            DomProp::AnchorTarget => "target".into(),
+            DomProp::AnchorText => "text".into(),
+            DomProp::AnchorType => "type".into(),
+            DomProp::AnchorUsername => "username".into(),
+            DomProp::AnchorCharset => "charset".into(),
+            DomProp::AnchorCoords => "coords".into(),
+            DomProp::AnchorRev => "rev".into(),
+            DomProp::AnchorShape => "shape".into(),
         }
     }
 
@@ -20070,10 +22592,13 @@ impl Harness {
             Value::Promise(_) => 0,
             Value::Map(_) => 0,
             Value::Set(_) => 0,
+            Value::Blob(_) => 0,
             Value::ArrayBuffer(_) => 0,
             Value::TypedArray(_) => 0,
             Value::StringConstructor => 0,
             Value::TypedArrayConstructor(_) => 0,
+            Value::BlobConstructor => 0,
+            Value::UrlConstructor => 0,
             Value::ArrayBufferConstructor => 0,
             Value::PromiseConstructor => 0,
             Value::MapConstructor => 0,
@@ -20224,8 +22749,10 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "after"
             | "append"
             | "appendChild"
+            | "attributionSrc"
             | "before"
             | "blur"
+            | "charset"
             | "checked"
             | "classList"
             | "className"
@@ -20234,15 +22761,23 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "closest"
             | "closedBy"
             | "closedby"
+            | "coords"
             | "dataset"
+            | "download"
             | "disabled"
             | "dispatchEvent"
             | "elements"
             | "focus"
             | "forEach"
             | "getAttribute"
+            | "hash"
             | "hasAttribute"
+            | "host"
+            | "hostname"
+            | "href"
+            | "hreflang"
             | "id"
+            | "interestForElement"
             | "innerHTML"
             | "insertAdjacentElement"
             | "insertAdjacentHTML"
@@ -20256,11 +22791,20 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "offsetTop"
             | "offsetWidth"
             | "open"
+            | "origin"
+            | "password"
+            | "pathname"
+            | "ping"
+            | "port"
+            | "protocol"
             | "querySelector"
             | "querySelectorAll"
             | "prepend"
             | "readOnly"
             | "readonly"
+            | "referrerPolicy"
+            | "rel"
+            | "relList"
             | "remove"
             | "removeAttribute"
             | "removeChild"
@@ -20270,6 +22814,9 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "replaceWith"
             | "required"
             | "reset"
+            | "rev"
+            | "search"
+            | "shape"
             | "scrollHeight"
             | "scrollIntoView"
             | "scrollLeft"
@@ -20280,7 +22827,11 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "showModal"
             | "style"
             | "submit"
+            | "target"
+            | "text"
             | "textContent"
+            | "type"
+            | "username"
             | "value"
     )
 }
@@ -24255,6 +26806,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_blob_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_array_buffer_expr(src)? {
         return Ok(expr);
     }
@@ -24268,6 +26823,14 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_map_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_url_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_url_search_params_expr(src)? {
         return Ok(expr);
     }
 
@@ -24398,6 +26961,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_typed_array_access_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_url_search_params_access_expr(src)? {
         return Ok(expr);
     }
 
@@ -24551,10 +27118,6 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
-    if let Some(expr) = parse_member_call_expr(src)? {
-        return Ok(expr);
-    }
-
     if let Some(expr) = parse_object_get_expr(src)? {
         return Ok(expr);
     }
@@ -24565,6 +27128,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if let Some(target) = parse_element_ref_expr(src)? {
         return Ok(Expr::DomRef(target));
+    }
+
+    if let Some(expr) = parse_member_call_expr(src)? {
+        return Ok(expr);
     }
 
     if is_ident(src) {
@@ -28164,6 +30731,96 @@ fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
+fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Blob") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "Blob supports zero, one, or two arguments".into(),
+            ));
+        }
+        if args.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse("Blob argument cannot be empty".into()));
+        }
+
+        let parts = args
+            .first()
+            .map(|arg| parse_expr(arg.trim()))
+            .transpose()?
+            .map(Box::new);
+        let options = args
+            .get(1)
+            .map(|arg| parse_expr(arg.trim()))
+            .transpose()?
+            .map(Box::new);
+
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::BlobConstruct {
+            parts,
+            options,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::BlobConstruct {
+                parts: None,
+                options: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::BlobConstructor))
+}
+
 fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -28276,6 +30933,249 @@ fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(Expr::MapConstructor))
+}
+
+fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("URL") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 2 {
+            return Err(Error::ScriptParse(
+                "URL supports one or two constructor arguments".into(),
+            ));
+        }
+        if args.first().is_none_or(|arg| arg.trim().is_empty()) {
+            return Err(Error::ScriptParse(
+                "URL constructor requires a URL argument".into(),
+            ));
+        }
+        if args.len() == 2 && args[1].trim().is_empty() {
+            return Err(Error::ScriptParse(
+                "URL base argument cannot be empty".into(),
+            ));
+        }
+        let input = args.first().map(|arg| parse_expr(arg.trim())).transpose()?.map(Box::new);
+        let base = args.get(1).map(|arg| parse_expr(arg.trim())).transpose()?.map(Box::new);
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::UrlConstruct {
+            input,
+            base,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::UrlConstruct {
+                input: None,
+                base: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        let Some(member) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        let method = match member.as_str() {
+            "canParse" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.canParse requires a URL argument and optional base".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.canParse base argument cannot be empty".into(),
+                    ));
+                }
+                UrlStaticMethod::CanParse
+            }
+            "parse" => {
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.parse requires a URL argument and optional base".into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.parse base argument cannot be empty".into(),
+                    ));
+                }
+                UrlStaticMethod::Parse
+            }
+            "createObjectURL" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.createObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                UrlStaticMethod::CreateObjectUrl
+            }
+            "revokeObjectURL" => {
+                if args.len() != 1 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "URL.revokeObjectURL requires exactly one argument".into(),
+                    ));
+                }
+                UrlStaticMethod::RevokeObjectUrl
+            }
+            _ => return Ok(None),
+        };
+        let mut parsed_args = Vec::with_capacity(args.len());
+        for arg in args {
+            parsed_args.push(parse_expr(arg.trim())?);
+        }
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::UrlStaticMethod {
+            method,
+            args: parsed_args,
+        }));
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::UrlConstructor))
+}
+
+fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("URLSearchParams") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "URLSearchParams supports zero or one argument".into(),
+            ));
+        }
+        let init = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse(
+                    "URLSearchParams argument cannot be empty".into(),
+                ));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::UrlSearchParamsConstruct {
+            init,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::UrlSearchParamsConstruct {
+                init: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    Ok(None)
 }
 
 fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
@@ -28881,6 +31781,83 @@ fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(Expr::TypedArrayMethod {
+        target,
+        method,
+        args: parsed,
+    }))
+}
+
+fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let Some(target) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let Some(member) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    if !matches!(member.as_str(), "append" | "getAll" | "has" | "delete") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let method = match member.as_str() {
+        "append" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "URLSearchParams.append requires exactly two arguments".into(),
+                ));
+            }
+            UrlSearchParamsInstanceMethod::Append
+        }
+        "getAll" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "URLSearchParams.getAll requires exactly one argument".into(),
+                ));
+            }
+            UrlSearchParamsInstanceMethod::GetAll
+        }
+        "has" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Ok(None);
+            }
+            UrlSearchParamsInstanceMethod::Has
+        }
+        "delete" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Ok(None);
+            }
+            UrlSearchParamsInstanceMethod::Delete
+        }
+        _ => unreachable!(),
+    };
+
+    let mut parsed = Vec::with_capacity(args.len());
+    for arg in args {
+        parsed.push(parse_expr(arg.trim())?);
+    }
+
+    Ok(Some(Expr::UrlSearchParamsMethod {
         target,
         method,
         args: parsed,
@@ -31111,7 +34088,12 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
             continue;
         }
 
-        let base = Box::new(parse_expr(base_src)?);
+        let base_expr = if let Some(target) = parse_element_ref_expr(base_src)? {
+            Expr::DomRef(target)
+        } else {
+            parse_expr(base_src)?
+        };
+        let base = Box::new(base_expr);
         let expr = match method.as_str() {
             "charAt" => {
                 if args.len() > 1 {
@@ -32012,6 +34994,21 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         None
     };
 
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let is_anchor_target = !matches!(target, DomQuery::DocumentRoot)
+        && !matches!(
+            &target,
+            DomQuery::Var(name)
+                if matches!(
+                    name.as_str(),
+                    "location" | "history" | "window" | "document" | "navigator" | "clipboard"
+                )
+        );
+
     let prop = match (head.as_str(), nested.as_ref()) {
         ("value", None) => DomProp::Value,
         ("checked", None) => DomProp::Checked,
@@ -32157,6 +35154,37 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
         {
             DomProp::ChildrenLength
         }
+        ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
+            DomProp::AnchorAttributionSrc
+        }
+        ("download", None) if is_anchor_target => DomProp::AnchorDownload,
+        ("hash", None) if is_anchor_target => DomProp::AnchorHash,
+        ("host", None) if is_anchor_target => DomProp::AnchorHost,
+        ("hostname", None) if is_anchor_target => DomProp::AnchorHostname,
+        ("href", None) if is_anchor_target => DomProp::AnchorHref,
+        ("hreflang", None) if is_anchor_target => DomProp::AnchorHreflang,
+        ("interestForElement", None) if is_anchor_target => DomProp::AnchorInterestForElement,
+        ("origin", None) if is_anchor_target => DomProp::AnchorOrigin,
+        ("password", None) if is_anchor_target => DomProp::AnchorPassword,
+        ("pathname", None) if is_anchor_target => DomProp::AnchorPathname,
+        ("ping", None) if is_anchor_target => DomProp::AnchorPing,
+        ("port", None) if is_anchor_target => DomProp::AnchorPort,
+        ("protocol", None) if is_anchor_target => DomProp::AnchorProtocol,
+        ("referrerPolicy", None) if is_anchor_target => DomProp::AnchorReferrerPolicy,
+        ("rel", None) if is_anchor_target => DomProp::AnchorRel,
+        ("relList", None) if is_anchor_target => DomProp::AnchorRelList,
+        ("relList", Some(length)) if is_anchor_target && length == "length" => {
+            DomProp::AnchorRelListLength
+        }
+        ("search", None) if is_anchor_target => DomProp::AnchorSearch,
+        ("target", None) if is_anchor_target => DomProp::AnchorTarget,
+        ("text", None) if is_anchor_target => DomProp::AnchorText,
+        ("type", None) if is_anchor_target => DomProp::AnchorType,
+        ("username", None) if is_anchor_target => DomProp::AnchorUsername,
+        ("charset", None) if is_anchor_target => DomProp::AnchorCharset,
+        ("coords", None) if is_anchor_target => DomProp::AnchorCoords,
+        ("rev", None) if is_anchor_target => DomProp::AnchorRev,
+        ("shape", None) if is_anchor_target => DomProp::AnchorShape,
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         _ => {
