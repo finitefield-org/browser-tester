@@ -3076,16 +3076,22 @@ impl Harness {
                 }
             },
             Expr::DomRead { target, prop } => {
-                if let DomQuery::Var(name) = target {
-                    if let Some(Value::Object(entries)) = env.get(name) {
-                        if let Some(key) = Self::object_key_from_dom_prop(prop) {
-                            return Ok(Self::object_get_entry(&entries.borrow(), key)
-                                .unwrap_or(Value::Undefined));
-                        }
+                let target_value = match target {
+                    DomQuery::Var(name) => env.get(name).cloned(),
+                    DomQuery::VarPath { base, path } => {
+                        self.resolve_dom_query_var_path_value(base, path, env)?
                     }
-                    if let Some(Value::Blob(blob)) = env.get(name) {
-                        if matches!(prop, DomProp::AnchorType) {
-                            return Ok(Value::String(blob.borrow().mime_type.clone()));
+                    _ => None,
+                };
+                if let Some(value) = target_value {
+                    if !matches!(value, Value::Node(_) | Value::NodeList(_)) {
+                        if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                            let variable_name = target.describe_call();
+                            return self.object_property_from_named_value(
+                                &variable_name,
+                                &value,
+                                key,
+                            );
                         }
                     }
                 }

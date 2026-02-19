@@ -123,3 +123,24 @@ fn function_declaration_can_be_called_before_its_definition() -> browser_tester:
     harness.assert_text("#result", "1")?;
     Ok(())
 }
+
+#[test]
+fn create_lot_row_seed_name_property_uses_object_semantics() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function createLotRow(seed = {}) {
+        return seed.name;
+      }
+
+      const fromDefault = createLotRow();
+      const fromArray = createLotRow([]);
+      document.getElementById("result").textContent =
+        String(fromDefault === undefined) + "|" + String(fromArray === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|true")?;
+    Ok(())
+}
