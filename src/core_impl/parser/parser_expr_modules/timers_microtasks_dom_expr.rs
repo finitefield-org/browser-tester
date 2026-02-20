@@ -12,6 +12,18 @@ pub(crate) fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocati
     Ok(Some((handler, delay_ms)))
 }
 
+pub(crate) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
+    let mut cursor = Cursor::new(src);
+    let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some((handler, delay_ms)))
+}
+
 pub(crate) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
@@ -115,61 +127,6 @@ pub(crate) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Opti
         params,
         stmts: parse_block_statements(&body)?,
     }))
-}
-
-pub(crate) fn parse_template_literal(src: &str) -> Result<Expr> {
-    let inner = &src[1..src.len() - 1];
-    let bytes = inner.as_bytes();
-
-    let mut parts: Vec<Expr> = Vec::new();
-    let mut text_start = 0usize;
-    let mut i = 0usize;
-
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(text) = inner.get(text_start..i) {
-                let text = unescape_string(text);
-                if !text.is_empty() {
-                    parts.push(Expr::String(text));
-                }
-            }
-            let expr_start = i + 2;
-            let expr_end = find_matching_brace(inner, expr_start)?;
-            let expr_src = inner
-                .get(expr_start..expr_end)
-                .ok_or_else(|| Error::ScriptParse("invalid template expression".into()))?;
-            let expr = parse_expr(expr_src.trim())?;
-            parts.push(expr);
-
-            i = expr_end + 1;
-            text_start = i;
-            continue;
-        }
-
-        i += 1;
-    }
-
-    if let Some(text) = inner.get(text_start..) {
-        let text = unescape_string(text);
-        if !text.is_empty() {
-            parts.push(Expr::String(text));
-        }
-    }
-
-    if parts.is_empty() {
-        return Ok(Expr::String(String::new()));
-    }
-
-    if parts.len() == 1 {
-        return Ok(parts.remove(0));
-    }
-
-    Ok(Expr::Add(parts))
 }
 
 pub(crate) fn starts_with_window_member_access(src: &str) -> bool {

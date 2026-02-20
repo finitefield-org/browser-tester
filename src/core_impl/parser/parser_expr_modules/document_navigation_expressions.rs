@@ -358,6 +358,56 @@ pub(crate) fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
+pub(crate) fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+
+    if cursor.consume_ascii("navigator") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            if cursor.consume_ascii("clipboard")
+                && cursor.peek().is_none_or(|ch| !is_ident_char(ch))
+            {
+                return true;
+            }
+        }
+        cursor.set_pos(start);
+    }
+
+    if cursor.consume_ascii("window") {
+        if cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_ascii("navigator") || cursor.peek().is_some_and(is_ident_char) {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            cursor.set_pos(start);
+            return false;
+        }
+        cursor.skip_ws();
+        if cursor.consume_ascii("clipboard") && cursor.peek().is_none_or(|ch| !is_ident_char(ch)) {
+            return true;
+        }
+    }
+
+    cursor.set_pos(start);
+    false
+}
+
 pub(crate) fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();

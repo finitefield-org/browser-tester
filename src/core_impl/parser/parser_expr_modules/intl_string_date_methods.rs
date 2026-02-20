@@ -1119,15 +1119,3 @@ pub(crate) fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usi
 
     out
 }
-
-pub(crate) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
-    let mut cursor = Cursor::new(src);
-    let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
-        return Ok(None);
-    };
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
-    Ok(Some((handler, delay_ms)))
-}

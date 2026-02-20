@@ -442,6 +442,61 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
     Err(Error::ScriptParse(format!("unsupported expression: {src}")))
 }
 
+pub(crate) fn parse_template_literal(src: &str) -> Result<Expr> {
+    let inner = &src[1..src.len() - 1];
+    let bytes = inner.as_bytes();
+
+    let mut parts: Vec<Expr> = Vec::new();
+    let mut text_start = 0usize;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            if let Some(text) = inner.get(text_start..i) {
+                let text = unescape_string(text);
+                if !text.is_empty() {
+                    parts.push(Expr::String(text));
+                }
+            }
+            let expr_start = i + 2;
+            let expr_end = find_matching_brace(inner, expr_start)?;
+            let expr_src = inner
+                .get(expr_start..expr_end)
+                .ok_or_else(|| Error::ScriptParse("invalid template expression".into()))?;
+            let expr = parse_expr(expr_src.trim())?;
+            parts.push(expr);
+
+            i = expr_end + 1;
+            text_start = i;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if let Some(text) = inner.get(text_start..) {
+        let text = unescape_string(text);
+        if !text.is_empty() {
+            parts.push(Expr::String(text));
+        }
+    }
+
+    if parts.is_empty() {
+        return Ok(Expr::String(String::new()));
+    }
+
+    if parts.len() == 1 {
+        return Ok(parts.remove(0));
+    }
+
+    Ok(Expr::Add(parts))
+}
+
 pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if src.is_empty() {
         return Ok(None);

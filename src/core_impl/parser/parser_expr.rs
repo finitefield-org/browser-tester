@@ -18,8 +18,12 @@ pub(super) mod builtin_constructors;
 pub(super) mod dialog_expressions;
 #[path = "parser_expr_modules/document_navigation_expressions.rs"]
 pub(super) mod document_navigation_expressions;
-#[path = "parser_expr_modules/form_data_assignment_utils.rs"]
-pub(super) mod form_data_assignment_utils;
+#[path = "parser_expr_modules/dom_event_query_expressions.rs"]
+pub(super) mod dom_event_query_expressions;
+#[path = "parser_expr_modules/dom_form_data_expressions.rs"]
+pub(super) mod dom_form_data_expressions;
+#[path = "parser_expr_modules/expression_syntax_utils.rs"]
+pub(super) mod expression_syntax_utils;
 #[path = "parser_expr_modules/global_numeric_json_expressions.rs"]
 pub(super) mod global_numeric_json_expressions;
 #[path = "parser_expr_modules/global_value_accessors.rs"]
@@ -44,6 +48,8 @@ pub(super) mod regex_date_constructors;
 pub(super) mod timers_microtasks_dom_expr;
 #[path = "parser_expr_modules/top_level_split_utils.rs"]
 pub(super) mod top_level_split_utils;
+#[path = "parser_expr_modules/webapi_call_expressions.rs"]
+pub(super) mod webapi_call_expressions;
 
 pub(super) use arithmetic_expressions::*;
 pub(super) use array_expressions::*;
@@ -51,7 +57,9 @@ pub(super) use binary_operators::*;
 pub(super) use builtin_constructors::*;
 pub(super) use dialog_expressions::*;
 pub(super) use document_navigation_expressions::*;
-pub(super) use form_data_assignment_utils::*;
+pub(super) use dom_event_query_expressions::*;
+pub(super) use dom_form_data_expressions::*;
+pub(super) use expression_syntax_utils::*;
 pub(super) use global_numeric_json_expressions::*;
 pub(super) use global_value_accessors::*;
 pub(super) use intl_expression_roots::*;
@@ -64,3 +72,4 @@ pub(super) use primary_literal_expressions::*;
 pub(super) use regex_date_constructors::*;
 pub(super) use timers_microtasks_dom_expr::*;
 pub(super) use top_level_split_utils::*;
+pub(super) use webapi_call_expressions::*;

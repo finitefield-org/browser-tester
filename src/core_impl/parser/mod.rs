@@ -57,15 +57,15 @@ pub(super) mod api {
     }
 
     pub(crate) fn parse_string_literal_exact(src: &str) -> Result<String> {
-        super::parser_expr::form_data_assignment_utils::parse_string_literal_exact(src)
+        super::parser_expr::expression_syntax_utils::parse_string_literal_exact(src)
     }
 
     pub(crate) fn strip_outer_parens(src: &str) -> &str {
-        super::parser_expr::form_data_assignment_utils::strip_outer_parens(src)
+        super::parser_expr::expression_syntax_utils::strip_outer_parens(src)
     }
 
     pub(crate) fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
-        super::parser_expr::form_data_assignment_utils::find_top_level_assignment(src)
+        super::parser_expr::expression_syntax_utils::find_top_level_assignment(src)
     }
 
     pub(crate) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
