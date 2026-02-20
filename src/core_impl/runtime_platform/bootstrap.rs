@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self> {
         Self::from_html_with_url("about:blank", html)
@@ -34,7 +36,7 @@ impl Harness {
         Ok(harness)
     }
 
-    pub(super) fn with_script_env<R>(
+    pub(crate) fn with_script_env<R>(
         &mut self,
         f: impl FnOnce(&mut Self, &mut HashMap<String, Value>) -> Result<R>,
     ) -> Result<R> {
@@ -48,7 +50,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn with_script_env_always<R>(
+    pub(crate) fn with_script_env_always<R>(
         &mut self,
         f: impl FnOnce(&mut Self, &mut HashMap<String, Value>) -> Result<R>,
     ) -> Result<R> {
@@ -58,7 +60,7 @@ impl Harness {
         result
     }
 
-    pub(super) fn initialize_global_bindings(&mut self) {
+    pub(crate) fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
         self.sync_history_object();
         self.dom_runtime.window_object = Rc::new(RefCell::new(ObjectValue::default()));
@@ -198,7 +200,7 @@ impl Harness {
             .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
     }
 
-    pub(super) fn current_location_parts(&self) -> LocationParts {
+    pub(crate) fn current_location_parts(&self) -> LocationParts {
         LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
             scheme: "about".to_string(),
             has_authority: false,
@@ -213,18 +215,18 @@ impl Harness {
         })
     }
 
-    pub(super) fn window_is_secure_context(&self) -> bool {
+    pub(crate) fn window_is_secure_context(&self) -> bool {
         matches!(
             self.current_location_parts().scheme.as_str(),
             "https" | "wss"
         )
     }
 
-    pub(super) fn document_builtin_keys() -> &'static [&'static str] {
+    pub(crate) fn document_builtin_keys() -> &'static [&'static str] {
         &["defaultView", "location", "URL", "documentURI"]
     }
 
-    pub(super) fn sync_document_object(&mut self) {
+    pub(crate) fn sync_document_object(&mut self) {
         let mut extras = Vec::new();
         {
             let entries = self.dom_runtime.document_object.borrow();
@@ -262,7 +264,7 @@ impl Harness {
         *self.dom_runtime.document_object.borrow_mut() = entries.into();
     }
 
-    pub(super) fn window_builtin_keys() -> &'static [&'static str] {
+    pub(crate) fn window_builtin_keys() -> &'static [&'static str] {
         &[
             "window",
             "self",
@@ -289,7 +291,7 @@ impl Harness {
         ]
     }
 
-    pub(super) fn sync_window_object(
+    pub(crate) fn sync_window_object(
         &mut self,
         navigator: &Value,
         intl: &Value,
@@ -373,7 +375,7 @@ impl Harness {
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }
 
-    pub(super) fn sync_window_runtime_properties(&mut self) {
+    pub(crate) fn sync_window_runtime_properties(&mut self) {
         let mut entries = self.dom_runtime.window_object.borrow_mut();
         Self::object_set_entry(
             &mut entries,
@@ -387,7 +389,7 @@ impl Harness {
         );
     }
 
-    pub(super) fn location_builtin_keys() -> &'static [&'static str] {
+    pub(crate) fn location_builtin_keys() -> &'static [&'static str] {
         &[
             "href",
             "protocol",
@@ -406,7 +408,7 @@ impl Harness {
         ]
     }
 
-    pub(super) fn sync_location_object(&mut self) {
+    pub(crate) fn sync_location_object(&mut self) {
         let mut extras = Vec::new();
         {
             let entries = self.dom_runtime.location_object.borrow();
@@ -475,14 +477,14 @@ impl Harness {
         *self.dom_runtime.location_object.borrow_mut() = entries.into();
     }
 
-    pub(super) fn is_location_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_location_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_LOCATION_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn history_builtin_keys() -> &'static [&'static str] {
+    pub(crate) fn history_builtin_keys() -> &'static [&'static str] {
         &[
             "length",
             "scrollRestoration",
@@ -495,14 +497,14 @@ impl Harness {
         ]
     }
 
-    pub(super) fn current_history_state(&self) -> Value {
+    pub(crate) fn current_history_state(&self) -> Value {
         self.location_history.history_entries
             .get(self.location_history.history_index)
             .map(|entry| entry.state.clone())
             .unwrap_or(Value::Null)
     }
 
-    pub(super) fn sync_history_object(&mut self) {
+    pub(crate) fn sync_history_object(&mut self) {
         let mut extras = Vec::new();
         {
             let entries = self.location_history.history_object.borrow();
@@ -550,35 +552,35 @@ impl Harness {
         *self.location_history.history_object.borrow_mut() = entries.into();
     }
 
-    pub(super) fn is_history_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_history_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_HISTORY_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn is_window_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_window_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_WINDOW_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn is_navigator_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_navigator_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_NAVIGATOR_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn is_storage_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_storage_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_STORAGE_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn set_navigator_property(
+    pub(crate) fn set_navigator_property(
         &mut self,
         navigator_object: &Rc<RefCell<ObjectValue>>,
         key: &str,
@@ -595,7 +597,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {
+    pub(crate) fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
@@ -622,7 +624,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn set_url_constructor_property(&mut self, key: &str, value: Value) {
+    pub(crate) fn set_url_constructor_property(&mut self, key: &str, value: Value) {
         Self::object_set_entry(
             &mut self.browser_apis.url_constructor_properties.borrow_mut(),
             key.to_string(),
@@ -630,7 +632,7 @@ impl Harness {
         );
     }
 
-    pub(super) fn set_storage_object_property(
+    pub(crate) fn set_storage_object_property(
         &mut self,
         storage_object: &Rc<RefCell<ObjectValue>>,
         key: &str,
@@ -656,7 +658,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn set_history_property(&mut self, key: &str, value: Value) -> Result<()> {
+    pub(crate) fn set_history_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "length" => Err(Error::ScriptRuntime("history.length is read-only".into())),
             "state" => Err(Error::ScriptRuntime("history.state is read-only".into())),
@@ -683,7 +685,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn set_node_event_handler_property(
+    pub(crate) fn set_node_event_handler_property(
         &mut self,
         node: NodeId,
         key: &str,
@@ -727,7 +729,7 @@ impl Harness {
         Ok(true)
     }
 
-    pub(super) fn set_node_assignment_property(
+    pub(crate) fn set_node_assignment_property(
         &mut self,
         node: NodeId,
         key: &str,
@@ -828,7 +830,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn read_object_assignment_property(
+    pub(crate) fn read_object_assignment_property(
         &self,
         container: &Value,
         key_value: &Value,
@@ -861,7 +863,7 @@ impl Harness {
         Ok(value)
     }
 
-    pub(super) fn set_object_assignment_property(
+    pub(crate) fn set_object_assignment_property(
         &mut self,
         container: &Value,
         key_value: &Value,
@@ -963,7 +965,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_object_assignment_stmt(
+    pub(crate) fn execute_object_assignment_stmt(
         &mut self,
         target: &str,
         path: &[Expr],
@@ -999,7 +1001,7 @@ impl Harness {
         self.set_object_assignment_property(&container, final_key, value, target)
     }
 
-    pub(super) fn resolve_location_target_url(&self, input: &str) -> String {
+    pub(crate) fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
         if input.is_empty() {
             return self.document_url.clone();
@@ -1070,7 +1072,7 @@ impl Harness {
         next.href()
     }
 
-    pub(super) fn is_hash_only_navigation(from: &str, to: &str) -> bool {
+    pub(crate) fn is_hash_only_navigation(from: &str, to: &str) -> bool {
         let Some(from_parts) = LocationParts::parse(from) else {
             return false;
         };
@@ -1089,7 +1091,7 @@ impl Harness {
             && from_parts.hash != to_parts.hash
     }
 
-    pub(super) fn navigate_location(
+    pub(crate) fn navigate_location(
         &mut self,
         next_url: &str,
         kind: LocationNavigationKind,
@@ -1130,7 +1132,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn reload_location(&mut self) -> Result<()> {
+    pub(crate) fn reload_location(&mut self) -> Result<()> {
         self.location_history.location_reload_count += 1;
         let current = self.document_url.clone();
         self.location_history.location_navigations.push(LocationNavigation {
@@ -1146,7 +1148,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<bool> {
+    pub(crate) fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<bool> {
         let Some(html) = self.location_history.location_mock_pages.get(url).cloned() else {
             return Ok(false);
         };
@@ -1154,7 +1156,7 @@ impl Harness {
         Ok(true)
     }
 
-    pub(super) fn history_push_entry(&mut self, url: &str, state: Value) {
+    pub(crate) fn history_push_entry(&mut self, url: &str, state: Value) {
         let next = self
             .location_history
             .history_index
@@ -1168,7 +1170,7 @@ impl Harness {
         self.location_history.history_index = self.location_history.history_entries.len().saturating_sub(1);
     }
 
-    pub(super) fn history_replace_current_entry(&mut self, url: &str, state: Value) {
+    pub(crate) fn history_replace_current_entry(&mut self, url: &str, state: Value) {
         if self.location_history.history_entries.is_empty() {
             self.location_history.history_entries.push(HistoryEntry {
                 url: url.to_string(),
@@ -1188,7 +1190,7 @@ impl Harness {
         self.location_history.history_index = index;
     }
 
-    pub(super) fn history_push_state(
+    pub(crate) fn history_push_state(
         &mut self,
         state: Value,
         url: Option<&str>,
@@ -1211,7 +1213,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn history_go_with_env(&mut self, delta: i64) -> Result<()> {
+    pub(crate) fn history_go_with_env(&mut self, delta: i64) -> Result<()> {
         if delta == 0 {
             self.reload_location()?;
             return Ok(());
@@ -1265,7 +1267,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
+    pub(crate) fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         self.dom = dom;
         self.listeners = ListenerStore::default();
@@ -1287,7 +1289,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn set_location_property(&mut self, key: &str, value: Value) -> Result<()> {
+    pub(crate) fn set_location_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "href" => self.navigate_location(&value.as_string(), LocationNavigationKind::HrefSet),
             "protocol" => {
@@ -1360,7 +1362,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn anchor_rel_tokens(&self, node: NodeId) -> Vec<String> {
+    pub(crate) fn anchor_rel_tokens(&self, node: NodeId) -> Vec<String> {
         self.dom
             .attr(node, "rel")
             .unwrap_or_default()
@@ -1369,17 +1371,17 @@ impl Harness {
             .collect::<Vec<_>>()
     }
 
-    pub(super) fn resolve_anchor_href(&self, node: NodeId) -> String {
+    pub(crate) fn resolve_anchor_href(&self, node: NodeId) -> String {
         let raw = self.dom.attr(node, "href").unwrap_or_default();
         self.resolve_location_target_url(&raw)
     }
 
-    pub(super) fn anchor_location_parts(&self, node: NodeId) -> LocationParts {
+    pub(crate) fn anchor_location_parts(&self, node: NodeId) -> LocationParts {
         let href = self.resolve_anchor_href(node);
         LocationParts::parse(&href).unwrap_or_else(|| self.current_location_parts())
     }
 
-    pub(super) fn set_anchor_url_property(
+    pub(crate) fn set_anchor_url_property(
         &mut self,
         node: NodeId,
         key: &str,

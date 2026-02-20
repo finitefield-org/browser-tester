@@ -1,4 +1,11 @@
-fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
+use super::*;
+use super::parser_expr::{
+    append_concat_expr, find_first_top_level_colon, find_top_level_assignment, parse_dom_access,
+    parse_queue_microtask_stmt, parse_string_literal_exact, split_top_level_by_char,
+    strip_js_comments, strip_outer_parens,
+};
+
+pub(super) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
     match target {
         DomQuery::Var(base) => Some(DomQuery::VarPath {
             base: base.clone(),
@@ -16,7 +23,7 @@ fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQu
     }
 }
 
-fn is_dom_target_chain_stop(ident: &str) -> bool {
+pub(super) fn is_dom_target_chain_stop(ident: &str) -> bool {
     if ident.starts_with("aria") {
         return true;
     }
@@ -165,7 +172,7 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
     )
 }
 
-fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(super) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
     let mut target = if let Ok(target) = parse_form_elements_item_target(cursor) {
@@ -287,7 +294,7 @@ fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     Ok(target)
 }
 
-fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(super) fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let start = cursor.pos();
     if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
@@ -319,7 +326,7 @@ fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     )))
 }
 
-fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(super) fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let form = parse_form_elements_base(cursor)?;
     cursor.skip_ws();
     cursor.expect_byte(b'.')?;
@@ -338,7 +345,7 @@ fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> 
     })
 }
 
-fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
+pub(super) fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
     let src = strip_js_comments(src).trim().to_string();
     if src.is_empty() {
         return Err(Error::ScriptParse("empty index".into()));
@@ -354,7 +361,7 @@ fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
     Ok(DomIndex::Dynamic(src))
 }
 
-fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(super) fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let start = cursor.pos();
     if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
@@ -369,7 +376,7 @@ fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     )))
 }
 
-fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(super) fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
         cursor.skip_ws();
@@ -411,7 +418,7 @@ fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     }
 }
 
-fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
+pub(super) fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
     let tag_name = tag_name.trim();
     if tag_name.is_empty() {
         return Err(Error::ScriptParse(
@@ -424,7 +431,7 @@ fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
     Ok(tag_name.to_ascii_lowercase())
 }
 
-fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
+pub(super) fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
     let mut selector = String::new();
     let classes: Vec<&str> = class_names
         .split_whitespace()
@@ -445,7 +452,7 @@ fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
     Ok(selector)
 }
 
-fn normalize_get_elements_by_name(name: &str) -> Result<String> {
+pub(super) fn normalize_get_elements_by_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::ScriptParse(
@@ -461,7 +468,7 @@ struct ParsedCallbackParams {
     prologue: Vec<String>,
 }
 
-fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
+pub(super) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
     let mut suffix = seed;
     loop {
         let candidate = format!("__bt_callback_arg_{suffix}");
@@ -472,7 +479,7 @@ fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
     }
 }
 
-fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
+pub(super) fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
     let mut out = String::from("[");
     for (idx, item) in pattern.iter().enumerate() {
         if idx > 0 {
@@ -486,7 +493,7 @@ fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
     out
 }
 
-fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
+pub(super) fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
     let mut out = String::from("{");
     for (index, (source, target)) in pattern.iter().enumerate() {
         if index > 0 {
@@ -502,7 +509,7 @@ fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
     out
 }
 
-fn inject_callback_param_prologue(
+pub(super) fn inject_callback_param_prologue(
     body: String,
     concise_body: bool,
     prologue: &[String],
@@ -531,7 +538,7 @@ fn inject_callback_param_prologue(
     }
 }
 
-fn prepend_callback_param_prologue_stmts(
+pub(super) fn prepend_callback_param_prologue_stmts(
     mut stmts: Vec<Stmt>,
     prologue: &[String],
 ) -> Result<Vec<Stmt>> {
@@ -712,7 +719,7 @@ fn parse_callback_parameter_list(
     Ok(ParsedCallbackParams { params, prologue })
 }
 
-fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
+pub(super) fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
     cursor.skip_ws();
     if cursor.peek() == Some(b'{') {
         return Ok((cursor.read_balanced_block(b'{', b'}')?, false));
@@ -764,7 +771,7 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
     Err(Error::ScriptParse("expected callback body".into()))
 }
 
-fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
+pub(super) fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
     let expr_src = strip_outer_parens(expr_src).trim();
     let Some((eq_pos, op_len)) = find_top_level_assignment(expr_src) else {
         return Ok(None);
@@ -805,13 +812,13 @@ fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
     Ok(Some(format!("{assignment_src}; return {lhs};")))
 }
 
-fn is_valid_callback_body_suffix(suffix: &str) -> bool {
+pub(super) fn is_valid_callback_body_suffix(suffix: &str) -> bool {
     suffix.chars().all(|ch| {
         ch.is_ascii_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';')
     })
 }
 
-fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
+pub(super) fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
     while let Some(ch) = cursor.peek() {
         if ch == b' ' || ch == b'\t' || ch == 0x0B || ch == 0x0C {
             cursor.set_pos(cursor.pos() + 1);
@@ -827,7 +834,7 @@ fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Res
     Ok(())
 }
 
-fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
+pub(super) fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii("async") {
         return false;
@@ -876,7 +883,7 @@ fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
     }
 }
 
-fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
+pub(super) fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii("async") {
         return false;
@@ -1005,7 +1012,7 @@ pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_callback(
+pub(super) fn parse_callback(
     cursor: &mut Cursor<'_>,
     max_params: usize,
     label: &str,
@@ -1066,7 +1073,7 @@ fn parse_callback(
     Ok((parsed_params.params, body, concise_body))
 }
 
-fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
+pub(super) fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
     let mut cursor = Cursor::new(src);
     if let Ok((params, body, _)) =
         parse_callback(&mut cursor, usize::MAX, "timer callback parameters")
@@ -1122,7 +1129,7 @@ pub(super) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
     Ok(stmts)
 }
 
-fn parse_single_statement(stmt: &str) -> Result<Stmt> {
+pub(super) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     let stmt = stmt.trim();
 
     if let Some(parsed) = parse_if_stmt(stmt)? {
@@ -1269,7 +1276,7 @@ fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     Ok(Stmt::Expr(expr))
 }
 
-fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
+pub(super) fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
     let trimmed = stmt.trim_start();
     let Some(rest) = strip_else_prefix(trimmed) else {
         return Ok(None);
@@ -1278,7 +1285,7 @@ fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
     Ok(Some(branch))
 }
 
-fn strip_else_prefix(src: &str) -> Option<&str> {
+pub(super) fn strip_else_prefix(src: &str) -> Option<&str> {
     if !src.starts_with("else") {
         return None;
     }
@@ -1290,7 +1297,7 @@ fn strip_else_prefix(src: &str) -> Option<&str> {
     Some(&src[after..])
 }
 
-fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
+pub(super) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
     let src = src.trim();
     if src.is_empty() {
         return Err(Error::ScriptParse("empty if branch".into()));
@@ -1317,7 +1324,7 @@ fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
     Ok(vec![parse_single_statement(single)?])
 }
 
-fn trim_optional_trailing_semicolon(src: &str) -> &str {
+pub(super) fn trim_optional_trailing_semicolon(src: &str) -> &str {
     let mut trimmed = src.trim_end();
     if let Some(without) = trimmed.strip_suffix(';') {
         trimmed = without.trim_end();
@@ -1325,7 +1332,7 @@ fn trim_optional_trailing_semicolon(src: &str) -> &str {
     trimmed
 }
 
-fn find_top_level_else_keyword(src: &str) -> Option<usize> {
+pub(super) fn find_top_level_else_keyword(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -1346,11 +1353,11 @@ fn find_top_level_else_keyword(src: &str) -> Option<usize> {
     None
 }
 
-fn is_ident_char(b: u8) -> bool {
+pub(super) fn is_ident_char(b: u8) -> bool {
     b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
 }
 
-fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -1429,7 +1436,7 @@ fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -1458,7 +1465,7 @@ fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::While { cond, body }))
 }
 
-fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -1505,7 +1512,7 @@ fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DoWhile { cond, body }))
 }
 
-fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
+pub(super) fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii(keyword) {
         return false;
@@ -1517,7 +1524,7 @@ fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
     true
 }
 
-fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
+pub(super) fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
     let src = src.trim();
     if src.is_empty() {
         return Err(Error::ScriptParse("catch binding cannot be empty".into()));
@@ -1538,7 +1545,7 @@ fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
     )))
 }
 
-fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "try") {
@@ -1595,7 +1602,7 @@ fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "throw") {
@@ -1620,7 +1627,7 @@ fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Throw { value }))
 }
 
-fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("return") {
@@ -1646,7 +1653,7 @@ fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Return { value: Some(value) }))
 }
 
-fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("break") {
@@ -1668,7 +1675,7 @@ fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Break))
 }
 
-fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("continue") {
@@ -1690,7 +1697,7 @@ fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Continue))
 }
 
-fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -1801,7 +1808,7 @@ fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &st
     Ok(Some((kind, item_var, right)))
 }
 
-fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
+pub(super) fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
     let bytes = src.as_bytes();
     let keyword_bytes = keyword.as_bytes();
     let mut i = 0usize;
@@ -1825,7 +1832,7 @@ fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize
     Ok(None)
 }
 
-fn parse_for_in_of_var(raw: &str) -> Result<String> {
+pub(super) fn parse_for_in_of_var(raw: &str) -> Result<String> {
     let mut cursor = Cursor::new(raw);
     cursor.skip_ws();
     let first = cursor
@@ -1856,7 +1863,7 @@ fn parse_for_in_of_var(raw: &str) -> Result<String> {
     Ok(name)
 }
 
-fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
+pub(super) fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
     let src = src.trim();
     if src.is_empty() {
         return Ok(None);
@@ -1879,11 +1886,11 @@ fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
     Ok(Some(Box::new(Stmt::Expr(expr))))
 }
 
-fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
+pub(super) fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
     parse_update_stmt(src)
 }
 
-fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
+pub(super) fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     let src = stmt.trim();
 
     if let Some(name) = src.strip_prefix("++") {
@@ -1929,7 +1936,7 @@ fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     None
 }
 
-fn split_top_level_statements(body: &str) -> Vec<String> {
+pub(super) fn split_top_level_statements(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -1988,7 +1995,7 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
     out
 }
 
-fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail: &str) -> bool {
+pub(super) fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail: &str) -> bool {
     let tail = tail.trim_start();
     if tail.is_empty() {
         return false;
@@ -2018,7 +2025,7 @@ fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail:
     true
 }
 
-fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
+pub(super) fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
     let bytes = body.as_bytes();
     if block_open == 0 || block_open > bytes.len() {
         return false;
@@ -2040,14 +2047,14 @@ fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
     }
 }
 
-fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
+pub(super) fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
     let Some(rest) = src.strip_prefix(keyword) else {
         return false;
     };
     rest.is_empty() || !is_ident_char(*rest.as_bytes().first().unwrap_or(&b'\0'))
 }
 
-fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -2100,7 +2107,7 @@ fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let mut rest = None;
     for kw in ["const", "let", "var"] {
         if let Some(after) = stmt.strip_prefix(kw) {
@@ -2150,7 +2157,7 @@ fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let Some((name, op_len, value_src)) = find_top_level_var_assignment(stmt) else {
         return Ok(None);
@@ -2193,7 +2200,7 @@ fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
+pub(super) fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
     let (eq_pos, op_len) = find_top_level_assignment(stmt)?;
     let lhs = stmt[..eq_pos].trim();
     if lhs.is_empty() {
@@ -2207,7 +2214,7 @@ fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
     ))
 }
 
-fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
@@ -2236,7 +2243,7 @@ fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     Ok(None)
 }
 
-fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {
+pub(super) fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {
     let mut cursor = Cursor::new(pattern);
     cursor.skip_ws();
     let items_src = cursor.read_balanced_block(b'[', b']')?;
@@ -2272,7 +2279,7 @@ fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>>
     Ok(targets)
 }
 
-fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String)>> {
+pub(super) fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String)>> {
     let mut cursor = Cursor::new(pattern);
     cursor.skip_ws();
     let items_src = cursor.read_balanced_block(b'{', b'}')?;
@@ -2322,7 +2329,7 @@ fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String
     Ok(bindings)
 }
 
-fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -2370,7 +2377,7 @@ fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -2444,7 +2451,7 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
@@ -2502,7 +2509,7 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
 }
 
-fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
+pub(super) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
     let mut cursor = Cursor::new(lhs);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -2542,7 +2549,7 @@ fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>
     Ok(Some((target, path)))
 }
 
-fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
@@ -2616,7 +2623,7 @@ fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::ObjectAssign { target, path, expr }))
 }
 
-fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -2699,7 +2706,7 @@ fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let stmt_no_semi = stmt.strip_suffix(';').map(str::trim_end).unwrap_or(stmt);
 
@@ -2800,7 +2807,7 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+pub(super) fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
     let callback_arg = strip_js_comments(arg);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
     let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
@@ -2826,7 +2833,7 @@ fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, label: &str) 
     Ok(ScriptHandler { params, stmts })
 }
 
-fn find_top_level_for_each_call(src: &str) -> Option<usize> {
+pub(super) fn find_top_level_for_each_call(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -2960,7 +2967,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
     Ok((item_var, index_var, body_stmts))
 }
 
-fn parse_for_each_callback_body_stmts(body: &str, concise_body: bool) -> Result<Vec<Stmt>> {
+pub(super) fn parse_for_each_callback_body_stmts(body: &str, concise_body: bool) -> Result<Vec<Stmt>> {
     if !concise_body {
         return parse_block_statements(body);
     }
@@ -2971,7 +2978,7 @@ fn parse_for_each_callback_body_stmts(body: &str, concise_body: bool) -> Result<
     }
 }
 
-fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3015,7 +3022,7 @@ fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3049,7 +3056,7 @@ fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomRemoveAttribute { target, name }))
 }
 
-fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3166,7 +3173,7 @@ fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+pub(super) fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
     let lowered = src.to_ascii_lowercase();
     match lowered.as_str() {
         "beforebegin" => Ok(InsertAdjacentPosition::BeforeBegin),
@@ -3192,7 +3199,7 @@ pub(super) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjace
     }
 }
 
-fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3237,7 +3244,7 @@ fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3282,7 +3289,7 @@ fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3327,7 +3334,7 @@ fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_set_timer_call(
+pub(super) fn parse_set_timer_call(
     cursor: &mut Cursor<'_>,
     timer_name: &str,
 ) -> Result<Option<(TimerInvocation, Expr)>> {
@@ -3390,15 +3397,15 @@ fn parse_set_timer_call(
     )))
 }
 
-fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setTimeout")
 }
 
-fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setInterval")
 }
 
-fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
@@ -3417,7 +3424,7 @@ fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::SetTimeout { handler, delay_ms }))
 }
 
-fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
@@ -3436,7 +3443,7 @@ fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::SetInterval { handler, delay_ms }))
 }
 
-fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -3479,7 +3486,7 @@ fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::ClearTimeout { timer_id }))
 }
 
-fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3553,7 +3560,7 @@ fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3588,7 +3595,7 @@ fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::NodeRemove { target }))
 }
 
-fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3655,7 +3662,7 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
     Ok(ListenerCallbackParseResult::Inline { params, body })
 }
 
-fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
+pub(super) fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
     let mut event_param = String::from("__bt_listener_event");
     while event_param == callback_name {
         event_param.push('_');
@@ -3671,7 +3678,7 @@ fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler
     })
 }
 
-fn parse_listener_option_key(raw: &str) -> Option<&str> {
+pub(super) fn parse_listener_option_key(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
     if trimmed.len() >= 2 {
         let bytes = trimmed.as_bytes();
@@ -3684,7 +3691,7 @@ fn parse_listener_option_key(raw: &str) -> Option<&str> {
     Some(trimmed)
 }
 
-fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>> {
+pub(super) fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>> {
     let mut capture = None;
     for raw_entry in split_top_level_by_char(src, b',') {
         let entry = raw_entry.trim();
@@ -3714,7 +3721,7 @@ fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>>
     Ok(capture)
 }
 
-fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -3791,7 +3798,7 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-fn parse_event_call_stmt(stmt: &str) -> Option<Stmt> {
+pub(super) fn parse_event_call_stmt(stmt: &str) -> Option<Stmt> {
     let stmt = stmt.trim();
     let open = stmt.find('(')?;
     let close = stmt.rfind(')')?;

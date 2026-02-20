@@ -5,5 +5,7 @@ use super::parser::{
 };
 use super::*;
 
-include!("runtime_platform.rs");
-include!("runtime_exec.rs");
+#[path = "runtime_platform.rs"]
+mod runtime_platform;
+#[path = "runtime_exec.rs"]
+mod runtime_exec;

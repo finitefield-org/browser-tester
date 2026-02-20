@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn invoke_listeners(
+    pub(crate) fn invoke_listeners(
         &mut self,
         node_id: NodeId,
         event: &mut EventState,
@@ -93,7 +95,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn trace_event_done(&mut self, event: &EventState, outcome: &str) {
+    pub(crate) fn trace_event_done(&mut self, event: &EventState, outcome: &str) {
         let target_label = self.trace_node_label(event.target);
         let current_label = self.trace_node_label(event.current_target);
         self.trace_event_line(format!(
@@ -108,19 +110,19 @@ impl Harness {
         ));
     }
 
-    pub(super) fn trace_event_line(&mut self, line: String) {
+    pub(crate) fn trace_event_line(&mut self, line: String) {
         if self.trace_state.enabled && self.trace_state.events {
             self.trace_line(line);
         }
     }
 
-    pub(super) fn trace_timer_line(&mut self, line: String) {
+    pub(crate) fn trace_timer_line(&mut self, line: String) {
         if self.trace_state.enabled && self.trace_state.timers {
             self.trace_line(line);
         }
     }
 
-    pub(super) fn trace_line(&mut self, line: String) {
+    pub(crate) fn trace_line(&mut self, line: String) {
         if self.trace_state.enabled {
             if self.trace_state.to_stderr {
                 eprintln!("{line}");
@@ -132,14 +134,14 @@ impl Harness {
         }
     }
 
-    pub(super) fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
+    pub(crate) fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
         self.scheduler.microtask_queue.push_back(ScheduledMicrotask::Script {
             handler,
             env: ScriptEnv::from_snapshot(env),
         });
     }
 
-    pub(super) fn queue_promise_reaction_microtask(
+    pub(crate) fn queue_promise_reaction_microtask(
         &mut self,
         reaction: PromiseReactionKind,
         settled: PromiseSettledValue,
@@ -148,7 +150,7 @@ impl Harness {
             .push_back(ScheduledMicrotask::Promise { reaction, settled });
     }
 
-    pub(super) fn run_microtask_queue(&mut self) -> Result<usize> {
+    pub(crate) fn run_microtask_queue(&mut self) -> Result<usize> {
         self.with_task_depth(|this| {
             let mut steps = 0usize;
             loop {
@@ -201,7 +203,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn run_in_task_context<T>(
+    pub(crate) fn run_in_task_context<T>(
         &mut self,
         mut run: impl FnMut(&mut Self) -> Result<T>,
     ) -> Result<T> {
@@ -218,7 +220,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_handler(
+    pub(crate) fn execute_handler(
         &mut self,
         handler: &ScriptHandler,
         event: &mut EventState,
@@ -247,7 +249,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_timer_task_callback(
+    pub(crate) fn execute_timer_task_callback(
         &mut self,
         callback: &TimerCallback,
         callback_args: &[Value],
@@ -347,7 +349,7 @@ impl Harness {
         self.script_runtime.pending_function_decls.truncate(start_len);
     }
 
-    pub(super) fn sync_global_binding_if_needed(
+    pub(crate) fn sync_global_binding_if_needed(
         &mut self,
         env: &HashMap<String, Value>,
         name: &str,
@@ -358,7 +360,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn make_function_value(
+    pub(crate) fn make_function_value(
         &mut self,
         handler: ScriptHandler,
         env: &HashMap<String, Value>,
@@ -404,14 +406,14 @@ impl Harness {
         }))
     }
 
-    pub(super) fn is_callable_value(&self, value: &Value) -> bool {
+    pub(crate) fn is_callable_value(&self, value: &Value) -> bool {
         matches!(
             value,
             Value::Function(_) | Value::PromiseCapability(_) | Value::StringConstructor
         ) || Self::callable_kind_from_value(value).is_some()
     }
 
-    pub(super) fn execute_callable_value(
+    pub(crate) fn execute_callable_value(
         &mut self,
         callable: &Value,
         args: &[Value],
@@ -420,7 +422,7 @@ impl Harness {
         self.execute_callable_value_with_env(callable, args, event, None)
     }
 
-    pub(super) fn execute_callable_value_with_env(
+    pub(crate) fn execute_callable_value_with_env(
         &mut self,
         callable: &Value,
         args: &[Value],
@@ -562,7 +564,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn invoke_promise_capability(
+    pub(crate) fn invoke_promise_capability(
         &mut self,
         capability: &PromiseCapabilityFunction,
         args: &[Value],
@@ -584,7 +586,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn bind_handler_params(
+    pub(crate) fn bind_handler_params(
         &mut self,
         handler: &ScriptHandler,
         args: &[Value],
@@ -618,7 +620,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn execute_function_call(
+    pub(crate) fn execute_function_call(
         &mut self,
         function: &FunctionValue,
         args: &[Value],
@@ -785,7 +787,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn error_to_catch_value(err: Error) -> std::result::Result<Value, Error> {
+    pub(crate) fn error_to_catch_value(err: Error) -> std::result::Result<Value, Error> {
         match err {
             Error::ScriptThrown(value) => Ok(value.into_value()),
             Error::ScriptRuntime(message) => Ok(Value::String(message)),
@@ -793,7 +795,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn bind_catch_binding(
+    pub(crate) fn bind_catch_binding(
         &self,
         binding: &CatchBinding,
         caught: &Value,
@@ -842,7 +844,7 @@ impl Harness {
         Ok(previous)
     }
 
-    pub(super) fn restore_catch_binding(
+    pub(crate) fn restore_catch_binding(
         &self,
         previous: Vec<(String, Option<Value>)>,
         env: &mut HashMap<String, Value>,
@@ -856,7 +858,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_catch_block(
+    pub(crate) fn execute_catch_block(
         &mut self,
         catch_binding: &Option<CatchBinding>,
         catch_stmts: &[Stmt],
@@ -875,7 +877,7 @@ impl Harness {
         result
     }
 
-    pub(super) fn parse_function_constructor_param_names(spec: &str) -> Result<Vec<String>> {
+    pub(crate) fn parse_function_constructor_param_names(spec: &str) -> Result<Vec<String>> {
         let mut params = Vec::new();
         for raw in spec.split(',') {
             let raw = raw.trim();
@@ -1013,7 +1015,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_pending_function_decl(
+    pub(crate) fn resolve_pending_function_decl(
         &mut self,
         name: &str,
         env: &HashMap<String, Value>,
@@ -1042,7 +1044,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_stmts(
+    pub(crate) fn execute_stmts(
         &mut self,
         stmts: &[Stmt],
         event_param: &Option<String>,

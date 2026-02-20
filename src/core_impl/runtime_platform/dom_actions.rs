@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn set_trace_stderr(&mut self, enabled: bool) {
         self.trace_state.to_stderr = enabled;
@@ -198,7 +200,7 @@ impl Harness {
         Some(details)
     }
 
-    pub(super) fn is_effectively_disabled(&self, node: NodeId) -> bool {
+    pub(crate) fn is_effectively_disabled(&self, node: NodeId) -> bool {
         if self.dom.disabled(node) {
             return true;
         }
@@ -304,7 +306,7 @@ impl Harness {
         self.click_node(target)
     }
 
-    pub(super) fn click_node_with_env(
+    pub(crate) fn click_node_with_env(
         &mut self,
         target: NodeId,
         env: &mut HashMap<String, Value>,
@@ -373,7 +375,7 @@ impl Harness {
         result
     }
 
-    pub(super) fn click_node(&mut self, target: NodeId) -> Result<()> {
+    pub(crate) fn click_node(&mut self, target: NodeId) -> Result<()> {
         self.with_script_env_always(|this, env| {
             stacker::grow(32 * 1024 * 1024, || this.click_node_with_env(target, env))
         })
@@ -396,7 +398,7 @@ impl Harness {
         })
     }
 
-    pub(super) fn submit_form_with_env(
+    pub(crate) fn submit_form_with_env(
         &mut self,
         target: NodeId,
         env: &mut HashMap<String, Value>,
@@ -409,7 +411,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn request_form_submit_with_env(
+    pub(crate) fn request_form_submit_with_env(
         &mut self,
         target: NodeId,
         env: &mut HashMap<String, Value>,
@@ -420,7 +422,7 @@ impl Harness {
         self.request_form_submit_node_with_env(form_id, env)
     }
 
-    pub(super) fn request_submit_form_with_env(
+    pub(crate) fn request_submit_form_with_env(
         &mut self,
         target: NodeId,
         submitter: Option<Value>,
@@ -461,7 +463,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn maybe_close_dialog_for_form_submit_with_env(
+    pub(crate) fn maybe_close_dialog_for_form_submit_with_env(
         &mut self,
         form: NodeId,
         env: &mut HashMap<String, Value>,
@@ -479,7 +481,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn reset_form_with_env(
+    pub(crate) fn reset_form_with_env(
         &mut self,
         target: NodeId,
         env: &mut HashMap<String, Value>,
@@ -643,11 +645,11 @@ impl Harness {
         Ok(ran)
     }
 
-    pub(super) fn run_due_timers_internal(&mut self) -> Result<usize> {
+    pub(crate) fn run_due_timers_internal(&mut self) -> Result<usize> {
         self.run_timer_queue(Some(self.scheduler.now_ms), false)
     }
 
-    pub(super) fn run_timer_queue(
+    pub(crate) fn run_timer_queue(
         &mut self,
         due_limit: Option<i64>,
         advance_clock: bool,
@@ -671,7 +673,7 @@ impl Harness {
         Ok(steps)
     }
 
-    pub(super) fn timer_step_limit_error(
+    pub(crate) fn timer_step_limit_error(
         &self,
         max_steps: usize,
         steps: usize,
@@ -705,7 +707,7 @@ impl Harness {
         ))
     }
 
-    pub(super) fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
+    pub(crate) fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
         self.scheduler.task_queue
             .iter()
             .enumerate()
@@ -720,7 +722,7 @@ impl Harness {
             .map(|(idx, _)| idx)
     }
 
-    pub(super) fn execute_timer_task(&mut self, task: ScheduledTask) -> Result<()> {
+    pub(crate) fn execute_timer_task(&mut self, task: ScheduledTask) -> Result<()> {
         stacker::grow(32 * 1024 * 1024, || self.execute_timer_task_impl(task))
     }
 
@@ -826,17 +828,17 @@ impl Harness {
         Ok(self.dom.dump_node(target))
     }
 
-    pub(super) fn select_one(&self, selector: &str) -> Result<NodeId> {
+    pub(crate) fn select_one(&self, selector: &str) -> Result<NodeId> {
         self.dom
             .query_selector(selector)?
             .ok_or_else(|| Error::SelectorNotFound(selector.to_string()))
     }
 
-    pub(super) fn node_snippet(&self, node_id: NodeId) -> String {
+    pub(crate) fn node_snippet(&self, node_id: NodeId) -> String {
         truncate_chars(&self.dom.dump_node(node_id), 200)
     }
 
-    pub(super) fn resolve_form_for_submit(&self, target: NodeId) -> Option<NodeId> {
+    pub(crate) fn resolve_form_for_submit(&self, target: NodeId) -> Option<NodeId> {
         if self
             .dom
             .tag_name(target)
@@ -848,11 +850,11 @@ impl Harness {
         self.dom.find_ancestor_by_tag(target, "form")
     }
 
-    pub(super) fn resolve_submit_form_target(&self, target: NodeId) -> Option<NodeId> {
+    pub(crate) fn resolve_submit_form_target(&self, target: NodeId) -> Option<NodeId> {
         self.resolve_form_for_submit(target)
     }
 
-    pub(super) fn resolve_request_submitter_node(
+    pub(crate) fn resolve_request_submitter_node(
         &self,
         submitter: Option<Value>,
     ) -> Result<Option<NodeId>> {
@@ -865,7 +867,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn form_elements(&self, form: NodeId) -> Result<Vec<NodeId>> {
+    pub(crate) fn form_elements(&self, form: NodeId) -> Result<Vec<NodeId>> {
         let tag = self
             .dom
             .tag_name(form)
@@ -882,7 +884,7 @@ impl Harness {
         Ok(out)
     }
 
-    pub(super) fn form_data_entries(&self, form: NodeId) -> Result<Vec<(String, String)>> {
+    pub(crate) fn form_data_entries(&self, form: NodeId) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
         for control in self.form_elements(form)? {
             if !self.is_successful_form_data_control(control)? {
@@ -895,7 +897,7 @@ impl Harness {
         Ok(out)
     }
 
-    pub(super) fn is_successful_form_data_control(&self, control: NodeId) -> Result<bool> {
+    pub(crate) fn is_successful_form_data_control(&self, control: NodeId) -> Result<bool> {
         if self.is_effectively_disabled(control) {
             return Ok(false);
         }
@@ -933,11 +935,11 @@ impl Harness {
         Ok(true)
     }
 
-    pub(super) fn form_data_control_value(&self, control: NodeId) -> Result<String> {
+    pub(crate) fn form_data_control_value(&self, control: NodeId) -> Result<String> {
         self.dom.value(control)
     }
 
-    pub(super) fn form_is_valid_for_submit(&self, form: NodeId) -> Result<bool> {
+    pub(crate) fn form_is_valid_for_submit(&self, form: NodeId) -> Result<bool> {
         let controls = self.form_elements(form)?;
         for control in &controls {
             if !self.required_control_satisfied(*control, &controls)? {
@@ -947,7 +949,7 @@ impl Harness {
         Ok(true)
     }
 
-    pub(super) fn required_control_satisfied(
+    pub(crate) fn required_control_satisfied(
         &self,
         control: NodeId,
         controls: &[NodeId],
@@ -1007,7 +1009,7 @@ impl Harness {
         Ok(true)
     }
 
-    pub(super) fn eval_form_data_source(
+    pub(crate) fn eval_form_data_source(
         &mut self,
         source: &FormDataSource,
         env: &HashMap<String, Value>,
@@ -1031,7 +1033,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn collect_form_controls(&self, node: NodeId, out: &mut Vec<NodeId>) {
+    pub(crate) fn collect_form_controls(&self, node: NodeId, out: &mut Vec<NodeId>) {
         for child in &self.dom.nodes[node.0].children {
             if is_form_control(&self.dom, *child) {
                 out.push(*child);
@@ -1040,7 +1042,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn dispatch_event(
+    pub(crate) fn dispatch_event(
         &mut self,
         target: NodeId,
         event_type: &str,
@@ -1048,7 +1050,7 @@ impl Harness {
         self.with_script_env(|this, env| this.dispatch_event_with_env(target, event_type, env, true))
     }
 
-    pub(super) fn dispatch_event_with_env(
+    pub(crate) fn dispatch_event_with_env(
         &mut self,
         target: NodeId,
         event_type: &str,
@@ -1063,7 +1065,7 @@ impl Harness {
         self.dispatch_prepared_event_with_env(event, env)
     }
 
-    pub(super) fn dispatch_event_with_options(
+    pub(crate) fn dispatch_event_with_options(
         &mut self,
         target: NodeId,
         event_type: &str,
@@ -1088,7 +1090,7 @@ impl Harness {
         self.dispatch_prepared_event_with_env(event, env)
     }
 
-    pub(super) fn dispatch_prepared_event_with_env(
+    pub(crate) fn dispatch_prepared_event_with_env(
         &mut self,
         mut event: EventState,
         env: &mut HashMap<String, Value>,
@@ -1157,11 +1159,11 @@ impl Harness {
         Ok(event)
     }
 
-    pub(super) fn focus_node(&mut self, node: NodeId) -> Result<()> {
+    pub(crate) fn focus_node(&mut self, node: NodeId) -> Result<()> {
         self.with_script_env(|this, env| this.focus_node_with_env(node, env))
     }
 
-    pub(super) fn focus_node_with_env(
+    pub(crate) fn focus_node_with_env(
         &mut self,
         node: NodeId,
         env: &mut HashMap<String, Value>,
@@ -1184,11 +1186,11 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn blur_node(&mut self, node: NodeId) -> Result<()> {
+    pub(crate) fn blur_node(&mut self, node: NodeId) -> Result<()> {
         self.with_script_env(|this, env| this.blur_node_with_env(node, env))
     }
 
-    pub(super) fn blur_node_with_env(
+    pub(crate) fn blur_node_with_env(
         &mut self,
         node: NodeId,
         env: &mut HashMap<String, Value>,
@@ -1203,7 +1205,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn scroll_into_view_node_with_env(
+    pub(crate) fn scroll_into_view_node_with_env(
         &mut self,
         _node: NodeId,
         _env: &mut HashMap<String, Value>,
@@ -1211,7 +1213,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn ensure_dialog_target(&self, node: NodeId, operation: &str) -> Result<()> {
+    pub(crate) fn ensure_dialog_target(&self, node: NodeId, operation: &str) -> Result<()> {
         let tag = self
             .dom
             .tag_name(node)
@@ -1224,7 +1226,7 @@ impl Harness {
         )))
     }
 
-    pub(super) fn dialog_return_value(&self, dialog: NodeId) -> Result<String> {
+    pub(crate) fn dialog_return_value(&self, dialog: NodeId) -> Result<String> {
         self.ensure_dialog_target(dialog, "returnValue")?;
         Ok(self
             .dom_runtime
@@ -1234,13 +1236,13 @@ impl Harness {
             .unwrap_or_default())
     }
 
-    pub(super) fn set_dialog_return_value(&mut self, dialog: NodeId, value: String) -> Result<()> {
+    pub(crate) fn set_dialog_return_value(&mut self, dialog: NodeId, value: String) -> Result<()> {
         self.ensure_dialog_target(dialog, "returnValue")?;
         self.dom_runtime.dialog_return_values.insert(dialog, value);
         Ok(())
     }
 
-    pub(super) fn show_dialog_with_env(
+    pub(crate) fn show_dialog_with_env(
         &mut self,
         dialog: NodeId,
         _modal: bool,
@@ -1251,7 +1253,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn close_dialog_with_env(
+    pub(crate) fn close_dialog_with_env(
         &mut self,
         dialog: NodeId,
         return_value: Option<Value>,
@@ -1265,7 +1267,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn request_close_dialog_with_env(
+    pub(crate) fn request_close_dialog_with_env(
         &mut self,
         dialog: NodeId,
         return_value: Option<Value>,
@@ -1288,7 +1290,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn transition_dialog_open_state_with_env(
+    pub(crate) fn transition_dialog_open_state_with_env(
         &mut self,
         dialog: NodeId,
         open: bool,

@@ -1,8 +1,33 @@
 use super::html::{can_start_regex_literal, unescape_string};
 use super::*;
 
-include!("parser_stmt.rs");
-include!("parser_expr.rs");
+#[path = "parser_stmt.rs"]
+mod parser_stmt;
+#[path = "parser_expr.rs"]
+mod parser_expr;
+
+use parser_stmt::is_ident_char;
+
+pub(super) fn parse_expr(src: &str) -> Result<Expr> {
+    parser_expr::parse_expr(src)
+}
+
+pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
+    parser_stmt::parse_function_expr(src)
+}
+
+pub(super) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
+    parser_stmt::parse_block_statements(body)
+}
+
+#[cfg(test)]
+pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
+    parser_stmt::parse_for_each_callback(src)
+}
+
+pub(super) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+    parser_stmt::resolve_insert_adjacent_position(src)
+}
 
 pub(super) fn is_ident(value: &str) -> bool {
     let mut chars = value.chars();

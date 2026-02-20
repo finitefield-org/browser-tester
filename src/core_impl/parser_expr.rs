@@ -1,3 +1,9 @@
+use super::*;
+use super::parser_stmt::{
+    is_ident_char, parse_callback, parse_element_target, parse_form_elements_base,
+    parse_set_interval_call, parse_set_timeout_call, parse_timer_callback,
+};
+
 pub(super) fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     if src.is_empty() {
@@ -27,7 +33,7 @@ pub(super) fn parse_expr(src: &str) -> Result<Expr> {
     parse_comma_expr(src)
 }
 
-fn strip_js_comments(src: &str) -> String {
+pub(super) fn strip_js_comments(src: &str) -> String {
     enum State {
         Normal,
         Single,
@@ -222,7 +228,7 @@ fn strip_js_comments(src: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| src.to_string())
 }
 
-fn parse_comma_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_comma_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let parts = split_top_level_by_char(src, b',');
     if parts.len() == 1 {
@@ -242,7 +248,7 @@ fn parse_comma_expr(src: &str) -> Result<Expr> {
     Ok(Expr::Comma(parsed))
 }
 
-fn parse_ternary_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_ternary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
 
     if let Some(q_pos) = find_top_level_ternary_question(src) {
@@ -263,7 +269,7 @@ fn parse_ternary_expr(src: &str) -> Result<Expr> {
     parse_logical_or_expr(src)
 }
 
-fn parse_logical_or_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -279,7 +285,7 @@ fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_nullish_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_nullish_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -295,7 +301,7 @@ fn parse_nullish_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_logical_and_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_logical_and_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -311,7 +317,7 @@ fn parse_logical_and_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -327,7 +333,7 @@ fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -343,7 +349,7 @@ fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -359,7 +365,7 @@ fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_equality_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_equality_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -378,7 +384,7 @@ fn parse_equality_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_relational_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_relational_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -399,7 +405,7 @@ fn parse_relational_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_shift_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_shift_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -417,7 +423,7 @@ fn parse_shift_expr(src: &str) -> Result<Expr> {
     })
 }
 
-fn parse_add_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_add_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -451,7 +457,7 @@ fn parse_add_expr(src: &str) -> Result<Expr> {
     Ok(expr)
 }
 
-fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
+pub(super) fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
     match lhs {
         Expr::Add(mut parts) => {
             parts.push(rhs);
@@ -461,7 +467,7 @@ fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
     }
 }
 
-fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
+pub(super) fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut ops = Vec::new();
@@ -488,7 +494,7 @@ fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     (parts, ops)
 }
 
-fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
+pub(super) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
     if idx >= bytes.len() {
         return false;
     }
@@ -524,7 +530,7 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
     )
 }
 
-fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
+pub(super) fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
     if exponent_index >= bytes.len() {
         return false;
     }
@@ -565,7 +571,7 @@ fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
     has_digit
 }
 
-fn parse_mul_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_mul_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -641,7 +647,7 @@ fn parse_mul_expr(src: &str) -> Result<Expr> {
     Ok(expr)
 }
 
-fn parse_pow_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_pow_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -668,7 +674,7 @@ fn parse_pow_expr(src: &str) -> Result<Expr> {
     parse_unary_expr(src)
 }
 
-fn parse_unary_expr(src: &str) -> Result<Expr> {
+pub(super) fn parse_unary_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -733,7 +739,7 @@ fn parse_unary_expr(src: &str) -> Result<Expr> {
     parse_primary(src)
 }
 
-fn fold_binary<F, G>(parts: Vec<&str>, ops: Vec<&str>, parse_leaf: F, map_op: G) -> Result<Expr>
+pub(super) fn fold_binary<F, G>(parts: Vec<&str>, ops: Vec<&str>, parse_leaf: F, map_op: G) -> Result<Expr>
 where
     F: Fn(&str) -> Result<Expr>,
     G: Fn(&str) -> BinaryOp,
@@ -753,7 +759,7 @@ where
     Ok(expr)
 }
 
-fn parse_primary(src: &str) -> Result<Expr> {
+pub(super) fn parse_primary(src: &str) -> Result<Expr> {
     let src = src.trim();
 
     if src == "true" {
@@ -1196,7 +1202,7 @@ fn parse_primary(src: &str) -> Result<Expr> {
     Err(Error::ScriptParse(format!("unsupported expression: {src}")))
 }
 
-fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if src.is_empty() {
         return Ok(None);
     }
@@ -1264,7 +1270,7 @@ fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::Float(n)))
 }
 
-fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
     let Some(raw) = src.strip_suffix('n') else {
         return Ok(None);
     };
@@ -1299,7 +1305,7 @@ fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BigInt(value)))
 }
 
-fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result<Option<Expr>> {
+pub(super) fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result<Option<Expr>> {
     let src = src.to_ascii_lowercase();
     if !src.starts_with(prefix) {
         return Ok(None);
@@ -1317,7 +1323,7 @@ fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result
     Ok(Some(Expr::Number(n)))
 }
 
-fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
+pub(super) fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
     if !src.starts_with(keyword) {
         return None;
     }
@@ -1330,7 +1336,7 @@ fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
     None
 }
 
-fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(super) fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -1347,7 +1353,7 @@ fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(target))
 }
 
-fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
+pub(super) fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("document") {
@@ -1374,7 +1380,7 @@ fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
     Ok(Some(tag_name.to_ascii_lowercase()))
 }
 
-fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
+pub(super) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("document") {
@@ -1401,7 +1407,7 @@ fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
     Ok(Some(text))
 }
 
-fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
+pub(super) fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1440,7 +1446,7 @@ fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1501,7 +1507,7 @@ fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::LocationMethodCall { method, url }))
 }
 
-fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
+pub(super) fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("location") {
@@ -1570,7 +1576,7 @@ fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1659,7 +1665,7 @@ fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
+pub(super) fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("history") {
@@ -1689,7 +1695,7 @@ fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1757,7 +1763,7 @@ fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
+pub(super) fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("navigator") {
@@ -1807,7 +1813,7 @@ fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -1875,7 +1881,7 @@ fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::DateNew { value }))
 }
 
-fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
+pub(super) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? else {
@@ -1888,7 +1894,7 @@ fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
     Ok(Some((pattern, flags)))
 }
 
-fn parse_regex_literal_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<(String, String)>> {
+pub(super) fn parse_regex_literal_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<(String, String)>> {
     cursor.skip_ws();
     if cursor.peek() != Some(b'/') {
         return Ok(None);
@@ -1961,7 +1967,7 @@ fn parse_regex_literal_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<(St
     Ok(Some((pattern, flags)))
 }
 
-fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? else {
@@ -1974,7 +1980,7 @@ fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
+pub(super) fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
     let start = cursor.i;
     cursor.skip_ws();
     if cursor.consume_ascii("new") {
@@ -2049,7 +2055,7 @@ fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<E
     Ok(Some(Expr::RegexNew { pattern, flags }))
 }
 
-fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -2109,7 +2115,7 @@ fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::RegExpConstructor))
 }
 
-fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -2173,7 +2179,7 @@ fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::FunctionConstructor { args: parsed }))
 }
 
-fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -2246,7 +2252,7 @@ fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     }
 }
 
-fn parse_date_now_expr(src: &str) -> Result<bool> {
+pub(super) fn parse_date_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -2282,7 +2288,7 @@ fn parse_date_now_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-fn parse_performance_now_expr(src: &str) -> Result<bool> {
+pub(super) fn parse_performance_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -2323,7 +2329,7 @@ fn parse_performance_now_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<String>>> {
+pub(super) fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<String>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -2371,7 +2377,7 @@ fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<Str
     Ok(Some(args))
 }
 
-fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
     let Some(args) = parse_date_static_args_expr(src, "parse")? else {
         return Ok(None);
     };
@@ -2383,7 +2389,7 @@ fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(parse_expr(args[0].trim())?))
 }
 
-fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+pub(super) fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     let Some(args) = parse_date_static_args_expr(src, "UTC")? else {
         return Ok(None);
     };
@@ -2406,7 +2412,7 @@ fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     Ok(Some(out))
 }
 
-fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -3703,7 +3709,7 @@ fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
@@ -3806,7 +3812,7 @@ fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MathConst(constant)))
 }
 
-fn parse_math_const_name(name: &str) -> Option<MathConst> {
+pub(super) fn parse_math_const_name(name: &str) -> Option<MathConst> {
     match name {
         "E" => Some(MathConst::E),
         "LN10" => Some(MathConst::Ln10),
@@ -3820,7 +3826,7 @@ fn parse_math_const_name(name: &str) -> Option<MathConst> {
     }
 }
 
-fn parse_math_method_name(name: &str) -> Option<MathMethod> {
+pub(super) fn parse_math_method_name(name: &str) -> Option<MathMethod> {
     match name {
         "abs" => Some(MathMethod::Abs),
         "acos" => Some(MathMethod::Acos),
@@ -3863,7 +3869,7 @@ fn parse_math_method_name(name: &str) -> Option<MathMethod> {
     }
 }
 
-fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
+pub(super) fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
     let method_name = match method {
         MathMethod::Abs => "abs",
         MathMethod::Acos => "acos",
@@ -3927,7 +3933,7 @@ fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
     Err(Error::ScriptParse(message))
 }
 
-fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4059,7 +4065,7 @@ fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::StringConstructor))
 }
 
-fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4208,7 +4214,7 @@ fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::NumberConst(constant)))
 }
 
-fn parse_number_const_name(name: &str) -> Option<NumberConst> {
+pub(super) fn parse_number_const_name(name: &str) -> Option<NumberConst> {
     match name {
         "EPSILON" => Some(NumberConst::Epsilon),
         "MAX_SAFE_INTEGER" => Some(NumberConst::MaxSafeInteger),
@@ -4222,7 +4228,7 @@ fn parse_number_const_name(name: &str) -> Option<NumberConst> {
     }
 }
 
-fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
+pub(super) fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
     match name {
         "isFinite" => Some(NumberMethod::IsFinite),
         "isInteger" => Some(NumberMethod::IsInteger),
@@ -4234,7 +4240,7 @@ fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
     }
 }
 
-fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4342,7 +4348,7 @@ fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
+pub(super) fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
     match name {
         "asIntN" => Some(BigIntMethod::AsIntN),
         "asUintN" => Some(BigIntMethod::AsUintN),
@@ -4350,7 +4356,7 @@ fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
     }
 }
 
-fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
+pub(super) fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
     match name {
         "Int8Array" => Some(TypedArrayKind::Int8),
         "Uint8Array" => Some(TypedArrayKind::Uint8),
@@ -4368,7 +4374,7 @@ fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
     }
 }
 
-fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4509,7 +4515,7 @@ fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
     )))
 }
 
-fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4700,7 +4706,7 @@ fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::PromiseConstructor))
 }
 
-fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -4786,7 +4792,7 @@ fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4876,7 +4882,7 @@ fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BlobConstructor))
 }
 
-fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -4990,7 +4996,7 @@ fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MapConstructor))
 }
 
-fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -5160,7 +5166,7 @@ fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::UrlConstructor))
 }
 
-fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -5241,7 +5247,7 @@ fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -5323,7 +5329,7 @@ fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::SetConstructor))
 }
 
-fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -5479,7 +5485,7 @@ fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::SymbolConstructor))
 }
 
-fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -5607,7 +5613,7 @@ fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ArrayBufferConstructor))
 }
 
-fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -5670,7 +5676,7 @@ fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::String("Error".to_string())))
 }
 
-fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -5716,7 +5722,7 @@ fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -5827,7 +5833,7 @@ fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
     }
 }
 
-fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -5913,7 +5919,7 @@ fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -5990,7 +5996,7 @@ fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -6104,7 +6110,7 @@ fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -6221,15 +6227,15 @@ fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "isNaN", "isNaN requires exactly one argument")
 }
 
-fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "encodeURI", "encodeURI requires exactly one argument")
 }
 
-fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "encodeURIComponent",
@@ -6237,11 +6243,11 @@ fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     )
 }
 
-fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "decodeURI", "decodeURI requires exactly one argument")
 }
 
-fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "decodeURIComponent",
@@ -6249,27 +6255,27 @@ fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     )
 }
 
-fn parse_escape_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_escape_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "escape", "escape requires exactly one argument")
 }
 
-fn parse_unescape_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_unescape_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "unescape", "unescape requires exactly one argument")
 }
 
-fn parse_is_finite_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_is_finite_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "isFinite", "isFinite requires exactly one argument")
 }
 
-fn parse_atob_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_atob_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "atob", "atob requires exactly one argument")
 }
 
-fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "btoa", "btoa requires exactly one argument")
 }
 
-fn parse_global_single_arg_expr(
+pub(super) fn parse_global_single_arg_expr(
     src: &str,
     function_name: &str,
     arg_error: &str,
@@ -6309,7 +6315,7 @@ fn parse_global_single_arg_expr(
     Ok(Some(value))
 }
 
-fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+pub(super) fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6358,7 +6364,7 @@ fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     Ok(Some((value, radix)))
 }
 
-fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6396,7 +6402,7 @@ fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6448,7 +6454,7 @@ fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6499,7 +6505,7 @@ fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
+pub(super) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'{') {
@@ -6587,7 +6593,7 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>
     Ok(Some(out))
 }
 
-fn find_first_top_level_colon(src: &str) -> Option<usize> {
+pub(super) fn find_first_top_level_colon(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -6602,7 +6608,7 @@ fn find_first_top_level_colon(src: &str) -> Option<usize> {
     None
 }
 
-fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6747,7 +6753,7 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -6826,7 +6832,7 @@ fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option
     }))
 }
 
-fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -6866,7 +6872,7 @@ fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -6902,7 +6908,7 @@ fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ObjectPathGet { target, path }))
 }
 
-fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec<&'a str>> {
+pub(super) fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec<&'a str>> {
     if args_src.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -6917,7 +6923,7 @@ fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec
     Ok(args)
 }
 
-fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
+pub(super) fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
     let arg_src = arg_src.trim();
     if let Some(rest) = arg_src.strip_prefix("...") {
         let rest = rest.trim();
@@ -6932,7 +6938,7 @@ fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
     }
 }
 
-fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -6986,7 +6992,7 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -7029,7 +7035,7 @@ fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let bytes = src.as_bytes();
     let mut brackets = Vec::new();
@@ -7101,7 +7107,7 @@ fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     let parse_args = |args_src: &str| -> Result<Vec<Expr>> {
         let args = parse_call_args(args_src, "function call arguments cannot be empty")?;
 
@@ -7162,11 +7168,11 @@ fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "fetch", "fetch requires exactly one argument")
 }
 
-fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -7224,7 +7230,7 @@ fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MatchMedia(Box::new(query))))
 }
 
-fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "structuredClone",
@@ -7232,15 +7238,15 @@ fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
     )
 }
 
-fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "alert", "alert requires exactly one argument")
 }
 
-fn parse_confirm_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_confirm_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "confirm", "confirm requires exactly one argument")
 }
 
-fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+pub(super) fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -7289,7 +7295,7 @@ fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     Ok(Some((message, default)))
 }
 
-fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+pub(super) fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'[') {
@@ -7333,7 +7339,7 @@ fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     Ok(Some(out))
 }
 
-fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -7378,7 +7384,7 @@ fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -7443,7 +7449,7 @@ fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -7846,7 +7852,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+pub(super) fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
     let callback_arg = strip_js_comments(arg);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
     let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
@@ -7869,7 +7875,7 @@ fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result
     Ok(ScriptHandler { params, stmts })
 }
 
-fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -7981,7 +7987,7 @@ fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod> {
+pub(super) fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod> {
     match name {
         "toExponential" => Some(NumberInstanceMethod::ToExponential),
         "toFixed" => Some(NumberInstanceMethod::ToFixed),
@@ -7993,7 +7999,7 @@ fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod>
     }
 }
 
-fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -8088,7 +8094,7 @@ fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod> {
+pub(super) fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod> {
     match name {
         "toLocaleString" => Some(BigIntInstanceMethod::ToLocaleString),
         "toString" => Some(BigIntInstanceMethod::ToString),
@@ -8097,7 +8103,7 @@ fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod>
     }
 }
 
-fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -8476,7 +8482,7 @@ fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -9092,7 +9098,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(super) fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -9201,7 +9207,7 @@ fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
+pub(super) fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
     let bytes = src.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -9217,7 +9223,7 @@ fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
     out
 }
 
-fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
         return Ok(None);
@@ -9229,7 +9235,7 @@ fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> 
     Ok(Some((handler, delay_ms)))
 }
 
-fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
         return Ok(None);
@@ -9241,14 +9247,14 @@ fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>>
     Ok(Some((handler, delay_ms)))
 }
 
-fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
+pub(super) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
     cursor.skip_ws();
     if cursor.eof() { Ok(callback) } else { Ok(None) }
 }
 
-fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<TimerCallback>> {
+pub(super) fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<TimerCallback>> {
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
         cursor.skip_ws();
@@ -9281,14 +9287,14 @@ fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<
     Ok(Some(callback))
 }
 
-fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
+pub(super) fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
     let mut cursor = Cursor::new(src);
     let handler = parse_queue_microtask_call(&mut cursor)?;
     cursor.skip_ws();
     if cursor.eof() { Ok(handler) } else { Ok(None) }
 }
 
-fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(super) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some(handler) = parse_queue_microtask_call(&mut cursor)? else {
@@ -9307,7 +9313,7 @@ fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::QueueMicrotask { handler }))
 }
 
-fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
+pub(super) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
     cursor.skip_ws();
     if !cursor.consume_ascii("queueMicrotask") {
         return Ok(None);
@@ -9344,7 +9350,7 @@ fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHa
     }))
 }
 
-fn parse_template_literal(src: &str) -> Result<Expr> {
+pub(super) fn parse_template_literal(src: &str) -> Result<Expr> {
     let inner = &src[1..src.len() - 1];
     let bytes = inner.as_bytes();
 
@@ -9399,7 +9405,7 @@ fn parse_template_literal(src: &str) -> Result<Expr> {
     Ok(Expr::Add(parts))
 }
 
-fn starts_with_window_member_access(src: &str) -> bool {
+pub(super) fn starts_with_window_member_access(src: &str) -> bool {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("window") {
@@ -9409,7 +9415,7 @@ fn starts_with_window_member_access(src: &str) -> bool {
     cursor.consume_byte(b'.')
 }
 
-fn is_non_dom_var_target(target: &DomQuery) -> bool {
+pub(super) fn is_non_dom_var_target(target: &DomQuery) -> bool {
     match target {
         DomQuery::Var(_) | DomQuery::VarPath { .. } => true,
         DomQuery::Index { target, .. } => is_non_dom_var_target(target),
@@ -9417,7 +9423,7 @@ fn is_non_dom_var_target(target: &DomQuery) -> bool {
     }
 }
 
-fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
+pub(super) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -9708,7 +9714,7 @@ fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     Ok(Some((target, prop)))
 }
 
-fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -9741,18 +9747,18 @@ fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     Ok(Some((target, name)))
 }
 
-fn is_aria_string_property(prop: &str) -> bool {
+pub(super) fn is_aria_string_property(prop: &str) -> bool {
     if !prop.starts_with("aria") || prop.len() <= 4 {
         return false;
     }
     !is_aria_element_ref_single_property(prop) && !is_aria_element_ref_list_property(prop)
 }
 
-fn is_aria_element_ref_single_property(prop: &str) -> bool {
+pub(super) fn is_aria_element_ref_single_property(prop: &str) -> bool {
     matches!(prop, "ariaActiveDescendantElement")
 }
 
-fn is_aria_element_ref_list_property(prop: &str) -> bool {
+pub(super) fn is_aria_element_ref_list_property(prop: &str) -> bool {
     matches!(
         prop,
         "ariaControlsElements"
@@ -9765,7 +9771,7 @@ fn is_aria_element_ref_list_property(prop: &str) -> bool {
     )
 }
 
-fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -9798,7 +9804,7 @@ fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     Ok(Some((target, name)))
 }
 
-fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -9830,7 +9836,7 @@ fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     Ok(Some((target, selector)))
 }
 
-fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -9862,7 +9868,7 @@ fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     Ok(Some((target, selector)))
 }
 
-fn parse_dom_computed_style_property_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_dom_computed_style_property_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("getComputedStyle") {
@@ -9893,7 +9899,7 @@ fn parse_dom_computed_style_property_expr(src: &str) -> Result<Option<(DomQuery,
     Ok(Some((target, property)))
 }
 
-fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)>> {
+pub(super) fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -9952,7 +9958,7 @@ fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)
     Ok(Some((event_var, prop)))
 }
 
-fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -9989,7 +9995,7 @@ fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)
     Ok(Some((target, class_name)))
 }
 
-fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(super) fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -10021,7 +10027,7 @@ fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(target))
 }
 
-fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(super) fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let form = match parse_form_elements_base(&mut cursor) {
@@ -10051,7 +10057,7 @@ fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(form))
 }
 
-fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(super) fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(form) = parse_new_form_data_target(&mut cursor)? else {
@@ -10064,19 +10070,19 @@ fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(form))
 }
 
-fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(super) fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "get")
 }
 
-fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(super) fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "has")
 }
 
-fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(super) fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "getAll")
 }
 
-fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(super) fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -10119,7 +10125,7 @@ fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSour
     Ok(Some((source, name)))
 }
 
-fn parse_form_data_method_expr(
+pub(super) fn parse_form_data_method_expr(
     src: &str,
     method: &str,
 ) -> Result<Option<(FormDataSource, String)>> {
@@ -10155,7 +10161,7 @@ fn parse_form_data_method_expr(
     Ok(Some((source, name)))
 }
 
-fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
+pub(super) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
     if let Some(form) = parse_new_form_data_target(cursor)? {
         return Ok(Some(FormDataSource::NewForm(form)));
     }
@@ -10167,7 +10173,7 @@ fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSour
     Ok(None)
 }
 
-fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
+pub(super) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
     cursor.skip_ws();
     let start = cursor.pos();
 
@@ -10209,7 +10215,7 @@ fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery
     Ok(Some(form))
 }
 
-fn parse_string_literal_exact(src: &str) -> Result<String> {
+pub(super) fn parse_string_literal_exact(src: &str) -> Result<String> {
     let bytes = src.as_bytes();
     if bytes.len() < 2 {
         return Err(Error::ScriptParse("invalid string literal".into()));
@@ -10236,7 +10242,7 @@ fn parse_string_literal_exact(src: &str) -> Result<String> {
     Ok(unescape_string(&src[1..src.len() - 1]))
 }
 
-fn strip_outer_parens(mut src: &str) -> &str {
+pub(super) fn strip_outer_parens(mut src: &str) -> &str {
     loop {
         let trimmed = src.trim();
         if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
@@ -10251,7 +10257,7 @@ fn strip_outer_parens(mut src: &str) -> &str {
     }
 }
 
-fn is_fully_wrapped_in_parens(src: &str) -> bool {
+pub(super) fn is_fully_wrapped_in_parens(src: &str) -> bool {
     let bytes = src.as_bytes();
     if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
         return false;
@@ -10276,7 +10282,7 @@ fn is_fully_wrapped_in_parens(src: &str) -> bool {
     scanner.in_normal() && scanner.paren == 0 && scanner.bracket == 0 && scanner.brace == 0
 }
 
-fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
+pub(super) fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -10320,7 +10326,7 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     None
 }
 
-fn find_top_level_ternary_question(src: &str) -> Option<usize> {
+pub(super) fn find_top_level_ternary_question(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -10343,7 +10349,7 @@ fn find_top_level_ternary_question(src: &str) -> Option<usize> {
     None
 }
 
-fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
+pub(super) fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
     let bytes = src.as_bytes();
     if from >= bytes.len() {
         return None;
@@ -10379,7 +10385,7 @@ fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
     None
 }
 
-fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
+pub(super) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut start = 0usize;
@@ -10404,7 +10410,7 @@ fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     parts
 }
 
-fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+pub(super) fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut found_ops = Vec::new();
@@ -10461,7 +10467,7 @@ fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, V
     (parts, found_ops)
 }
 
-fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
+pub(super) fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
     let bytes = src.as_bytes();
     let mut i = start;
     let mut scanner = JsLexScanner {
