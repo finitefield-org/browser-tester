@@ -2291,7 +2291,7 @@ impl PartialEq for RegexValue {
 #[derive(Debug, Clone)]
 struct FunctionValue {
     handler: ScriptHandler,
-    captured_env: Rc<RefCell<HashMap<String, Value>>>,
+    captured_env: Rc<RefCell<ScriptEnv>>,
     captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
     captured_global_names: HashSet<String>,
     local_bindings: HashSet<String>,
@@ -2387,60 +2387,53 @@ impl Value {
             }
             Self::Object(entries) => {
                 let entries = entries.borrow();
-                match entries.iter().find_map(|(key, value)| {
-                    (key == INTERNAL_STRING_WRAPPER_VALUE_KEY).then(|| value)
-                }) {
-                    Some(Value::String(value)) => value.clone(),
-                    _ => {
-                        let is_url = entries.iter().any(|(key, value)| {
-                            key == INTERNAL_URL_OBJECT_KEY && matches!(value, Value::Bool(true))
-                        });
-                        if is_url {
-                            if let Some(Value::String(href)) = entries
-                                .iter()
-                                .find_map(|(key, value)| (key == "href").then(|| value))
-                            {
-                                return href.clone();
+                if let Some(Value::String(value)) =
+                    entries.get_entry(INTERNAL_STRING_WRAPPER_VALUE_KEY)
+                {
+                    return value;
+                }
+                let is_url = matches!(
+                    entries.get_entry(INTERNAL_URL_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                );
+                if is_url {
+                    if let Some(Value::String(href)) = entries.get_entry("href") {
+                        return href;
+                    }
+                }
+                let is_url_search_params = matches!(
+                    entries.get_entry(INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                );
+                if is_url_search_params {
+                    let mut pairs = Vec::new();
+                    if let Some(Value::Array(list)) =
+                        entries.get_entry(INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY)
+                    {
+                        let list = list.borrow();
+                        for item in list.iter() {
+                            let Value::Array(pair) = item else {
+                                continue;
+                            };
+                            let pair = pair.borrow();
+                            if pair.is_empty() {
+                                continue;
                             }
+                            let name = pair[0].as_string();
+                            let value = pair.get(1).map(Value::as_string).unwrap_or_default();
+                            pairs.push((name, value));
                         }
-                        let is_url_search_params = entries.iter().any(|(key, value)| {
-                            key == INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY
-                                && matches!(value, Value::Bool(true))
-                        });
-                        if is_url_search_params {
-                            let mut pairs = Vec::new();
-                            if let Some(Value::Array(list)) =
-                                entries.iter().find_map(|(key, value)| {
-                                    (key == INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY).then(|| value)
-                                })
-                            {
-                                let list = list.borrow();
-                                for item in list.iter() {
-                                    let Value::Array(pair) = item else {
-                                        continue;
-                                    };
-                                    let pair = pair.borrow();
-                                    if pair.is_empty() {
-                                        continue;
-                                    }
-                                    let name = pair[0].as_string();
-                                    let value =
-                                        pair.get(1).map(Value::as_string).unwrap_or_default();
-                                    pairs.push((name, value));
-                                }
-                            }
-                            serialize_url_search_params_pairs(&pairs)
-                        } else {
-                            let is_readable_stream = entries.iter().any(|(key, value)| {
-                                key == INTERNAL_READABLE_STREAM_OBJECT_KEY
-                                    && matches!(value, Value::Bool(true))
-                            });
-                            if is_readable_stream {
-                                "[object ReadableStream]".into()
-                            } else {
-                                "[object Object]".into()
-                            }
-                        }
+                    }
+                    serialize_url_search_params_pairs(&pairs)
+                } else {
+                    let is_readable_stream = matches!(
+                        entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    if is_readable_stream {
+                        "[object ReadableStream]".into()
+                    } else {
+                        "[object Object]".into()
                     }
                 }
             }
@@ -4524,7 +4517,7 @@ fn ensure_hash_prefix(value: &str) -> String {
 struct Listener {
     capture: bool,
     handler: ScriptHandler,
-    captured_env: Rc<RefCell<HashMap<String, Value>>>,
+    captured_env: Rc<RefCell<ScriptEnv>>,
     captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
 }
 
@@ -4779,7 +4772,7 @@ impl std::ops::DerefMut for ScriptEnv {
 struct ScriptRuntimeState {
     env: ScriptEnv,
     pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
-    listener_capture_env_stack: Vec<Rc<RefCell<HashMap<String, Value>>>>,
+    listener_capture_env_stack: Vec<Rc<RefCell<ScriptEnv>>>,
 }
 
 #[derive(Debug)]

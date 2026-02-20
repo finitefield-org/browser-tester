@@ -2797,7 +2797,7 @@ impl Harness {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
             let mut listener_env = env.clone();
-            let captured_env_snapshot = listener.captured_env.borrow().clone();
+            let captured_env_snapshot = listener.captured_env.borrow().to_map();
             let captured_keys = captured_env_snapshot
                 .keys()
                 .filter(|name| !Self::is_internal_env_key(name))
@@ -3109,7 +3109,7 @@ impl Harness {
     }
 
     pub(super) fn make_function_value(
-        &self,
+        &mut self,
         handler: ScriptHandler,
         env: &HashMap<String, Value>,
         global_scope: bool,
@@ -3125,11 +3125,13 @@ impl Harness {
             .cloned()
             .collect::<Vec<_>>();
         let captured_env = if global_scope {
-            Rc::new(RefCell::new(self.script_runtime.env.to_map()))
+            Rc::new(RefCell::new(self.script_runtime.env.share()))
         } else if let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() {
-            shared_env.clone()
+            let shared_env = shared_env.clone();
+            *shared_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+            shared_env
         } else {
-            Rc::new(RefCell::new(env.clone()))
+            Rc::new(RefCell::new(ScriptEnv::from_snapshot(env)))
         };
         let captured_env_snapshot = captured_env.borrow();
         let mut captured_global_names = HashSet::new();
@@ -3391,7 +3393,7 @@ impl Harness {
                 let captured_env_before_call = if function.global_scope {
                     HashMap::new()
                 } else {
-                    function.captured_env.borrow().clone()
+                    function.captured_env.borrow().to_map()
                 };
                 let mut call_env = if function.global_scope {
                     this.script_runtime.env.to_map()
@@ -3773,17 +3775,29 @@ impl Harness {
     }
 
     pub(super) fn resolve_pending_function_decl(
-        &self,
+        &mut self,
         name: &str,
         env: &HashMap<String, Value>,
     ) -> Option<Value> {
+        let mut resolved = None;
         for scope in self.script_runtime.pending_function_decls.iter().rev() {
             let Some((handler, is_async)) = scope.get(name) else {
                 continue;
             };
-            return Some(self.make_function_value(handler.clone(), env, false, *is_async));
+            resolved = Some((handler.clone(), *is_async));
+            break;
         }
-        None
+        let (handler, is_async) = resolved?;
+        Some(self.make_function_value(handler, env, false, is_async))
+    }
+
+    fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
+        let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() else {
+            return;
+        };
+        if Rc::strong_count(shared_env) > 1 {
+            *shared_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+        }
     }
 
     pub(super) fn execute_stmts(
@@ -3796,13 +3810,11 @@ impl Harness {
         let pending = Self::collect_function_decls(stmts);
         self.script_runtime.pending_function_decls.push(pending);
         self.script_runtime.listener_capture_env_stack
-            .push(Rc::new(RefCell::new(env.clone())));
+            .push(Rc::new(RefCell::new(ScriptEnv::from_snapshot(env))));
 
         let result = (|| -> Result<ExecFlow> {
             for stmt in stmts {
-                if let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() {
-                    *shared_env.borrow_mut() = env.clone();
-                }
+                self.sync_listener_capture_env_if_shared(env);
                 match stmt {
                 Stmt::VarDecl { name, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -4910,8 +4922,8 @@ impl Harness {
                                 .listener_capture_env_stack
                                 .last()
                                 .cloned()
-                                .unwrap_or_else(|| Rc::new(RefCell::new(HashMap::new())));
-                            *captured_env.borrow_mut() = env.clone();
+                                .unwrap_or_else(|| Rc::new(RefCell::new(ScriptEnv::default())));
+                            *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
                             self.listeners.add(
                                 node,
                                 event_type.clone(),
