@@ -104,6 +104,7 @@ pub(super) struct JsLexScanner {
     bracket: usize,
     brace: usize,
     previous_significant: Option<u8>,
+    previous_identifier_allows_regex: bool,
 }
 
 impl JsLexScanner {
@@ -115,6 +116,7 @@ impl JsLexScanner {
             bracket: 0,
             brace: 0,
             previous_significant: None,
+            previous_identifier_allows_regex: false,
         }
     }
 
@@ -139,7 +141,7 @@ impl JsLexScanner {
         if i + 1 < bytes.len() && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*') {
             return true;
         }
-        can_start_regex_literal(self.previous_significant)
+        can_start_regex_literal(self.previous_significant) || self.previous_identifier_allows_regex
     }
 
     fn note_significant_byte(&mut self, b: u8) {
@@ -153,6 +155,7 @@ impl JsLexScanner {
             _ => {}
         }
         self.previous_significant = Some(b);
+        self.previous_identifier_allows_regex = false;
     }
 
     fn push_mode(&mut self, next: JsLexMode) {
@@ -165,23 +168,54 @@ impl JsLexScanner {
     }
 
     pub(super) fn advance(&mut self, bytes: &[u8], i: usize) -> usize {
+        fn can_start_regex_after_identifier(ident: &[u8]) -> bool {
+            matches!(
+                ident,
+                b"return"
+                    | b"throw"
+                    | b"case"
+                    | b"delete"
+                    | b"typeof"
+                    | b"void"
+                    | b"yield"
+                    | b"await"
+                    | b"in"
+                    | b"of"
+                    | b"instanceof"
+            )
+        }
+
         let b = bytes[i];
         match self.mode {
             JsLexMode::Normal => {
                 if b.is_ascii_whitespace() {
                     return i + 1;
                 }
+                if b == b'_' || b == b'$' || b.is_ascii_alphabetic() {
+                    let start = i;
+                    let mut end = i + 1;
+                    while end < bytes.len() && is_ident_char(bytes[end]) {
+                        end += 1;
+                    }
+                    self.previous_significant = Some(bytes[end - 1]);
+                    self.previous_identifier_allows_regex =
+                        can_start_regex_after_identifier(&bytes[start..end]);
+                    return end;
+                }
                 match b {
                     b'\'' => {
                         self.push_mode(JsLexMode::Single);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'"' => {
                         self.push_mode(JsLexMode::Double);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'`' => {
                         self.push_mode(JsLexMode::Backtick);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'/' => {
@@ -191,8 +225,11 @@ impl JsLexScanner {
                         } else if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
                             self.push_mode(JsLexMode::BlockComment);
                             i + 2
-                        } else if can_start_regex_literal(self.previous_significant) {
+                        } else if can_start_regex_literal(self.previous_significant)
+                            || self.previous_identifier_allows_regex
+                        {
                             self.push_mode(JsLexMode::Regex { in_class: false });
+                            self.previous_identifier_allows_regex = false;
                             i + 1
                         } else {
                             self.note_significant_byte(b'/');
@@ -212,6 +249,7 @@ impl JsLexScanner {
                     if b == b'\'' {
                         self.pop_mode();
                         self.previous_significant = Some(b'\'');
+                        self.previous_identifier_allows_regex = false;
                     }
                     i + 1
                 }
@@ -223,6 +261,7 @@ impl JsLexScanner {
                     if b == b'"' {
                         self.pop_mode();
                         self.previous_significant = Some(b'"');
+                        self.previous_identifier_allows_regex = false;
                     }
                     i + 1
                 }
@@ -237,6 +276,7 @@ impl JsLexScanner {
                     if b == b'`' {
                         self.pop_mode();
                         self.previous_significant = Some(b'`');
+                        self.previous_identifier_allows_regex = false;
                     }
                     i + 1
                 }
@@ -245,17 +285,31 @@ impl JsLexScanner {
                 if b.is_ascii_whitespace() {
                     return i + 1;
                 }
+                if b == b'_' || b == b'$' || b.is_ascii_alphabetic() {
+                    let start = i;
+                    let mut end = i + 1;
+                    while end < bytes.len() && is_ident_char(bytes[end]) {
+                        end += 1;
+                    }
+                    self.previous_significant = Some(bytes[end - 1]);
+                    self.previous_identifier_allows_regex =
+                        can_start_regex_after_identifier(&bytes[start..end]);
+                    return end;
+                }
                 match b {
                     b'\'' => {
                         self.push_mode(JsLexMode::Single);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'"' => {
                         self.push_mode(JsLexMode::Double);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'`' => {
                         self.push_mode(JsLexMode::Backtick);
+                        self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'/' => {
@@ -265,8 +319,11 @@ impl JsLexScanner {
                         } else if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
                             self.push_mode(JsLexMode::BlockComment);
                             i + 2
-                        } else if can_start_regex_literal(self.previous_significant) {
+                        } else if can_start_regex_literal(self.previous_significant)
+                            || self.previous_identifier_allows_regex
+                        {
                             self.push_mode(JsLexMode::Regex { in_class: false });
+                            self.previous_identifier_allows_regex = false;
                             i + 1
                         } else {
                             self.note_significant_byte(b'/');
@@ -283,6 +340,7 @@ impl JsLexScanner {
                         if brace_depth == 1 {
                             self.pop_mode();
                             self.previous_significant = Some(b'}');
+                            self.previous_identifier_allows_regex = false;
                         } else {
                             brace_depth -= 1;
                             self.note_significant_byte(b'}');
@@ -327,6 +385,7 @@ impl JsLexScanner {
                 if b == b'/' && !in_class {
                     self.pop_mode();
                     self.previous_significant = Some(b'/');
+                    self.previous_identifier_allows_regex = false;
                     return i + 1;
                 }
                 self.mode = JsLexMode::Regex { in_class };

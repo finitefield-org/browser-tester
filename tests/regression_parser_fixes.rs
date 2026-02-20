@@ -830,3 +830,54 @@ fn hex_literal_followed_by_minus_still_parses_as_subtraction() -> browser_tester
     harness.assert_text("#result", "29")?;
     Ok(())
 }
+
+#[test]
+fn if_block_allows_comment_before_else() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "init";
+      if (true) { out = "then"; } /* comment before else */ else { out = "else"; }
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn comments_stripper_does_not_break_return_regex_with_double_slash() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /https?:\/\/example\.com/.test("https://example.com");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn comments_stripper_does_not_break_return_regex_char_class_with_double_slash()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /[//]/.test("/");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}

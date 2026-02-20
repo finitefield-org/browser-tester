@@ -28,6 +28,23 @@ pub(super) fn parse_expr(src: &str) -> Result<Expr> {
 }
 
 fn strip_js_comments(src: &str) -> String {
+    fn can_start_regex_after_identifier(ident: &str) -> bool {
+        matches!(
+            ident,
+            "return"
+                | "throw"
+                | "case"
+                | "delete"
+                | "typeof"
+                | "void"
+                | "yield"
+                | "await"
+                | "in"
+                | "of"
+                | "instanceof"
+        )
+    }
+
     enum State {
         Normal,
         Single,
@@ -40,6 +57,7 @@ fn strip_js_comments(src: &str) -> String {
     let mut state = State::Normal;
     let mut i = 0usize;
     let mut previous_significant: Option<u8> = None;
+    let mut previous_identifier: Option<String> = None;
     let mut out: Vec<u8> = Vec::with_capacity(src.len());
 
     while i < bytes.len() {
@@ -69,11 +87,29 @@ fn strip_js_comments(src: &str) -> String {
                     }
                     continue;
                 }
-                if b == b'/' && can_start_regex_literal(previous_significant) {
-                    state = State::Regex { in_class: false };
-                    out.push(b);
-                    previous_significant = Some(b'/');
+                if b == b'/' {
+                    let allow_after_ident = previous_identifier
+                        .as_deref()
+                        .is_some_and(can_start_regex_after_identifier);
+                    if can_start_regex_literal(previous_significant) || allow_after_ident {
+                        state = State::Regex { in_class: false };
+                        out.push(b);
+                        previous_significant = Some(b'/');
+                        previous_identifier = None;
+                        i += 1;
+                        continue;
+                    }
+                }
+
+                if b == b'_' || b == b'$' || b.is_ascii_alphabetic() {
+                    let start = i;
                     i += 1;
+                    while i < bytes.len() && is_ident_char(bytes[i]) {
+                        i += 1;
+                    }
+                    out.extend_from_slice(&bytes[start..i]);
+                    previous_significant = bytes.get(i - 1).copied();
+                    previous_identifier = src.get(start..i).map(ToString::to_string);
                     continue;
                 }
 
@@ -82,24 +118,28 @@ fn strip_js_comments(src: &str) -> String {
                         state = State::Single;
                         out.push(b);
                         previous_significant = Some(b'\'');
+                        previous_identifier = None;
                         i += 1;
                     }
                     b'"' => {
                         state = State::Double;
                         out.push(b);
                         previous_significant = Some(b'"');
+                        previous_identifier = None;
                         i += 1;
                     }
                     b'`' => {
                         state = State::Template;
                         out.push(b);
                         previous_significant = Some(b'`');
+                        previous_identifier = None;
                         i += 1;
                     }
                     _ => {
                         out.push(b);
                         if !b.is_ascii_whitespace() {
                             previous_significant = Some(b);
+                            previous_identifier = None;
                         }
                         i += 1;
                     }
@@ -120,6 +160,7 @@ fn strip_js_comments(src: &str) -> String {
                 if b == b'\'' {
                     state = State::Normal;
                     previous_significant = Some(b'\'');
+                    previous_identifier = None;
                 }
                 i += 1;
             }
@@ -138,6 +179,7 @@ fn strip_js_comments(src: &str) -> String {
                 if b == b'"' {
                     state = State::Normal;
                     previous_significant = Some(b'"');
+                    previous_identifier = None;
                 }
                 i += 1;
             }
@@ -156,6 +198,7 @@ fn strip_js_comments(src: &str) -> String {
                 if b == b'`' {
                     state = State::Normal;
                     previous_significant = Some(b'`');
+                    previous_identifier = None;
                 }
                 i += 1;
             }
@@ -186,6 +229,7 @@ fn strip_js_comments(src: &str) -> String {
                 if b == b'/' && !in_class {
                     state = State::Normal;
                     previous_significant = Some(b'/');
+                    previous_identifier = None;
                 }
                 i += 1;
             }
@@ -10444,6 +10488,7 @@ fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
         bracket: 0,
         brace: 0,
         previous_significant: None,
+        previous_identifier_allows_regex: false,
     };
 
     while i < bytes.len() {
