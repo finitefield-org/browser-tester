@@ -508,6 +508,120 @@ fn array_from_map_values_is_usable_with_array_map() -> browser_tester::Result<()
 }
 
 #[test]
+fn parenthesized_arrow_parameter_list_in_const_assignment_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const toCSV = (rows) => rows.map((r) => r).join(",");
+      document.getElementById("result").textContent = toCSV(["a", "b"]);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a,b")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_arrow_parameter_list_with_nested_callbacks_and_template_literal_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const toCSV = (rows) => rows
+        .map((row) => row.map((cell) => {
+          const s = String(cell ?? "");
+          if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+          return s;
+        }).join(","))
+        .join("\n");
+      document.getElementById("result").textContent = toCSV([["a", "x,y"], ["b", "z"]]);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a,\"x,y\"\nb,z")?;
+    Ok(())
+}
+
+#[test]
+fn regex_char_class_with_escaped_newline_in_test_call_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const s = "x,y";
+      document.getElementById("result").textContent = String(/[",\n]/.test(s));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn template_literal_expression_with_regex_replace_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const s = "x,y";
+      document.getElementById("result").textContent = `"${s.replace(/"/g, '""')}"`;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "\"x,y\"")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_arrow_parameter_list_with_multiline_replace_chain_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const encodeSharePayload = (payload) => btoa(unescape(encodeURIComponent(JSON.stringify(payload))))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+      document.getElementById("result").textContent = encodeSharePayload({ a: 1 });
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "eyJhIjoxfQ")?;
+    Ok(())
+}
+
+#[test]
+fn regex_with_escaped_slash_parses_in_replace_call() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "a/b".replace(/\//g, "_");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a_b")?;
+    Ok(())
+}
+
+#[test]
+fn regex_with_end_anchor_quantifier_parses_in_replace_call() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "abc==".replace(/=+$/g, "");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "abc")?;
+    Ok(())
+}
+
+#[test]
 fn for_and_while_allow_single_statement_bodies() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>

@@ -285,6 +285,10 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
             if tag.eq_ignore_ascii_case("script") {
                 let close = if executable_script {
                     find_case_insensitive_end_tag(bytes, i, b"script")
+                        // Some generated pages can contain malformed JS source. If the
+                        // JS-aware scan cannot recover, fall back to raw end-tag search
+                        // so HTML parsing still advances to the explicit </script>.
+                        .or_else(|| find_case_insensitive_raw_end_tag(bytes, i, b"script"))
                 } else {
                     find_case_insensitive_raw_end_tag(bytes, i, b"script")
                 }

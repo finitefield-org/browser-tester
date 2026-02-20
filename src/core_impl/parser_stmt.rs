@@ -2550,7 +2550,45 @@ fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     };
 
-    let expr = parse_expr(rhs)?;
+    let rhs_expr = parse_expr(rhs)?;
+    let op = &stmt[eq_pos..eq_pos + op_len];
+    let expr = if op_len == 1 {
+        rhs_expr
+    } else {
+        let lhs_expr = Expr::DomRead {
+            target: target.clone(),
+            prop: prop.clone(),
+        };
+        match op {
+            "+=" => append_concat_expr(lhs_expr, rhs_expr),
+            "-=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Sub,
+                right: Box::new(rhs_expr),
+            },
+            "*=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Mul,
+                right: Box::new(rhs_expr),
+            },
+            "/=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Div,
+                right: Box::new(rhs_expr),
+            },
+            "%=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Mod,
+                right: Box::new(rhs_expr),
+            },
+            "**=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::Pow,
+                right: Box::new(rhs_expr),
+            },
+            _ => rhs_expr,
+        }
+    };
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
 }
 

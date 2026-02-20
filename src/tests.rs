@@ -2046,6 +2046,40 @@ fn element_click_method_from_script_works() -> Result<()> {
 }
 
 #[test]
+fn anchor_download_blob_click_inside_handler_keeps_dom_state_for_following_statements() -> Result<()>
+{
+    let html = r#"
+        <html><body>
+          <button id='run'>run</button>
+          <div id='result'></div>
+          <script>
+            document.getElementById('run').addEventListener('click', () => {
+              const blob = new Blob(['abc'], { type: 'text/plain' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'test.csv';
+              document.body.appendChild(a);
+
+              document.getElementById('result').textContent = 'before';
+              a.click();
+              document.getElementById('result').textContent += '|after';
+
+              a.remove();
+              URL.revokeObjectURL(url);
+            });
+          </script>
+        </body></html>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "before|after")?;
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
 fn element_scroll_into_view_method_from_script_works() -> Result<()> {
     let html = r#"
         <button id='trigger'>scroll target</button>
@@ -8059,6 +8093,25 @@ fn script_extractor_handles_regex_literals_with_quotes_for_end_tag_scan() -> Res
     let parsed = parse_html(html)?;
     assert_eq!(parsed.scripts.len(), 1);
     assert!(parsed.scripts[0].contains(r#"/["]/g"#));
+    Ok(())
+}
+
+#[test]
+fn script_extractor_falls_back_to_raw_end_tag_scan_when_js_lexer_gets_stuck() -> Result<()> {
+    let html = r###"
+        <script>
+          const map = {
+            '"': """,
+            "'": "'",
+          };
+          return String(value ?? "").replace(/[&<>"']/g, (ch) => map[ch] || ch);
+        </script>
+        <p id="result"></p>
+        "###;
+
+    let parsed = parse_html(html)?;
+    assert_eq!(parsed.scripts.len(), 1);
+    assert!(parsed.scripts[0].contains(r#"replace(/[&<>"']/g"#));
     Ok(())
 }
 

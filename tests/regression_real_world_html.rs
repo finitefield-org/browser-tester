@@ -405,3 +405,49 @@ fn local_storage_basic_methods_are_available() -> browser_tester::Result<()> {
     harness.assert_text("#result", "true|42|42|1|x|true|0")?;
     Ok(())
 }
+
+#[test]
+fn dom_expando_properties_round_trip_on_nodes() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="root"></div>
+    <div id="result"></div>
+    <script>
+      const root = document.getElementById("root");
+      root.__state = { score: 19 };
+      document.getElementById("result").textContent = String(root.__state.score);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "19")?;
+    Ok(())
+}
+
+#[test]
+fn regex_lookahead_in_replace_parses_and_runs() -> browser_tester::Result<()> {
+    let html = r#"
+    <p id="result"></p>
+    <script>
+      const format = (v) => String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      document.getElementById("result").textContent = format(810000);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "810,000")?;
+    Ok(())
+}
+
+#[test]
+fn utf8_script_assigned_text_is_preserved() -> browser_tester::Result<()> {
+    let html = r#"
+    <p id="result"></p>
+    <script>
+      document.getElementById("result").textContent = "A 〜 B";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "A 〜 B")?;
+    Ok(())
+}

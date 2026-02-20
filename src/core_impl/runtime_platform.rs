@@ -9,6 +9,7 @@ impl Harness {
             dom,
             listeners: ListenerStore::default(),
             node_event_handler_props: HashMap::new(),
+            node_expando_props: HashMap::new(),
             script_env: HashMap::new(),
             document_url: "about:blank".to_string(),
             window_object: Rc::new(RefCell::new(Vec::new())),
@@ -839,7 +840,9 @@ impl Harness {
             "coords" => self.dom.set_attr(node, "coords", &value.as_string())?,
             "rev" => self.dom.set_attr(node, "rev", &value.as_string())?,
             "shape" => self.dom.set_attr(node, "shape", &value.as_string())?,
-            _ => {}
+            _ => {
+                self.node_expando_props.insert((node, key.to_string()), value);
+            }
         }
         Ok(())
     }
@@ -1281,6 +1284,7 @@ impl Harness {
         self.dom = dom;
         self.listeners = ListenerStore::default();
         self.node_event_handler_props.clear();
+        self.node_expando_props.clear();
         self.script_env.clear();
         self.task_queue.clear();
         self.microtask_queue.clear();

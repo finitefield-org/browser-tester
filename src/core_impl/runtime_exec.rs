@@ -2634,7 +2634,7 @@ impl Harness {
                 let parts = match separator {
                     None => Self::split_string(&text, None, limit),
                     Some(Value::RegExp(regex)) => {
-                        Self::split_string_with_regex(&text, &regex, limit)
+                        Self::split_string_with_regex(&text, &regex, limit)?
                     }
                     Some(value) => Self::split_string(&text, Some(value.as_string()), limit),
                 };
@@ -2645,7 +2645,7 @@ impl Harness {
                 let to = self.eval_expr(to, env, event_param, event)?.as_string();
                 let from = self.eval_expr(from, env, event_param, event)?;
                 let replaced = match from {
-                    Value::RegExp(regex) => Self::replace_string_with_regex(&value, &regex, &to),
+                    Value::RegExp(regex) => Self::replace_string_with_regex(&value, &regex, &to)?,
                     other => value.replacen(&other.as_string(), &to, 1),
                 };
                 Ok(Value::String(replaced))
@@ -2662,7 +2662,7 @@ impl Harness {
                                     .into(),
                             ));
                         }
-                        Self::replace_string_with_regex(&value, &regex, &to)
+                        Self::replace_string_with_regex(&value, &regex, &to)?
                     }
                     other => {
                         let from = other.as_string();
@@ -2734,11 +2734,14 @@ impl Harness {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();
                 let pattern = self.eval_expr(pattern, env, event_param, event)?;
                 let idx = match pattern {
-                    Value::RegExp(regex) => regex
-                        .borrow()
-                        .compiled
-                        .find(&value)
-                        .map(|m| value[..m.start()].chars().count() as i64),
+                    Value::RegExp(regex) => {
+                        let matched = regex
+                            .borrow()
+                            .compiled
+                            .find(&value)
+                            .map_err(Self::map_regex_runtime_error)?;
+                        matched.map(|m| value[..m.start()].chars().count() as i64)
+                    }
                     other => {
                         let search = other.as_string();
                         Self::string_index_of(&value, &search, 0).map(|idx| idx as i64)
@@ -5376,12 +5379,16 @@ impl Harness {
                                     if part.is_empty() {
                                         continue;
                                     }
-                                    if !regex.is_match(part) {
-                                        validity.pattern_mismatch = true;
-                                        break;
+                                    match regex.is_match(part) {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            validity.pattern_mismatch = true;
+                                            break;
+                                        }
+                                        Err(_) => {}
                                     }
                                 }
-                            } else if !regex.is_match(&value) {
+                            } else if let Ok(false) = regex.is_match(&value) {
                                 validity.pattern_mismatch = true;
                             }
                         }
@@ -6265,7 +6272,11 @@ impl Harness {
                         }
                         Ok(Value::Number(select_options().len() as i64))
                     }
-                    _ => Ok(Value::Undefined),
+                    _ => Ok(self
+                        .node_expando_props
+                        .get(&(*node, key.to_string()))
+                        .cloned()
+                        .unwrap_or(Value::Undefined)),
                 }
             }
             Value::String(text) => {
@@ -7438,6 +7449,10 @@ impl Harness {
         }
     }
 
+    pub(super) fn map_regex_runtime_error(err: regex::Error) -> Error {
+        Error::ScriptRuntime(format!("regular expression runtime error: {err}"))
+    }
+
     pub(super) fn regex_test(regex: &Rc<RefCell<RegexValue>>, input: &str) -> Result<bool> {
         Ok(Self::regex_exec_internal(regex, input)?.is_some())
     }
@@ -7464,7 +7479,10 @@ impl Harness {
             return Ok(None);
         }
 
-        let captures = regex.compiled.captures_at(input, start);
+        let captures = regex
+            .compiled
+            .captures_from_pos(input, start)
+            .map_err(Self::map_regex_runtime_error)?;
 
         let Some(captures) = captures else {
             if regex.global || regex.sticky {
@@ -11730,7 +11748,7 @@ impl Harness {
                     ));
                 }
                 let value = self.eval_expr(&args[0], env, event_param, event)?;
-                Ok(Value::String(regex::escape(&value.as_string())))
+                Ok(Value::String(regex::escape(&value.as_string()).into_owned()))
             }
         }
     }
@@ -11749,10 +11767,11 @@ impl Harness {
         let global = regex.borrow().global;
         if global {
             let compiled = regex.borrow().compiled.clone();
-            let matches = compiled
-                .find_iter(value)
-                .map(|m| Value::String(m.as_str().to_string()))
-                .collect::<Vec<_>>();
+            let mut matches = Vec::new();
+            for matched in compiled.find_iter(value) {
+                let matched = matched.map_err(Self::map_regex_runtime_error)?;
+                matches.push(Value::String(matched.as_str().to_string()));
+            }
             regex.borrow_mut().last_index = 0;
             if matches.is_empty() {
                 Ok(Value::Null)
@@ -13610,12 +13629,13 @@ impl Harness {
         value: &str,
         regex: &Rc<RefCell<RegexValue>>,
         limit: Option<i64>,
-    ) -> Vec<Value> {
+    ) -> Result<Vec<Value>> {
         let compiled = regex.borrow().compiled.clone();
-        let mut parts = compiled
-            .split(value)
-            .map(|part| Value::String(part.to_string()))
-            .collect::<Vec<_>>();
+        let mut parts = Vec::new();
+        for part in compiled.split(value) {
+            let part = part.map_err(Self::map_regex_runtime_error)?;
+            parts.push(Value::String(part.to_string()));
+        }
         if let Some(limit) = limit {
             if limit == 0 {
                 parts.clear();
@@ -13623,7 +13643,7 @@ impl Harness {
                 parts.truncate(limit as usize);
             }
         }
-        parts
+        Ok(parts)
     }
 
     pub(super) fn expand_regex_replacement(template: &str, captures: &Captures<'_>) -> String {
@@ -13687,7 +13707,7 @@ impl Harness {
         value: &str,
         regex: &Rc<RefCell<RegexValue>>,
         replacement: &str,
-    ) -> String {
+    ) -> Result<String> {
         let (compiled, global) = {
             let regex = regex.borrow();
             (regex.compiled.clone(), regex.global)
@@ -13697,6 +13717,7 @@ impl Harness {
             let mut out = String::new();
             let mut last_end = 0usize;
             for captures in compiled.captures_iter(value) {
+                let captures = captures.map_err(Self::map_regex_runtime_error)?;
                 let Some(full) = captures.get(0) else {
                     continue;
                 };
@@ -13705,19 +13726,22 @@ impl Harness {
                 last_end = full.end();
             }
             out.push_str(&value[last_end..]);
-            out
-        } else if let Some(captures) = compiled.captures(value) {
+            Ok(out)
+        } else if let Some(captures) = compiled
+            .captures(value)
+            .map_err(Self::map_regex_runtime_error)?
+        {
             if let Some(full) = captures.get(0) {
                 let mut out = String::new();
                 out.push_str(&value[..full.start()]);
                 out.push_str(&Self::expand_regex_replacement(replacement, &captures));
                 out.push_str(&value[full.end()..]);
-                out
+                Ok(out)
             } else {
-                value.to_string()
+                Ok(value.to_string())
             }
         } else {
-            value.to_string()
+            Ok(value.to_string())
         }
     }
 

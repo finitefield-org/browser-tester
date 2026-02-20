@@ -5,9 +5,10 @@
 //! Use [`Harness`] as the main entry point to load HTML, simulate user actions,
 //! control fake time, and assert DOM state.
 
+use fancy_regex as regex;
+use fancy_regex::{Captures, Regex, RegexBuilder};
 use num_bigint::{BigInt as JsBigInt, Sign};
 use num_traits::{One, ToPrimitive, Zero};
-use regex::{Captures, Regex, RegexBuilder};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
@@ -4624,6 +4625,7 @@ pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
     node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
+    node_expando_props: HashMap<(NodeId, String), Value>,
     script_env: HashMap<String, Value>,
     document_url: String,
     window_object: Rc<RefCell<Vec<(String, Value)>>>,

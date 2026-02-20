@@ -33,11 +33,13 @@ fn strip_js_comments(src: &str) -> String {
         Single,
         Double,
         Template,
+        Regex { in_class: bool },
     }
 
     let bytes = src.as_bytes();
     let mut state = State::Normal;
     let mut i = 0usize;
+    let mut previous_significant: Option<u8> = None;
     let mut out: Vec<u8> = Vec::with_capacity(src.len());
 
     while i < bytes.len() {
@@ -67,25 +69,38 @@ fn strip_js_comments(src: &str) -> String {
                     }
                     continue;
                 }
+                if b == b'/' && can_start_regex_literal(previous_significant) {
+                    state = State::Regex { in_class: false };
+                    out.push(b);
+                    previous_significant = Some(b'/');
+                    i += 1;
+                    continue;
+                }
 
                 match b {
                     b'\'' => {
                         state = State::Single;
                         out.push(b);
+                        previous_significant = Some(b'\'');
                         i += 1;
                     }
                     b'"' => {
                         state = State::Double;
                         out.push(b);
+                        previous_significant = Some(b'"');
                         i += 1;
                     }
                     b'`' => {
                         state = State::Template;
                         out.push(b);
+                        previous_significant = Some(b'`');
                         i += 1;
                     }
                     _ => {
                         out.push(b);
+                        if !b.is_ascii_whitespace() {
+                            previous_significant = Some(b);
+                        }
                         i += 1;
                     }
                 }
@@ -104,6 +119,7 @@ fn strip_js_comments(src: &str) -> String {
                 out.push(b);
                 if b == b'\'' {
                     state = State::Normal;
+                    previous_significant = Some(b'\'');
                 }
                 i += 1;
             }
@@ -121,6 +137,7 @@ fn strip_js_comments(src: &str) -> String {
                 out.push(b);
                 if b == b'"' {
                     state = State::Normal;
+                    previous_significant = Some(b'"');
                 }
                 i += 1;
             }
@@ -138,6 +155,37 @@ fn strip_js_comments(src: &str) -> String {
                 out.push(b);
                 if b == b'`' {
                     state = State::Normal;
+                    previous_significant = Some(b'`');
+                }
+                i += 1;
+            }
+            State::Regex { in_class } => {
+                if b == b'\\' {
+                    out.push(b);
+                    if i + 1 < bytes.len() {
+                        out.push(bytes[i + 1]);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                    continue;
+                }
+                if b == b'[' {
+                    out.push(b);
+                    state = State::Regex { in_class: true };
+                    i += 1;
+                    continue;
+                }
+                if b == b']' && in_class {
+                    out.push(b);
+                    state = State::Regex { in_class: false };
+                    i += 1;
+                    continue;
+                }
+                out.push(b);
+                if b == b'/' && !in_class {
+                    state = State::Normal;
+                    previous_significant = Some(b'/');
                 }
                 i += 1;
             }
@@ -9132,62 +9180,13 @@ fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
     let bytes = src.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                _ => {
-                    if b == target && paren == 0 && bracket == 0 && brace == 0 {
-                        out.push(i);
-                    }
-                }
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+        if scanner.is_top_level() && bytes[i] == target {
+            out.push(i);
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     out
