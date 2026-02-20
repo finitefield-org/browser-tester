@@ -3498,6 +3498,7 @@ enum Expr {
         target: Box<Expr>,
         member: String,
         args: Vec<Expr>,
+        optional: bool,
     },
     MemberGet {
         target: Box<Expr>,
@@ -3507,6 +3508,7 @@ enum Expr {
     IndexGet {
         target: Box<Expr>,
         index: Box<Expr>,
+        optional: bool,
     },
     Var(String),
     DomRef(DomQuery),

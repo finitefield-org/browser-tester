@@ -778,9 +778,14 @@ fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
         .ok_or_else(|| Error::ScriptParse("invalid assignment operator".into()))?;
     let assignment_src = format!("{lhs} {op} {rhs_src}");
 
-    let supported = parse_var_assign(&assignment_src)?.is_some()
-        || parse_object_assign(&assignment_src)?.is_some()
-        || (op_len == 1 && parse_dom_assignment(&assignment_src)?.is_some());
+    let supports_assignment = |result: Result<Option<Stmt>>| match result {
+        Ok(Some(_)) => true,
+        Ok(None) | Err(_) => false,
+    };
+
+    let supported = supports_assignment(parse_var_assign(&assignment_src))
+        || supports_assignment(parse_object_assign(&assignment_src))
+        || (op_len == 1 && supports_assignment(parse_dom_assignment(&assignment_src)));
     if !supported {
         return Ok(None);
     }
@@ -2803,6 +2808,7 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
         target,
         member,
         args,
+        optional: _,
     } = expr
     else {
         return Ok(None);

@@ -1615,9 +1615,11 @@ impl Harness {
             });
         }
 
-        self.dom.set_value(target, text)?;
-        self.dispatch_event(target, "input")?;
-        Ok(())
+        stacker::grow(32 * 1024 * 1024, || {
+            self.dom.set_value(target, text)?;
+            self.dispatch_event(target, "input")?;
+            Ok(())
+        })
     }
 
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {

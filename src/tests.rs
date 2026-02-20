@@ -3587,6 +3587,83 @@ fn arrow_function_concise_assignment_expression_returns_assigned_value() -> Resu
 }
 
 #[test]
+fn arrow_function_with_parenthesized_parameter_and_optional_chain_body_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const selectedLabel = (select) => select?.options?.[select.selectedIndex]?.textContent?.trim() || "";
+          const sample = {
+            selectedIndex: 0,
+            options: [{ textContent: "  ok  " }],
+          };
+          document.getElementById('result').textContent = selectedLabel(sample);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chain_with_optional_index_and_optional_call_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const sample = {
+            selectedIndex: 0,
+            options: [{ textContent: "  ok  " }],
+          };
+          const value = sample?.options?.[sample.selectedIndex]?.textContent?.trim() || "";
+          document.getElementById('result').textContent = value;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chain_without_fallback_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const sample = {
+            selectedIndex: 0,
+            options: [{ textContent: "  ok  " }],
+          };
+          const value = sample?.options?.[sample.selectedIndex]?.textContent?.trim();
+          document.getElementById('result').textContent = value || "";
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chain_with_dom_select_options_dynamic_index_and_trim_works() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <select id='delay-count'>
+          <option value='0'>  低  </option>
+          <option value='1'>  中  </option>
+        </select>
+        <script>
+          const selectedLabel = (select) => select?.options?.[select.selectedIndex]?.textContent?.trim() || "";
+          const select = document.getElementById('delay-count');
+          document.getElementById('result').textContent = selectedLabel(select);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "低")?;
+    Ok(())
+}
+
+#[test]
 fn for_each_arrow_concise_assignment_expression_updates_outer_binding() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -11349,6 +11426,55 @@ fn input_event_handler_keeps_dataset_camel_case_keys() -> Result<()> {
     h.type_text("#case", "24")?;
     h.type_text("#desired", "100")?;
     h.assert_text("#result", "24:100")?;
+    Ok(())
+}
+
+#[test]
+fn type_text_handles_input_handler_that_rerenders_same_subtree() -> Result<()> {
+    let html = r#"
+        <table>
+          <tbody id='rows-tbody'></tbody>
+        </table>
+        <script>
+          const state = { rows: [{ id: 'r1', moq: '' }] };
+          const tbody = document.getElementById('rows-tbody');
+
+          function escapeHtml(value) {
+            const map = {
+              "&": "\u0026amp;",
+              "<": "\u0026lt;",
+              ">": "\u0026gt;",
+              '"': "\u0026quot;",
+              "'": "\u0026#39;",
+            };
+            return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, (ch) => map[ch] || ch);
+          }
+
+          function renderRowsTable() {
+            const html = state.rows
+              .map((row) => `<tr data-row-id="${row.id}"><td><input data-field="moq" value="${escapeHtml(row.moq)}" /></td></tr>`)
+              .join("");
+            tbody.innerHTML = html;
+          }
+
+          tbody.addEventListener("input", (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) return;
+
+            const row = state.rows.find((item) => item.id === "r1");
+            if (!row) return;
+
+            row.moq = target.value;
+            renderRowsTable();
+          });
+
+          renderRowsTable();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#rows-tbody tr input[data-field='moq']", "100")?;
+    h.assert_value("#rows-tbody tr input[data-field='moq']", "100")?;
     Ok(())
 }
 

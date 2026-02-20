@@ -860,6 +860,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(handler_expr) = parse_function_expr(src)? {
+        return Ok(handler_expr);
+    }
+
     if let Some(expr) = parse_location_method_expr(src)? {
         return Ok(expr);
     }
@@ -906,10 +910,6 @@ fn parse_primary(src: &str) -> Result<Expr> {
 
     if parse_document_has_focus_expr(src)? {
         return Ok(Expr::DocumentHasFocus);
-    }
-
-    if let Some(handler_expr) = parse_function_expr(src)? {
-        return Ok(handler_expr);
     }
 
     if let Some((handler, delay_ms)) = parse_set_timeout_expr(src)? {
@@ -6729,9 +6729,15 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
-        let Some(base_src) = src.get(..dot) else {
+        let Some(mut base_src) = src.get(..dot) else {
             continue;
         };
+        base_src = base_src.trim_end();
+        let mut optional = false;
+        if let Some(stripped) = base_src.strip_suffix('?') {
+            optional = true;
+            base_src = stripped.trim_end();
+        }
         let base_src = base_src.trim();
         if base_src.is_empty() {
             continue;
@@ -6767,6 +6773,7 @@ fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             target: Box::new(parse_expr(base_src)?),
             member,
             args: parsed_args,
+            optional,
         }));
     }
     Ok(None)
@@ -6829,9 +6836,18 @@ fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     for open in brackets.into_iter().rev() {
-        let Some(base_src) = src.get(..open) else {
+        let Some(mut base_src) = src.get(..open) else {
             continue;
         };
+        base_src = base_src.trim_end();
+        let mut optional = false;
+        if let Some(stripped) = base_src.strip_suffix("?.") {
+            optional = true;
+            base_src = stripped.trim_end();
+        } else if let Some(stripped) = base_src.strip_suffix('?') {
+            optional = true;
+            base_src = stripped.trim_end();
+        }
         let base_src = base_src.trim();
         if base_src.is_empty() {
             continue;
@@ -6858,20 +6874,21 @@ fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
             return Ok(Some(Expr::MemberGet {
                 target: Box::new(parse_expr(base_src)?),
                 member: parse_string_literal_exact(index)?,
-                optional: false,
+                optional,
             }));
         }
         if index.as_bytes().iter().all(|b| b.is_ascii_digit()) {
             return Ok(Some(Expr::MemberGet {
                 target: Box::new(parse_expr(base_src)?),
                 member: index.to_string(),
-                optional: false,
+                optional,
             }));
         }
 
         return Ok(Some(Expr::IndexGet {
             target: Box::new(parse_expr(base_src)?),
             index: Box::new(parse_expr(index)?),
+            optional,
         }));
     }
     Ok(None)
@@ -7317,6 +7334,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7340,6 +7358,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7363,6 +7382,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7400,6 +7420,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7423,6 +7444,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7446,6 +7468,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7469,6 +7492,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -7492,6 +7516,7 @@ fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         target: Box::new(Expr::Var(target.clone())),
                         member: method.clone(),
                         args: parsed_args,
+                        optional: false,
                     }));
                 }
             };
@@ -8226,9 +8251,15 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
-        let Some(base_src) = src.get(..dot) else {
+        let Some(mut base_src) = src.get(..dot) else {
             continue;
         };
+        base_src = base_src.trim_end();
+        let mut optional = false;
+        if let Some(stripped) = base_src.strip_suffix('?') {
+            optional = true;
+            base_src = stripped.trim_end();
+        }
         let base_src = base_src.trim();
         if base_src.is_empty() {
             continue;
@@ -8306,7 +8337,7 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
         } else {
             parse_expr(base_src)?
         };
-        let base = Box::new(base_expr);
+        let base = Box::new(base_expr.clone());
         let expr = match method.as_str() {
             "charAt" => {
                 if args.len() > 1 {
@@ -8813,6 +8844,18 @@ fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
             "toString" => Expr::StringToString(base),
             _ => unreachable!(),
         };
+
+        if optional {
+            return Ok(Some(Expr::Ternary {
+                cond: Box::new(Expr::Binary {
+                    left: Box::new(base_expr),
+                    op: BinaryOp::Eq,
+                    right: Box::new(Expr::Null),
+                }),
+                on_true: Box::new(Expr::Undefined),
+                on_false: Box::new(expr),
+            }));
+        }
 
         return Ok(Some(expr));
     }

@@ -3026,8 +3026,12 @@ impl Harness {
                 target,
                 member,
                 args,
+                optional,
             } => {
                 let receiver = self.eval_expr(target, env, event_param, event)?;
+                if *optional && matches!(receiver, Value::Null | Value::Undefined) {
+                    return Ok(Value::Undefined);
+                }
                 let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
 
                 if let Value::Array(values) = &receiver {
@@ -3128,8 +3132,15 @@ impl Harness {
                 }
                 self.object_property_from_value(&receiver, member)
             }
-            Expr::IndexGet { target, index } => {
+            Expr::IndexGet {
+                target,
+                index,
+                optional,
+            } => {
                 let receiver = self.eval_expr(target, env, event_param, event)?;
+                if *optional && matches!(receiver, Value::Null | Value::Undefined) {
+                    return Ok(Value::Undefined);
+                }
                 let index_value = self.eval_expr(index, env, event_param, event)?;
                 let key = match index_value {
                     Value::Number(value) => value.to_string(),
@@ -5973,6 +5984,68 @@ impl Harness {
 
     pub(super) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
         match value {
+            Value::Node(node) => {
+                let is_select = self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("select"))
+                    .unwrap_or(false);
+                let select_options = || {
+                    let mut options = Vec::new();
+                    self.dom.collect_select_options(*node, &mut options);
+                    options
+                };
+
+                match key {
+                    "textContent" | "innerText" => Ok(Value::String(self.dom.text_content(*node))),
+                    "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
+                    "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
+                    "value" => Ok(Value::String(self.dom.value(*node)?)),
+                    "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
+                    "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
+                    "required" => Ok(Value::Bool(self.dom.required(*node))),
+                    "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
+                    "id" => Ok(Value::String(self.dom.attr(*node, "id").unwrap_or_default())),
+                    "name" => Ok(Value::String(self.dom.attr(*node, "name").unwrap_or_default())),
+                    "type" => Ok(Value::String(self.dom.attr(*node, "type").unwrap_or_default())),
+                    "tagName" => Ok(Value::String(
+                        self.dom
+                            .tag_name(*node)
+                            .unwrap_or_default()
+                            .to_ascii_uppercase(),
+                    )),
+                    "className" => Ok(Value::String(
+                        self.dom.attr(*node, "class").unwrap_or_default(),
+                    )),
+                    "options" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        Ok(Value::NodeList(select_options()))
+                    }
+                    "selectedIndex" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        let options = select_options();
+                        if options.is_empty() {
+                            return Ok(Value::Number(-1));
+                        }
+                        let selected = options
+                            .iter()
+                            .position(|option| self.dom.attr(*option, "selected").is_some())
+                            .unwrap_or(0);
+                        Ok(Value::Number(selected as i64))
+                    }
+                    "length" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        Ok(Value::Number(select_options().len() as i64))
+                    }
+                    _ => Ok(Value::Undefined),
+                }
+            }
             Value::String(text) => {
                 if key == "length" {
                     Ok(Value::Number(text.chars().count() as i64))
@@ -5994,6 +6067,29 @@ impl Harness {
                     Ok(Value::Number(values.len() as i64))
                 } else if let Ok(index) = key.parse::<usize>() {
                     Ok(values.get(index).cloned().unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::NodeList(nodes) => {
+                if key == "length" {
+                    Ok(Value::Number(nodes.len() as i64))
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(nodes
+                        .get(index)
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::TypedArray(values) => {
+                let snapshot = self.typed_array_snapshot(values)?;
+                if key == "length" {
+                    Ok(Value::Number(snapshot.len() as i64))
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
                 } else {
                     Ok(Value::Undefined)
                 }
