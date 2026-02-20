@@ -63,6 +63,7 @@ impl Harness {
             trace_log_limit: 10_000,
             trace_to_stderr: true,
             pending_function_decls: Vec::new(),
+            listener_capture_env_stack: Vec::new(),
         };
 
         harness.initialize_global_bindings();
@@ -670,6 +671,9 @@ impl Harness {
                     capture: false,
                     handler: handler.clone(),
                     captured_env: function.captured_env.clone(),
+                    captured_pending_function_decls: function
+                        .captured_pending_function_decls
+                        .clone(),
                 },
             );
             self.node_event_handler_props
@@ -1210,6 +1214,8 @@ impl Harness {
         self.active_element = None;
         self.running_timer_id = None;
         self.running_timer_canceled = false;
+        self.pending_function_decls.clear();
+        self.listener_capture_env_stack.clear();
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();
@@ -2727,7 +2733,13 @@ impl Harness {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
             let mut listener_env = env.clone();
-            for (name, value) in &listener.captured_env {
+            let captured_env_snapshot = listener.captured_env.borrow().clone();
+            let captured_keys = captured_env_snapshot
+                .keys()
+                .filter(|name| !Self::is_internal_env_key(name))
+                .cloned()
+                .collect::<Vec<_>>();
+            for (name, value) in &captured_env_snapshot {
                 if Self::is_internal_env_key(name) {
                     continue;
                 }
@@ -2751,7 +2763,35 @@ impl Harness {
                     event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
             }
-            self.execute_handler(&listener.handler, event, &mut listener_env)?;
+            for scope in &listener.captured_pending_function_decls {
+                self.pending_function_decls.push(scope.clone());
+            }
+            let call_result = self.execute_handler(&listener.handler, event, &mut listener_env);
+            for _ in 0..listener.captured_pending_function_decls.len() {
+                self.pending_function_decls.pop();
+            }
+            call_result?;
+            {
+                let mut captured_env = listener.captured_env.borrow_mut();
+                for key in &captured_keys {
+                    let before = captured_env_snapshot.get(key);
+                    let after = listener_env.get(key);
+                    let changed = match (before, after) {
+                        (Some(prev), Some(next)) => !self.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    if !changed {
+                        continue;
+                    }
+                    if let Some(value) = after.cloned() {
+                        captured_env.insert(key.clone(), value);
+                    } else {
+                        captured_env.remove(key);
+                    }
+                }
+            }
             for key in current_keys {
                 let listener_value = listener_env.get(&key).cloned();
                 let before = script_env_before.get(&key);
@@ -3002,13 +3042,22 @@ impl Harness {
     ) -> Value {
         let local_bindings = Self::collect_function_scope_bindings(&handler);
         let scope_depth = Self::env_scope_depth(env);
+        let captured_pending_function_decls = self
+            .pending_function_decls
+            .iter()
+            .filter(|scope| !scope.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
         let captured_env = if global_scope {
-            self.script_env.clone()
+            Rc::new(RefCell::new(self.script_env.clone()))
+        } else if let Some(shared_env) = self.listener_capture_env_stack.last() {
+            shared_env.clone()
         } else {
-            env.clone()
+            Rc::new(RefCell::new(env.clone()))
         };
+        let captured_env_snapshot = captured_env.borrow();
         let mut captured_global_names = HashSet::new();
-        for (name, value) in &captured_env {
+        for (name, value) in captured_env_snapshot.iter() {
             if Self::is_internal_env_key(name) || name == INTERNAL_RETURN_SLOT {
                 continue;
             }
@@ -3023,9 +3072,11 @@ impl Harness {
                 captured_global_names.insert(name.clone());
             }
         }
+        drop(captured_env_snapshot);
         Value::Function(Rc::new(FunctionValue {
             handler,
             captured_env,
+            captured_pending_function_decls,
             captured_global_names,
             local_bindings,
             global_scope,
@@ -3254,108 +3305,151 @@ impl Harness {
         event: &EventState,
         caller_env: Option<&HashMap<String, Value>>,
     ) -> Result<Value> {
-        let run = |this: &mut Self, caller_env: Option<&HashMap<String, Value>>| -> Result<Value> {
-            let mut call_env = if function.global_scope {
-                this.script_env.clone()
-            } else {
-                function.captured_env.clone()
-            };
-            call_env.remove(INTERNAL_RETURN_SLOT);
-            let scope_depth = Self::env_scope_depth(&call_env);
-            call_env.insert(
-                INTERNAL_SCOPE_DEPTH_KEY.to_string(),
-                Value::Number(scope_depth.saturating_add(1)),
-            );
-            let mut global_sync_keys = HashSet::new();
-            let caller_view = caller_env;
-            for name in &function.captured_global_names {
-                if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
-                    continue;
-                }
-                global_sync_keys.insert(name.clone());
-                if let Some(global_value) = this.script_env.get(name).cloned() {
-                    call_env.insert(name.clone(), global_value);
-                } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
-                    call_env.insert(name.clone(), value);
-                }
+        let run =
+            |this: &mut Self, caller_env: Option<&HashMap<String, Value>>| -> Result<Value> {
+            for scope in &function.captured_pending_function_decls {
+                this.pending_function_decls.push(scope.clone());
             }
-            for (name, global_value) in &this.script_env {
-                if Self::is_internal_env_key(name)
-                    || function.local_bindings.contains(name)
-                    || call_env.contains_key(name)
-                {
-                    continue;
-                }
-                call_env.insert(name.clone(), global_value.clone());
-                global_sync_keys.insert(name.clone());
-            }
-            if !global_sync_keys.is_empty() {
-                let mut sync_names = global_sync_keys.iter().cloned().collect::<Vec<_>>();
-                sync_names.sort();
+
+            let result = (|| -> Result<Value> {
+                let captured_env_before_call = if function.global_scope {
+                    HashMap::new()
+                } else {
+                    function.captured_env.borrow().clone()
+                };
+                let mut call_env = if function.global_scope {
+                    this.script_env.clone()
+                } else {
+                    captured_env_before_call.clone()
+                };
+                call_env.remove(INTERNAL_RETURN_SLOT);
+                let scope_depth = Self::env_scope_depth(&call_env);
                 call_env.insert(
-                    INTERNAL_GLOBAL_SYNC_NAMES_KEY.to_string(),
-                    Self::new_array_value(sync_names.into_iter().map(Value::String).collect()),
+                    INTERNAL_SCOPE_DEPTH_KEY.to_string(),
+                    Value::Number(scope_depth.saturating_add(1)),
                 );
-            }
-            let mut global_values_before_call = HashMap::new();
-            for name in &global_sync_keys {
-                if let Some(value) = this.script_env.get(name).cloned() {
-                    global_values_before_call.insert(name.clone(), value);
+                let mut global_sync_keys = HashSet::new();
+                let caller_view = caller_env;
+                for name in &function.captured_global_names {
+                    if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                        continue;
+                    }
+                    global_sync_keys.insert(name.clone());
+                    if let Some(global_value) = this.script_env.get(name).cloned() {
+                        call_env.insert(name.clone(), global_value);
+                    } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
+                        call_env.insert(name.clone(), value);
+                    }
                 }
-            }
-            let mut call_event = event.clone();
-            let event_param = None;
-            this.bind_handler_params(
-                &function.handler,
-                args,
-                &mut call_env,
-                &event_param,
-                &call_event,
-            )?;
-            let flow = this.execute_stmts(
-                &function.handler.stmts,
-                &event_param,
-                &mut call_event,
-                &mut call_env,
-            )?;
-            for name in &global_sync_keys {
-                if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
-                    continue;
+                for (name, global_value) in &this.script_env {
+                    if Self::is_internal_env_key(name)
+                        || function.local_bindings.contains(name)
+                        || call_env.contains_key(name)
+                    {
+                        continue;
+                    }
+                    call_env.insert(name.clone(), global_value.clone());
+                    global_sync_keys.insert(name.clone());
                 }
-                let before = global_values_before_call.get(name);
-                let global_after = this.script_env.get(name).cloned();
-                let call_after = call_env.get(name).cloned();
-                let global_changed = match (before, global_after.as_ref()) {
-                    (Some(prev), Some(next)) => !this.strict_equal(prev, next),
-                    (None, Some(_)) => true,
-                    (Some(_), None) => true,
-                    (None, None) => false,
-                };
-                let call_changed = match (before, call_after.as_ref()) {
-                    (Some(prev), Some(next)) => !this.strict_equal(prev, next),
-                    (None, Some(_)) => true,
-                    (Some(_), None) => true,
-                    (None, None) => false,
-                };
-                if global_changed && !call_changed {
-                    continue;
+                if !global_sync_keys.is_empty() {
+                    let mut sync_names = global_sync_keys.iter().cloned().collect::<Vec<_>>();
+                    sync_names.sort();
+                    call_env.insert(
+                        INTERNAL_GLOBAL_SYNC_NAMES_KEY.to_string(),
+                        Self::new_array_value(sync_names.into_iter().map(Value::String).collect()),
+                    );
                 }
-                if let Some(next) = call_after {
-                    this.script_env.insert(name.clone(), next);
+                let mut global_values_before_call = HashMap::new();
+                for name in &global_sync_keys {
+                    if let Some(value) = this.script_env.get(name).cloned() {
+                        global_values_before_call.insert(name.clone(), value);
+                    }
                 }
+                let mut call_event = event.clone();
+                let event_param = None;
+                this.bind_handler_params(
+                    &function.handler,
+                    args,
+                    &mut call_env,
+                    &event_param,
+                    &call_event,
+                )?;
+                let flow = this.execute_stmts(
+                    &function.handler.stmts,
+                    &event_param,
+                    &mut call_event,
+                    &mut call_env,
+                )?;
+                for name in &global_sync_keys {
+                    if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                        continue;
+                    }
+                    let before = global_values_before_call.get(name);
+                    let global_after = this.script_env.get(name).cloned();
+                    let call_after = call_env.get(name).cloned();
+                    let global_changed = match (before, global_after.as_ref()) {
+                        (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    let call_changed = match (before, call_after.as_ref()) {
+                        (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    if global_changed && !call_changed {
+                        continue;
+                    }
+                    if let Some(next) = call_after {
+                        this.script_env.insert(name.clone(), next);
+                    }
+                }
+                if !function.global_scope {
+                    let mut captured_env = function.captured_env.borrow_mut();
+                    for name in captured_env_before_call.keys() {
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name.as_str())
+                        {
+                            continue;
+                        }
+                        let before = captured_env_before_call.get(name);
+                        let after = call_env.get(name);
+                        let changed = match (before, after) {
+                            (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                            (None, Some(_)) => true,
+                            (Some(_), None) => true,
+                            (None, None) => false,
+                        };
+                        if !changed {
+                            continue;
+                        }
+                        if let Some(next) = after.cloned() {
+                            captured_env.insert(name.clone(), next);
+                        } else {
+                            captured_env.remove(name);
+                        }
+                    }
+                }
+                match flow {
+                    ExecFlow::Continue => Ok(Value::Undefined),
+                    ExecFlow::Break => Err(Error::ScriptRuntime(
+                        "break statement outside of loop".into(),
+                    )),
+                    ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                        "continue statement outside of loop".into(),
+                    )),
+                    ExecFlow::Return => Ok(call_env
+                        .remove(INTERNAL_RETURN_SLOT)
+                        .unwrap_or(Value::Undefined)),
+                }
+            })();
+
+            for _ in 0..function.captured_pending_function_decls.len() {
+                this.pending_function_decls.pop();
             }
-            match flow {
-                ExecFlow::Continue => Ok(Value::Undefined),
-                ExecFlow::Break => Err(Error::ScriptRuntime(
-                    "break statement outside of loop".into(),
-                )),
-                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                    "continue statement outside of loop".into(),
-                )),
-                ExecFlow::Return => Ok(call_env
-                    .remove(INTERNAL_RETURN_SLOT)
-                    .unwrap_or(Value::Undefined)),
-            }
+            result
         };
 
         if function.is_async {
@@ -3625,9 +3719,14 @@ impl Harness {
     ) -> Result<ExecFlow> {
         let pending = Self::collect_function_decls(stmts);
         self.pending_function_decls.push(pending);
+        self.listener_capture_env_stack
+            .push(Rc::new(RefCell::new(env.clone())));
 
         let result = (|| -> Result<ExecFlow> {
             for stmt in stmts {
+                if let Some(shared_env) = self.listener_capture_env_stack.last() {
+                    *shared_env.borrow_mut() = env.clone();
+                }
                 match stmt {
                 Stmt::VarDecl { name, expr } => {
                     let value = self.eval_expr(expr, env, event_param, event)?;
@@ -4729,13 +4828,25 @@ impl Harness {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     match op {
                         ListenerRegistrationOp::Add => {
+                            let captured_env = self
+                                .listener_capture_env_stack
+                                .last()
+                                .cloned()
+                                .unwrap_or_else(|| Rc::new(RefCell::new(HashMap::new())));
+                            *captured_env.borrow_mut() = env.clone();
                             self.listeners.add(
                                 node,
                                 event_type.clone(),
                                 Listener {
                                     capture: *capture,
                                     handler: handler.clone(),
-                                    captured_env: env.clone(),
+                                    captured_env,
+                                    captured_pending_function_decls: self
+                                        .pending_function_decls
+                                        .iter()
+                                        .filter(|scope| !scope.is_empty())
+                                        .cloned()
+                                        .collect(),
                                 },
                             );
                         }
@@ -4792,6 +4903,7 @@ impl Harness {
             Ok(ExecFlow::Continue)
         })();
 
+        self.listener_capture_env_stack.pop();
         self.pending_function_decls.pop();
         result
     }

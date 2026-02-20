@@ -14588,3 +14588,177 @@ fn click_summary_toggles_details_open_state() -> Result<()> {
     h.assert_text("#result", "open")?;
     Ok(())
 }
+
+#[test]
+fn function_reference_chain_inside_event_callback_uses_same_scope_declarations() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <div id='result'></div>
+        <script>
+          (() => {
+            const el = document.getElementById('btn');
+
+            function render() {
+              document.getElementById('result').textContent = compute();
+            }
+
+            function onStateUpdated() {
+              render();
+            }
+
+            function compute() {
+              return 'ok';
+            }
+
+            el.addEventListener('click', () => {
+              onStateUpdated();
+            });
+          })();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn callback_can_resolve_later_function_declaration_hide_toast() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <button id='toast-action'>action</button>
+        <div id='toast' class='show'></div>
+        <div id='result'></div>
+        <script>
+          (() => {
+            const el = {
+              btn: document.getElementById('btn'),
+              toast: document.getElementById('toast'),
+              toastAction: document.getElementById('toast-action'),
+            };
+
+            function showToast(action) {
+              el.toast.classList.add('show');
+              el.toastAction.onclick = () => {
+                hideToast();
+                action();
+              };
+            }
+
+            function hideToast() {
+              el.toast.classList.remove('show');
+            }
+
+            el.btn.addEventListener('click', () => {
+              showToast(() => {
+                document.getElementById('result').textContent = el.toast.className + ':ok';
+              });
+            });
+          })();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.click("#toast-action")?;
+    h.assert_text("#result", ":ok")?;
+    Ok(())
+}
+
+#[test]
+fn event_listener_callback_can_resolve_later_function_declaration() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <div id='result'></div>
+        <script>
+          (() => {
+            const btn = document.getElementById('btn');
+            btn.addEventListener('click', () => {
+              hideToast();
+            });
+
+            function hideToast() {
+              document.getElementById('result').textContent = 'ok';
+            }
+          })();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn function_calls_share_outer_scope_variable_updates() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          (() => {
+            let computed = [];
+            const state = [1, 2, 3];
+
+            function computeAll() {
+              computed = state.map((value) => value * 2);
+            }
+
+            function render() {
+              document.getElementById('result').textContent = String(computed.length);
+            }
+
+            function renderAll() {
+              computeAll();
+              render();
+            }
+
+            document.getElementById('run').addEventListener('click', () => {
+              renderAll();
+            });
+          })();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn listeners_registered_in_same_scope_share_captured_bindings() -> Result<()> {
+    let html = r#"
+        <button id='load'>load</button>
+        <button id='copy'>copy</button>
+        <p id='result'></p>
+        <script>
+          (() => {
+            let computedRows = [];
+
+            function renderAll() {
+              computedRows = [1, 2];
+            }
+
+            function buildResultSummary() {
+              return String(computedRows.length);
+            }
+
+            document.getElementById('load').addEventListener('click', () => {
+              renderAll();
+            });
+
+            document.getElementById('copy').addEventListener('click', () => {
+              document.getElementById('result').textContent = buildResultSummary();
+            });
+          })();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#load")?;
+    h.click("#copy")?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}

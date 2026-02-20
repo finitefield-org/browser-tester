@@ -2227,7 +2227,8 @@ impl PartialEq for RegexValue {
 #[derive(Debug, Clone)]
 struct FunctionValue {
     handler: ScriptHandler,
-    captured_env: HashMap<String, Value>,
+    captured_env: Rc<RefCell<HashMap<String, Value>>>,
+    captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
     captured_global_names: HashSet<String>,
     local_bindings: HashSet<String>,
     global_scope: bool,
@@ -4445,7 +4446,8 @@ fn ensure_hash_prefix(value: &str) -> String {
 struct Listener {
     capture: bool,
     handler: ScriptHandler,
-    captured_env: HashMap<String, Value>,
+    captured_env: Rc<RefCell<HashMap<String, Value>>>,
+    captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -4670,6 +4672,7 @@ pub struct Harness {
     trace_log_limit: usize,
     trace_to_stderr: bool,
     pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
+    listener_capture_env_stack: Vec<Rc<RefCell<HashMap<String, Value>>>>,
 }
 
 #[derive(Debug)]
