@@ -4163,6 +4163,20 @@ impl ScriptHandler {
     fn first_event_param(&self) -> Option<&str> {
         self.params.first().map(|param| param.name.as_str())
     }
+
+    fn listener_callback_reference(&self) -> Option<&str> {
+        if self.params.len() != 1 || self.stmts.len() != 1 {
+            return None;
+        }
+        let event_param = self.params[0].name.as_str();
+        match &self.stmts[0] {
+            Stmt::Expr(Expr::FunctionCall { target, args }) if args.len() == 1 => match &args[0] {
+                Expr::Var(arg_name) if arg_name == event_param => Some(target.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4460,12 +4474,28 @@ struct ListenerStore {
 
 impl ListenerStore {
     fn add(&mut self, node_id: NodeId, event: String, listener: Listener) {
-        self.map
+        let listeners = self
+            .map
             .entry(node_id)
             .or_default()
             .entry(event)
-            .or_default()
-            .push(listener);
+            .or_default();
+
+        // Match browser semantics: dedupe only when the same callback reference
+        // is re-registered for the same type/capture pair.
+        if let Some(new_callback_ref) = listener.handler.listener_callback_reference() {
+            if listeners.iter().any(|existing| {
+                existing.capture == listener.capture
+                    && existing
+                        .handler
+                        .listener_callback_reference()
+                        .is_some_and(|existing_ref| existing_ref == new_callback_ref)
+            }) {
+                return;
+            }
+        }
+
+        listeners.push(listener);
     }
 
     fn remove(
@@ -4674,7 +4704,7 @@ pub struct Harness {
     trace: bool,
     trace_events: bool,
     trace_timers: bool,
-    trace_logs: Vec<String>,
+    trace_logs: VecDeque<String>,
     trace_log_limit: usize,
     trace_to_stderr: bool,
     pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,

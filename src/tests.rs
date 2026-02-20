@@ -5184,7 +5184,110 @@ fn dispatch_event_origin_is_untrusted_and_supports_event_methods() -> Result<()>
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "false:true")?;
+    h.assert_text("#result", "false:false")?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_event_custom_non_bubbling_does_not_reach_ancestor_bubble_listeners() -> Result<()> {
+    let html = r#"
+        <div id='root'>
+          <div id='box'></div>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('root').addEventListener('custom', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'root';
+          });
+          document.getElementById('box').addEventListener('custom', () => {
+            document.getElementById('result').textContent =
+              document.getElementById('result').textContent + 'box';
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = '';
+            document.getElementById('box').dispatchEvent('custom');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "box")?;
+    Ok(())
+}
+
+#[test]
+fn prevent_default_does_not_flip_default_prevented_when_event_is_not_cancelable() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('box').addEventListener('custom', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent =
+              String(event.defaultPrevented) + ':' + String(event.cancelable);
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('box').dispatchEvent('custom');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "false:false")?;
+    Ok(())
+}
+
+#[test]
+fn add_event_listener_deduplicates_same_handler_and_capture() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          let count = 0;
+          const button = document.getElementById('btn');
+          const onClick = () => {
+            count = count + 1;
+            document.getElementById('result').textContent = String(count);
+          };
+          button.addEventListener('click', onClick);
+          button.addEventListener('click', onClick);
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn add_event_listener_does_not_deduplicate_distinct_inline_callbacks() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          let count = 0;
+          const button = document.getElementById('btn');
+          button.addEventListener('click', () => {
+            count = count + 1;
+          });
+          button.addEventListener('click', () => {
+            count = count + 1;
+          });
+          button.addEventListener('click', () => {
+            document.getElementById('result').textContent = String(count);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2")?;
     Ok(())
 }
 

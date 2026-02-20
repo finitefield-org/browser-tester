@@ -62,7 +62,7 @@ impl Harness {
             trace: false,
             trace_events: true,
             trace_timers: true,
-            trace_logs: Vec::new(),
+            trace_logs: VecDeque::new(),
             trace_log_limit: 10_000,
             trace_to_stderr: true,
             pending_function_decls: Vec::new(),
@@ -1476,7 +1476,7 @@ impl Harness {
     }
 
     pub fn take_trace_logs(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.trace_logs)
+        self.trace_logs.drain(..).collect()
     }
 
     pub fn set_trace_stderr(&mut self, enabled: bool) {
@@ -1499,7 +1499,7 @@ impl Harness {
         }
         self.trace_log_limit = max_entries;
         while self.trace_logs.len() > self.trace_log_limit {
-            self.trace_logs.remove(0);
+            self.trace_logs.pop_front();
         }
         Ok(())
     }
@@ -2585,7 +2585,7 @@ impl Harness {
             }
 
             // Bubble phase.
-            if path.len() >= 2 {
+            if event.bubbles && path.len() >= 2 {
                 for node in path[..path.len() - 1].iter().rev() {
                     event.event_phase = 3;
                     event.current_target = *node;
@@ -2928,9 +2928,9 @@ impl Harness {
                 eprintln!("{line}");
             }
             if self.trace_logs.len() >= self.trace_log_limit {
-                self.trace_logs.remove(0);
+                self.trace_logs.pop_front();
             }
-            self.trace_logs.push(line);
+            self.trace_logs.push_back(line);
         }
     }
 
@@ -2951,52 +2951,62 @@ impl Harness {
     }
 
     pub(super) fn run_microtask_queue(&mut self) -> Result<usize> {
-        let mut steps = 0usize;
-        self.task_depth += 1;
-        let result = loop {
-            let Some(task) = self.microtask_queue.pop_front() else {
-                break Ok(());
-            };
-            steps += 1;
-            if steps > self.timer_step_limit {
-                break Err(self.timer_step_limit_error(
-                    self.timer_step_limit,
-                    steps,
-                    Some(self.now_ms),
-                ));
-            }
+        self.with_task_depth(|this| {
+            let mut steps = 0usize;
+            loop {
+                let Some(task) = this.microtask_queue.pop_front() else {
+                    return Ok(steps);
+                };
+                steps += 1;
+                if steps > this.timer_step_limit {
+                    return Err(this.timer_step_limit_error(
+                        this.timer_step_limit,
+                        steps,
+                        Some(this.now_ms),
+                    ));
+                }
 
-            match task {
-                ScheduledMicrotask::Script { handler, mut env } => {
-                    let mut event = EventState::new("microtask", self.dom.root, self.now_ms);
-                    let event_param = handler
-                        .first_event_param()
-                        .map(|event_param| event_param.to_string());
-                    self.bind_handler_params(&handler, &[], &mut env, &event_param, &event)?;
-                    let run =
-                        self.execute_stmts(&handler.stmts, &event_param, &mut event, &mut env);
-                    let run = run.map(|_| ());
-                    if let Err(err) = run {
-                        break Err(err);
+                match task {
+                    ScheduledMicrotask::Script { handler, mut env } => {
+                        let mut event = EventState::new("microtask", this.dom.root, this.now_ms);
+                        let event_param = handler
+                            .first_event_param()
+                            .map(|event_param| event_param.to_string());
+                        this.bind_handler_params(&handler, &[], &mut env, &event_param, &event)?;
+                        let run = this.execute_stmts(
+                            &handler.stmts,
+                            &event_param,
+                            &mut event,
+                            &mut env,
+                        );
+                        let run = run.map(|_| ());
+                        if let Err(err) = run {
+                            return Err(err);
+                        }
+                    }
+                    ScheduledMicrotask::Promise { reaction, settled } => {
+                        this.run_promise_reaction_task(reaction, settled)?;
                     }
                 }
-                ScheduledMicrotask::Promise { reaction, settled } => {
-                    self.run_promise_reaction_task(reaction, settled)?;
-                }
             }
-        };
-        self.task_depth -= 1;
-        result?;
-        Ok(steps)
+        })
+    }
+
+    fn with_task_depth<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.task_depth += 1;
+        let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        self.task_depth = self.task_depth.saturating_sub(1);
+        match run_result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     pub(super) fn run_in_task_context<T>(
         &mut self,
         mut run: impl FnMut(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        self.task_depth += 1;
-        let result = run(self);
-        self.task_depth -= 1;
+        let result = self.with_task_depth(|this| run(this));
         let should_flush_microtasks = self.task_depth == 0;
         match result {
             Ok(value) => {
@@ -4882,7 +4892,9 @@ impl Harness {
                         if param == event_var {
                             match method {
                                 EventMethod::PreventDefault => {
-                                    event.default_prevented = true;
+                                    if event.cancelable {
+                                        event.default_prevented = true;
+                                    }
                                 }
                                 EventMethod::StopPropagation => {
                                     event.propagation_stopped = true;
