@@ -798,3 +798,35 @@ fn for_of_header_ignores_in_inside_regex_literal() -> browser_tester::Result<()>
     harness.assert_text("#result", "in")?;
     Ok(())
 }
+
+#[test]
+fn scientific_notation_with_signed_exponent_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const a = 1e-3;
+      const b = 1e+3;
+      const c = 2 + 1e-3;
+      document.getElementById("result").textContent = [a, b, c].join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "0.001|1000|2.001")?;
+    Ok(())
+}
+
+#[test]
+fn hex_literal_followed_by_minus_still_parses_as_subtraction() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const out = 0x1e-1;
+      document.getElementById("result").textContent = String(out);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "29")?;
+    Ok(())
+}

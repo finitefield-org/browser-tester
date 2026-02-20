@@ -473,6 +473,9 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
         return false;
     }
     let prev = bytes[left - 1];
+    if matches!(prev, b'e' | b'E') && is_decimal_exponent_sign(bytes, left - 1) {
+        return false;
+    }
     !matches!(
         prev,
         b'(' | b'['
@@ -492,6 +495,47 @@ fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
             | b'/'
             | b'%'
     )
+}
+
+fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
+    if exponent_index >= bytes.len() {
+        return false;
+    }
+    if !matches!(bytes[exponent_index], b'e' | b'E') {
+        return false;
+    }
+
+    let mut start = exponent_index;
+    while start > 0 && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.') {
+        start -= 1;
+    }
+
+    if start == exponent_index {
+        return false;
+    }
+
+    if start > 0 && is_ident_char(bytes[start - 1]) {
+        return false;
+    }
+
+    let mut has_digit = false;
+    let mut dot_count = 0usize;
+    for &b in &bytes[start..exponent_index] {
+        if b.is_ascii_digit() {
+            has_digit = true;
+            continue;
+        }
+        if b == b'.' {
+            dot_count += 1;
+            if dot_count > 1 {
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+
+    has_digit
 }
 
 fn parse_mul_expr(src: &str) -> Result<Expr> {
