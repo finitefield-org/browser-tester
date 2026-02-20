@@ -32,7 +32,6 @@ impl Harness {
             task_queue: Vec::new(),
             microtask_queue: VecDeque::new(),
             dialog_return_values: HashMap::new(),
-            active_element: None,
             now_ms: 0,
             timer_step_limit: 10_000,
             next_timer_id: 1,
@@ -1292,7 +1291,6 @@ impl Harness {
         self.script_env.clear();
         self.task_queue.clear();
         self.microtask_queue.clear();
-        self.active_element = None;
         self.running_timer_id = None;
         self.running_timer_canceled = false;
         self.pending_function_decls.clear();
@@ -2630,15 +2628,14 @@ impl Harness {
             return Ok(());
         }
 
-        if self.active_element == Some(node) {
+        if self.dom.active_element() == Some(node) {
             return Ok(());
         }
 
-        if let Some(current) = self.active_element {
+        if let Some(current) = self.dom.active_element() {
             self.blur_node_with_env(current, env)?;
         }
 
-        self.active_element = Some(node);
         self.dom.set_active_element(Some(node));
         self.dispatch_event_with_env(node, "focusin", env, true)?;
         self.dispatch_event_with_env(node, "focus", env, true)?;
@@ -2657,13 +2654,12 @@ impl Harness {
         node: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        if self.active_element != Some(node) {
+        if self.dom.active_element() != Some(node) {
             return Ok(());
         }
 
         self.dispatch_event_with_env(node, "focusout", env, true)?;
         self.dispatch_event_with_env(node, "blur", env, true)?;
-        self.active_element = None;
         self.dom.set_active_element(None);
         Ok(())
     }
@@ -4537,9 +4533,8 @@ impl Harness {
                 }
                 Stmt::NodeRemove { target } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    if let Some(active) = self.active_element {
+                    if let Some(active) = self.dom.active_element() {
                         if active == node || self.dom.is_descendant_of(active, node) {
-                            self.active_element = None;
                             self.dom.set_active_element(None);
                         }
                     }

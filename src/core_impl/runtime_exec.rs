@@ -3822,7 +3822,7 @@ impl Harness {
                     Ok(Value::Promise(promise))
                 }
             },
-            Expr::DocumentHasFocus => Ok(Value::Bool(self.active_element.is_some())),
+            Expr::DocumentHasFocus => Ok(Value::Bool(self.dom.active_element().is_some())),
             Expr::DomMatches { target, selector } => {
                 let node = self.resolve_dom_query_required_runtime(target, env)?;
                 let result = self.dom.matches_selector(node, selector)?;

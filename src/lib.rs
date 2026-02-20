@@ -4670,7 +4670,6 @@ pub struct Harness {
     task_queue: Vec<ScheduledTask>,
     microtask_queue: VecDeque<ScheduledMicrotask>,
     dialog_return_values: HashMap<NodeId, String>,
-    active_element: Option<NodeId>,
     now_ms: i64,
     timer_step_limit: usize,
     next_timer_id: i64,
