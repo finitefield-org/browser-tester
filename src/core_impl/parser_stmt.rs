@@ -1327,67 +1327,19 @@ fn trim_optional_trailing_semicolon(src: &str) -> &str {
 fn find_top_level_else_keyword(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'e' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 4 <= bytes.len()
-                        && &bytes[i..i + 4] == b"else"
-                        && (i == 0 || !is_ident_char(bytes[i - 1]))
-                        && (i + 4 == bytes.len() || !is_ident_char(bytes[i + 4]))
-                    {
-                        return Some(i);
-                    }
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
+        if scanner.is_top_level() && bytes[i] == b'e' {
+            if i + 4 <= bytes.len()
+                && &bytes[i..i + 4] == b"else"
+                && (i == 0 || !is_ident_char(bytes[i - 1]))
+                && (i + 4 == bytes.len() || !is_ident_char(bytes[i + 4]))
+            {
+                return Some(i);
             }
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     None
@@ -1822,13 +1774,15 @@ fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &st
         return Ok(None);
     }
 
-    let mut found = None;
-    for (kind, keyword) in [(ForInOfKind::In, "in"), (ForInOfKind::Of, "of")] {
-        if let Some(pos) = find_top_level_in_of_keyword(header, keyword)? {
-            found = Some((kind, pos, keyword));
-            break;
-        }
-    }
+    let in_pos = find_top_level_in_of_keyword(header, "in")?;
+    let of_pos = find_top_level_in_of_keyword(header, "of")?;
+    let found = match (in_pos, of_pos) {
+        (Some(in_pos), Some(of_pos)) if in_pos < of_pos => Some((ForInOfKind::In, in_pos, "in")),
+        (Some(_), Some(of_pos)) => Some((ForInOfKind::Of, of_pos, "of")),
+        (Some(in_pos), None) => Some((ForInOfKind::In, in_pos, "in")),
+        (None, Some(of_pos)) => Some((ForInOfKind::Of, of_pos, "of")),
+        (None, None) => None,
+    };
 
     let Some((kind, pos, keyword)) = found else {
         return Ok(None);
@@ -1848,69 +1802,23 @@ fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &st
 
 fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
     let bytes = src.as_bytes();
-    let mut state = 0u8;
+    let keyword_bytes = keyword.as_bytes();
     let mut i = 0usize;
-    let mut paren = 0isize;
-    let mut bracket = 0isize;
-    let mut brace = 0isize;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            0 => match b {
-                b'\'' => state = 1,
-                b'"' => state = 2,
-                b'`' => state = 3,
-                b'(' => paren += 1,
-                b')' => paren -= 1,
-                b'[' => bracket += 1,
-                b']' => bracket -= 1,
-                b'{' => brace += 1,
-                b'}' => brace -= 1,
-                _ => {
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        if i + keyword.len() <= bytes.len() && &src[i..i + keyword.len()] == keyword
-                        {
-                            let prev_ok = i == 0
-                                || !is_ident_char(
-                                    src.as_bytes()
-                                        .get(i.wrapping_sub(1))
-                                        .copied()
-                                        .unwrap_or_default(),
-                                );
-                            let next = src.as_bytes().get(i + keyword.len()).copied();
-                            let next_ok = next.is_none() || !is_ident_char(next.unwrap());
-                            if prev_ok && next_ok {
-                                return Ok(Some(i));
-                            }
-                        }
-                    }
-                }
-            },
-            1 => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = 0;
-                }
+        if scanner.is_top_level()
+            && i + keyword_bytes.len() <= bytes.len()
+            && &bytes[i..i + keyword_bytes.len()] == keyword_bytes
+        {
+            let prev_ok = i == 0 || !is_ident_char(bytes[i - 1]);
+            let next = bytes.get(i + keyword_bytes.len()).copied();
+            let next_ok = next.map_or(true, |b| !is_ident_char(b));
+            if prev_ok && next_ok {
+                return Ok(Some(i));
             }
-            2 => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = 0;
-                }
-            }
-            3 => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = 0;
-                }
-            }
-            _ => state = 0,
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     Ok(None)

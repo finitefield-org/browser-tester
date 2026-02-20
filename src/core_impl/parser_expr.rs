@@ -10182,60 +10182,27 @@ fn strip_outer_parens(mut src: &str) -> &str {
 
 fn is_fully_wrapped_in_parens(src: &str) -> bool {
     let bytes = src.as_bytes();
-    let mut depth = 0isize;
-    let mut i = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
+    if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
+        return false;
     }
-    let mut state = StrState::None;
+
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 && i + 1 < bytes.len() {
-                        return false;
-                    }
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
+        if scanner.in_normal() && bytes[i] == b')' && scanner.paren == 1 {
+            let mut tail = i + 1;
+            while tail < bytes.len() && bytes[tail].is_ascii_whitespace() {
+                tail += 1;
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
+            if tail < bytes.len() {
+                return false;
             }
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
-    depth == 0
+    scanner.in_normal() && scanner.paren == 0 && scanner.bracket == 0 && scanner.brace == 0
 }
 
 fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {

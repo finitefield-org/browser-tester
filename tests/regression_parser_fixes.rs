@@ -735,3 +735,66 @@ fn nested_parenthesized_division_in_multiplication_parses() -> browser_tester::R
     harness.assert_text("#result", "2")?;
     Ok(())
 }
+
+#[test]
+fn if_else_with_regex_char_class_parens_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "";
+      if (true) out = /[(]/.test("(") ? "then" : "bad"; else out = "else";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_with_regex_char_class_brace_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "";
+      if (true) out = /[{]/.test("{") ? "then" : "bad"; else out = "else";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_regex_char_class_expression_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const ok = (/[(]/.test("("));
+      document.getElementById("result").textContent = ok ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn for_of_header_ignores_in_inside_regex_literal() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [];
+      for (const item of /in/.exec("in")) values.push(item);
+      document.getElementById("result").textContent = values.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "in")?;
+    Ok(())
+}
