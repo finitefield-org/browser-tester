@@ -5,12 +5,36 @@
 //! Use [`Harness`] as the main entry point to load HTML, simulate user actions,
 //! control fake time, and assert DOM state.
 
-include!("lib_parts/core_dom_utils.rs");
-include!("lib_parts/selector.rs");
-include!("lib_parts/runtime_values.rs");
-include!("lib_parts/script_ast.rs");
-include!("lib_parts/runtime_state.rs");
-include!("lib_parts/harness_api.rs");
+use js_regex::{Captures, Regex, RegexBuilder, RegexError, escape as regex_escape};
+use num_bigint::{BigInt as JsBigInt, Sign};
+use num_traits::{One, ToPrimitive, Zero};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
+use std::sync::Arc;
+
+#[path = "lib_parts/core_dom_utils.rs"]
+mod core_dom_utils;
+#[path = "lib_parts/selector.rs"]
+mod selector;
+#[path = "lib_parts/runtime_values.rs"]
+mod runtime_values;
+#[path = "lib_parts/script_ast.rs"]
+mod script_ast;
+#[path = "lib_parts/runtime_state.rs"]
+mod runtime_state;
+#[path = "lib_parts/harness_api.rs"]
+mod harness_api;
+
+pub use core_dom_utils::{Error, Result, ThrownValue};
+pub use harness_api::{Harness, MockPage, MockWindow};
+pub use runtime_state::{LocationNavigation, LocationNavigationKind, PendingTimer};
+
+pub(crate) use core_dom_utils::*;
+pub(crate) use runtime_state::*;
+pub(crate) use runtime_values::*;
+pub(crate) use script_ast::*;
+pub(crate) use selector::*;
 
 mod core_impl;
 mod js_regex;

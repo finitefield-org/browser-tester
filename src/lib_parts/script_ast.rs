@@ -1,5 +1,7 @@
+use super::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IntlLocaleMethod {
+pub(crate) enum IntlLocaleMethod {
     GetCalendars,
     GetCollations,
     GetHourCycles,
@@ -13,7 +15,7 @@ enum IntlLocaleMethod {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Expr {
+pub(crate) enum Expr {
     String(String),
     Bool(bool),
     Null,
@@ -696,40 +698,40 @@ enum Expr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EventMethod {
+pub(crate) enum EventMethod {
     PreventDefault,
     StopPropagation,
     StopImmediatePropagation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StringTrimMode {
+pub(crate) enum StringTrimMode {
     Both,
     Start,
     End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StringStaticMethod {
+pub(crate) enum StringStaticMethod {
     FromCharCode,
     FromCodePoint,
     Raw,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ObjectLiteralKey {
+pub(crate) enum ObjectLiteralKey {
     Static(String),
     Computed(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ObjectLiteralEntry {
+pub(crate) enum ObjectLiteralEntry {
     Pair(ObjectLiteralKey, Expr),
     Spread(Expr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MathConst {
+pub(crate) enum MathConst {
     E,
     Ln10,
     Ln2,
@@ -742,7 +744,7 @@ enum MathConst {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MathMethod {
+pub(crate) enum MathMethod {
     Abs,
     Acos,
     Acosh,
@@ -783,7 +785,7 @@ enum MathMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NumberConst {
+pub(crate) enum NumberConst {
     Epsilon,
     MaxSafeInteger,
     MaxValue,
@@ -795,7 +797,7 @@ enum NumberConst {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NumberMethod {
+pub(crate) enum NumberMethod {
     IsFinite,
     IsInteger,
     IsNaN,
@@ -805,7 +807,7 @@ enum NumberMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NumberInstanceMethod {
+pub(crate) enum NumberInstanceMethod {
     ToExponential,
     ToFixed,
     ToLocaleString,
@@ -815,13 +817,13 @@ enum NumberInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypedArrayStaticMethod {
+pub(crate) enum TypedArrayStaticMethod {
     From,
     Of,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypedArrayInstanceMethod {
+pub(crate) enum TypedArrayInstanceMethod {
     At,
     CopyWithin,
     Entries,
@@ -844,12 +846,12 @@ enum TypedArrayInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MapStaticMethod {
+pub(crate) enum MapStaticMethod {
     GroupBy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UrlStaticMethod {
+pub(crate) enum UrlStaticMethod {
     CanParse,
     Parse,
     CreateObjectUrl,
@@ -857,13 +859,13 @@ enum UrlStaticMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SymbolStaticMethod {
+pub(crate) enum SymbolStaticMethod {
     For,
     KeyFor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SymbolStaticProperty {
+pub(crate) enum SymbolStaticProperty {
     AsyncDispose,
     AsyncIterator,
     Dispose,
@@ -882,12 +884,12 @@ enum SymbolStaticProperty {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RegExpStaticMethod {
+pub(crate) enum RegExpStaticMethod {
     Escape,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PromiseStaticMethod {
+pub(crate) enum PromiseStaticMethod {
     Resolve,
     Reject,
     All,
@@ -899,7 +901,7 @@ enum PromiseStaticMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MapInstanceMethod {
+pub(crate) enum MapInstanceMethod {
     Get,
     Has,
     Delete,
@@ -910,7 +912,7 @@ enum MapInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UrlSearchParamsInstanceMethod {
+pub(crate) enum UrlSearchParamsInstanceMethod {
     Append,
     Delete,
     GetAll,
@@ -918,14 +920,14 @@ enum UrlSearchParamsInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PromiseInstanceMethod {
+pub(crate) enum PromiseInstanceMethod {
     Then,
     Catch,
     Finally,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SetInstanceMethod {
+pub(crate) enum SetInstanceMethod {
     Add,
     Union,
     Intersection,
@@ -937,20 +939,20 @@ enum SetInstanceMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BigIntMethod {
+pub(crate) enum BigIntMethod {
     AsIntN,
     AsUintN,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BigIntInstanceMethod {
+pub(crate) enum BigIntInstanceMethod {
     ToLocaleString,
     ToString,
     ValueOf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NodeTreeMethod {
+pub(crate) enum NodeTreeMethod {
     After,
     Append,
     AppendChild,
@@ -962,7 +964,7 @@ enum NodeTreeMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InsertAdjacentPosition {
+pub(crate) enum InsertAdjacentPosition {
     BeforeBegin,
     AfterBegin,
     BeforeEnd,
@@ -970,13 +972,13 @@ enum InsertAdjacentPosition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ListenerRegistrationOp {
+pub(crate) enum ListenerRegistrationOp {
     Add,
     Remove,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Stmt {
+pub(crate) enum Stmt {
     VarDecl {
         name: String,
         expr: Expr,
@@ -1159,14 +1161,14 @@ enum Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum CatchBinding {
+pub(crate) enum CatchBinding {
     Identifier(String),
     ArrayPattern(Vec<Option<String>>),
     ObjectPattern(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExecFlow {
+pub(crate) enum ExecFlow {
     Continue,
     Break,
     ContinueLoop,
@@ -1174,7 +1176,7 @@ enum ExecFlow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DomMethod {
+pub(crate) enum DomMethod {
     Focus,
     Blur,
     Click,
@@ -1189,7 +1191,7 @@ enum DomMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocationMethod {
+pub(crate) enum LocationMethod {
     Assign,
     Reload,
     Replace,
@@ -1197,7 +1199,7 @@ enum LocationMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HistoryMethod {
+pub(crate) enum HistoryMethod {
     Back,
     Forward,
     Go,
@@ -1206,7 +1208,7 @@ enum HistoryMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardMethod {
+pub(crate) enum ClipboardMethod {
     ReadText,
     WriteText,
 }

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn parse_json_text(src: &str) -> Result<Value> {
+    pub(crate) fn parse_json_text(src: &str) -> Result<Value> {
         let bytes = src.as_bytes();
         let mut i = 0usize;
         Self::json_skip_ws(bytes, &mut i);
@@ -13,7 +15,7 @@ impl Harness {
         Ok(value)
     }
 
-    pub(super) fn parse_json_value(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+    pub(crate) fn parse_json_value(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
         Self::json_skip_ws(bytes, i);
         let Some(&b) = bytes.get(*i) else {
             return Err(Error::ScriptRuntime(
@@ -59,7 +61,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn parse_json_object(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+    pub(crate) fn parse_json_object(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
         *i += 1; // consume '{'
         Self::json_skip_ws(bytes, i);
         let mut entries = Vec::new();
@@ -107,7 +109,7 @@ impl Harness {
         Ok(Self::new_object_value(entries))
     }
 
-    pub(super) fn parse_json_array(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+    pub(crate) fn parse_json_array(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
         *i += 1; // consume '['
         Self::json_skip_ws(bytes, i);
         let mut items = Vec::new();
@@ -140,7 +142,7 @@ impl Harness {
         Ok(Self::new_array_value(items))
     }
 
-    pub(super) fn parse_json_string(src: &str, bytes: &[u8], i: &mut usize) -> Result<String> {
+    pub(crate) fn parse_json_string(src: &str, bytes: &[u8], i: &mut usize) -> Result<String> {
         if bytes.get(*i) != Some(&b'"') {
             return Err(Error::ScriptRuntime(
                 "JSON.parse invalid JSON: expected string".into(),
@@ -256,7 +258,7 @@ impl Harness {
         ))
     }
 
-    pub(super) fn parse_json_hex4(src: &str, i: &mut usize) -> Result<u16> {
+    pub(crate) fn parse_json_hex4(src: &str, i: &mut usize) -> Result<u16> {
         let end = i.saturating_add(4);
         let segment = src.get(*i..end).ok_or_else(|| {
             Error::ScriptRuntime("JSON.parse invalid JSON: invalid unicode escape".into())
@@ -272,7 +274,7 @@ impl Harness {
         })
     }
 
-    pub(super) fn parse_json_number(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
+    pub(crate) fn parse_json_number(src: &str, bytes: &[u8], i: &mut usize) -> Result<Value> {
         let start = *i;
 
         if bytes.get(*i) == Some(&b'-') {
@@ -342,13 +344,13 @@ impl Harness {
         Ok(Value::Float(n))
     }
 
-    pub(super) fn json_skip_ws(bytes: &[u8], i: &mut usize) {
+    pub(crate) fn json_skip_ws(bytes: &[u8], i: &mut usize) {
         while bytes.get(*i).is_some_and(|b| b.is_ascii_whitespace()) {
             *i += 1;
         }
     }
 
-    pub(super) fn json_consume_ascii(bytes: &[u8], i: &mut usize, token: &str) -> bool {
+    pub(crate) fn json_consume_ascii(bytes: &[u8], i: &mut usize, token: &str) -> bool {
         let token_bytes = token.as_bytes();
         let end = i.saturating_add(token_bytes.len());
         if end <= bytes.len() && &bytes[*i..end] == token_bytes {
@@ -359,13 +361,13 @@ impl Harness {
         }
     }
 
-    pub(super) fn json_stringify_top_level(value: &Value) -> Result<Option<String>> {
+    pub(crate) fn json_stringify_top_level(value: &Value) -> Result<Option<String>> {
         let mut array_stack = Vec::new();
         let mut object_stack = Vec::new();
         Self::json_stringify_value(value, &mut array_stack, &mut object_stack)
     }
 
-    pub(super) fn json_stringify_value(
+    pub(crate) fn json_stringify_value(
         value: &Value,
         array_stack: &mut Vec<usize>,
         object_stack: &mut Vec<usize>,
@@ -475,7 +477,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn json_escape_string(src: &str) -> String {
+    pub(crate) fn json_escape_string(src: &str) -> String {
         let mut out = String::new();
         for ch in src.chars() {
             match ch {
@@ -495,7 +497,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn structured_clone_value(
+    pub(crate) fn structured_clone_value(
         value: &Value,
         array_stack: &mut Vec<usize>,
         object_stack: &mut Vec<usize>,
@@ -631,7 +633,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn analyze_regex_flags(flags: &str) -> std::result::Result<RegexFlags, String> {
+    pub(crate) fn analyze_regex_flags(flags: &str) -> std::result::Result<RegexFlags, String> {
         let mut info = RegexFlags {
             global: false,
             ignore_case: false,
@@ -663,7 +665,7 @@ impl Harness {
         Ok(info)
     }
 
-    pub(super) fn compile_regex(
+    pub(crate) fn compile_regex(
         pattern: &str,
         info: RegexFlags,
     ) -> std::result::Result<Regex, RegexError> {
@@ -674,7 +676,7 @@ impl Harness {
         builder.build()
     }
 
-    pub(super) fn new_regex_value(pattern: String, flags: String) -> Result<Value> {
+    pub(crate) fn new_regex_value(pattern: String, flags: String) -> Result<Value> {
         let info = Self::analyze_regex_flags(&flags).map_err(Error::ScriptRuntime)?;
         let compiled = Self::compile_regex(&pattern, info).map_err(|err| {
             Error::ScriptRuntime(format!(
@@ -697,7 +699,7 @@ impl Harness {
         }))))
     }
 
-    pub(super) fn new_regex_from_values(pattern: &Value, flags: Option<&Value>) -> Result<Value> {
+    pub(crate) fn new_regex_from_values(pattern: &Value, flags: Option<&Value>) -> Result<Value> {
         let pattern_text = match pattern {
             Value::RegExp(value) => value.borrow().source.clone(),
             _ => pattern.as_string(),
@@ -712,29 +714,29 @@ impl Harness {
         Self::new_regex_value(pattern_text, flags_text)
     }
 
-    pub(super) fn resolve_regex_from_value(value: &Value) -> Result<Rc<RefCell<RegexValue>>> {
+    pub(crate) fn resolve_regex_from_value(value: &Value) -> Result<Rc<RefCell<RegexValue>>> {
         match value {
             Value::RegExp(regex) => Ok(regex.clone()),
             _ => Err(Error::ScriptRuntime("value is not a RegExp".into())),
         }
     }
 
-    pub(super) fn map_regex_runtime_error(err: RegexError) -> Error {
+    pub(crate) fn map_regex_runtime_error(err: RegexError) -> Error {
         Error::ScriptRuntime(format!("regular expression runtime error: {err}"))
     }
 
-    pub(super) fn regex_test(regex: &Rc<RefCell<RegexValue>>, input: &str) -> Result<bool> {
+    pub(crate) fn regex_test(regex: &Rc<RefCell<RegexValue>>, input: &str) -> Result<bool> {
         Ok(Self::regex_exec_internal(regex, input)?.is_some())
     }
 
-    pub(super) fn regex_exec(
+    pub(crate) fn regex_exec(
         regex: &Rc<RefCell<RegexValue>>,
         input: &str,
     ) -> Result<Option<Vec<String>>> {
         Self::regex_exec_internal(regex, input)
     }
 
-    pub(super) fn regex_exec_internal(
+    pub(crate) fn regex_exec_internal(
         regex: &Rc<RefCell<RegexValue>>,
         input: &str,
     ) -> Result<Option<Vec<String>>> {
@@ -789,7 +791,7 @@ impl Harness {
         Ok(Some(out))
     }
 
-    pub(super) fn eval_math_method(
+    pub(crate) fn eval_math_method(
         &mut self,
         method: MathMethod,
         args: &[Expr],
@@ -881,7 +883,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_number_method(
+    pub(crate) fn eval_number_method(
         &mut self,
         method: NumberMethod,
         args: &[Expr],
@@ -930,7 +932,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_number_instance_method(
+    pub(crate) fn eval_number_instance_method(
         &mut self,
         method: NumberInstanceMethod,
         value: &Expr,
@@ -1064,7 +1066,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_bigint_method(
+    pub(crate) fn eval_bigint_method(
         &mut self,
         method: BigIntMethod,
         args: &[Expr],
@@ -1092,7 +1094,7 @@ impl Harness {
         Ok(Value::BigInt(out))
     }
 
-    pub(super) fn eval_bigint_instance_method(
+    pub(crate) fn eval_bigint_instance_method(
         &mut self,
         method: BigIntInstanceMethod,
         value: &Expr,
@@ -1128,7 +1130,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn bigint_as_uint_n(bits: usize, value: &JsBigInt) -> JsBigInt {
+    pub(crate) fn bigint_as_uint_n(bits: usize, value: &JsBigInt) -> JsBigInt {
         if bits == 0 {
             return JsBigInt::zero();
         }
@@ -1140,7 +1142,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn bigint_as_int_n(bits: usize, value: &JsBigInt) -> JsBigInt {
+    pub(crate) fn bigint_as_int_n(bits: usize, value: &JsBigInt) -> JsBigInt {
         if bits == 0 {
             return JsBigInt::zero();
         }
@@ -1154,7 +1156,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn coerce_bigint_for_constructor(value: &Value) -> Result<JsBigInt> {
+    pub(crate) fn coerce_bigint_for_constructor(value: &Value) -> Result<JsBigInt> {
         match value {
             Value::BigInt(value) => Ok(value.clone()),
             Value::Bool(value) => Ok(if *value {
@@ -1210,7 +1212,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn coerce_bigint_for_builtin_op(value: &Value) -> Result<JsBigInt> {
+    pub(crate) fn coerce_bigint_for_builtin_op(value: &Value) -> Result<JsBigInt> {
         match value {
             Value::BigInt(value) => Ok(value.clone()),
             Value::Bool(value) => Ok(if *value {
@@ -1255,7 +1257,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn parse_js_bigint_from_string(src: &str) -> Result<JsBigInt> {
+    pub(crate) fn parse_js_bigint_from_string(src: &str) -> Result<JsBigInt> {
         let trimmed = src.trim();
         if trimmed.is_empty() {
             return Ok(JsBigInt::zero());
@@ -1290,7 +1292,7 @@ impl Harness {
         Self::parse_signed_decimal_bigint(trimmed, false)
     }
 
-    pub(super) fn parse_prefixed_bigint(src: &str, radix: u32, original: &str) -> Result<JsBigInt> {
+    pub(crate) fn parse_prefixed_bigint(src: &str, radix: u32, original: &str) -> Result<JsBigInt> {
         if src.is_empty() {
             return Err(Error::ScriptRuntime(format!(
                 "cannot convert {} to a BigInt",
@@ -1301,7 +1303,7 @@ impl Harness {
             .ok_or_else(|| Error::ScriptRuntime(format!("cannot convert {} to a BigInt", original)))
     }
 
-    pub(super) fn parse_signed_decimal_bigint(src: &str, negative: bool) -> Result<JsBigInt> {
+    pub(crate) fn parse_signed_decimal_bigint(src: &str, negative: bool) -> Result<JsBigInt> {
         let original = format!("{}{}", if negative { "-" } else { "" }, src);
         if src.is_empty() || !src.as_bytes().iter().all(u8::is_ascii_digit) {
             return Err(Error::ScriptRuntime(format!(
@@ -1318,7 +1320,7 @@ impl Harness {
         Ok(value)
     }
 
-    pub(super) fn bigint_shift_left(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
+    pub(crate) fn bigint_shift_left(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
         if shift.sign() == Sign::Minus {
             let magnitude = (-shift)
                 .to_usize()
@@ -1332,7 +1334,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn bigint_shift_right(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
+    pub(crate) fn bigint_shift_right(value: &JsBigInt, shift: &JsBigInt) -> Result<JsBigInt> {
         if shift.sign() == Sign::Minus {
             let magnitude = (-shift)
                 .to_usize()
@@ -1346,7 +1348,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn number_primitive_value(value: &Value) -> Option<f64> {
+    pub(crate) fn number_primitive_value(value: &Value) -> Option<f64> {
         match value {
             Value::Number(value) => Some(*value as f64),
             Value::Float(value) => Some(*value),
@@ -1354,7 +1356,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn number_value(value: f64) -> Value {
+    pub(crate) fn number_value(value: f64) -> Value {
         if value == 0.0 && value.is_sign_negative() {
             return Value::Float(-0.0);
         }
@@ -1371,7 +1373,7 @@ impl Harness {
         Value::Float(value)
     }
 
-    pub(super) fn coerce_number_for_number_constructor(value: &Value) -> f64 {
+    pub(crate) fn coerce_number_for_number_constructor(value: &Value) -> f64 {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
@@ -1424,7 +1426,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn parse_js_number_from_string(src: &str) -> f64 {
+    pub(crate) fn parse_js_number_from_string(src: &str) -> f64 {
         let trimmed = src.trim();
         if trimmed.is_empty() {
             return 0.0;
@@ -1471,7 +1473,7 @@ impl Harness {
         trimmed.parse::<f64>().unwrap_or(f64::NAN)
     }
 
-    pub(super) fn parse_prefixed_radix_to_f64(src: &str, radix: u32) -> f64 {
+    pub(crate) fn parse_prefixed_radix_to_f64(src: &str, radix: u32) -> f64 {
         if src.is_empty() {
             return f64::NAN;
         }
@@ -1485,7 +1487,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn format_number_default(value: f64) -> String {
+    pub(crate) fn format_number_default(value: f64) -> String {
         if value.is_nan() {
             return "NaN".to_string();
         }
@@ -1510,7 +1512,7 @@ impl Harness {
         Self::normalize_exponential_string(out, false)
     }
 
-    pub(super) fn number_to_exponential(value: f64, fraction_digits: Option<usize>) -> String {
+    pub(crate) fn number_to_exponential(value: f64, fraction_digits: Option<usize>) -> String {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
@@ -1527,7 +1529,7 @@ impl Harness {
         Self::normalize_exponential_string(out, fraction_digits.is_none())
     }
 
-    pub(super) fn normalize_exponential_string(raw: String, trim_fraction_zeros: bool) -> String {
+    pub(crate) fn normalize_exponential_string(raw: String, trim_fraction_zeros: bool) -> String {
         let Some(exp_idx) = raw.find('e').or_else(|| raw.find('E')) else {
             return raw;
         };
@@ -1547,7 +1549,7 @@ impl Harness {
         format!("{mantissa}e{:+}", exponent)
     }
 
-    pub(super) fn number_to_fixed(value: f64, fraction_digits: usize) -> String {
+    pub(crate) fn number_to_fixed(value: f64, fraction_digits: usize) -> String {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
@@ -1558,7 +1560,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn number_to_precision(value: f64, precision: usize) -> String {
+    pub(crate) fn number_to_precision(value: f64, precision: usize) -> String {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
@@ -1583,7 +1585,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn number_to_string_radix(value: f64, radix: u32) -> String {
+    pub(crate) fn number_to_string_radix(value: f64, radix: u32) -> String {
         if radix == 10 {
             return Self::format_number_default(value);
         }
@@ -1640,7 +1642,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn radix_digit_char(value: u32) -> char {
+    pub(crate) fn radix_digit_char(value: u32) -> char {
         if value < 10 {
             char::from(b'0' + value as u8)
         } else {
@@ -1648,7 +1650,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn sum_precise(values: &[Value]) -> f64 {
+    pub(crate) fn sum_precise(values: &[Value]) -> f64 {
         let mut sum = 0.0f64;
         let mut compensation = 0.0f64;
         for value in values {
@@ -1661,7 +1663,7 @@ impl Harness {
         sum
     }
 
-    pub(super) fn js_math_round(value: f64) -> f64 {
+    pub(crate) fn js_math_round(value: f64) -> f64 {
         if !value.is_finite() || value == 0.0 {
             return value;
         }
@@ -1673,7 +1675,7 @@ impl Harness {
         if frac < 0.5 { floor } else { floor + 1.0 }
     }
 
-    pub(super) fn js_math_sign(value: f64) -> f64 {
+    pub(crate) fn js_math_sign(value: f64) -> f64 {
         if value.is_nan() {
             f64::NAN
         } else if value == 0.0 {
@@ -1685,7 +1687,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn to_i32_for_math(value: &Value) -> i32 {
+    pub(crate) fn to_i32_for_math(value: &Value) -> i32 {
         let numeric = Self::coerce_number_for_global(value);
         if !numeric.is_finite() {
             return 0;
@@ -1698,7 +1700,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn to_u32_for_math(value: &Value) -> u32 {
+    pub(crate) fn to_u32_for_math(value: &Value) -> u32 {
         let numeric = Self::coerce_number_for_global(value);
         if !numeric.is_finite() {
             return 0;
@@ -1706,12 +1708,12 @@ impl Harness {
         numeric.trunc().rem_euclid(4_294_967_296.0) as u32
     }
 
-    pub(super) fn math_f16round(value: f64) -> f64 {
+    pub(crate) fn math_f16round(value: f64) -> f64 {
         let half = Self::f32_to_f16_bits(value as f32);
         Self::f16_bits_to_f32(half) as f64
     }
 
-    pub(super) fn f32_to_f16_bits(value: f32) -> u16 {
+    pub(crate) fn f32_to_f16_bits(value: f32) -> u16 {
         let bits = value.to_bits();
         let sign = ((bits >> 16) & 0x8000) as u16;
         let exp = ((bits >> 23) & 0xff) as i32;
@@ -1761,7 +1763,7 @@ impl Harness {
         sign | half_exp | half_mant
     }
 
-    pub(super) fn f16_bits_to_f32(bits: u16) -> f32 {
+    pub(crate) fn f16_bits_to_f32(bits: u16) -> f32 {
         let sign = ((bits & 0x8000) as u32) << 16;
         let exp = ((bits >> 10) & 0x1f) as u32;
         let mant = (bits & 0x03ff) as u32;

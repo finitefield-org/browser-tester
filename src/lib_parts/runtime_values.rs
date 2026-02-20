@@ -1,22 +1,24 @@
+use super::*;
+
 #[derive(Debug, Clone, PartialEq)]
-struct ArrayBufferValue {
-    bytes: Vec<u8>,
-    max_byte_length: Option<usize>,
-    detached: bool,
+pub(crate) struct ArrayBufferValue {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) max_byte_length: Option<usize>,
+    pub(crate) detached: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BlobValue {
-    bytes: Vec<u8>,
-    mime_type: String,
+pub(crate) struct BlobValue {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) mime_type: String,
 }
 
 impl ArrayBufferValue {
-    fn byte_length(&self) -> usize {
+    pub(crate) fn byte_length(&self) -> usize {
         if self.detached { 0 } else { self.bytes.len() }
     }
 
-    fn max_byte_length(&self) -> usize {
+    pub(crate) fn max_byte_length(&self) -> usize {
         if self.detached {
             0
         } else {
@@ -24,13 +26,13 @@ impl ArrayBufferValue {
         }
     }
 
-    fn resizable(&self) -> bool {
+    pub(crate) fn resizable(&self) -> bool {
         !self.detached && self.max_byte_length.is_some()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypedArrayKind {
+pub(crate) enum TypedArrayKind {
     Int8,
     Uint8,
     Uint8Clamped,
@@ -46,7 +48,7 @@ enum TypedArrayKind {
 }
 
 impl TypedArrayKind {
-    fn bytes_per_element(&self) -> usize {
+    pub(crate) fn bytes_per_element(&self) -> usize {
         match self {
             Self::Int8 | Self::Uint8 | Self::Uint8Clamped => 1,
             Self::Int16 | Self::Uint16 | Self::Float16 => 2,
@@ -55,11 +57,11 @@ impl TypedArrayKind {
         }
     }
 
-    fn is_bigint(&self) -> bool {
+    pub(crate) fn is_bigint(&self) -> bool {
         matches!(self, Self::BigInt64 | Self::BigUint64)
     }
 
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Int8 => "Int8Array",
             Self::Uint8 => "Uint8Array",
@@ -78,21 +80,21 @@ impl TypedArrayKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TypedArrayConstructorKind {
+pub(crate) enum TypedArrayConstructorKind {
     Concrete(TypedArrayKind),
     Abstract,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct TypedArrayValue {
-    kind: TypedArrayKind,
-    buffer: Rc<RefCell<ArrayBufferValue>>,
-    byte_offset: usize,
-    fixed_length: Option<usize>,
+pub(crate) struct TypedArrayValue {
+    pub(crate) kind: TypedArrayKind,
+    pub(crate) buffer: Rc<RefCell<ArrayBufferValue>>,
+    pub(crate) byte_offset: usize,
+    pub(crate) fixed_length: Option<usize>,
 }
 
 impl TypedArrayValue {
-    fn observed_length(&self) -> usize {
+    pub(crate) fn observed_length(&self) -> usize {
         let buffer_len = self.buffer.borrow().byte_length();
         let bytes_per = self.kind.bytes_per_element();
         if self.byte_offset >= buffer_len {
@@ -112,29 +114,29 @@ impl TypedArrayValue {
         }
     }
 
-    fn observed_byte_length(&self) -> usize {
+    pub(crate) fn observed_byte_length(&self) -> usize {
         self.observed_length()
             .saturating_mul(self.kind.bytes_per_element())
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct MapValue {
-    entries: Vec<(Value, Value)>,
-    properties: ObjectValue,
+pub(crate) struct MapValue {
+    pub(crate) entries: Vec<(Value, Value)>,
+    pub(crate) properties: ObjectValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct SetValue {
-    values: Vec<Value>,
-    properties: ObjectValue,
+pub(crate) struct SetValue {
+    pub(crate) values: Vec<Value>,
+    pub(crate) properties: ObjectValue,
 }
 
 #[derive(Debug, Clone)]
-struct PromiseValue {
-    id: usize,
-    state: PromiseState,
-    reactions: Vec<PromiseReaction>,
+pub(crate) struct PromiseValue {
+    pub(crate) id: usize,
+    pub(crate) state: PromiseState,
+    pub(crate) reactions: Vec<PromiseReaction>,
 }
 
 impl PartialEq for PromiseValue {
@@ -144,19 +146,19 @@ impl PartialEq for PromiseValue {
 }
 
 #[derive(Debug, Clone)]
-enum PromiseState {
+pub(crate) enum PromiseState {
     Pending,
     Fulfilled(Value),
     Rejected(Value),
 }
 
 #[derive(Debug, Clone)]
-struct PromiseReaction {
-    kind: PromiseReactionKind,
+pub(crate) struct PromiseReaction {
+    pub(crate) kind: PromiseReactionKind,
 }
 
 #[derive(Debug, Clone)]
-enum PromiseReactionKind {
+pub(crate) enum PromiseReactionKind {
     Then {
         on_fulfilled: Option<Value>,
         on_rejected: Option<Value>,
@@ -191,45 +193,45 @@ enum PromiseReactionKind {
 }
 
 #[derive(Debug, Clone)]
-enum PromiseSettledValue {
+pub(crate) enum PromiseSettledValue {
     Fulfilled(Value),
     Rejected(Value),
 }
 
 #[derive(Debug, Clone)]
-struct PromiseAllState {
-    result: Rc<RefCell<PromiseValue>>,
-    remaining: usize,
-    values: Vec<Option<Value>>,
-    settled: bool,
+pub(crate) struct PromiseAllState {
+    pub(crate) result: Rc<RefCell<PromiseValue>>,
+    pub(crate) remaining: usize,
+    pub(crate) values: Vec<Option<Value>>,
+    pub(crate) settled: bool,
 }
 
 #[derive(Debug, Clone)]
-struct PromiseAllSettledState {
-    result: Rc<RefCell<PromiseValue>>,
-    remaining: usize,
-    values: Vec<Option<Value>>,
+pub(crate) struct PromiseAllSettledState {
+    pub(crate) result: Rc<RefCell<PromiseValue>>,
+    pub(crate) remaining: usize,
+    pub(crate) values: Vec<Option<Value>>,
 }
 
 #[derive(Debug, Clone)]
-struct PromiseAnyState {
-    result: Rc<RefCell<PromiseValue>>,
-    remaining: usize,
-    reasons: Vec<Option<Value>>,
-    settled: bool,
+pub(crate) struct PromiseAnyState {
+    pub(crate) result: Rc<RefCell<PromiseValue>>,
+    pub(crate) remaining: usize,
+    pub(crate) reasons: Vec<Option<Value>>,
+    pub(crate) settled: bool,
 }
 
 #[derive(Debug, Clone)]
-struct PromiseRaceState {
-    result: Rc<RefCell<PromiseValue>>,
-    settled: bool,
+pub(crate) struct PromiseRaceState {
+    pub(crate) result: Rc<RefCell<PromiseValue>>,
+    pub(crate) settled: bool,
 }
 
 #[derive(Debug, Clone)]
-struct PromiseCapabilityFunction {
-    promise: Rc<RefCell<PromiseValue>>,
-    reject: bool,
-    already_called: Rc<RefCell<bool>>,
+pub(crate) struct PromiseCapabilityFunction {
+    pub(crate) promise: Rc<RefCell<PromiseValue>>,
+    pub(crate) reject: bool,
+    pub(crate) already_called: Rc<RefCell<bool>>,
 }
 
 impl PartialEq for PromiseCapabilityFunction {
@@ -241,10 +243,10 @@ impl PartialEq for PromiseCapabilityFunction {
 }
 
 #[derive(Debug, Clone)]
-struct SymbolValue {
-    id: usize,
-    description: Option<String>,
-    registry_key: Option<String>,
+pub(crate) struct SymbolValue {
+    pub(crate) id: usize,
+    pub(crate) description: Option<String>,
+    pub(crate) registry_key: Option<String>,
 }
 
 impl PartialEq for SymbolValue {
@@ -254,7 +256,7 @@ impl PartialEq for SymbolValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+pub(crate) enum Value {
     String(String),
     StringConstructor,
     Bool(bool),
@@ -291,13 +293,13 @@ enum Value {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ObjectValue {
-    entries: Vec<(String, Value)>,
-    index_by_key: HashMap<String, usize>,
+pub(crate) struct ObjectValue {
+    pub(crate) entries: Vec<(String, Value)>,
+    pub(crate) index_by_key: HashMap<String, usize>,
 }
 
 impl ObjectValue {
-    fn new(entries: Vec<(String, Value)>) -> Self {
+    pub(crate) fn new(entries: Vec<(String, Value)>) -> Self {
         let mut value = Self::default();
         for (key, entry_value) in entries {
             value.set_entry(key, entry_value);
@@ -305,7 +307,7 @@ impl ObjectValue {
         value
     }
 
-    fn set_entry(&mut self, key: String, value: Value) {
+    pub(crate) fn set_entry(&mut self, key: String, value: Value) {
         if let Some(index) = self.index_by_key.get(&key).copied() {
             if let Some((_, existing)) = self.entries.get_mut(index) {
                 *existing = value;
@@ -317,14 +319,14 @@ impl ObjectValue {
         self.index_by_key.insert(key, index);
     }
 
-    fn get_entry(&self, key: &str) -> Option<Value> {
+    pub(crate) fn get_entry(&self, key: &str) -> Option<Value> {
         self.index_by_key
             .get(key)
             .and_then(|index| self.entries.get(*index))
             .map(|(_, value)| value.clone())
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.index_by_key.clear();
     }
@@ -351,19 +353,19 @@ impl PartialEq for ObjectValue {
 }
 
 #[derive(Debug, Clone)]
-struct RegexValue {
-    source: String,
-    flags: String,
-    global: bool,
-    ignore_case: bool,
-    multiline: bool,
-    dot_all: bool,
-    sticky: bool,
-    has_indices: bool,
-    unicode: bool,
-    compiled: Regex,
-    last_index: usize,
-    properties: ObjectValue,
+pub(crate) struct RegexValue {
+    pub(crate) source: String,
+    pub(crate) flags: String,
+    pub(crate) global: bool,
+    pub(crate) ignore_case: bool,
+    pub(crate) multiline: bool,
+    pub(crate) dot_all: bool,
+    pub(crate) sticky: bool,
+    pub(crate) has_indices: bool,
+    pub(crate) unicode: bool,
+    pub(crate) compiled: Regex,
+    pub(crate) last_index: usize,
+    pub(crate) properties: ObjectValue,
 }
 
 impl PartialEq for RegexValue {
@@ -383,14 +385,14 @@ impl PartialEq for RegexValue {
 }
 
 #[derive(Debug, Clone)]
-struct FunctionValue {
-    handler: ScriptHandler,
-    captured_env: Rc<RefCell<ScriptEnv>>,
-    captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
-    captured_global_names: HashSet<String>,
-    local_bindings: HashSet<String>,
-    global_scope: bool,
-    is_async: bool,
+pub(crate) struct FunctionValue {
+    pub(crate) handler: ScriptHandler,
+    pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
+    pub(crate) captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    pub(crate) captured_global_names: HashSet<String>,
+    pub(crate) local_bindings: HashSet<String>,
+    pub(crate) global_scope: bool,
+    pub(crate) is_async: bool,
 }
 
 impl PartialEq for FunctionValue {
@@ -402,18 +404,18 @@ impl PartialEq for FunctionValue {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RegexFlags {
-    global: bool,
-    ignore_case: bool,
-    multiline: bool,
-    dot_all: bool,
-    sticky: bool,
-    has_indices: bool,
-    unicode: bool,
+pub(crate) struct RegexFlags {
+    pub(crate) global: bool,
+    pub(crate) ignore_case: bool,
+    pub(crate) multiline: bool,
+    pub(crate) dot_all: bool,
+    pub(crate) sticky: bool,
+    pub(crate) has_indices: bool,
+    pub(crate) unicode: bool,
 }
 
 impl Value {
-    fn truthy(&self) -> bool {
+    pub(crate) fn truthy(&self) -> bool {
         match self {
             Self::Bool(v) => *v,
             Self::String(v) => !v.is_empty(),
@@ -451,7 +453,7 @@ impl Value {
         }
     }
 
-    fn as_string(&self) -> String {
+    pub(crate) fn as_string(&self) -> String {
         match self {
             Self::String(v) => v.clone(),
             Self::StringConstructor => "String".to_string(),
@@ -576,7 +578,7 @@ impl Value {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DomProp {
+pub(crate) enum DomProp {
     Attributes,
     AssignedSlot,
     Value,
@@ -718,20 +720,20 @@ enum DomProp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DomIndex {
+pub(crate) enum DomIndex {
     Static(usize),
     Dynamic(String),
 }
 
 impl DomIndex {
-    fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         match self {
             Self::Static(index) => index.to_string(),
             Self::Dynamic(expr) => expr.clone(),
         }
     }
 
-    fn static_index(&self) -> Option<usize> {
+    pub(crate) fn static_index(&self) -> Option<usize> {
         match self {
             Self::Static(index) => Some(*index),
             Self::Dynamic(_) => None,
@@ -740,7 +742,7 @@ impl DomIndex {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DomQuery {
+pub(crate) enum DomQuery {
     DocumentRoot,
     DocumentBody,
     DocumentHead,
@@ -783,13 +785,13 @@ enum DomQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FormDataSource {
+pub(crate) enum FormDataSource {
     NewForm(DomQuery),
     Var(String),
 }
 
 impl DomQuery {
-    fn describe_call(&self) -> String {
+    pub(crate) fn describe_call(&self) -> String {
         match self {
             Self::DocumentRoot => "document".into(),
             Self::DocumentBody => "document.body".into(),
@@ -834,14 +836,14 @@ impl DomQuery {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClassListMethod {
+pub(crate) enum ClassListMethod {
     Add,
     Remove,
     Toggle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BinaryOp {
+pub(crate) enum BinaryOp {
     Or,
     And,
     Nullish,
@@ -869,7 +871,7 @@ enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VarAssignOp {
+pub(crate) enum VarAssignOp {
     Assign,
     Add,
     Sub,
@@ -889,7 +891,7 @@ enum VarAssignOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EventExprProp {
+pub(crate) enum EventExprProp {
     Type,
     Target,
     CurrentTarget,
@@ -909,13 +911,13 @@ enum EventExprProp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MatchMediaProp {
+pub(crate) enum MatchMediaProp {
     Matches,
     Media,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IntlFormatterKind {
+pub(crate) enum IntlFormatterKind {
     Collator,
     DateTimeFormat,
     DisplayNames,
@@ -928,7 +930,7 @@ enum IntlFormatterKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IntlStaticMethod {
+pub(crate) enum IntlStaticMethod {
     CollatorSupportedLocalesOf,
     DateTimeFormatSupportedLocalesOf,
     DisplayNamesSupportedLocalesOf,
@@ -942,7 +944,7 @@ enum IntlStaticMethod {
 }
 
 impl IntlFormatterKind {
-    fn storage_name(self) -> &'static str {
+    pub(crate) fn storage_name(self) -> &'static str {
         match self {
             Self::Collator => "Collator",
             Self::DateTimeFormat => "DateTimeFormat",
@@ -956,7 +958,7 @@ impl IntlFormatterKind {
         }
     }
 
-    fn from_storage_name(value: &str) -> Option<Self> {
+    pub(crate) fn from_storage_name(value: &str) -> Option<Self> {
         match value {
             "Collator" => Some(Self::Collator),
             "DateTimeFormat" => Some(Self::DateTimeFormat),
@@ -973,112 +975,111 @@ impl IntlFormatterKind {
 }
 
 #[derive(Debug, Clone)]
-struct IntlDateTimeOptions {
-    calendar: String,
-    numbering_system: String,
-    time_zone: String,
-    date_style: Option<String>,
-    time_style: Option<String>,
-    weekday: Option<String>,
-    year: Option<String>,
-    month: Option<String>,
-    day: Option<String>,
-    hour: Option<String>,
-    minute: Option<String>,
-    second: Option<String>,
-    fractional_second_digits: Option<u8>,
-    time_zone_name: Option<String>,
-    hour12: Option<bool>,
-    day_period: Option<String>,
+pub(crate) struct IntlDateTimeOptions {
+    pub(crate) calendar: String,
+    pub(crate) numbering_system: String,
+    pub(crate) time_zone: String,
+    pub(crate) date_style: Option<String>,
+    pub(crate) time_style: Option<String>,
+    pub(crate) weekday: Option<String>,
+    pub(crate) year: Option<String>,
+    pub(crate) month: Option<String>,
+    pub(crate) day: Option<String>,
+    pub(crate) hour: Option<String>,
+    pub(crate) minute: Option<String>,
+    pub(crate) second: Option<String>,
+    pub(crate) fractional_second_digits: Option<u8>,
+    pub(crate) time_zone_name: Option<String>,
+    pub(crate) hour12: Option<bool>,
+    pub(crate) day_period: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct IntlDateTimeComponents {
-    year: i64,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-    millisecond: u32,
-    weekday: u32,
-    offset_minutes: i64,
+pub(crate) struct IntlDateTimeComponents {
+    pub(crate) year: i64,
+    pub(crate) month: u32,
+    pub(crate) day: u32,
+    pub(crate) hour: u32,
+    pub(crate) minute: u32,
+    pub(crate) second: u32,
+    pub(crate) millisecond: u32,
+    pub(crate) weekday: u32,
+    pub(crate) offset_minutes: i64,
 }
 
 #[derive(Debug, Clone)]
-struct IntlPart {
-    part_type: String,
-    value: String,
+pub(crate) struct IntlPart {
+    pub(crate) part_type: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlRelativeTimePart {
-    part_type: String,
-    value: String,
-    unit: Option<String>,
+pub(crate) struct IntlRelativeTimePart {
+    pub(crate) part_type: String,
+    pub(crate) value: String,
+    pub(crate) unit: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct IntlDisplayNamesOptions {
-    style: String,
-    display_type: String,
-    fallback: String,
-    language_display: String,
+pub(crate) struct IntlDisplayNamesOptions {
+    pub(crate) style: String,
+    pub(crate) display_type: String,
+    pub(crate) fallback: String,
+    pub(crate) language_display: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlDurationOptions {
-    style: String,
+pub(crate) struct IntlDurationOptions {
+    pub(crate) style: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlListOptions {
-    style: String,
-    list_type: String,
+pub(crate) struct IntlListOptions {
+    pub(crate) style: String,
+    pub(crate) list_type: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlPluralRulesOptions {
-    rule_type: String,
+pub(crate) struct IntlPluralRulesOptions {
+    pub(crate) rule_type: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlRelativeTimeOptions {
-    style: String,
-    numeric: String,
-    locale_matcher: String,
+pub(crate) struct IntlRelativeTimeOptions {
+    pub(crate) style: String,
+    pub(crate) numeric: String,
+    pub(crate) locale_matcher: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlSegmenterOptions {
-    granularity: String,
-    locale_matcher: String,
+pub(crate) struct IntlSegmenterOptions {
+    pub(crate) granularity: String,
+    pub(crate) locale_matcher: String,
 }
 
 #[derive(Debug, Clone)]
-struct IntlLocaleOptions {
-    language: Option<String>,
-    script: Option<String>,
-    region: Option<String>,
-    calendar: Option<String>,
-    case_first: Option<String>,
-    collation: Option<String>,
-    hour_cycle: Option<String>,
-    numbering_system: Option<String>,
-    numeric: Option<bool>,
+pub(crate) struct IntlLocaleOptions {
+    pub(crate) language: Option<String>,
+    pub(crate) script: Option<String>,
+    pub(crate) region: Option<String>,
+    pub(crate) calendar: Option<String>,
+    pub(crate) case_first: Option<String>,
+    pub(crate) collation: Option<String>,
+    pub(crate) hour_cycle: Option<String>,
+    pub(crate) numbering_system: Option<String>,
+    pub(crate) numeric: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
-struct IntlLocaleData {
-    language: String,
-    script: Option<String>,
-    region: Option<String>,
-    variants: Vec<String>,
-    calendar: Option<String>,
-    case_first: Option<String>,
-    collation: Option<String>,
-    hour_cycle: Option<String>,
-    numbering_system: Option<String>,
-    numeric: Option<bool>,
+pub(crate) struct IntlLocaleData {
+    pub(crate) language: String,
+    pub(crate) script: Option<String>,
+    pub(crate) region: Option<String>,
+    pub(crate) variants: Vec<String>,
+    pub(crate) calendar: Option<String>,
+    pub(crate) case_first: Option<String>,
+    pub(crate) collation: Option<String>,
+    pub(crate) hour_cycle: Option<String>,
+    pub(crate) numbering_system: Option<String>,
+    pub(crate) numeric: Option<bool>,
 }
-

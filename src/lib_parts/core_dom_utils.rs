@@ -1,47 +1,41 @@
-use js_regex::{Captures, Regex, RegexBuilder, RegexError, escape as regex_escape};
-use num_bigint::{BigInt as JsBigInt, Sign};
-use num_traits::{One, ToPrimitive, Zero};
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use super::*;
 use std::error::Error as StdError;
 use std::fmt;
-use std::rc::Rc;
-use std::sync::Arc;
 
-const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
-const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
-const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
-const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
-const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
-const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
-const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
-const INTERNAL_INTL_OPTIONS_KEY: &str = "\u{0}\u{0}bt_intl:options";
-const INTERNAL_INTL_LOCALE_DATA_KEY: &str = "\u{0}\u{0}bt_intl:localeData";
-const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
-const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
-const INTERNAL_INTL_SEGMENTS_KEY: &str = "\u{0}\u{0}bt_intl:segments";
-const INTERNAL_INTL_SEGMENT_INDEX_KEY: &str = "\u{0}\u{0}bt_intl:segmentIndex";
-const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
-const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
-const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
-const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
-const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
-const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
-const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
-const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
-const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
-const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
-const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
-const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";
-const INTERNAL_URL_OBJECT_ID_KEY: &str = "\u{0}\u{0}bt_url:id";
-const INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX: &str = "\u{0}\u{0}bt_url_search_params:";
-const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str = "\u{0}\u{0}bt_url_search_params:object";
-const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_url_search_params:entries";
-const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str = "\u{0}\u{0}bt_url_search_params:owner_id";
-const INTERNAL_STORAGE_KEY_PREFIX: &str = "\u{0}\u{0}bt_storage:";
-const INTERNAL_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_storage:object";
-const INTERNAL_STORAGE_ENTRIES_KEY: &str = "\u{0}\u{0}bt_storage:entries";
-const DEFAULT_LOCALE: &str = "en-US";
+pub(crate) const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
+pub(crate) const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
+pub(crate) const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
+pub(crate) const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
+pub(crate) const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
+pub(crate) const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
+pub(crate) const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";
+pub(crate) const INTERNAL_INTL_OPTIONS_KEY: &str = "\u{0}\u{0}bt_intl:options";
+pub(crate) const INTERNAL_INTL_LOCALE_DATA_KEY: &str = "\u{0}\u{0}bt_intl:localeData";
+pub(crate) const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
+pub(crate) const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
+pub(crate) const INTERNAL_INTL_SEGMENTS_KEY: &str = "\u{0}\u{0}bt_intl:segments";
+pub(crate) const INTERNAL_INTL_SEGMENT_INDEX_KEY: &str = "\u{0}\u{0}bt_intl:segmentIndex";
+pub(crate) const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";
+pub(crate) const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind";
+pub(crate) const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
+pub(crate) const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
+pub(crate) const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
+pub(crate) const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
+pub(crate) const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
+pub(crate) const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
+pub(crate) const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
+pub(crate) const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
+pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
+pub(crate) const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";
+pub(crate) const INTERNAL_URL_OBJECT_ID_KEY: &str = "\u{0}\u{0}bt_url:id";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX: &str = "\u{0}\u{0}bt_url_search_params:";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str = "\u{0}\u{0}bt_url_search_params:object";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_url_search_params:entries";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str = "\u{0}\u{0}bt_url_search_params:owner_id";
+pub(crate) const INTERNAL_STORAGE_KEY_PREFIX: &str = "\u{0}\u{0}bt_storage:";
+pub(crate) const INTERNAL_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_storage:object";
+pub(crate) const INTERNAL_STORAGE_ENTRIES_KEY: &str = "\u{0}\u{0}bt_storage:entries";
+pub(crate) const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -102,66 +96,66 @@ impl StdError for Error {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThrownValue {
-    value: Value,
+    pub(crate) value: Value,
 }
 
 impl ThrownValue {
-    fn new(value: Value) -> Self {
+    pub(crate) fn new(value: Value) -> Self {
         Self { value }
     }
 
-    fn into_value(self) -> Value {
+    pub(crate) fn into_value(self) -> Value {
         self.value
     }
 
-    fn as_string(&self) -> String {
+    pub(crate) fn as_string(&self) -> String {
         self.value.as_string()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct NodeId(usize);
+pub(crate) struct NodeId(pub(crate) usize);
 
 #[derive(Debug, Clone)]
-enum NodeType {
+pub(crate) enum NodeType {
     Document,
     Element(Element),
     Text(String),
 }
 
 #[derive(Debug, Clone)]
-struct Node {
-    parent: Option<NodeId>,
-    children: Vec<NodeId>,
-    node_type: NodeType,
+pub(crate) struct Node {
+    pub(crate) parent: Option<NodeId>,
+    pub(crate) children: Vec<NodeId>,
+    pub(crate) node_type: NodeType,
 }
 
 #[derive(Debug, Clone)]
-struct Element {
-    tag_name: String,
-    attrs: HashMap<String, String>,
-    value: String,
-    checked: bool,
-    indeterminate: bool,
-    disabled: bool,
-    readonly: bool,
-    required: bool,
-    custom_validity_message: String,
-    selection_start: usize,
-    selection_end: usize,
-    selection_direction: String,
+pub(crate) struct Element {
+    pub(crate) tag_name: String,
+    pub(crate) attrs: HashMap<String, String>,
+    pub(crate) value: String,
+    pub(crate) checked: bool,
+    pub(crate) indeterminate: bool,
+    pub(crate) disabled: bool,
+    pub(crate) readonly: bool,
+    pub(crate) required: bool,
+    pub(crate) custom_validity_message: String,
+    pub(crate) selection_start: usize,
+    pub(crate) selection_end: usize,
+    pub(crate) selection_direction: String,
 }
 
 #[derive(Debug, Clone)]
-struct Dom {
-    nodes: Vec<Node>,
-    root: NodeId,
-    id_index: HashMap<String, Vec<NodeId>>,
-    active_element: Option<NodeId>,
-    active_pseudo_element: Option<NodeId>,
+pub(crate) struct Dom {
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) root: NodeId,
+    pub(crate) id_index: HashMap<String, Vec<NodeId>>,
+    pub(crate) active_element: Option<NodeId>,
+    pub(crate) active_pseudo_element: Option<NodeId>,
 }
 
-fn has_class(element: &Element, class_name: &str) -> bool {
+pub(crate) fn has_class(element: &Element, class_name: &str) -> bool {
     element
         .attrs
         .get("class")
@@ -169,11 +163,11 @@ fn has_class(element: &Element, class_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn should_strip_inner_html_element(tag_name: &str) -> bool {
+pub(crate) fn should_strip_inner_html_element(tag_name: &str) -> bool {
     tag_name.eq_ignore_ascii_case("script")
 }
 
-fn sanitize_inner_html_element_attrs(element: &mut Element) {
+pub(crate) fn sanitize_inner_html_element_attrs(element: &mut Element) {
     element.attrs.retain(|name, value| {
         if name.starts_with("on") {
             return false;
@@ -196,14 +190,14 @@ fn sanitize_inner_html_element_attrs(element: &mut Element) {
     element.selection_direction = "none".to_string();
 }
 
-fn is_javascript_url_attr(name: &str) -> bool {
+pub(crate) fn is_javascript_url_attr(name: &str) -> bool {
     matches!(
         name,
         "href" | "src" | "xlink:href" | "action" | "formaction"
     )
 }
 
-fn is_javascript_scheme(value: &str) -> bool {
+pub(crate) fn is_javascript_scheme(value: &str) -> bool {
     let mut normalized = String::with_capacity(value.len());
     for ch in value.chars() {
         if ch.is_ascii_whitespace() || ch.is_ascii_control() {
@@ -214,7 +208,7 @@ fn is_javascript_scheme(value: &str) -> bool {
     normalized.starts_with("javascript:")
 }
 
-fn escape_html_text_for_serialization(value: &str) -> String {
+pub(crate) fn escape_html_text_for_serialization(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
@@ -227,7 +221,7 @@ fn escape_html_text_for_serialization(value: &str) -> String {
     out
 }
 
-fn escape_html_attr_for_serialization(value: &str) -> String {
+pub(crate) fn escape_html_attr_for_serialization(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
@@ -241,7 +235,7 @@ fn escape_html_attr_for_serialization(value: &str) -> String {
     out
 }
 
-fn class_tokens(class_attr: Option<&str>) -> Vec<String> {
+pub(crate) fn class_tokens(class_attr: Option<&str>) -> Vec<String> {
     class_attr
         .map(|value| {
             value
@@ -253,7 +247,7 @@ fn class_tokens(class_attr: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn set_class_attr(element: &mut Element, classes: &[String]) {
+pub(crate) fn set_class_attr(element: &mut Element, classes: &[String]) {
     if classes.is_empty() {
         element.attrs.remove("class");
     } else {
@@ -261,11 +255,11 @@ fn set_class_attr(element: &mut Element, classes: &[String]) {
     }
 }
 
-fn dataset_key_to_attr_name(key: &str) -> String {
+pub(crate) fn dataset_key_to_attr_name(key: &str) -> String {
     format!("data-{}", js_prop_to_css_name(key))
 }
 
-fn js_prop_to_css_name(prop: &str) -> String {
+pub(crate) fn js_prop_to_css_name(prop: &str) -> String {
     let mut out = String::new();
     for ch in prop.chars() {
         if ch.is_ascii_uppercase() {
@@ -278,7 +272,7 @@ fn js_prop_to_css_name(prop: &str) -> String {
     out
 }
 
-fn parse_style_declarations(style_attr: Option<&str>) -> Vec<(String, String)> {
+pub(crate) fn parse_style_declarations(style_attr: Option<&str>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(style_attr) = style_attr else {
         return out;
@@ -324,7 +318,7 @@ fn parse_style_declarations(style_attr: Option<&str>) -> Vec<(String, String)> {
     out
 }
 
-fn push_style_declaration(raw_decl: &str, out: &mut Vec<(String, String)>) {
+pub(crate) fn push_style_declaration(raw_decl: &str, out: &mut Vec<(String, String)>) {
     let decl = raw_decl.trim();
     if decl.is_empty() {
         return;
@@ -377,7 +371,7 @@ fn push_style_declaration(raw_decl: &str, out: &mut Vec<(String, String)>) {
     }
 }
 
-fn serialize_style_declarations(decls: &[(String, String)]) -> String {
+pub(crate) fn serialize_style_declarations(decls: &[(String, String)]) -> String {
     let mut out = String::new();
     for (idx, (name, value)) in decls.iter().enumerate() {
         if idx > 0 {
@@ -391,7 +385,7 @@ fn serialize_style_declarations(decls: &[(String, String)]) -> String {
     out
 }
 
-fn format_float(value: f64) -> String {
+pub(crate) fn format_float(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_string();
     }
@@ -415,7 +409,7 @@ fn format_float(value: f64) -> String {
     format!("{mantissa}e{:+}", exponent)
 }
 
-fn parse_js_parse_float(src: &str) -> f64 {
+pub(crate) fn parse_js_parse_float(src: &str) -> f64 {
     let src = src.trim_start();
     if src.is_empty() {
         return f64::NAN;
@@ -476,7 +470,7 @@ fn parse_js_parse_float(src: &str) -> f64 {
     src[..i].parse::<f64>().unwrap_or(f64::NAN)
 }
 
-fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
+pub(crate) fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
     let src = src.trim_start();
     if src.is_empty() {
         return f64::NAN;
@@ -529,7 +523,7 @@ fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
     if negative { -value } else { value }
 }
 
-fn encode_binary_string_to_base64(src: &str) -> Result<String> {
+pub(crate) fn encode_binary_string_to_base64(src: &str) -> Result<String> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut bytes = Vec::with_capacity(src.len());
@@ -576,7 +570,7 @@ fn encode_binary_string_to_base64(src: &str) -> Result<String> {
     Ok(out)
 }
 
-fn decode_base64_to_binary_string(src: &str) -> Result<String> {
+pub(crate) fn decode_base64_to_binary_string(src: &str) -> Result<String> {
     let mut bytes: Vec<u8> = src.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if bytes.is_empty() {
         return Ok(String::new());
@@ -627,7 +621,7 @@ fn decode_base64_to_binary_string(src: &str) -> Result<String> {
     Ok(out.into_iter().map(char::from).collect())
 }
 
-fn decode_base64_char(ch: u8) -> Result<u8> {
+pub(crate) fn decode_base64_char(ch: u8) -> Result<u8> {
     let value = match ch {
         b'A'..=b'Z' => ch - b'A',
         b'a'..=b'z' => ch - b'a' + 26,
@@ -641,7 +635,7 @@ fn decode_base64_char(ch: u8) -> Result<u8> {
     Ok(value)
 }
 
-fn encode_uri_like(src: &str, component: bool) -> String {
+pub(crate) fn encode_uri_like(src: &str, component: bool) -> String {
     let mut out = String::new();
     for b in src.as_bytes() {
         if is_unescaped_uri_byte(*b, component) {
@@ -655,7 +649,7 @@ fn encode_uri_like(src: &str, component: bool) -> String {
     out
 }
 
-fn encode_uri_like_preserving_percent(src: &str, component: bool) -> String {
+pub(crate) fn encode_uri_like_preserving_percent(src: &str, component: bool) -> String {
     let mut out = String::new();
     let bytes = src.as_bytes();
     let mut i = 0usize;
@@ -689,7 +683,7 @@ fn encode_uri_like_preserving_percent(src: &str, component: bool) -> String {
     out
 }
 
-fn decode_uri_like(src: &str, component: bool) -> Result<String> {
+pub(crate) fn decode_uri_like(src: &str, component: bool) -> Result<String> {
     let preserve_reserved = !component;
     let bytes = src.as_bytes();
     let mut out = String::new();
@@ -742,7 +736,7 @@ fn decode_uri_like(src: &str, component: bool) -> Result<String> {
     Ok(out)
 }
 
-fn parse_url_search_params_pairs_from_query_string(query: &str) -> Result<Vec<(String, String)>> {
+pub(crate) fn parse_url_search_params_pairs_from_query_string(query: &str) -> Result<Vec<(String, String)>> {
     let query = query.strip_prefix('?').unwrap_or(query);
     if query.is_empty() {
         return Ok(Vec::new());
@@ -764,7 +758,7 @@ fn parse_url_search_params_pairs_from_query_string(query: &str) -> Result<Vec<(S
     Ok(pairs)
 }
 
-fn serialize_url_search_params_pairs(pairs: &[(String, String)]) -> String {
+pub(crate) fn serialize_url_search_params_pairs(pairs: &[(String, String)]) -> String {
     pairs
         .iter()
         .map(|(name, value)| {
@@ -778,7 +772,7 @@ fn serialize_url_search_params_pairs(pairs: &[(String, String)]) -> String {
         .join("&")
 }
 
-fn encode_form_urlencoded_component(src: &str) -> String {
+pub(crate) fn encode_form_urlencoded_component(src: &str) -> String {
     let mut out = String::new();
     for b in src.as_bytes() {
         if is_form_urlencoded_unescaped_byte(*b) {
@@ -794,7 +788,7 @@ fn encode_form_urlencoded_component(src: &str) -> String {
     out
 }
 
-fn decode_form_urlencoded_component(src: &str) -> Result<String> {
+pub(crate) fn decode_form_urlencoded_component(src: &str) -> Result<String> {
     let bytes = src.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0usize;
@@ -829,11 +823,11 @@ fn decode_form_urlencoded_component(src: &str) -> Result<String> {
         .map_err(|_| Error::ScriptRuntime("URLSearchParams malformed UTF-8 sequence".into()))
 }
 
-fn is_form_urlencoded_unescaped_byte(b: u8) -> bool {
+pub(crate) fn is_form_urlencoded_unescaped_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_')
 }
 
-fn js_escape(src: &str) -> String {
+pub(crate) fn js_escape(src: &str) -> String {
     let mut out = String::new();
     for unit in src.encode_utf16() {
         if unit <= 0x7F && is_unescaped_legacy_escape_byte(unit as u8) {
@@ -859,7 +853,7 @@ fn js_escape(src: &str) -> String {
     out
 }
 
-fn js_unescape(src: &str) -> String {
+pub(crate) fn js_unescape(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut units: Vec<u16> = Vec::with_capacity(src.len());
     let mut i = 0usize;
@@ -905,7 +899,7 @@ fn js_unescape(src: &str) -> String {
     String::from_utf16_lossy(&units)
 }
 
-fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
+pub(crate) fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
     if b.is_ascii_alphanumeric() {
         return true;
     }
@@ -926,18 +920,18 @@ fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
     false
 }
 
-fn is_decode_uri_reserved_char(ch: char) -> bool {
+pub(crate) fn is_decode_uri_reserved_char(ch: char) -> bool {
     matches!(
         ch,
         ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#'
     )
 }
 
-fn is_unescaped_legacy_escape_byte(b: u8) -> bool {
+pub(crate) fn is_unescaped_legacy_escape_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'*' | b'+' | b'-' | b'.' | b'/' | b'@' | b'_')
 }
 
-fn parse_percent_byte(bytes: &[u8], offset: usize) -> Result<u8> {
+pub(crate) fn parse_percent_byte(bytes: &[u8], offset: usize) -> Result<u8> {
     if offset + 2 >= bytes.len() || bytes[offset] != b'%' {
         return Err(Error::ScriptRuntime("malformed URI sequence".into()));
     }
@@ -948,7 +942,7 @@ fn parse_percent_byte(bytes: &[u8], offset: usize) -> Result<u8> {
     Ok((hi << 4) | lo)
 }
 
-fn utf8_sequence_len(first: u8) -> Option<usize> {
+pub(crate) fn utf8_sequence_len(first: u8) -> Option<usize> {
     match first {
         0xC2..=0xDF => Some(2),
         0xE0..=0xEF => Some(3),
@@ -957,7 +951,7 @@ fn utf8_sequence_len(first: u8) -> Option<usize> {
     }
 }
 
-fn from_hex_digit(b: u8) -> Option<u8> {
+pub(crate) fn from_hex_digit(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
@@ -966,7 +960,7 @@ fn from_hex_digit(b: u8) -> Option<u8> {
     }
 }
 
-fn to_hex_upper(nibble: u8) -> char {
+pub(crate) fn to_hex_upper(nibble: u8) -> char {
     match nibble {
         0..=9 => (b'0' + nibble) as char,
         10..=15 => (b'A' + (nibble - 10)) as char,
@@ -974,7 +968,7 @@ fn to_hex_upper(nibble: u8) -> char {
     }
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut it = value.chars();
     let mut out = String::new();
     for _ in 0..max_chars {
@@ -988,4 +982,3 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     }
     out
 }
-

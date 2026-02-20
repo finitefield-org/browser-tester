@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    fn eval_array_member_call(
+    pub(crate) fn eval_array_member_call(
         &mut self,
         values: &Rc<RefCell<Vec<Value>>>,
         member: &str,
@@ -373,7 +375,7 @@ impl Harness {
         Ok(Some(value))
     }
 
-    fn eval_map_member_call_from_values(
+    pub(crate) fn eval_map_member_call_from_values(
         &mut self,
         map: &Rc<RefCell<MapValue>>,
         member: &str,
@@ -534,7 +536,7 @@ impl Harness {
         Ok(Some(value))
     }
 
-    fn eval_nodelist_member_call(
+    pub(crate) fn eval_nodelist_member_call(
         &mut self,
         nodes: &[NodeId],
         member: &str,
@@ -567,7 +569,7 @@ impl Harness {
         }
     }
 
-    fn eval_node_member_call(
+    pub(crate) fn eval_node_member_call(
         &mut self,
         node: NodeId,
         member: &str,
@@ -906,7 +908,7 @@ impl Harness {
         )
     }
 
-    fn normalize_selection_direction(direction: &str) -> &'static str {
+    pub(crate) fn normalize_selection_direction(direction: &str) -> &'static str {
         match direction {
             "forward" => "forward",
             "backward" => "backward",
@@ -1133,7 +1135,7 @@ impl Harness {
         !matches!(kind, "button" | "submit" | "reset" | "hidden")
     }
 
-    fn compute_input_validity(&self, node: NodeId) -> Result<InputValidity> {
+    pub(crate) fn compute_input_validity(&self, node: NodeId) -> Result<InputValidity> {
         let mut validity = InputValidity {
             valid: true,
             ..InputValidity::default()
@@ -1293,7 +1295,7 @@ impl Harness {
         Ok(validity)
     }
 
-    fn input_validity_to_value(validity: &InputValidity) -> Value {
+    pub(crate) fn input_validity_to_value(validity: &InputValidity) -> Value {
         Self::new_object_value(vec![
             ("valueMissing".to_string(), Value::Bool(validity.value_missing)),
             ("typeMismatch".to_string(), Value::Bool(validity.type_mismatch)),
@@ -1318,7 +1320,7 @@ impl Harness {
         ])
     }
 
-    pub(super) fn collect_left_associative_binary_operands<'a>(
+    pub(crate) fn collect_left_associative_binary_operands<'a>(
         expr: &'a Expr,
         op: BinaryOp,
     ) -> Vec<&'a Expr> {
@@ -1346,7 +1348,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn eval_binary(&self, op: &BinaryOp, left: &Value, right: &Value) -> Result<Value> {
+    pub(crate) fn eval_binary(&self, op: &BinaryOp, left: &Value, right: &Value) -> Result<Value> {
         if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
             if matches!(
                 op,
@@ -1552,7 +1554,7 @@ impl Harness {
         Ok(out)
     }
 
-    pub(super) fn loose_equal(&self, left: &Value, right: &Value) -> bool {
+    pub(crate) fn loose_equal(&self, left: &Value, right: &Value) -> bool {
         if self.strict_equal(left, right) {
             return true;
         }
@@ -1593,7 +1595,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn is_loose_primitive(value: &Value) -> bool {
+    pub(crate) fn is_loose_primitive(value: &Value) -> bool {
         matches!(
             value,
             Value::String(_)
@@ -1607,7 +1609,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn is_loose_object(value: &Value) -> bool {
+    pub(crate) fn is_loose_object(value: &Value) -> bool {
         matches!(
             value,
             Value::Array(_)
@@ -1638,7 +1640,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn to_primitive_for_loose(&self, value: &Value) -> Value {
+    pub(crate) fn to_primitive_for_loose(&self, value: &Value) -> Value {
         match value {
             Value::Object(entries) => {
                 if let Some(wrapped) = Self::string_wrapper_value_from_object(&entries.borrow()) {
@@ -1679,7 +1681,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn value_in(&self, left: &Value, right: &Value) -> bool {
+    pub(crate) fn value_in(&self, left: &Value, right: &Value) -> bool {
         match right {
             Value::NodeList(nodes) => self
                 .value_as_index(left)
@@ -1702,7 +1704,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
+    pub(crate) fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
         if let Value::Node(node) = left {
             if self.is_named_constructor_value(right, "HTMLElement") {
                 return self.dom.element(*node).is_some();
@@ -1746,7 +1748,7 @@ impl Harness {
             .is_some_and(|expected| self.strict_equal(value, expected))
     }
 
-    pub(super) fn value_as_index(&self, value: &Value) -> Option<usize> {
+    pub(crate) fn value_as_index(&self, value: &Value) -> Option<usize> {
         match value {
             Value::Number(v) => usize::try_from(*v).ok(),
             Value::Float(v) => {
@@ -1774,7 +1776,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn strict_equal(&self, left: &Value, right: &Value) -> bool {
+    pub(crate) fn strict_equal(&self, left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Number(l), Value::Number(r)) => l == r,
@@ -1814,7 +1816,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn compare<F>(&self, left: &Value, right: &Value, op: F) -> bool
+    pub(crate) fn compare<F>(&self, left: &Value, right: &Value, op: F) -> bool
     where
         F: Fn(f64, f64) -> bool,
     {
@@ -1923,7 +1925,7 @@ impl Harness {
         op(l, r)
     }
 
-    pub(super) fn number_bigint_loose_equal(left: &Value, right: &Value) -> bool {
+    pub(crate) fn number_bigint_loose_equal(left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::BigInt(l), Value::Number(r)) => *l == JsBigInt::from(*r),
             (Value::BigInt(l), Value::Float(r)) => {
@@ -1937,7 +1939,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn f64_to_bigint_if_integral(value: f64) -> Option<JsBigInt> {
+    pub(crate) fn f64_to_bigint_if_integral(value: f64) -> Option<JsBigInt> {
         if !value.is_finite() || value.fract() != 0.0 {
             return None;
         }
@@ -1948,7 +1950,7 @@ impl Harness {
         JsBigInt::parse_bytes(rendered.as_bytes(), 10)
     }
 
-    pub(super) fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(crate) fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
         if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
             return Err(Error::ScriptRuntime(
                 "Cannot convert a Symbol value to a string".into(),
@@ -1985,29 +1987,29 @@ impl Harness {
         }
     }
 
-    pub(super) fn new_array_value(values: Vec<Value>) -> Value {
+    pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(values)))
     }
 
-    pub(super) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
+    pub(crate) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
         Value::Object(Rc::new(RefCell::new(ObjectValue::new(entries))))
     }
 
-    pub(super) fn new_boolean_constructor_callable() -> Value {
+    pub(crate) fn new_boolean_constructor_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("boolean_constructor".to_string()),
         )])
     }
 
-    pub(super) fn new_string_wrapper_value(value: String) -> Value {
+    pub(crate) fn new_string_wrapper_value(value: String) -> Value {
         Self::new_object_value(vec![(
             INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
             Value::String(value),
         )])
     }
 
-    pub(super) fn object_set_entry(
+    pub(crate) fn object_set_entry(
         entries: &mut impl ObjectEntryMut,
         key: String,
         value: Value,
@@ -2015,14 +2017,14 @@ impl Harness {
         entries.set_entry(key, value);
     }
 
-    pub(super) fn object_get_entry(
+    pub(crate) fn object_get_entry(
         entries: &(impl ObjectEntryLookup + ?Sized),
         key: &str,
     ) -> Option<Value> {
         entries.get_entry(key)
     }
 
-    pub(super) fn callable_kind_from_value(value: &Value) -> Option<&str> {
+    pub(crate) fn callable_kind_from_value(value: &Value) -> Option<&str> {
         let Value::Object(entries) = value else {
             return None;
         };
@@ -2043,7 +2045,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
+    pub(crate) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
         match value {
             Value::Node(node) => {
                 let is_select = self
@@ -2313,7 +2315,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn object_property_from_named_value(
+    pub(crate) fn object_property_from_named_value(
         &self,
         variable_name: &str,
         value: &Value,
@@ -2331,7 +2333,7 @@ impl Harness {
             })
     }
 
-    pub(super) fn eval_event_prop_fallback(
+    pub(crate) fn eval_event_prop_fallback(
         &self,
         event_var: &str,
         value: &Value,
@@ -2371,14 +2373,14 @@ impl Harness {
         }
     }
 
-    pub(super) fn aria_property_to_attr_name(prop_name: &str) -> String {
+    pub(crate) fn aria_property_to_attr_name(prop_name: &str) -> String {
         if !prop_name.starts_with("aria") || prop_name.len() <= 4 {
             return prop_name.to_ascii_lowercase();
         }
         format!("aria-{}", prop_name[4..].to_ascii_lowercase())
     }
 
-    pub(super) fn aria_element_ref_attr_name(prop_name: &str) -> Option<&'static str> {
+    pub(crate) fn aria_element_ref_attr_name(prop_name: &str) -> Option<&'static str> {
         match prop_name {
             "ariaActiveDescendantElement" => Some("aria-activedescendant"),
             "ariaControlsElements" => Some("aria-controls"),
@@ -2392,7 +2394,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_aria_single_element_property(
+    pub(crate) fn resolve_aria_single_element_property(
         &self,
         node: NodeId,
         prop_name: &str,
@@ -2403,7 +2405,7 @@ impl Harness {
         self.dom.by_id(id_ref)
     }
 
-    pub(super) fn resolve_aria_element_list_property(
+    pub(crate) fn resolve_aria_element_list_property(
         &self,
         node: NodeId,
         prop_name: &str,
@@ -2419,7 +2421,7 @@ impl Harness {
             .collect()
     }
 
-    pub(super) fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
+    pub(crate) fn object_key_from_dom_prop(prop: &DomProp) -> Option<&'static str> {
         match prop {
             DomProp::Attributes => Some("attributes"),
             DomProp::AssignedSlot => Some("assignedSlot"),

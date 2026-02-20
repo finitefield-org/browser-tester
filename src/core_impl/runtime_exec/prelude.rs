@@ -1,23 +1,25 @@
+use super::*;
+
 #[derive(Debug, Clone, Default)]
-struct InputValidity {
-    value_missing: bool,
-    type_mismatch: bool,
-    pattern_mismatch: bool,
-    too_long: bool,
-    too_short: bool,
-    range_underflow: bool,
-    range_overflow: bool,
-    step_mismatch: bool,
-    bad_input: bool,
-    custom_error: bool,
-    valid: bool,
+pub(crate) struct InputValidity {
+    pub(crate) value_missing: bool,
+    pub(crate) type_mismatch: bool,
+    pub(crate) pattern_mismatch: bool,
+    pub(crate) too_long: bool,
+    pub(crate) too_short: bool,
+    pub(crate) range_underflow: bool,
+    pub(crate) range_overflow: bool,
+    pub(crate) step_mismatch: bool,
+    pub(crate) bad_input: bool,
+    pub(crate) custom_error: bool,
+    pub(crate) valid: bool,
 }
 
-pub(super) trait ObjectEntryLookup {
+pub(crate) trait ObjectEntryLookup {
     fn get_entry(&self, key: &str) -> Option<Value>;
 }
 
-pub(super) trait ObjectEntryMut {
+pub(crate) trait ObjectEntryMut {
     fn set_entry(&mut self, key: String, value: Value);
 }
 
@@ -73,4 +75,3 @@ impl ObjectEntryMut for std::cell::RefMut<'_, ObjectValue> {
         ObjectValue::set_entry(&mut *self, key, value);
     }
 }
-

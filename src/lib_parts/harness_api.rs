@@ -1,33 +1,35 @@
+use super::*;
+
 #[derive(Debug)]
 pub struct Harness {
-    dom: Dom,
-    listeners: ListenerStore,
-    dom_runtime: DomRuntimeState,
-    script_runtime: ScriptRuntimeState,
-    document_url: String,
-    location_history: LocationHistoryState,
-    scheduler: SchedulerState,
-    promise_runtime: PromiseRuntimeState,
-    symbol_runtime: SymbolRuntimeState,
-    browser_apis: BrowserApiState,
-    rng_state: u64,
-    platform_mocks: PlatformMockState,
-    trace_state: TraceState,
+    pub(crate) dom: Dom,
+    pub(crate) listeners: ListenerStore,
+    pub(crate) dom_runtime: DomRuntimeState,
+    pub(crate) script_runtime: ScriptRuntimeState,
+    pub(crate) document_url: String,
+    pub(crate) location_history: LocationHistoryState,
+    pub(crate) scheduler: SchedulerState,
+    pub(crate) promise_runtime: PromiseRuntimeState,
+    pub(crate) symbol_runtime: SymbolRuntimeState,
+    pub(crate) browser_apis: BrowserApiState,
+    pub(crate) rng_state: u64,
+    pub(crate) platform_mocks: PlatformMockState,
+    pub(crate) trace_state: TraceState,
 }
 
 #[derive(Debug)]
 pub struct MockWindow {
-    pages: Vec<MockPage>,
-    current: usize,
+    pub(crate) pages: Vec<MockPage>,
+    pub(crate) current: usize,
 }
 
 #[derive(Debug)]
 pub struct MockPage {
-    harness: Harness,
+    pub(crate) harness: Harness,
 }
 
 impl MockWindow {
-    fn with_current_harness_mut<R>(
+    pub(crate) fn with_current_harness_mut<R>(
         &mut self,
         f: impl FnOnce(&mut Harness) -> Result<R>,
     ) -> Result<R> {

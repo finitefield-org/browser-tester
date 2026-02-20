@@ -1,9 +1,11 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn promise_error_reason(err: Error) -> Value {
+    pub(crate) fn promise_error_reason(err: Error) -> Value {
         Value::String(format!("{err}"))
     }
 
-    pub(super) fn new_pending_promise(&mut self) -> Rc<RefCell<PromiseValue>> {
+    pub(crate) fn new_pending_promise(&mut self) -> Rc<RefCell<PromiseValue>> {
         let id = self.promise_runtime.allocate_promise_id();
         Rc::new(RefCell::new(PromiseValue {
             id,
@@ -12,7 +14,7 @@ impl Harness {
         }))
     }
 
-    pub(super) fn new_promise_capability_functions(
+    pub(crate) fn new_promise_capability_functions(
         &self,
         promise: Rc<RefCell<PromiseValue>>,
     ) -> (Value, Value) {
@@ -30,7 +32,7 @@ impl Harness {
         (resolve, reject)
     }
 
-    pub(super) fn promise_add_reaction(
+    pub(crate) fn promise_add_reaction(
         &mut self,
         promise: &Rc<RefCell<PromiseValue>>,
         kind: PromiseReactionKind,
@@ -49,7 +51,7 @@ impl Harness {
         self.queue_promise_reaction_microtask(kind, settled);
     }
 
-    pub(super) fn promise_fulfill(&mut self, promise: &Rc<RefCell<PromiseValue>>, value: Value) {
+    pub(crate) fn promise_fulfill(&mut self, promise: &Rc<RefCell<PromiseValue>>, value: Value) {
         let reactions = {
             let mut promise_ref = promise.borrow_mut();
             if !matches!(promise_ref.state, PromiseState::Pending) {
@@ -66,7 +68,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn promise_reject(&mut self, promise: &Rc<RefCell<PromiseValue>>, reason: Value) {
+    pub(crate) fn promise_reject(&mut self, promise: &Rc<RefCell<PromiseValue>>, reason: Value) {
         let reactions = {
             let mut promise_ref = promise.borrow_mut();
             if !matches!(promise_ref.state, PromiseState::Pending) {
@@ -83,7 +85,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn promise_resolve(
+    pub(crate) fn promise_resolve(
         &mut self,
         promise: &Rc<RefCell<PromiseValue>>,
         value: Value,
@@ -153,7 +155,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn promise_resolve_value_as_promise(
+    pub(crate) fn promise_resolve_value_as_promise(
         &mut self,
         value: Value,
     ) -> Result<Rc<RefCell<PromiseValue>>> {
@@ -165,7 +167,7 @@ impl Harness {
         Ok(promise)
     }
 
-    pub(super) fn promise_then_internal(
+    pub(crate) fn promise_then_internal(
         &mut self,
         promise: &Rc<RefCell<PromiseValue>>,
         on_fulfilled: Option<Value>,
@@ -183,7 +185,7 @@ impl Harness {
         result
     }
 
-    pub(super) fn eval_promise_construct(
+    pub(crate) fn eval_promise_construct(
         &mut self,
         executor: &Option<Box<Expr>>,
         called_with_new: bool,
@@ -216,7 +218,7 @@ impl Harness {
         Ok(Value::Promise(promise))
     }
 
-    pub(super) fn eval_promise_static_method(
+    pub(crate) fn eval_promise_static_method(
         &mut self,
         method: PromiseStaticMethod,
         args: &[Expr],
@@ -333,7 +335,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_promise_method(
+    pub(crate) fn eval_promise_method(
         &mut self,
         target: &Expr,
         method: PromiseInstanceMethod,
@@ -435,7 +437,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_promise_all(&mut self, iterable: Value) -> Result<Value> {
+    pub(crate) fn eval_promise_all(&mut self, iterable: Value) -> Result<Value> {
         let values = self.array_like_values_from_value(&iterable)?;
         let result = self.new_pending_promise();
         if values.is_empty() {
@@ -464,7 +466,7 @@ impl Harness {
         Ok(Value::Promise(result))
     }
 
-    pub(super) fn eval_promise_all_settled(&mut self, iterable: Value) -> Result<Value> {
+    pub(crate) fn eval_promise_all_settled(&mut self, iterable: Value) -> Result<Value> {
         let values = self.array_like_values_from_value(&iterable)?;
         let result = self.new_pending_promise();
         if values.is_empty() {
@@ -492,7 +494,7 @@ impl Harness {
         Ok(Value::Promise(result))
     }
 
-    pub(super) fn eval_promise_any(&mut self, iterable: Value) -> Result<Value> {
+    pub(crate) fn eval_promise_any(&mut self, iterable: Value) -> Result<Value> {
         let values = self.array_like_values_from_value(&iterable)?;
         let result = self.new_pending_promise();
         if values.is_empty() {
@@ -521,7 +523,7 @@ impl Harness {
         Ok(Value::Promise(result))
     }
 
-    pub(super) fn eval_promise_race(&mut self, iterable: Value) -> Result<Value> {
+    pub(crate) fn eval_promise_race(&mut self, iterable: Value) -> Result<Value> {
         let values = self.array_like_values_from_value(&iterable)?;
         let result = self.new_pending_promise();
         if values.is_empty() {
@@ -546,7 +548,7 @@ impl Harness {
         Ok(Value::Promise(result))
     }
 
-    pub(super) fn new_aggregate_error_value(reasons: Vec<Value>) -> Value {
+    pub(crate) fn new_aggregate_error_value(reasons: Vec<Value>) -> Value {
         Self::new_object_value(vec![
             ("name".into(), Value::String("AggregateError".into())),
             (
@@ -557,7 +559,7 @@ impl Harness {
         ])
     }
 
-    pub(super) fn run_promise_reaction_task(
+    pub(crate) fn run_promise_reaction_task(
         &mut self,
         reaction: PromiseReactionKind,
         settled: PromiseSettledValue,
@@ -748,7 +750,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn execute_callback_value(
+    pub(crate) fn execute_callback_value(
         &mut self,
         callback: &Value,
         args: &[Value],
@@ -757,7 +759,7 @@ impl Harness {
         self.execute_callable_value(callback, args, event)
     }
 
-    pub(super) fn eval_typed_array_method(
+    pub(crate) fn eval_typed_array_method(
         &mut self,
         target: &str,
         method: TypedArrayInstanceMethod,
@@ -1595,7 +1597,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_array_callback(
+    pub(crate) fn execute_array_callback(
         &mut self,
         callback: &ScriptHandler,
         args: &[Value],
@@ -1637,7 +1639,7 @@ impl Harness {
             .unwrap_or(Value::Undefined))
     }
 
-    pub(super) fn execute_array_callback_in_env(
+    pub(crate) fn execute_array_callback_in_env(
         &mut self,
         callback: &ScriptHandler,
         args: &[Value],
@@ -1674,7 +1676,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn execute_array_like_foreach_in_env(
+    pub(crate) fn execute_array_like_foreach_in_env(
         &mut self,
         target_value: Value,
         callback: &ScriptHandler,
@@ -1763,7 +1765,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn normalize_slice_index(len: usize, index: i64) -> usize {
+    pub(crate) fn normalize_slice_index(len: usize, index: i64) -> usize {
         if index < 0 {
             len.saturating_sub(index.unsigned_abs() as usize)
         } else {
@@ -1771,7 +1773,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn normalize_splice_start_index(len: usize, start: i64) -> usize {
+    pub(crate) fn normalize_splice_start_index(len: usize, start: i64) -> usize {
         if start < 0 {
             len.saturating_sub(start.unsigned_abs() as usize)
         } else {
@@ -1779,7 +1781,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn normalize_substring_index(len: usize, index: i64) -> usize {
+    pub(crate) fn normalize_substring_index(len: usize, index: i64) -> usize {
         if index < 0 {
             0
         } else {
@@ -1787,7 +1789,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn char_index_to_byte(value: &str, char_index: usize) -> usize {
+    pub(crate) fn char_index_to_byte(value: &str, char_index: usize) -> usize {
         value
             .char_indices()
             .nth(char_index)
@@ -1795,14 +1797,14 @@ impl Harness {
             .unwrap_or(value.len())
     }
 
-    pub(super) fn substring_chars(value: &str, start: usize, end: usize) -> String {
+    pub(crate) fn substring_chars(value: &str, start: usize, end: usize) -> String {
         if start >= end {
             return String::new();
         }
         value.chars().skip(start).take(end - start).collect()
     }
 
-    pub(super) fn split_string(
+    pub(crate) fn split_string(
         value: &str,
         separator: Option<String>,
         limit: Option<i64>,
@@ -1835,7 +1837,7 @@ impl Harness {
         parts
     }
 
-    pub(super) fn split_string_with_regex(
+    pub(crate) fn split_string_with_regex(
         value: &str,
         regex: &Rc<RefCell<RegexValue>>,
         limit: Option<i64>,
@@ -1858,7 +1860,7 @@ impl Harness {
         Ok(parts)
     }
 
-    pub(super) fn expand_regex_replacement(template: &str, captures: &Captures) -> String {
+    pub(crate) fn expand_regex_replacement(template: &str, captures: &Captures) -> String {
         let chars = template.chars().collect::<Vec<_>>();
         let mut i = 0usize;
         let mut out = String::new();
@@ -1915,7 +1917,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn replace_string_with_regex(
+    pub(crate) fn replace_string_with_regex(
         value: &str,
         regex: &Rc<RefCell<RegexValue>>,
         replacement: &str,
@@ -1959,7 +1961,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn string_index_of(
+    pub(crate) fn string_index_of(
         value: &str,
         search: &str,
         start_char_idx: usize,
@@ -1969,7 +1971,7 @@ impl Harness {
         Some(value[..start_byte + pos].chars().count())
     }
 
-    pub(super) fn parse_date_string_to_epoch_ms(src: &str) -> Option<i64> {
+    pub(crate) fn parse_date_string_to_epoch_ms(src: &str) -> Option<i64> {
         let src = src.trim();
         if src.is_empty() {
             return None;
@@ -2107,7 +2109,7 @@ impl Harness {
         Some(timestamp_ms - offset_minutes * 60_000)
     }
 
-    pub(super) fn parse_fixed_digits_i64(src: &str, i: &mut usize, width: usize) -> Option<i64> {
+    pub(crate) fn parse_fixed_digits_i64(src: &str, i: &mut usize, width: usize) -> Option<i64> {
         let end = i.checked_add(width)?;
         let segment = src.get(*i..end)?;
         if !segment.as_bytes().iter().all(|b| b.is_ascii_digit()) {
@@ -2117,7 +2119,7 @@ impl Harness {
         segment.parse::<i64>().ok()
     }
 
-    pub(super) fn format_iso_8601_utc(timestamp_ms: i64) -> String {
+    pub(crate) fn format_iso_8601_utc(timestamp_ms: i64) -> String {
         let (year, month, day, hour, minute, second, millisecond) =
             Self::date_components_utc(timestamp_ms);
         let year_str = if (0..=9999).contains(&year) {
@@ -2132,7 +2134,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn date_components_utc(timestamp_ms: i64) -> (i64, u32, u32, u32, u32, u32, u32) {
+    pub(crate) fn date_components_utc(timestamp_ms: i64) -> (i64, u32, u32, u32, u32, u32, u32) {
         let days = timestamp_ms.div_euclid(86_400_000);
         let rem = timestamp_ms.rem_euclid(86_400_000);
         let hour = (rem / 3_600_000) as u32;
@@ -2143,7 +2145,7 @@ impl Harness {
         (year, month, day, hour, minute, second, millisecond)
     }
 
-    pub(super) fn utc_timestamp_ms_from_components(
+    pub(crate) fn utc_timestamp_ms_from_components(
         year: i64,
         month_zero_based: i64,
         day: i64,
@@ -2162,14 +2164,14 @@ impl Harness {
         out.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
     }
 
-    pub(super) fn normalize_year_month(year: i64, month_zero_based: i64) -> (i64, u32) {
+    pub(crate) fn normalize_year_month(year: i64, month_zero_based: i64) -> (i64, u32) {
         let total_month = year.saturating_mul(12).saturating_add(month_zero_based);
         let norm_year = total_month.div_euclid(12);
         let norm_month = total_month.rem_euclid(12) as u32 + 1;
         (norm_year, norm_month)
     }
 
-    pub(super) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
         let adjusted_year = year - if month <= 2 { 1 } else { 0 };
         let era = adjusted_year.div_euclid(400);
         let yoe = adjusted_year - era * 400;
@@ -2180,7 +2182,7 @@ impl Harness {
         era * 146_097 + doe - 719_468
     }
 
-    pub(super) fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
         let z = days + 719_468;
         let era = z.div_euclid(146_097);
         let doe = z - era * 146_097;
@@ -2196,7 +2198,7 @@ impl Harness {
         (year, month, day)
     }
 
-    pub(super) fn days_in_month(year: i64, month: u32) -> u32 {
+    pub(crate) fn days_in_month(year: i64, month: u32) -> u32 {
         match month {
             1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
             4 | 6 | 9 | 11 => 30,
@@ -2211,11 +2213,11 @@ impl Harness {
         }
     }
 
-    pub(super) fn is_leap_year(year: i64) -> bool {
+    pub(crate) fn is_leap_year(year: i64) -> bool {
         (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
     }
 
-    pub(super) fn numeric_value(&self, value: &Value) -> f64 {
+    pub(crate) fn numeric_value(&self, value: &Value) -> f64 {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
@@ -2233,7 +2235,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn coerce_number_for_global(value: &Value) -> f64 {
+    pub(crate) fn coerce_number_for_global(value: &Value) -> f64 {
         match value {
             Value::Number(v) => *v as f64,
             Value::Float(v) => *v,
@@ -2286,7 +2288,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn to_i32_for_bitwise(&self, value: &Value) -> i32 {
+    pub(crate) fn to_i32_for_bitwise(&self, value: &Value) -> i32 {
         let numeric = self.numeric_value(value);
         if !numeric.is_finite() {
             return 0;
@@ -2299,7 +2301,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn to_u32_for_bitwise(&self, value: &Value) -> u32 {
+    pub(crate) fn to_u32_for_bitwise(&self, value: &Value) -> u32 {
         let numeric = self.numeric_value(value);
         if !numeric.is_finite() {
             return 0;
@@ -2307,7 +2309,7 @@ impl Harness {
         numeric.trunc().rem_euclid(4_294_967_296.0) as u32
     }
 
-    pub(super) fn resolve_dom_query_var_path_value(
+    pub(crate) fn resolve_dom_query_var_path_value(
         &self,
         base: &str,
         path: &[String],
@@ -2334,7 +2336,7 @@ impl Harness {
         Ok(Some(value))
     }
 
-    pub(super) fn resolve_dom_query_list_static(
+    pub(crate) fn resolve_dom_query_list_static(
         &mut self,
         target: &DomQuery,
     ) -> Result<Option<Vec<NodeId>>> {
@@ -2389,7 +2391,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_dom_query_list_runtime(
+    pub(crate) fn resolve_dom_query_list_runtime(
         &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
@@ -2449,7 +2451,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_dom_query_static(&mut self, target: &DomQuery) -> Result<Option<NodeId>> {
+    pub(crate) fn resolve_dom_query_static(&mut self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
             DomQuery::DocumentBody => Ok(self.dom.body()),
@@ -2511,7 +2513,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_dom_query_runtime(
+    pub(crate) fn resolve_dom_query_runtime(
         &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
@@ -2591,7 +2593,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_dom_query_required_runtime(
+    pub(crate) fn resolve_dom_query_required_runtime(
         &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
@@ -2601,7 +2603,7 @@ impl Harness {
         })
     }
 
-    pub(super) fn resolve_runtime_dom_index(
+    pub(crate) fn resolve_runtime_dom_index(
         &mut self,
         index: &DomIndex,
         env: Option<&HashMap<String, Value>>,
@@ -2626,7 +2628,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn describe_dom_prop(&self, prop: &DomProp) -> String {
+    pub(crate) fn describe_dom_prop(&self, prop: &DomProp) -> String {
         match prop {
             DomProp::Attributes => "attributes".into(),
             DomProp::AssignedSlot => "assignedSlot".into(),
@@ -2769,7 +2771,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn event_node_label(&self, node: NodeId) -> String {
+    pub(crate) fn event_node_label(&self, node: NodeId) -> String {
         if let Some(id) = self.dom.attr(node, "id") {
             if !id.is_empty() {
                 return id;
@@ -2781,7 +2783,7 @@ impl Harness {
             .unwrap_or_else(|| format!("node-{}", node.0))
     }
 
-    pub(super) fn trace_node_label(&self, node: NodeId) -> String {
+    pub(crate) fn trace_node_label(&self, node: NodeId) -> String {
         if let Some(id) = self.dom.attr(node, "id") {
             if !id.is_empty() {
                 return format!("#{id}");
@@ -2793,7 +2795,7 @@ impl Harness {
             .unwrap_or_else(|| format!("node-{}", node.0))
     }
 
-    pub(super) fn value_to_i64(value: &Value) -> i64 {
+    pub(crate) fn value_to_i64(value: &Value) -> i64 {
         match value {
             Value::Number(v) => *v,
             Value::Float(v) => *v as i64,
@@ -2858,7 +2860,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn next_random_f64(&mut self) -> f64 {
+    pub(crate) fn next_random_f64(&mut self) -> f64 {
         // xorshift64*: simple deterministic PRNG for test runtime.
         let mut x = self.rng_state;
         x ^= x >> 12;
@@ -2871,7 +2873,7 @@ impl Harness {
         (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
     }
 
-    pub(super) fn schedule_timeout(
+    pub(crate) fn schedule_timeout(
         &mut self,
         callback: TimerCallback,
         delay_ms: i64,
@@ -2898,7 +2900,7 @@ impl Harness {
         id
     }
 
-    pub(super) fn schedule_interval(
+    pub(crate) fn schedule_interval(
         &mut self,
         callback: TimerCallback,
         interval_ms: i64,
@@ -2925,7 +2927,7 @@ impl Harness {
         id
     }
 
-    pub(super) fn clear_timeout(&mut self, id: i64) {
+    pub(crate) fn clear_timeout(&mut self, id: i64) {
         let before = self.scheduler.task_queue.len();
         self.scheduler.task_queue.retain(|task| task.id != id);
         let removed = before.saturating_sub(self.scheduler.task_queue.len());
@@ -2940,7 +2942,7 @@ impl Harness {
         ));
     }
 
-    pub(super) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
+    pub(crate) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
         let stmts = parse_block_statements(script)?;
         self.with_script_env(|this, env| {
             let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);

@@ -1,22 +1,24 @@
+use super::*;
+
 #[derive(Debug, Clone, PartialEq)]
-struct ScriptHandler {
-    params: Vec<FunctionParam>,
-    stmts: Vec<Stmt>,
+pub(crate) struct ScriptHandler {
+    pub(crate) params: Vec<FunctionParam>,
+    pub(crate) stmts: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct FunctionParam {
-    name: String,
-    default: Option<Expr>,
-    is_rest: bool,
+pub(crate) struct FunctionParam {
+    pub(crate) name: String,
+    pub(crate) default: Option<Expr>,
+    pub(crate) is_rest: bool,
 }
 
 impl ScriptHandler {
-    fn first_event_param(&self) -> Option<&str> {
+    pub(crate) fn first_event_param(&self) -> Option<&str> {
         self.params.first().map(|param| param.name.as_str())
     }
 
-    fn listener_callback_reference(&self) -> Option<&str> {
+    pub(crate) fn listener_callback_reference(&self) -> Option<&str> {
         if self.params.len() != 1 || self.stmts.len() != 1 {
             return None;
         }
@@ -32,37 +34,37 @@ impl ScriptHandler {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum TimerCallback {
+pub(crate) enum TimerCallback {
     Inline(ScriptHandler),
     Reference(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct TimerInvocation {
-    callback: TimerCallback,
-    args: Vec<Expr>,
+pub(crate) struct TimerInvocation {
+    pub(crate) callback: TimerCallback,
+    pub(crate) args: Vec<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LocationParts {
-    scheme: String,
-    has_authority: bool,
-    username: String,
-    password: String,
-    hostname: String,
-    port: String,
-    pathname: String,
-    opaque_path: String,
-    search: String,
-    hash: String,
+pub(crate) struct LocationParts {
+    pub(crate) scheme: String,
+    pub(crate) has_authority: bool,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) hostname: String,
+    pub(crate) port: String,
+    pub(crate) pathname: String,
+    pub(crate) opaque_path: String,
+    pub(crate) search: String,
+    pub(crate) hash: String,
 }
 
 impl LocationParts {
-    fn protocol(&self) -> String {
+    pub(crate) fn protocol(&self) -> String {
         format!("{}:", self.scheme)
     }
 
-    fn host(&self) -> String {
+    pub(crate) fn host(&self) -> String {
         if self.port.is_empty() {
             self.hostname.clone()
         } else {
@@ -70,7 +72,7 @@ impl LocationParts {
         }
     }
 
-    fn origin(&self) -> String {
+    pub(crate) fn origin(&self) -> String {
         if self.has_authority && !self.hostname.is_empty() {
             format!("{}//{}", self.protocol(), self.host())
         } else {
@@ -78,7 +80,7 @@ impl LocationParts {
         }
     }
 
-    fn href(&self) -> String {
+    pub(crate) fn href(&self) -> String {
         if self.has_authority {
             let path = if self.pathname.is_empty() {
                 "/".to_string()
@@ -112,7 +114,7 @@ impl LocationParts {
         }
     }
 
-    fn parse(input: &str) -> Option<Self> {
+    pub(crate) fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
         let scheme_end = trimmed.find(':')?;
         let scheme = trimmed[..scheme_end].to_ascii_lowercase();
@@ -163,7 +165,7 @@ impl LocationParts {
     }
 }
 
-fn is_valid_url_scheme(scheme: &str) -> bool {
+pub(crate) fn is_valid_url_scheme(scheme: &str) -> bool {
     let mut chars = scheme.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -174,7 +176,7 @@ fn is_valid_url_scheme(scheme: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
-fn split_hostname_and_port(authority: &str) -> (String, String) {
+pub(crate) fn split_hostname_and_port(authority: &str) -> (String, String) {
     if authority.is_empty() {
         return (String::new(), String::new());
     }
@@ -200,7 +202,7 @@ fn split_hostname_and_port(authority: &str) -> (String, String) {
     (authority.to_string(), String::new())
 }
 
-fn split_authority_components(authority: &str) -> (String, String, String, String) {
+pub(crate) fn split_authority_components(authority: &str) -> (String, String, String, String) {
     if authority.is_empty() {
         return (String::new(), String::new(), String::new(), String::new());
     }
@@ -223,7 +225,7 @@ fn split_authority_components(authority: &str) -> (String, String, String, Strin
     (username, password, hostname, port)
 }
 
-fn split_path_search_hash(tail: &str) -> (String, String, String) {
+pub(crate) fn split_path_search_hash(tail: &str) -> (String, String, String) {
     let mut pathname = tail;
     let mut search = "";
     let mut hash = "";
@@ -241,7 +243,7 @@ fn split_path_search_hash(tail: &str) -> (String, String, String) {
     (pathname.to_string(), search.to_string(), hash.to_string())
 }
 
-fn split_opaque_search_hash(rest: &str) -> (String, String, String) {
+pub(crate) fn split_opaque_search_hash(rest: &str) -> (String, String, String) {
     let mut opaque_path = rest;
     let mut search = "";
     let mut hash = "";
@@ -263,7 +265,7 @@ fn split_opaque_search_hash(rest: &str) -> (String, String, String) {
     )
 }
 
-fn normalize_pathname(pathname: &str) -> String {
+pub(crate) fn normalize_pathname(pathname: &str) -> String {
     let starts_with_slash = pathname.starts_with('/');
     let ends_with_slash = pathname.ends_with('/') && pathname.len() > 1;
     let mut parts = Vec::new();
@@ -291,7 +293,7 @@ fn normalize_pathname(pathname: &str) -> String {
     out
 }
 
-fn ensure_search_prefix(value: &str) -> String {
+pub(crate) fn ensure_search_prefix(value: &str) -> String {
     if value.is_empty() {
         String::new()
     } else if value.starts_with('?') {
@@ -301,7 +303,7 @@ fn ensure_search_prefix(value: &str) -> String {
     }
 }
 
-fn ensure_hash_prefix(value: &str) -> String {
+pub(crate) fn ensure_hash_prefix(value: &str) -> String {
     if value.is_empty() {
         String::new()
     } else if value.starts_with('#') {
@@ -312,20 +314,20 @@ fn ensure_hash_prefix(value: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct Listener {
-    capture: bool,
-    handler: ScriptHandler,
-    captured_env: Rc<RefCell<ScriptEnv>>,
-    captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+pub(crate) struct Listener {
+    pub(crate) capture: bool,
+    pub(crate) handler: ScriptHandler,
+    pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
+    pub(crate) captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
 }
 
 #[derive(Debug, Default, Clone)]
-struct ListenerStore {
-    map: HashMap<NodeId, HashMap<String, Vec<Listener>>>,
+pub(crate) struct ListenerStore {
+    pub(crate) map: HashMap<NodeId, HashMap<String, Vec<Listener>>>,
 }
 
 impl ListenerStore {
-    fn add(&mut self, node_id: NodeId, event: String, listener: Listener) {
+    pub(crate) fn add(&mut self, node_id: NodeId, event: String, listener: Listener) {
         let listeners = self
             .map
             .entry(node_id)
@@ -350,7 +352,7 @@ impl ListenerStore {
         listeners.push(listener);
     }
 
-    fn remove(
+    pub(crate) fn remove(
         &mut self,
         node_id: NodeId,
         event: &str,
@@ -381,7 +383,7 @@ impl ListenerStore {
         false
     }
 
-    fn get(&self, node_id: NodeId, event: &str, capture: bool) -> Vec<Listener> {
+    pub(crate) fn get(&self, node_id: NodeId, event: &str, capture: bool) -> Vec<Listener> {
         self.map
             .get(&node_id)
             .and_then(|events| events.get(event))
@@ -397,25 +399,25 @@ impl ListenerStore {
 }
 
 #[derive(Debug, Clone)]
-struct EventState {
-    event_type: String,
-    target: NodeId,
-    current_target: NodeId,
-    event_phase: i32,
-    time_stamp_ms: i64,
-    default_prevented: bool,
-    is_trusted: bool,
-    bubbles: bool,
-    cancelable: bool,
-    state: Option<Value>,
-    old_state: Option<String>,
-    new_state: Option<String>,
-    propagation_stopped: bool,
-    immediate_propagation_stopped: bool,
+pub(crate) struct EventState {
+    pub(crate) event_type: String,
+    pub(crate) target: NodeId,
+    pub(crate) current_target: NodeId,
+    pub(crate) event_phase: i32,
+    pub(crate) time_stamp_ms: i64,
+    pub(crate) default_prevented: bool,
+    pub(crate) is_trusted: bool,
+    pub(crate) bubbles: bool,
+    pub(crate) cancelable: bool,
+    pub(crate) state: Option<Value>,
+    pub(crate) old_state: Option<String>,
+    pub(crate) new_state: Option<String>,
+    pub(crate) propagation_stopped: bool,
+    pub(crate) immediate_propagation_stopped: bool,
 }
 
 impl EventState {
-    fn new(event_type: &str, target: NodeId, time_stamp_ms: i64) -> Self {
+    pub(crate) fn new(event_type: &str, target: NodeId, time_stamp_ms: i64) -> Self {
         Self {
             event_type: event_type.to_string(),
             target,
@@ -434,7 +436,7 @@ impl EventState {
         }
     }
 
-    fn new_untrusted(event_type: &str, target: NodeId, time_stamp_ms: i64) -> Self {
+    pub(crate) fn new_untrusted(event_type: &str, target: NodeId, time_stamp_ms: i64) -> Self {
         let mut event = Self::new(event_type, target, time_stamp_ms);
         event.is_trusted = false;
         event.bubbles = false;
@@ -444,24 +446,24 @@ impl EventState {
 }
 
 #[derive(Debug, Clone)]
-struct ParseOutput {
-    dom: Dom,
-    scripts: Vec<String>,
+pub(crate) struct ParseOutput {
+    pub(crate) dom: Dom,
+    pub(crate) scripts: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct ScheduledTask {
-    id: i64,
-    due_at: i64,
-    order: i64,
-    interval_ms: Option<i64>,
-    callback: TimerCallback,
-    callback_args: Vec<Value>,
-    env: ScriptEnv,
+pub(crate) struct ScheduledTask {
+    pub(crate) id: i64,
+    pub(crate) due_at: i64,
+    pub(crate) order: i64,
+    pub(crate) interval_ms: Option<i64>,
+    pub(crate) callback: TimerCallback,
+    pub(crate) callback_args: Vec<Value>,
+    pub(crate) env: ScriptEnv,
 }
 
 #[derive(Debug, Clone)]
-enum ScheduledMicrotask {
+pub(crate) enum ScheduledMicrotask {
     Script {
         handler: ScriptHandler,
         env: ScriptEnv,
@@ -496,24 +498,24 @@ pub struct LocationNavigation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct HistoryEntry {
-    url: String,
-    state: Value,
+pub(crate) struct HistoryEntry {
+    pub(crate) url: String,
+    pub(crate) state: Value,
 }
 
 #[derive(Debug)]
-struct LocationHistoryState {
-    history_object: Rc<RefCell<ObjectValue>>,
-    history_entries: Vec<HistoryEntry>,
-    history_index: usize,
-    history_scroll_restoration: String,
-    location_mock_pages: HashMap<String, String>,
-    location_navigations: Vec<LocationNavigation>,
-    location_reload_count: usize,
+pub(crate) struct LocationHistoryState {
+    pub(crate) history_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) history_entries: Vec<HistoryEntry>,
+    pub(crate) history_index: usize,
+    pub(crate) history_scroll_restoration: String,
+    pub(crate) location_mock_pages: HashMap<String, String>,
+    pub(crate) location_navigations: Vec<LocationNavigation>,
+    pub(crate) location_reload_count: usize,
 }
 
 impl LocationHistoryState {
-    fn new(initial_url: &str) -> Self {
+    pub(crate) fn new(initial_url: &str) -> Self {
         Self {
             history_object: Rc::new(RefCell::new(ObjectValue::default())),
             history_entries: vec![HistoryEntry {
@@ -530,24 +532,24 @@ impl LocationHistoryState {
 }
 
 #[derive(Debug, Default, Clone)]
-struct ScriptEnv {
-    inner: Arc<HashMap<String, Value>>,
+pub(crate) struct ScriptEnv {
+    pub(crate) inner: Arc<HashMap<String, Value>>,
 }
 
 impl ScriptEnv {
-    fn share(&self) -> Self {
+    pub(crate) fn share(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
         }
     }
 
-    fn from_snapshot(env: &HashMap<String, Value>) -> Self {
+    pub(crate) fn from_snapshot(env: &HashMap<String, Value>) -> Self {
         Self {
             inner: Arc::new(env.clone()),
         }
     }
 
-    fn to_map(&self) -> HashMap<String, Value> {
+    pub(crate) fn to_map(&self) -> HashMap<String, Value> {
         self.inner.as_ref().clone()
     }
 }
@@ -567,25 +569,25 @@ impl std::ops::DerefMut for ScriptEnv {
 }
 
 #[derive(Debug, Default)]
-struct ListenerCaptureFrame {
-    shared_env: Option<Rc<RefCell<ScriptEnv>>>,
+pub(crate) struct ListenerCaptureFrame {
+    pub(crate) shared_env: Option<Rc<RefCell<ScriptEnv>>>,
 }
 
 #[derive(Debug, Default)]
-struct ScriptRuntimeState {
-    env: ScriptEnv,
-    pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
-    listener_capture_env_stack: Vec<ListenerCaptureFrame>,
+pub(crate) struct ScriptRuntimeState {
+    pub(crate) env: ScriptEnv,
+    pub(crate) pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    pub(crate) listener_capture_env_stack: Vec<ListenerCaptureFrame>,
 }
 
 #[derive(Debug)]
-struct DomRuntimeState {
-    window_object: Rc<RefCell<ObjectValue>>,
-    document_object: Rc<RefCell<ObjectValue>>,
-    location_object: Rc<RefCell<ObjectValue>>,
-    node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
-    node_expando_props: HashMap<(NodeId, String), Value>,
-    dialog_return_values: HashMap<NodeId, String>,
+pub(crate) struct DomRuntimeState {
+    pub(crate) window_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) document_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) location_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
+    pub(crate) node_expando_props: HashMap<(NodeId, String), Value>,
+    pub(crate) dialog_return_values: HashMap<NodeId, String>,
 }
 
 impl Default for DomRuntimeState {
@@ -602,28 +604,28 @@ impl Default for DomRuntimeState {
 }
 
 #[derive(Debug, Default)]
-struct PlatformMockState {
-    clipboard_text: String,
-    fetch_mocks: HashMap<String, String>,
-    fetch_calls: Vec<String>,
-    match_media_mocks: HashMap<String, bool>,
-    match_media_calls: Vec<String>,
-    default_match_media_matches: bool,
-    alert_messages: Vec<String>,
-    confirm_responses: VecDeque<bool>,
-    default_confirm_response: bool,
-    prompt_responses: VecDeque<Option<String>>,
-    default_prompt_response: Option<String>,
+pub(crate) struct PlatformMockState {
+    pub(crate) clipboard_text: String,
+    pub(crate) fetch_mocks: HashMap<String, String>,
+    pub(crate) fetch_calls: Vec<String>,
+    pub(crate) match_media_mocks: HashMap<String, bool>,
+    pub(crate) match_media_calls: Vec<String>,
+    pub(crate) default_match_media_matches: bool,
+    pub(crate) alert_messages: Vec<String>,
+    pub(crate) confirm_responses: VecDeque<bool>,
+    pub(crate) default_confirm_response: bool,
+    pub(crate) prompt_responses: VecDeque<Option<String>>,
+    pub(crate) default_prompt_response: Option<String>,
 }
 
 #[derive(Debug)]
-struct TraceState {
-    enabled: bool,
-    events: bool,
-    timers: bool,
-    logs: VecDeque<String>,
-    log_limit: usize,
-    to_stderr: bool,
+pub(crate) struct TraceState {
+    pub(crate) enabled: bool,
+    pub(crate) events: bool,
+    pub(crate) timers: bool,
+    pub(crate) logs: VecDeque<String>,
+    pub(crate) log_limit: usize,
+    pub(crate) to_stderr: bool,
 }
 
 impl Default for TraceState {
@@ -640,13 +642,13 @@ impl Default for TraceState {
 }
 
 #[derive(Debug)]
-struct BrowserApiState {
-    next_url_object_id: usize,
-    url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
-    url_constructor_properties: Rc<RefCell<ObjectValue>>,
-    local_storage_object: Rc<RefCell<ObjectValue>>,
-    next_blob_url_id: usize,
-    blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
+pub(crate) struct BrowserApiState {
+    pub(crate) next_url_object_id: usize,
+    pub(crate) url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
+    pub(crate) url_constructor_properties: Rc<RefCell<ObjectValue>>,
+    pub(crate) local_storage_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) next_blob_url_id: usize,
+    pub(crate) blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
 }
 
 impl Default for BrowserApiState {
@@ -663,13 +665,13 @@ impl Default for BrowserApiState {
 }
 
 impl BrowserApiState {
-    fn allocate_url_object_id(&mut self) -> usize {
+    pub(crate) fn allocate_url_object_id(&mut self) -> usize {
         let id = self.next_url_object_id;
         self.next_url_object_id = self.next_url_object_id.saturating_add(1);
         id
     }
 
-    fn allocate_blob_url(&mut self) -> String {
+    pub(crate) fn allocate_blob_url(&mut self) -> String {
         let object_url = format!("blob:bt-{}", self.next_blob_url_id);
         self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
         object_url
@@ -677,8 +679,8 @@ impl BrowserApiState {
 }
 
 #[derive(Debug)]
-struct PromiseRuntimeState {
-    next_promise_id: usize,
+pub(crate) struct PromiseRuntimeState {
+    pub(crate) next_promise_id: usize,
 }
 
 impl Default for PromiseRuntimeState {
@@ -688,7 +690,7 @@ impl Default for PromiseRuntimeState {
 }
 
 impl PromiseRuntimeState {
-    fn allocate_promise_id(&mut self) -> usize {
+    pub(crate) fn allocate_promise_id(&mut self) -> usize {
         let id = self.next_promise_id;
         self.next_promise_id = self.next_promise_id.saturating_add(1);
         id
@@ -696,11 +698,11 @@ impl PromiseRuntimeState {
 }
 
 #[derive(Debug)]
-struct SymbolRuntimeState {
-    next_symbol_id: usize,
-    symbol_registry: HashMap<String, Rc<SymbolValue>>,
-    symbols_by_id: HashMap<usize, Rc<SymbolValue>>,
-    well_known_symbols: HashMap<String, Rc<SymbolValue>>,
+pub(crate) struct SymbolRuntimeState {
+    pub(crate) next_symbol_id: usize,
+    pub(crate) symbol_registry: HashMap<String, Rc<SymbolValue>>,
+    pub(crate) symbols_by_id: HashMap<usize, Rc<SymbolValue>>,
+    pub(crate) well_known_symbols: HashMap<String, Rc<SymbolValue>>,
 }
 
 impl Default for SymbolRuntimeState {
@@ -715,7 +717,7 @@ impl Default for SymbolRuntimeState {
 }
 
 impl SymbolRuntimeState {
-    fn allocate_symbol_id(&mut self) -> usize {
+    pub(crate) fn allocate_symbol_id(&mut self) -> usize {
         let id = self.next_symbol_id;
         self.next_symbol_id = self.next_symbol_id.saturating_add(1);
         id
@@ -723,16 +725,16 @@ impl SymbolRuntimeState {
 }
 
 #[derive(Debug)]
-struct SchedulerState {
-    task_queue: Vec<ScheduledTask>,
-    microtask_queue: VecDeque<ScheduledMicrotask>,
-    now_ms: i64,
-    timer_step_limit: usize,
-    next_timer_id: i64,
-    next_task_order: i64,
-    task_depth: usize,
-    running_timer_id: Option<i64>,
-    running_timer_canceled: bool,
+pub(crate) struct SchedulerState {
+    pub(crate) task_queue: Vec<ScheduledTask>,
+    pub(crate) microtask_queue: VecDeque<ScheduledMicrotask>,
+    pub(crate) now_ms: i64,
+    pub(crate) timer_step_limit: usize,
+    pub(crate) next_timer_id: i64,
+    pub(crate) next_task_order: i64,
+    pub(crate) task_depth: usize,
+    pub(crate) running_timer_id: Option<i64>,
+    pub(crate) running_timer_canceled: bool,
 }
 
 impl Default for SchedulerState {
@@ -752,16 +754,15 @@ impl Default for SchedulerState {
 }
 
 impl SchedulerState {
-    fn allocate_timer_id(&mut self) -> i64 {
+    pub(crate) fn allocate_timer_id(&mut self) -> i64 {
         let id = self.next_timer_id;
         self.next_timer_id += 1;
         id
     }
 
-    fn allocate_task_order(&mut self) -> i64 {
+    pub(crate) fn allocate_task_order(&mut self) -> i64 {
         let order = self.next_task_order;
         self.next_task_order += 1;
         order
     }
 }
-

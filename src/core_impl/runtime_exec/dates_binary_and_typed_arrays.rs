@@ -1,9 +1,11 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn new_date_value(timestamp_ms: i64) -> Value {
+    pub(crate) fn new_date_value(timestamp_ms: i64) -> Value {
         Value::Date(Rc::new(RefCell::new(timestamp_ms)))
     }
 
-    pub(super) fn resolve_date_from_env(
+    pub(crate) fn resolve_date_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -21,7 +23,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn coerce_date_timestamp_ms(&self, value: &Value) -> i64 {
+    pub(crate) fn coerce_date_timestamp_ms(&self, value: &Value) -> i64 {
         match value {
             Value::Date(value) => *value.borrow(),
             Value::String(value) => Self::parse_date_string_to_epoch_ms(value).unwrap_or(0),
@@ -29,7 +31,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_array_from_env(
+    pub(crate) fn resolve_array_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -47,7 +49,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_array_buffer_from_env(
+    pub(crate) fn resolve_array_buffer_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -65,7 +67,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_typed_array_from_env(
+    pub(crate) fn resolve_typed_array_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -83,7 +85,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn normalize_blob_type(raw: &str) -> String {
+    pub(crate) fn normalize_blob_type(raw: &str) -> String {
         let trimmed = raw.trim();
         if trimmed.as_bytes().iter().all(|b| (0x20..=0x7e).contains(b)) {
             trimmed.to_ascii_lowercase()
@@ -92,18 +94,18 @@ impl Harness {
         }
     }
 
-    pub(super) fn new_blob_value(bytes: Vec<u8>, mime_type: String) -> Value {
+    pub(crate) fn new_blob_value(bytes: Vec<u8>, mime_type: String) -> Value {
         Value::Blob(Rc::new(RefCell::new(BlobValue { bytes, mime_type })))
     }
 
-    pub(super) fn new_readable_stream_placeholder_value() -> Value {
+    pub(crate) fn new_readable_stream_placeholder_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_READABLE_STREAM_OBJECT_KEY.to_string(),
             Value::Bool(true),
         )])
     }
 
-    pub(super) fn new_uint8_typed_array_from_bytes(bytes: &[u8]) -> Value {
+    pub(crate) fn new_uint8_typed_array_from_bytes(bytes: &[u8]) -> Value {
         let buffer = Rc::new(RefCell::new(ArrayBufferValue {
             bytes: bytes.to_vec(),
             max_byte_length: None,
@@ -117,7 +119,7 @@ impl Harness {
         })))
     }
 
-    pub(super) fn typed_array_raw_bytes(&self, array: &Rc<RefCell<TypedArrayValue>>) -> Vec<u8> {
+    pub(crate) fn typed_array_raw_bytes(&self, array: &Rc<RefCell<TypedArrayValue>>) -> Vec<u8> {
         let (buffer, byte_offset, byte_length) = {
             let array = array.borrow();
             (
@@ -139,7 +141,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn blob_part_bytes(&self, part: &Value) -> Vec<u8> {
+    pub(crate) fn blob_part_bytes(&self, part: &Value) -> Vec<u8> {
         match part {
             Value::Blob(blob) => blob.borrow().bytes.clone(),
             Value::ArrayBuffer(buffer) => buffer.borrow().bytes.clone(),
@@ -149,7 +151,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_blob_construct(
+    pub(crate) fn eval_blob_construct(
         &mut self,
         parts: &Option<Box<Expr>>,
         options: &Option<Box<Expr>>,
@@ -204,7 +206,7 @@ impl Harness {
         Ok(Self::new_blob_value(bytes, mime_type))
     }
 
-    pub(super) fn eval_blob_member_call(
+    pub(crate) fn eval_blob_member_call(
         &mut self,
         blob: &Rc<RefCell<BlobValue>>,
         member: &str,
@@ -263,7 +265,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_typed_array_member_call(
+    pub(crate) fn eval_typed_array_member_call(
         &mut self,
         array: &Rc<RefCell<TypedArrayValue>>,
         member: &str,
@@ -302,7 +304,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn to_non_negative_usize(value: &Value, label: &str) -> Result<usize> {
+    pub(crate) fn to_non_negative_usize(value: &Value, label: &str) -> Result<usize> {
         let n = Self::value_to_i64(value);
         if n < 0 {
             return Err(Error::ScriptRuntime(format!(
@@ -312,7 +314,7 @@ impl Harness {
         usize::try_from(n).map_err(|_| Error::ScriptRuntime(format!("{label} is too large")))
     }
 
-    pub(super) fn eval_call_args_with_spread(
+    pub(crate) fn eval_call_args_with_spread(
         &mut self,
         args: &[Expr],
         env: &HashMap<String, Value>,
@@ -332,7 +334,7 @@ impl Harness {
         Ok(evaluated)
     }
 
-    pub(super) fn spread_iterable_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
+    pub(crate) fn spread_iterable_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
         match value {
             Value::Array(values) => Ok(values.borrow().clone()),
             Value::TypedArray(values) => self.typed_array_snapshot(values),
@@ -366,7 +368,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn array_like_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
+    pub(crate) fn array_like_values_from_value(&self, value: &Value) -> Result<Vec<Value>> {
         match value {
             Value::Array(values) => Ok(values.borrow().clone()),
             Value::TypedArray(values) => self.typed_array_snapshot(values),
@@ -410,7 +412,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn new_array_buffer_value(
+    pub(crate) fn new_array_buffer_value(
         byte_length: usize,
         max_byte_length: Option<usize>,
     ) -> Value {
@@ -421,7 +423,7 @@ impl Harness {
         })))
     }
 
-    pub(super) fn new_typed_array_with_length(
+    pub(crate) fn new_typed_array_with_length(
         &mut self,
         kind: TypedArrayKind,
         length: usize,
@@ -440,7 +442,7 @@ impl Harness {
         }))))
     }
 
-    pub(super) fn new_typed_array_view(
+    pub(crate) fn new_typed_array_view(
         &self,
         kind: TypedArrayKind,
         buffer: Rc<RefCell<ArrayBufferValue>>,
@@ -489,7 +491,7 @@ impl Harness {
         }))))
     }
 
-    pub(super) fn new_typed_array_from_values(
+    pub(crate) fn new_typed_array_from_values(
         &mut self,
         kind: TypedArrayKind,
         values: &[Value],
@@ -504,7 +506,7 @@ impl Harness {
         Ok(Value::TypedArray(array))
     }
 
-    pub(super) fn typed_array_snapshot(
+    pub(crate) fn typed_array_snapshot(
         &self,
         array: &Rc<RefCell<TypedArrayValue>>,
     ) -> Result<Vec<Value>> {
@@ -516,7 +518,7 @@ impl Harness {
         Ok(out)
     }
 
-    pub(super) fn typed_array_get_index(
+    pub(crate) fn typed_array_get_index(
         &self,
         array: &Rc<RefCell<TypedArrayValue>>,
         index: usize,
@@ -578,7 +580,7 @@ impl Harness {
         Ok(value)
     }
 
-    pub(super) fn typed_array_number_to_i128(value: f64) -> i128 {
+    pub(crate) fn typed_array_number_to_i128(value: f64) -> i128 {
         if !value.is_finite() {
             return 0;
         }
@@ -592,7 +594,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn typed_array_round_half_even(value: f64) -> f64 {
+    pub(crate) fn typed_array_round_half_even(value: f64) -> f64 {
         let floor = value.floor();
         let frac = value - floor;
         if frac < 0.5 {
@@ -606,7 +608,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn typed_array_bytes_for_value(
+    pub(crate) fn typed_array_bytes_for_value(
         kind: TypedArrayKind,
         value: &Value,
     ) -> Result<Vec<u8>> {
@@ -705,7 +707,7 @@ impl Harness {
         Ok(bytes)
     }
 
-    pub(super) fn typed_array_set_index(
+    pub(crate) fn typed_array_set_index(
         &mut self,
         array: &Rc<RefCell<TypedArrayValue>>,
         index: usize,
@@ -739,7 +741,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn eval_array_buffer_construct(
+    pub(crate) fn eval_array_buffer_construct(
         &mut self,
         byte_length: &Option<Box<Expr>>,
         options: &Option<Box<Expr>>,
@@ -791,7 +793,7 @@ impl Harness {
         Ok(Self::new_array_buffer_value(byte_length, max_byte_length))
     }
 
-    pub(super) fn resize_array_buffer(
+    pub(crate) fn resize_array_buffer(
         &mut self,
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         new_byte_length: i64,
@@ -817,7 +819,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn ensure_array_buffer_not_detached(
+    pub(crate) fn ensure_array_buffer_not_detached(
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         method: &str,
     ) -> Result<()> {
@@ -829,7 +831,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn transfer_array_buffer(
+    pub(crate) fn transfer_array_buffer(
         &mut self,
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         to_fixed_length: bool,
@@ -862,7 +864,7 @@ impl Harness {
         ))))
     }
 
-    pub(super) fn resize_array_buffer_in_env(
+    pub(crate) fn resize_array_buffer_in_env(
         &mut self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -872,7 +874,7 @@ impl Harness {
         self.resize_array_buffer(&buffer, new_byte_length)
     }
 
-    pub(super) fn eval_typed_array_construct(
+    pub(crate) fn eval_typed_array_construct(
         &mut self,
         kind: TypedArrayKind,
         args: &[Expr],
@@ -948,7 +950,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_typed_array_construct_with_callee(
+    pub(crate) fn eval_typed_array_construct_with_callee(
         &mut self,
         callee: &Expr,
         args: &[Expr],
@@ -974,7 +976,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_typed_array_static_method(
+    pub(crate) fn eval_typed_array_static_method(
         &mut self,
         kind: TypedArrayKind,
         method: TypedArrayStaticMethod,
@@ -1012,7 +1014,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn same_value_zero(&self, left: &Value, right: &Value) -> bool {
+    pub(crate) fn same_value_zero(&self, left: &Value, right: &Value) -> bool {
         if let (Some(left_num), Some(right_num)) = (
             Self::number_primitive_value(left),
             Self::number_primitive_value(right),
@@ -1024,13 +1026,13 @@ impl Harness {
         self.strict_equal(left, right)
     }
 
-    pub(super) fn map_entry_index(&self, map: &MapValue, key: &Value) -> Option<usize> {
+    pub(crate) fn map_entry_index(&self, map: &MapValue, key: &Value) -> Option<usize> {
         map.entries
             .iter()
             .position(|(existing_key, _)| self.same_value_zero(existing_key, key))
     }
 
-    pub(super) fn map_set_entry(&self, map: &mut MapValue, key: Value, value: Value) {
+    pub(crate) fn map_set_entry(&self, map: &mut MapValue, key: Value, value: Value) {
         if let Some(index) = self.map_entry_index(map, &key) {
             map.entries[index].1 = value;
         } else {
@@ -1038,7 +1040,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn map_entries_array(&self, map: &Rc<RefCell<MapValue>>) -> Vec<Value> {
+    pub(crate) fn map_entries_array(&self, map: &Rc<RefCell<MapValue>>) -> Vec<Value> {
         map.borrow()
             .entries
             .iter()
@@ -1046,7 +1048,7 @@ impl Harness {
             .collect::<Vec<_>>()
     }
 
-    pub(super) fn is_map_method_name(name: &str) -> bool {
+    pub(crate) fn is_map_method_name(name: &str) -> bool {
         matches!(
             name,
             "set"
@@ -1063,23 +1065,23 @@ impl Harness {
         )
     }
 
-    pub(super) fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {
+    pub(crate) fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {
         set.values
             .iter()
             .position(|existing_value| self.same_value_zero(existing_value, value))
     }
 
-    pub(super) fn set_add_value(&self, set: &mut SetValue, value: Value) {
+    pub(crate) fn set_add_value(&self, set: &mut SetValue, value: Value) {
         if self.set_value_index(set, &value).is_none() {
             set.values.push(value);
         }
     }
 
-    pub(super) fn set_values_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
+    pub(crate) fn set_values_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
         set.borrow().values.clone()
     }
 
-    pub(super) fn set_entries_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
+    pub(crate) fn set_entries_array(&self, set: &Rc<RefCell<SetValue>>) -> Vec<Value> {
         set.borrow()
             .values
             .iter()
@@ -1087,7 +1089,7 @@ impl Harness {
             .collect::<Vec<_>>()
     }
 
-    pub(super) fn set_like_keys_snapshot(&self, value: &Value) -> Result<Vec<Value>> {
+    pub(crate) fn set_like_keys_snapshot(&self, value: &Value) -> Result<Vec<Value>> {
         match value {
             Value::Set(set) => Ok(set.borrow().values.clone()),
             Value::Map(map) => Ok(map
@@ -1102,7 +1104,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn set_like_has_value(&self, value: &Value, candidate: &Value) -> Result<bool> {
+    pub(crate) fn set_like_has_value(&self, value: &Value, candidate: &Value) -> Result<bool> {
         match value {
             Value::Set(set) => Ok(self.set_value_index(&set.borrow(), candidate).is_some()),
             Value::Map(map) => Ok(self.map_entry_index(&map.borrow(), candidate).is_some()),
@@ -1112,21 +1114,21 @@ impl Harness {
         }
     }
 
-    pub(super) fn is_url_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_url_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_URL_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn is_url_static_method_name(name: &str) -> bool {
+    pub(crate) fn is_url_static_method_name(name: &str) -> bool {
         matches!(
             name,
             "canParse" | "parse" | "createObjectURL" | "revokeObjectURL"
         )
     }
 
-    pub(super) fn normalize_url_parts_for_serialization(parts: &mut LocationParts) {
+    pub(crate) fn normalize_url_parts_for_serialization(parts: &mut LocationParts) {
         parts.scheme = parts.scheme.to_ascii_lowercase();
         if parts.has_authority {
             parts.hostname = parts.hostname.to_ascii_lowercase();
@@ -1156,7 +1158,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn resolve_url_against_base_parts(input: &str, base: &LocationParts) -> String {
+    pub(crate) fn resolve_url_against_base_parts(input: &str, base: &LocationParts) -> String {
         let input = input.trim();
         if input.is_empty() {
             return base.href();
@@ -1222,7 +1224,7 @@ impl Harness {
         next.href()
     }
 
-    pub(super) fn resolve_url_string(input: &str, base: Option<&str>) -> Option<String> {
+    pub(crate) fn resolve_url_string(input: &str, base: Option<&str>) -> Option<String> {
         let input = input.trim();
         if let Some(mut absolute) = LocationParts::parse(input) {
             Self::normalize_url_parts_for_serialization(&mut absolute);
@@ -1238,7 +1240,7 @@ impl Harness {
         Some(resolved_parts.href())
     }
 
-    pub(super) fn sync_url_object_entries_from_parts(
+    pub(crate) fn sync_url_object_entries_from_parts(
         &self,
         entries: &mut (impl ObjectEntryLookup + ObjectEntryMut),
         parts: &LocationParts,
@@ -1324,7 +1326,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn new_url_value_from_href(&mut self, href: &str) -> Result<Value> {
+    pub(crate) fn new_url_value_from_href(&mut self, href: &str) -> Result<Value> {
         let mut parts =
             LocationParts::parse(href).ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
         Self::normalize_url_parts_for_serialization(&mut parts);
@@ -1343,7 +1345,7 @@ impl Harness {
         Ok(Value::Object(object))
     }
 
-    pub(super) fn set_url_object_property(
+    pub(crate) fn set_url_object_property(
         &mut self,
         object: &Rc<RefCell<ObjectValue>>,
         key: &str,
@@ -1427,7 +1429,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(super) fn sync_url_search_params_owner(
+    pub(crate) fn sync_url_search_params_owner(
         &mut self,
         object: &Rc<RefCell<ObjectValue>>,
     ) {

@@ -1,5 +1,7 @@
+use super::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SelectorAttrCondition {
+pub(crate) enum SelectorAttrCondition {
     Exists { key: String },
     Eq { key: String, value: String },
     StartsWith { key: String, value: String },
@@ -10,7 +12,7 @@ enum SelectorAttrCondition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SelectorPseudoClass {
+pub(crate) enum SelectorPseudoClass {
     FirstChild,
     LastChild,
     FirstOfType,
@@ -40,7 +42,7 @@ enum SelectorPseudoClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum NthChildSelector {
+pub(crate) enum NthChildSelector {
     Exact(usize),
     Odd,
     Even,
@@ -48,17 +50,17 @@ enum NthChildSelector {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct SelectorStep {
-    tag: Option<String>,
-    universal: bool,
-    id: Option<String>,
-    classes: Vec<String>,
-    attrs: Vec<SelectorAttrCondition>,
-    pseudo_classes: Vec<SelectorPseudoClass>,
+pub(crate) struct SelectorStep {
+    pub(crate) tag: Option<String>,
+    pub(crate) universal: bool,
+    pub(crate) id: Option<String>,
+    pub(crate) classes: Vec<String>,
+    pub(crate) attrs: Vec<SelectorAttrCondition>,
+    pub(crate) pseudo_classes: Vec<SelectorPseudoClass>,
 }
 
 impl SelectorStep {
-    fn id_only(&self) -> Option<&str> {
+    pub(crate) fn id_only(&self) -> Option<&str> {
         if !self.universal
             && self.tag.is_none()
             && self.classes.is_empty()
@@ -73,7 +75,7 @@ impl SelectorStep {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectorCombinator {
+pub(crate) enum SelectorCombinator {
     Descendant,
     Child,
     AdjacentSibling,
@@ -81,13 +83,13 @@ enum SelectorCombinator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SelectorPart {
-    step: SelectorStep,
+pub(crate) struct SelectorPart {
+    pub(crate) step: SelectorStep,
     // Relation to previous (left) selector part.
-    combinator: Option<SelectorCombinator>,
+    pub(crate) combinator: Option<SelectorCombinator>,
 }
 
-fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
+pub(crate) fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
     let selector = selector.trim();
     if selector.is_empty() {
         return Err(Error::UnsupportedSelector(selector.into()));
@@ -131,7 +133,7 @@ fn parse_selector_chain(selector: &str) -> Result<Vec<SelectorPart>> {
     Ok(steps)
 }
 
-fn parse_selector_groups(selector: &str) -> Result<Vec<Vec<SelectorPart>>> {
+pub(crate) fn parse_selector_groups(selector: &str) -> Result<Vec<Vec<SelectorPart>>> {
     let groups = split_selector_groups(selector)?;
     let mut parsed = Vec::with_capacity(groups.len());
     for group in groups {
@@ -140,7 +142,7 @@ fn parse_selector_groups(selector: &str) -> Result<Vec<Vec<SelectorPart>>> {
     Ok(parsed)
 }
 
-fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
+pub(crate) fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
     let mut groups = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
@@ -197,7 +199,7 @@ fn split_selector_groups(selector: &str) -> Result<Vec<String>> {
     Ok(groups)
 }
 
-fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
+pub(crate) fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
@@ -258,7 +260,7 @@ fn tokenize_selector(selector: &str) -> Result<Vec<String>> {
     Ok(tokens)
 }
 
-fn parse_selector_step(part: &str) -> Result<SelectorStep> {
+pub(crate) fn parse_selector_step(part: &str) -> Result<SelectorStep> {
     let part = part.trim();
     if part.is_empty() {
         return Err(Error::UnsupportedSelector(part.into()));
@@ -336,7 +338,7 @@ fn parse_selector_step(part: &str) -> Result<SelectorStep> {
     Ok(step)
 }
 
-fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClass, usize)> {
+pub(crate) fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClass, usize)> {
     if part.as_bytes().get(start)? != &b':' {
         return None;
     }
@@ -570,7 +572,7 @@ fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClas
     None
 }
 
-fn parse_pseudo_selector_list(
+pub(crate) fn parse_pseudo_selector_list(
     part: &str,
     start: usize,
     prefix: &str,
@@ -610,7 +612,7 @@ fn parse_pseudo_selector_list(
     Some((selectors, next))
 }
 
-fn find_matching_paren(body: &str) -> Option<usize> {
+pub(crate) fn find_matching_paren(body: &str) -> Option<usize> {
     let mut paren_depth = 1usize;
     let mut bracket_depth = 0usize;
     let mut quote: Option<u8> = None;
@@ -658,7 +660,7 @@ fn find_matching_paren(body: &str) -> Option<usize> {
     None
 }
 
-fn parse_nth_child_selector(raw: &str) -> Option<NthChildSelector> {
+pub(crate) fn parse_nth_child_selector(raw: &str) -> Option<NthChildSelector> {
     let compact = raw
         .chars()
         .filter(|c| !c.is_ascii_whitespace())
@@ -690,7 +692,7 @@ fn parse_nth_child_selector(raw: &str) -> Option<NthChildSelector> {
     }
 }
 
-fn parse_nth_child_expression(raw: &str) -> Option<NthChildSelector> {
+pub(crate) fn parse_nth_child_expression(raw: &str) -> Option<NthChildSelector> {
     let expr = raw
         .chars()
         .filter(|c| !c.is_ascii_whitespace())
@@ -734,11 +736,11 @@ fn parse_nth_child_expression(raw: &str) -> Option<NthChildSelector> {
     Some(NthChildSelector::AnPlusB(a, b * sign))
 }
 
-fn is_selector_continuation(next: &u8) -> bool {
+pub(crate) fn is_selector_continuation(next: &u8) -> bool {
     matches!(next, b'.' | b'#' | b'[' | b':')
 }
 
-fn parse_selector_ident(src: &str, start: usize) -> Option<(String, usize)> {
+pub(crate) fn parse_selector_ident(src: &str, start: usize) -> Option<(String, usize)> {
     let bytes = src.as_bytes();
     if start >= bytes.len() || !is_selector_ident_char(bytes[start]) {
         return None;
@@ -750,11 +752,11 @@ fn parse_selector_ident(src: &str, start: usize) -> Option<(String, usize)> {
     Some((src.get(start..end)?.to_string(), end))
 }
 
-fn is_selector_ident_char(b: u8) -> bool {
+pub(crate) fn is_selector_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
-fn parse_selector_attr_condition(
+pub(crate) fn parse_selector_attr_condition(
     src: &str,
     open_bracket: usize,
 ) -> Result<(SelectorAttrCondition, usize)> {
@@ -847,7 +849,7 @@ fn parse_selector_attr_condition(
 }
 
 #[derive(Debug, Clone, Copy)]
-enum SelectorAttrConditionType {
+pub(crate) enum SelectorAttrConditionType {
     Eq,
     StartsWith,
     EndsWith,
@@ -856,11 +858,11 @@ enum SelectorAttrConditionType {
     DashMatch,
 }
 
-fn is_selector_attr_name_char(b: u8) -> bool {
+pub(crate) fn is_selector_attr_name_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b':'
 }
 
-fn parse_selector_attr_value(src: &str, start: usize) -> Result<(String, usize)> {
+pub(crate) fn parse_selector_attr_value(src: &str, start: usize) -> Result<(String, usize)> {
     let bytes = src.as_bytes();
     if start >= bytes.len() {
         return Err(Error::UnsupportedSelector(src.into()));
@@ -905,4 +907,3 @@ fn parse_selector_attr_value(src: &str, start: usize) -> Result<(String, usize)>
         .ok_or_else(|| Error::UnsupportedSelector(src.into()))?;
     Ok((unescape_string(raw), i))
 }
-

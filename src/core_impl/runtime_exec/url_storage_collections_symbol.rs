@@ -1,9 +1,11 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn is_storage_method_name(name: &str) -> bool {
+    pub(crate) fn is_storage_method_name(name: &str) -> bool {
         matches!(name, "getItem" | "setItem" | "removeItem" | "clear" | "key")
     }
 
-    pub(super) fn storage_pairs_to_value(pairs: &[(String, String)]) -> Value {
+    pub(crate) fn storage_pairs_to_value(pairs: &[(String, String)]) -> Value {
         Self::new_array_value(
             pairs
                 .iter()
@@ -17,7 +19,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn storage_pairs_from_object_entries(
+    pub(crate) fn storage_pairs_from_object_entries(
         entries: &[(String, Value)],
     ) -> Vec<(String, String)> {
         let Some(Value::Array(list)) = Self::object_get_entry(entries, INTERNAL_STORAGE_ENTRIES_KEY)
@@ -41,7 +43,7 @@ impl Harness {
         pairs
     }
 
-    pub(super) fn set_storage_pairs(
+    pub(crate) fn set_storage_pairs(
         entries: &mut impl ObjectEntryMut,
         pairs: &[(String, String)],
     ) {
@@ -52,7 +54,7 @@ impl Harness {
         );
     }
 
-    pub(super) fn eval_storage_member_call(
+    pub(crate) fn eval_storage_member_call(
         &mut self,
         object: &Rc<RefCell<ObjectValue>>,
         member: &str,
@@ -136,14 +138,14 @@ impl Harness {
         }
     }
 
-    pub(super) fn is_url_search_params_object(entries: &[(String, Value)]) -> bool {
+    pub(crate) fn is_url_search_params_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
 
-    pub(super) fn url_search_params_pairs_to_value(pairs: &[(String, String)]) -> Value {
+    pub(crate) fn url_search_params_pairs_to_value(pairs: &[(String, String)]) -> Value {
         Self::new_array_value(
             pairs
                 .iter()
@@ -157,7 +159,7 @@ impl Harness {
         )
     }
 
-    pub(super) fn url_search_params_pairs_from_object_entries(
+    pub(crate) fn url_search_params_pairs_from_object_entries(
         entries: &[(String, Value)],
     ) -> Vec<(String, String)> {
         let Some(Value::Array(list)) =
@@ -182,7 +184,7 @@ impl Harness {
         pairs
     }
 
-    pub(super) fn set_url_search_params_pairs(
+    pub(crate) fn set_url_search_params_pairs(
         entries: &mut impl ObjectEntryMut,
         pairs: &[(String, String)],
     ) {
@@ -193,7 +195,7 @@ impl Harness {
         );
     }
 
-    pub(super) fn new_url_search_params_value(
+    pub(crate) fn new_url_search_params_value(
         &self,
         pairs: Vec<(String, String)>,
         owner_id: Option<usize>,
@@ -212,7 +214,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    pub(super) fn resolve_url_search_params_object_from_env(
+    pub(crate) fn resolve_url_search_params_object_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -239,7 +241,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn url_search_params_pairs_from_init_value(
+    pub(crate) fn url_search_params_pairs_from_init_value(
         &self,
         init: &Value,
     ) -> Result<Vec<(String, String)>> {
@@ -283,7 +285,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_url_construct(
+    pub(crate) fn eval_url_construct(
         &mut self,
         input: &Option<Box<Expr>>,
         base: &Option<Box<Expr>>,
@@ -315,7 +317,7 @@ impl Harness {
         self.new_url_value_from_href(&href)
     }
 
-    pub(super) fn eval_url_static_method(
+    pub(crate) fn eval_url_static_method(
         &mut self,
         method: UrlStaticMethod,
         args: &[Expr],
@@ -351,7 +353,7 @@ impl Harness {
             .ok_or_else(|| Error::ScriptRuntime(format!("unsupported URL static method: {member}")))
     }
 
-    pub(super) fn eval_url_static_member_call_from_values(
+    pub(crate) fn eval_url_static_member_call_from_values(
         &mut self,
         member: &str,
         args: &[Value],
@@ -411,7 +413,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_url_member_call(
+    pub(crate) fn eval_url_member_call(
         &self,
         object: &Rc<RefCell<ObjectValue>>,
         member: &str,
@@ -436,7 +438,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_url_search_params_member_call(
+    pub(crate) fn eval_url_search_params_member_call(
         &mut self,
         object: &Rc<RefCell<ObjectValue>>,
         member: &str,
@@ -665,7 +667,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_url_search_params_construct(
+    pub(crate) fn eval_url_search_params_construct(
         &mut self,
         init: &Option<Box<Expr>>,
         called_with_new: bool,
@@ -687,7 +689,7 @@ impl Harness {
         Ok(self.new_url_search_params_value(pairs, None))
     }
 
-    pub(super) fn eval_url_search_params_method(
+    pub(crate) fn eval_url_search_params_method(
         &mut self,
         target: &str,
         method: UrlSearchParamsInstanceMethod,
@@ -849,7 +851,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_map_construct(
+    pub(crate) fn eval_map_construct(
         &mut self,
         iterable: &Option<Box<Expr>>,
         called_with_new: bool,
@@ -903,7 +905,7 @@ impl Harness {
         Ok(Value::Map(map))
     }
 
-    pub(super) fn eval_map_static_method(
+    pub(crate) fn eval_map_static_method(
         &mut self,
         method: MapStaticMethod,
         args: &[Expr],
@@ -950,7 +952,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_map_method(
+    pub(crate) fn eval_map_method(
         &mut self,
         target: &str,
         method: MapInstanceMethod,
@@ -1294,7 +1296,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_set_construct(
+    pub(crate) fn eval_set_construct(
         &mut self,
         iterable: &Option<Box<Expr>>,
         called_with_new: bool,
@@ -1329,7 +1331,7 @@ impl Harness {
         Ok(Value::Set(set))
     }
 
-    pub(super) fn eval_set_method(
+    pub(crate) fn eval_set_method(
         &mut self,
         target: &str,
         method: SetInstanceMethod,
@@ -1481,7 +1483,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn new_symbol_value(
+    pub(crate) fn new_symbol_value(
         &mut self,
         description: Option<String>,
         registry_key: Option<String>,
@@ -1496,20 +1498,20 @@ impl Harness {
         Value::Symbol(symbol)
     }
 
-    pub(super) fn symbol_storage_key(id: usize) -> String {
+    pub(crate) fn symbol_storage_key(id: usize) -> String {
         format!("{INTERNAL_SYMBOL_KEY_PREFIX}{id}")
     }
 
-    pub(super) fn symbol_id_from_storage_key(key: &str) -> Option<usize> {
+    pub(crate) fn symbol_id_from_storage_key(key: &str) -> Option<usize> {
         key.strip_prefix(INTERNAL_SYMBOL_KEY_PREFIX)
             .and_then(|value| value.parse::<usize>().ok())
     }
 
-    pub(super) fn is_symbol_storage_key(key: &str) -> bool {
+    pub(crate) fn is_symbol_storage_key(key: &str) -> bool {
         key.starts_with(INTERNAL_SYMBOL_KEY_PREFIX)
     }
 
-    pub(super) fn is_internal_object_key(key: &str) -> bool {
+    pub(crate) fn is_internal_object_key(key: &str) -> bool {
         Self::is_symbol_storage_key(key)
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
@@ -1519,7 +1521,7 @@ impl Harness {
             || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
     }
 
-    pub(super) fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
+    pub(crate) fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {
         let value = Self::object_get_entry(entries, INTERNAL_SYMBOL_WRAPPER_KEY)?;
         match value {
             Value::Number(value) if value >= 0 => Some(value as usize),
@@ -1527,14 +1529,14 @@ impl Harness {
         }
     }
 
-    pub(super) fn string_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<String> {
+    pub(crate) fn string_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<String> {
         match Self::object_get_entry(entries, INTERNAL_STRING_WRAPPER_VALUE_KEY) {
             Some(Value::String(value)) => Some(value),
             _ => None,
         }
     }
 
-    pub(super) fn symbol_id_from_property_key(&self, value: &Value) -> Option<usize> {
+    pub(crate) fn symbol_id_from_property_key(&self, value: &Value) -> Option<usize> {
         match value {
             Value::Symbol(symbol) => Some(symbol.id),
             Value::Object(entries) => {
@@ -1545,7 +1547,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn property_key_to_storage_key(&self, value: &Value) -> String {
+    pub(crate) fn property_key_to_storage_key(&self, value: &Value) -> String {
         if let Some(symbol_id) = self.symbol_id_from_property_key(value) {
             Self::symbol_storage_key(symbol_id)
         } else {
@@ -1553,7 +1555,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_symbol_construct(
+    pub(crate) fn eval_symbol_construct(
         &mut self,
         description: &Option<Box<Expr>>,
         called_with_new: bool,
@@ -1577,7 +1579,7 @@ impl Harness {
         Ok(self.new_symbol_value(description, None))
     }
 
-    pub(super) fn eval_symbol_static_method(
+    pub(crate) fn eval_symbol_static_method(
         &mut self,
         method: SymbolStaticMethod,
         args: &[Expr],
@@ -1626,7 +1628,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn symbol_static_property_name(property: SymbolStaticProperty) -> &'static str {
+    pub(crate) fn symbol_static_property_name(property: SymbolStaticProperty) -> &'static str {
         match property {
             SymbolStaticProperty::AsyncDispose => "Symbol.asyncDispose",
             SymbolStaticProperty::AsyncIterator => "Symbol.asyncIterator",
@@ -1646,7 +1648,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_symbol_static_property(&mut self, property: SymbolStaticProperty) -> Value {
+    pub(crate) fn eval_symbol_static_property(&mut self, property: SymbolStaticProperty) -> Value {
         let name = Self::symbol_static_property_name(property).to_string();
         if let Some(symbol) = self.symbol_runtime.well_known_symbols.get(&name) {
             return Value::Symbol(symbol.clone());
@@ -1659,7 +1661,7 @@ impl Harness {
         Value::Symbol(symbol)
     }
 
-    pub(super) fn eval_string_static_method(
+    pub(crate) fn eval_string_static_method(
         &mut self,
         method: StringStaticMethod,
         args: &[Expr],
@@ -1735,7 +1737,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_regexp_static_method(
+    pub(crate) fn eval_regexp_static_method(
         &mut self,
         method: RegExpStaticMethod,
         args: &[Expr],
@@ -1756,7 +1758,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_string_match(&mut self, value: &str, pattern: Value) -> Result<Value> {
+    pub(crate) fn eval_string_match(&mut self, value: &str, pattern: Value) -> Result<Value> {
         let regex = if let Value::RegExp(regex) = pattern {
             regex
         } else {

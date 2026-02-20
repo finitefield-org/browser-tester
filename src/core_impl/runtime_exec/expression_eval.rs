@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    pub(super) fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
+    pub(crate) fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
         if !matches!(
             expr,
             Expr::SetTimeout { .. } | Expr::SetInterval { .. } | Expr::RequestAnimationFrame { .. }
@@ -19,7 +21,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn eval_expr(
+    pub(crate) fn eval_expr(
         &mut self,
         expr: &Expr,
         env: &HashMap<String, Value>,
