@@ -14837,3 +14837,73 @@ fn nested_object_literal_parses_without_recursion_overflow() -> Result<()> {
     h.assert_text("#result", "ok")?;
     Ok(())
 }
+
+#[test]
+fn arrow_function_with_object_destructuring_parameter_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const render = ({ growthFlag, arrearsFlag, uncertain }) => {
+            document.getElementById('result').textContent =
+              String(growthFlag) + ':' + String(arrearsFlag) + ':' + String(uncertain);
+          };
+          render({ growthFlag: true, arrearsFlag: false, uncertain: 2 });
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:false:2")?;
+    Ok(())
+}
+
+#[test]
+fn arrow_function_with_object_destructuring_after_prior_call_and_object_updates_parses()
+-> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          (() => {
+            const buildRenderer = () => {
+              const latest = { actions: [] };
+              const render = ({ growthFlag, arrearsFlag, uncertain }) => {
+                latest.actions.forEach((text, idx) => {
+                  const input = document.createElement("input");
+                  input.id = "action-" + idx;
+                  input.addEventListener("change", () => {
+                    if (input.checked) {
+                      document.getElementById('result').textContent = text;
+                    }
+                  });
+                });
+                return String(growthFlag) + ":" + String(arrearsFlag) + ":" + String(uncertain);
+              };
+              return render;
+            };
+            const render = buildRenderer();
+            document.getElementById('result').textContent =
+              render({ growthFlag: false, arrearsFlag: false, uncertain: false });
+          })();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "false:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn array_for_each_concise_callback_with_member_call_body_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const btn = {};
+          const el = { mobileTabButtons: [] };
+          el.mobileTabButtons.forEach((b) => b.classList.toggle("active", b === btn));
+          document.getElementById('result').textContent = 'ok';
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}

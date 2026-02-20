@@ -36,6 +36,8 @@ impl Harness {
             next_symbol_id: 1,
             next_url_object_id: 1,
             url_objects: HashMap::new(),
+            url_constructor_properties: Rc::new(RefCell::new(Vec::new())),
+            local_storage_object: Rc::new(RefCell::new(Vec::new())),
             next_blob_url_id: 1,
             blob_url_objects: HashMap::new(),
             task_depth: 0,
@@ -80,6 +82,19 @@ impl Harness {
         self.sync_history_object();
         self.window_object = Rc::new(RefCell::new(Vec::new()));
         self.document_object = Rc::new(RefCell::new(Vec::new()));
+        self.url_constructor_properties.borrow_mut().clear();
+        let local_storage_items = {
+            let entries = self.local_storage_object.borrow();
+            if Self::is_storage_object(&entries) {
+                Self::storage_pairs_from_object_entries(&entries)
+            } else {
+                Vec::new()
+            }
+        };
+        let mut local_storage_entries =
+            vec![(INTERNAL_STORAGE_OBJECT_KEY.to_string(), Value::Bool(true))];
+        Self::set_storage_pairs(&mut local_storage_entries, &local_storage_items);
+        *self.local_storage_object.borrow_mut() = local_storage_entries;
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
             ("readText".into(), Self::new_builtin_placeholder_function()),
@@ -155,6 +170,7 @@ impl Harness {
         let url_constructor = Value::UrlConstructor;
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
+        let local_storage = Value::Object(self.local_storage_object.clone());
 
         self.sync_document_object();
         self.sync_window_object(
@@ -165,6 +181,7 @@ impl Harness {
             &url_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
+            &local_storage,
         );
 
         let window = Value::Object(self.window_object.clone());
@@ -189,6 +206,8 @@ impl Harness {
         );
         self.script_env.insert("location".to_string(), location);
         self.script_env.insert("history".to_string(), history);
+        self.script_env
+            .insert("localStorage".to_string(), local_storage);
         self.script_env.insert("window".to_string(), window.clone());
         self.script_env.insert("self".to_string(), window.clone());
         self.script_env.insert("top".to_string(), window.clone());
@@ -275,6 +294,7 @@ impl Harness {
             "history",
             "navigator",
             "clientInformation",
+            "localStorage",
             "document",
             "origin",
             "isSecureContext",
@@ -297,6 +317,7 @@ impl Harness {
         url_constructor: &Value,
         html_element_constructor: &Value,
         html_input_element_constructor: &Value,
+        local_storage: &Value,
     ) {
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
@@ -344,6 +365,7 @@ impl Harness {
                 "document".to_string(),
                 Value::Object(self.document_object.clone()),
             ),
+            ("localStorage".to_string(), local_storage.clone()),
             (
                 "origin".to_string(),
                 Value::String(self.current_location_parts().origin()),
@@ -568,6 +590,13 @@ impl Harness {
         )
     }
 
+    pub(super) fn is_storage_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_STORAGE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(super) fn set_navigator_property(
         &mut self,
         navigator_object: &Rc<RefCell<Vec<(String, Value)>>>,
@@ -589,7 +618,7 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "URL" | "HTMLElement" | "HTMLInputElement" => {
+            | "URL" | "HTMLElement" | "HTMLInputElement" | "localStorage" => {
                 Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
             }
             "location" => self.set_location_property("href", value),
@@ -607,6 +636,40 @@ impl Harness {
                     key.to_string(),
                     value,
                 );
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn set_url_constructor_property(&mut self, key: &str, value: Value) {
+        Self::object_set_entry(
+            &mut self.url_constructor_properties.borrow_mut(),
+            key.to_string(),
+            value,
+        );
+    }
+
+    pub(super) fn set_storage_object_property(
+        &mut self,
+        storage_object: &Rc<RefCell<Vec<(String, Value)>>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        match key {
+            "length" => Err(Error::ScriptRuntime("Storage.length is read-only".into())),
+            "getItem" | "setItem" | "removeItem" | "clear" | "key" => {
+                Self::object_set_entry(&mut storage_object.borrow_mut(), key.to_string(), value);
+                Ok(())
+            }
+            _ => {
+                let mut entries = storage_object.borrow_mut();
+                let mut pairs = Self::storage_pairs_from_object_entries(&entries);
+                if let Some((_, stored)) = pairs.iter_mut().find(|(name, _)| name == key) {
+                    *stored = value.as_string();
+                } else {
+                    pairs.push((key.to_string(), value.as_string()));
+                }
+                Self::set_storage_pairs(&mut entries, &pairs);
                 Ok(())
             }
         }
@@ -824,7 +887,7 @@ impl Harness {
         match container {
             Value::Object(object) => {
                 let key = self.property_key_to_storage_key(key_value);
-                let (is_location, is_history, is_window, is_navigator, is_url) = {
+                let (is_location, is_history, is_window, is_navigator, is_url, is_storage) = {
                     let entries = object.borrow();
                     (
                         Self::is_location_object(&entries),
@@ -832,6 +895,7 @@ impl Harness {
                         Self::is_window_object(&entries),
                         Self::is_navigator_object(&entries),
                         Self::is_url_object(&entries),
+                        Self::is_storage_object(&entries),
                     )
                 };
                 if is_location {
@@ -854,7 +918,16 @@ impl Harness {
                     self.set_url_object_property(object, &key, value)?;
                     return Ok(());
                 }
+                if is_storage {
+                    self.set_storage_object_property(object, &key, value)?;
+                    return Ok(());
+                }
                 Self::object_set_entry(&mut object.borrow_mut(), key, value);
+                Ok(())
+            }
+            Value::UrlConstructor => {
+                let key = self.property_key_to_storage_key(key_value);
+                self.set_url_constructor_property(&key, value);
                 Ok(())
             }
             Value::Array(values) => {

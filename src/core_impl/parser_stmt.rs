@@ -750,6 +750,13 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
             return Ok((rewritten, false));
         }
 
+        // Keep concise callback bodies that are valid single statements even
+        // when expression parsing is not yet supported.
+        if parse_single_statement(stripped).is_ok() {
+            cursor.set_pos(cursor.i + end);
+            return Ok((stripped.to_string(), true));
+        }
+
         end -= 1;
     }
 
@@ -2780,7 +2787,8 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 if args.len() == 2 && args[1].trim().is_empty() {
                     return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
                 }
-                let callback = parse_array_callback_arg(args[0], 3, "array callback parameters")?;
+                let callback =
+                    parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")?;
                 if args.len() == 2 {
                     let _ = parse_expr(args[1].trim())?;
                 }
@@ -2802,37 +2810,97 @@ fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     if stmt_no_semi.contains(".classList.forEach(") {
         return Ok(None);
     }
-
-    let expr = parse_expr(stmt_no_semi)?;
-    let Expr::MemberCall {
-        target,
-        member,
-        args,
-        optional: _,
-    } = expr
-    else {
+    let Some(for_each_dot_pos) = find_top_level_for_each_call(stmt_no_semi) else {
         return Ok(None);
     };
-    if member != "forEach" {
+
+    let target_src = stmt_no_semi[..for_each_dot_pos].trim();
+    if target_src.is_empty() {
         return Ok(None);
     }
+
+    let call_src = stmt_no_semi
+        .get(for_each_dot_pos + 1..)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid forEach statement: {stmt}")))?;
+    let mut cursor = Cursor::new(call_src);
+    if !cursor.consume_ascii("forEach") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let args = split_top_level_by_char(&args_src, b',');
     if args.is_empty() || args.len() > 2 {
         return Err(Error::ScriptParse(
             "forEach requires a callback and optional thisArg".into(),
         ));
     }
-    let callback = match &args[0] {
-        Expr::Function {
-            handler,
-            is_async: false,
-        } => handler.clone(),
-        _ => return Ok(None),
-    };
+    if args[0].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "forEach requires a callback and optional thisArg".into(),
+        ));
+    }
+    if args.len() == 2 && args[1].trim().is_empty() {
+        return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
+    }
+
+    let target = parse_expr(target_src)?;
+    let callback = parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")?;
+    if args.len() == 2 {
+        let _ = parse_expr(args[1].trim())?;
+    }
 
     Ok(Some(Stmt::ArrayForEachExpr {
-        target: *target,
+        target,
         callback,
     }))
+}
+
+fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+    let callback_arg = strip_js_comments(arg);
+    let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
+    let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
+    callback_cursor.skip_ws();
+    if !callback_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported array callback: {}",
+            arg.trim()
+        )));
+    }
+
+    let stmts = if concise_body {
+        match parse_expr(body.trim()) {
+            Ok(expr) => vec![Stmt::Return {
+                value: Some(expr),
+            }],
+            Err(_) => parse_block_statements(&format!("{};", body.trim()))?,
+        }
+    } else {
+        parse_block_statements(&body)?
+    };
+
+    Ok(ScriptHandler { params, stmts })
+}
+
+fn find_top_level_for_each_call(src: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+
+    while i < bytes.len() {
+        if scanner.is_top_level() && bytes[i] == b'.' {
+            if src.get(i + 1..).is_some_and(|tail| tail.starts_with("forEach(")) {
+                return Some(i);
+            }
+        }
+        i = scanner.advance(bytes, i);
+    }
+
+    None
 }
 
 pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
@@ -2894,11 +2962,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
             )));
         }
 
-        let body_stmts = if concise_body {
-            vec![Stmt::Expr(parse_expr(body.trim())?)]
-        } else {
-            parse_block_statements(&body)?
-        };
+        let body_stmts = parse_for_each_callback_body_stmts(&body, concise_body)?;
         let body_stmts =
             prepend_callback_param_prologue_stmts(body_stmts, &parsed_params.prologue)?;
         return Ok((item_var, index_var, body_stmts));
@@ -2951,13 +3015,20 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
         )));
     }
 
-    let body_stmts = if concise_body {
-        vec![Stmt::Expr(parse_expr(body.trim())?)]
-    } else {
-        parse_block_statements(&body)?
-    };
+    let body_stmts = parse_for_each_callback_body_stmts(&body, concise_body)?;
     let body_stmts = prepend_callback_param_prologue_stmts(body_stmts, &param_prologue)?;
     Ok((item_var, index_var, body_stmts))
+}
+
+fn parse_for_each_callback_body_stmts(body: &str, concise_body: bool) -> Result<Vec<Stmt>> {
+    if !concise_body {
+        return parse_block_statements(body);
+    }
+
+    match parse_expr(body.trim()) {
+        Ok(expr) => Ok(vec![Stmt::Expr(expr)]),
+        Err(_) => parse_block_statements(&format!("{};", body.trim())),
+    }
 }
 
 fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {

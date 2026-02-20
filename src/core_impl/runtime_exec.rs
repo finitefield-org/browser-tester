@@ -1462,6 +1462,10 @@ impl Harness {
                             Self::object_get_entry(&entries, "length").unwrap_or(Value::Number(0))
                         );
                     }
+                    if Self::is_storage_object(&entries) {
+                        let len = Self::storage_pairs_from_object_entries(&entries).len();
+                        return Ok(Value::Number(len as i64));
+                    }
                     if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
                         Ok(Value::Number(value.chars().count() as i64))
                     } else {
@@ -1496,6 +1500,14 @@ impl Harness {
                                 .unwrap_or(Value::Undefined));
                         }
                         let key = self.property_key_to_storage_key(&index);
+                        if Self::is_storage_object(&entries_ref) {
+                            return Ok(Self::storage_pairs_from_object_entries(&entries_ref)
+                                .into_iter()
+                                .find_map(|(name, value)| {
+                                    (name == key).then(|| Value::String(value))
+                                })
+                                .unwrap_or(Value::Undefined));
+                        }
                         Ok(Self::object_get_entry(&entries_ref, &key).unwrap_or(Value::Undefined))
                     }
                     Some(Value::Array(values)) => {
@@ -3075,6 +3087,25 @@ impl Harness {
                 }
 
                 if let Value::UrlConstructor = &receiver {
+                    let url_constructor_override = {
+                        let entries = self.url_constructor_properties.borrow();
+                        Self::object_get_entry_with_case_fallback(&entries, member)
+                    };
+                    if let Some(callee) = url_constructor_override {
+                        return self
+                            .execute_callable_value_with_env(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                                    Error::ScriptRuntime(format!("'{}' is not a function", member))
+                                }
+                                other => other,
+                            });
+                    }
                     if let Some(value) =
                         self.eval_url_static_member_call_from_values(member, &evaluated_args)?
                     {
@@ -3097,6 +3128,13 @@ impl Harness {
                             &evaluated_args,
                             event,
                         )? {
+                            return Ok(value);
+                        }
+                    }
+                    if Self::is_storage_object(&object.borrow()) {
+                        if let Some(value) =
+                            self.eval_storage_member_call(object, member, &evaluated_args)?
+                        {
                             return Ok(value);
                         }
                     }
@@ -6118,6 +6156,25 @@ impl Harness {
                         return Ok(Value::Number(size as i64));
                     }
                 }
+                if Self::is_storage_object(&entries) {
+                    if key == "length" {
+                        let len = Self::storage_pairs_from_object_entries(&entries).len();
+                        return Ok(Value::Number(len as i64));
+                    }
+                    if let Some(value) = Self::object_get_entry_with_case_fallback(&entries, key) {
+                        return Ok(value);
+                    }
+                    if Self::is_storage_method_name(key) {
+                        return Ok(Self::new_builtin_placeholder_function());
+                    }
+                    if let Some((_, value)) = Self::storage_pairs_from_object_entries(&entries)
+                        .into_iter()
+                        .find(|(name, _)| name == key)
+                    {
+                        return Ok(Value::String(value));
+                    }
+                    return Ok(Value::Undefined);
+                }
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
@@ -6207,6 +6264,17 @@ impl Harness {
                     _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
                 };
                 Ok(value)
+            }
+            Value::UrlConstructor => {
+                if let Some(value) =
+                    Self::object_get_entry_with_case_fallback(&self.url_constructor_properties.borrow(), key)
+                {
+                    return Ok(value);
+                }
+                if Self::is_url_static_method_name(key) {
+                    return Ok(Self::new_builtin_placeholder_function());
+                }
+                Ok(Value::Undefined)
             }
             Value::StringConstructor => Ok(Value::Undefined),
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
@@ -9349,6 +9417,13 @@ impl Harness {
         )
     }
 
+    pub(super) fn is_url_static_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "canParse" | "parse" | "createObjectURL" | "revokeObjectURL"
+        )
+    }
+
     pub(super) fn url_object_id_from_entries(entries: &[(String, Value)]) -> Option<usize> {
         match Self::object_get_entry(entries, INTERNAL_URL_OBJECT_ID_KEY) {
             Some(Value::Number(id)) if id > 0 => usize::try_from(id).ok(),
@@ -9696,6 +9771,143 @@ impl Harness {
         self.sync_url_object_entries_from_parts(&mut url_object.borrow_mut(), &parts);
     }
 
+    pub(super) fn is_storage_method_name(name: &str) -> bool {
+        matches!(name, "getItem" | "setItem" | "removeItem" | "clear" | "key")
+    }
+
+    pub(super) fn storage_pairs_to_value(pairs: &[(String, String)]) -> Value {
+        Self::new_array_value(
+            pairs
+                .iter()
+                .map(|(name, value)| {
+                    Self::new_array_value(vec![
+                        Value::String(name.clone()),
+                        Value::String(value.clone()),
+                    ])
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub(super) fn storage_pairs_from_object_entries(
+        entries: &[(String, Value)],
+    ) -> Vec<(String, String)> {
+        let Some(Value::Array(list)) = Self::object_get_entry(entries, INTERNAL_STORAGE_ENTRIES_KEY)
+        else {
+            return Vec::new();
+        };
+        let snapshot = list.borrow().clone();
+        let mut pairs = Vec::new();
+        for item in snapshot {
+            let Value::Array(pair) = item else {
+                continue;
+            };
+            let pair = pair.borrow();
+            if pair.is_empty() {
+                continue;
+            }
+            let name = pair[0].as_string();
+            let value = pair.get(1).map(Value::as_string).unwrap_or_default();
+            pairs.push((name, value));
+        }
+        pairs
+    }
+
+    pub(super) fn set_storage_pairs(
+        entries: &mut Vec<(String, Value)>,
+        pairs: &[(String, String)],
+    ) {
+        Self::object_set_entry(
+            entries,
+            INTERNAL_STORAGE_ENTRIES_KEY.to_string(),
+            Self::storage_pairs_to_value(pairs),
+        );
+    }
+
+    pub(super) fn eval_storage_member_call(
+        &mut self,
+        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "getItem" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Storage.getItem requires exactly one argument".into(),
+                    ));
+                }
+                let key = args[0].as_string();
+                let value = Self::storage_pairs_from_object_entries(&object.borrow())
+                    .into_iter()
+                    .find_map(|(name, value)| (name == key).then_some(value))
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
+                Ok(Some(value))
+            }
+            "setItem" => {
+                if args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Storage.setItem requires exactly two arguments".into(),
+                    ));
+                }
+                let key = args[0].as_string();
+                let value = args[1].as_string();
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::storage_pairs_from_object_entries(&entries);
+                    if let Some((_, stored)) = pairs.iter_mut().find(|(name, _)| name == &key) {
+                        *stored = value;
+                    } else {
+                        pairs.push((key, value));
+                    }
+                    Self::set_storage_pairs(&mut entries, &pairs);
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "removeItem" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Storage.removeItem requires exactly one argument".into(),
+                    ));
+                }
+                let key = args[0].as_string();
+                {
+                    let mut entries = object.borrow_mut();
+                    let mut pairs = Self::storage_pairs_from_object_entries(&entries);
+                    pairs.retain(|(name, _)| name != &key);
+                    Self::set_storage_pairs(&mut entries, &pairs);
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Storage.clear does not take arguments".into(),
+                    ));
+                }
+                Self::set_storage_pairs(&mut object.borrow_mut(), &[]);
+                Ok(Some(Value::Undefined))
+            }
+            "key" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Storage.key requires exactly one argument".into(),
+                    ));
+                }
+                let Some(index) = self.value_as_index(&args[0]) else {
+                    return Ok(Some(Value::Null));
+                };
+                let value = Self::storage_pairs_from_object_entries(&object.borrow())
+                    .get(index)
+                    .map(|(name, _)| Value::String(name.clone()))
+                    .unwrap_or(Value::Null);
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub(super) fn is_url_search_params_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY),
@@ -9883,81 +10095,32 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
-        match method {
-            UrlStaticMethod::CanParse => {
-                if args.is_empty() || args.len() > 2 {
-                    return Err(Error::ScriptRuntime(
-                        "URL.canParse requires a URL argument and optional base".into(),
-                    ));
-                }
-                let input = self
-                    .eval_expr(&args[0], env, event_param, event)?
-                    .as_string();
-                let base = if args.len() == 2 {
-                    Some(
-                        self.eval_expr(&args[1], env, event_param, event)?
-                            .as_string(),
-                    )
-                } else {
-                    None
-                };
-                Ok(Value::Bool(
-                    Self::resolve_url_string(&input, base.as_deref()).is_some(),
-                ))
-            }
-            UrlStaticMethod::Parse => {
-                if args.is_empty() || args.len() > 2 {
-                    return Err(Error::ScriptRuntime(
-                        "URL.parse requires a URL argument and optional base".into(),
-                    ));
-                }
-                let input = self
-                    .eval_expr(&args[0], env, event_param, event)?
-                    .as_string();
-                let base = if args.len() == 2 {
-                    Some(
-                        self.eval_expr(&args[1], env, event_param, event)?
-                            .as_string(),
-                    )
-                } else {
-                    None
-                };
-                if let Some(href) = Self::resolve_url_string(&input, base.as_deref()) {
-                    self.new_url_value_from_href(&href)
-                } else {
-                    Ok(Value::Null)
-                }
-            }
-            UrlStaticMethod::CreateObjectUrl => {
-                if args.len() != 1 {
-                    return Err(Error::ScriptRuntime(
-                        "URL.createObjectURL requires exactly one argument".into(),
-                    ));
-                }
-                let value = self.eval_expr(&args[0], env, event_param, event)?;
-                let Value::Blob(blob) = value else {
-                    return Err(Error::ScriptRuntime(
-                        "URL.createObjectURL requires a Blob argument".into(),
-                    ));
-                };
-                let object_url = format!("blob:bt-{}", self.next_blob_url_id);
-                self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
-                self.blob_url_objects.insert(object_url.clone(), blob);
-                Ok(Value::String(object_url))
-            }
-            UrlStaticMethod::RevokeObjectUrl => {
-                if args.len() != 1 {
-                    return Err(Error::ScriptRuntime(
-                        "URL.revokeObjectURL requires exactly one argument".into(),
-                    ));
-                }
-                let object_url = self
-                    .eval_expr(&args[0], env, event_param, event)?
-                    .as_string();
-                self.blob_url_objects.remove(&object_url);
-                Ok(Value::Undefined)
-            }
+        let member = match method {
+            UrlStaticMethod::CanParse => "canParse",
+            UrlStaticMethod::Parse => "parse",
+            UrlStaticMethod::CreateObjectUrl => "createObjectURL",
+            UrlStaticMethod::RevokeObjectUrl => "revokeObjectURL",
+        };
+        let evaluated_args = args
+            .iter()
+            .map(|arg| self.eval_expr(arg, env, event_param, event))
+            .collect::<Result<Vec<_>>>()?;
+        let url_constructor_override = {
+            let entries = self.url_constructor_properties.borrow();
+            Self::object_get_entry_with_case_fallback(&entries, member)
+        };
+        if let Some(callee) = url_constructor_override {
+            return self
+                .execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
+                .map_err(|err| match err {
+                    Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                        Error::ScriptRuntime(format!("URL.{member} is not a function"))
+                    }
+                    other => other,
+                });
         }
+        self.eval_url_static_member_call_from_values(member, &evaluated_args)?
+            .ok_or_else(|| Error::ScriptRuntime(format!("unsupported URL static method: {member}")))
     }
 
     pub(super) fn eval_url_static_member_call_from_values(
@@ -10677,6 +10840,23 @@ impl Harness {
 
         if let Value::Object(entries) = target_value {
             let entries = entries.clone();
+            if Self::is_storage_object(&entries.borrow()) {
+                return match method {
+                    MapInstanceMethod::Clear => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Storage.clear does not take arguments".into(),
+                            ));
+                        }
+                        Self::set_storage_pairs(&mut entries.borrow_mut(), &[]);
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a Map",
+                        target
+                    ))),
+                };
+            }
             if Self::is_url_search_params_object(&entries.borrow()) {
                 return match method {
                     MapInstanceMethod::Get => {
@@ -11110,6 +11290,7 @@ impl Harness {
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
             || key.starts_with(INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX)
+            || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
     }
 
     pub(super) fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {

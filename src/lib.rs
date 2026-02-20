@@ -44,6 +44,9 @@ const INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX: &str = "\u{0}\u{0}bt_url_search_par
 const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str = "\u{0}\u{0}bt_url_search_params:object";
 const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_url_search_params:entries";
 const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str = "\u{0}\u{0}bt_url_search_params:owner_id";
+const INTERNAL_STORAGE_KEY_PREFIX: &str = "\u{0}\u{0}bt_storage:";
+const INTERNAL_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_storage:object";
+const INTERNAL_STORAGE_ENTRIES_KEY: &str = "\u{0}\u{0}bt_storage:entries";
 const DEFAULT_LOCALE: &str = "en-US";
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -4645,6 +4648,8 @@ pub struct Harness {
     next_symbol_id: usize,
     next_url_object_id: usize,
     url_objects: HashMap<usize, Rc<RefCell<Vec<(String, Value)>>>>,
+    url_constructor_properties: Rc<RefCell<Vec<(String, Value)>>>,
+    local_storage_object: Rc<RefCell<Vec<(String, Value)>>>,
     next_blob_url_id: usize,
     blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
     task_depth: usize,

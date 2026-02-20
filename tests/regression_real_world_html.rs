@@ -345,3 +345,54 @@ fn run_calculation_pipeline_keeps_candidates_for_render_outputs() -> browser_tes
     harness.assert_text("#result", "4:29:125")?;
     Ok(())
 }
+
+#[test]
+fn window_url_static_properties_are_object_like_and_assignable() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const beforeType = typeof window.URL.createObjectURL;
+      window.URL.createObjectURL = function() { return "patched"; };
+      const afterType = typeof window.URL.createObjectURL;
+      const called = window.URL.createObjectURL(new Blob(["x"]));
+      document.getElementById("result").textContent = beforeType + "|" + afterType + "|" + called;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "function|function|patched")?;
+    Ok(())
+}
+
+#[test]
+fn local_storage_basic_methods_are_available() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      localStorage.removeItem("x");
+      const initialMissing = localStorage.getItem("x") === null;
+      localStorage.setItem("x", "42");
+      const fromMethod = localStorage.getItem("x");
+      const fromIndex = localStorage["x"];
+      const lenAfterOne = localStorage.length;
+      localStorage.setItem("y", "99");
+      const firstKey = localStorage.key(0);
+      localStorage.removeItem("x");
+      const missingAgain = localStorage.getItem("x") === null;
+      localStorage.clear();
+      const lenAfterClear = localStorage.length;
+      document.getElementById("result").textContent =
+        String(initialMissing) + "|" +
+        fromMethod + "|" +
+        fromIndex + "|" +
+        String(lenAfterOne) + "|" +
+        firstKey + "|" +
+        String(missingAgain) + "|" +
+        String(lenAfterClear);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|42|42|1|x|true|0")?;
+    Ok(())
+}
