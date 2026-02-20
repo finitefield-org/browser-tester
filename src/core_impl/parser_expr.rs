@@ -6519,59 +6519,13 @@ fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>
 fn find_first_top_level_colon(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b':' if paren == 0 && bracket == 0 && brace == 0 => return Some(i),
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+        if scanner.is_top_level() && bytes[i] == b':' {
+            return Some(i);
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     None
@@ -10287,92 +10241,42 @@ fn is_fully_wrapped_in_parens(src: &str) -> bool {
 fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'=' => {
-                    if paren == 0 && bracket == 0 && brace == 0 {
-                        if i + 1 < bytes.len() && bytes[i + 1] == b'=' {
-                            if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
-                                i += 2;
-                            } else {
-                                i += 1;
-                            }
-                        } else if i >= 2 && &bytes[i - 2..=i] == b"&&=" {
-                            return Some((i - 2, 3));
-                        } else if i >= 2 && &bytes[i - 2..=i] == b"||=" {
-                            return Some((i - 2, 3));
-                        } else if i >= 2 && &bytes[i - 2..=i] == b"??=" {
-                            return Some((i - 2, 3));
-                        } else if i >= 2 && &bytes[i - 2..=i] == b"**=" {
-                            return Some((i - 2, 3));
-                        } else if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
-                            return Some((i - 3, 4));
-                        } else if i >= 2 && &bytes[i - 2..=i] == b"<<=" {
-                            return Some((i - 2, 3));
-                        } else if i >= 2 && &bytes[i - 2..=i] == b">>=" {
-                            return Some((i - 2, 3));
-                        } else if i > 0
-                            && matches!(
-                                bytes[i - 1],
-                                b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
-                            )
-                        {
-                            return Some((i - 1, 2));
-                        } else {
-                            return Some((i, 1));
-                        }
-                    }
+        if scanner.is_top_level() && bytes[i] == b'=' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'=' {
+                i = scanner.advance(bytes, i);
+                continue;
+            }
+            if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
+                i = scanner.advance(bytes, i);
+                continue;
+            }
+            if i >= 3 && &bytes[i - 3..=i] == b">>>=" {
+                return Some((i - 3, 4));
+            }
+            if i >= 2
+                && matches!(
+                    &bytes[i - 2..=i],
+                    b"&&=" | b"||=" | b"??=" | b"**=" | b"<<=" | b">>="
+                )
+            {
+                return Some((i - 2, 3));
+            }
+            if i > 0 {
+                let prev = bytes[i - 1];
+                if matches!(prev, b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^') {
+                    return Some((i - 1, 2));
                 }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
+                if matches!(prev, b'!' | b'<' | b'>' | b'=') {
+                    i = scanner.advance(bytes, i);
+                    continue;
                 }
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+            return Some((i, 1));
         }
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     None
@@ -10381,66 +10285,21 @@ fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
 fn find_top_level_ternary_question(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
-
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
+    let mut scanner = JsLexScanner::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'?' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
-                        i += 1;
-                    } else {
-                        return Some(i);
-                    }
-                }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
-                }
+        if scanner.is_top_level() && bytes[i] == b'?' {
+            if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
+                i = scanner.advance(bytes, i);
+                continue;
             }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
+            if i > 0 && bytes[i - 1] == b'?' {
+                i = scanner.advance(bytes, i);
+                continue;
             }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
-            }
+            return Some(i);
         }
-
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     None
@@ -10448,74 +10307,35 @@ fn find_top_level_ternary_question(src: &str) -> Option<usize> {
 
 fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
     let bytes = src.as_bytes();
-    let mut i = from;
+    if from >= bytes.len() {
+        return None;
+    }
 
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut brace = 0usize;
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
     let mut nested_ternary = 0usize;
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum StrState {
-        None,
-        Single,
-        Double,
-        Backtick,
-    }
-    let mut state = StrState::None;
-
     while i < bytes.len() {
-        let b = bytes[i];
-        match state {
-            StrState::None => match b {
-                b'\'' => state = StrState::Single,
-                b'"' => state = StrState::Double,
-                b'`' => state = StrState::Backtick,
-                b'(' => paren += 1,
-                b')' => paren = paren.saturating_sub(1),
-                b'[' => bracket += 1,
-                b']' => bracket = bracket.saturating_sub(1),
-                b'{' => brace += 1,
-                b'}' => brace = brace.saturating_sub(1),
-                b'?' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
-                        i += 1;
-                    } else {
-                        nested_ternary += 1;
-                    }
+        if i >= from && scanner.is_top_level() {
+            let b = bytes[i];
+            if b == b'?' {
+                if i + 1 < bytes.len() && (bytes[i + 1] == b'?' || bytes[i + 1] == b'.') {
+                    i = scanner.advance(bytes, i);
+                    continue;
                 }
-                b':' if paren == 0 && bracket == 0 && brace == 0 => {
-                    if nested_ternary == 0 {
-                        return Some(i);
-                    }
-                    nested_ternary -= 1;
+                if i > 0 && bytes[i - 1] == b'?' {
+                    i = scanner.advance(bytes, i);
+                    continue;
                 }
-                _ => {}
-            },
-            StrState::Single => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'\'' {
-                    state = StrState::None;
+                nested_ternary += 1;
+            } else if b == b':' {
+                if nested_ternary == 0 {
+                    return Some(i);
                 }
-            }
-            StrState::Double => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'"' {
-                    state = StrState::None;
-                }
-            }
-            StrState::Backtick => {
-                if b == b'\\' {
-                    i += 1;
-                } else if b == b'`' {
-                    state = StrState::None;
-                }
+                nested_ternary -= 1;
             }
         }
-
-        i += 1;
+        i = scanner.advance(bytes, i);
     }
 
     None

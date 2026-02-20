@@ -622,6 +622,58 @@ fn regex_with_end_anchor_quantifier_parses_in_replace_call() -> browser_tester::
 }
 
 #[test]
+fn regex_lookahead_in_ternary_condition_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const input = "810000";
+      const out = /\B(?=(\d{3})+(?!\d))/.test(input)
+        ? input.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+        : "ng";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "810,000")?;
+    Ok(())
+}
+
+#[test]
+fn object_literal_colon_detection_ignores_regex_lookahead() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const model = {
+        formatter: /\B(?=(\d{3})+(?!\d))/g,
+        formatted: "810000".replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+      };
+      document.getElementById("result").textContent = model.formatted;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "810,000")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_coalescing_inside_ternary_condition_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const maybe = null;
+      const out = (maybe ?? "x") ? "ok" : "ng";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
 fn for_and_while_allow_single_statement_bodies() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
