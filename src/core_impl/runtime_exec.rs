@@ -86,6 +86,7 @@ impl Harness {
             return;
         };
         for task in self
+            .scheduler
             .task_queue
             .iter_mut()
             .filter(|task| task.id == *timer_id)
@@ -109,14 +110,14 @@ impl Harness {
             Expr::Number(value) => Ok(Value::Number(*value)),
             Expr::Float(value) => Ok(Value::Float(*value)),
             Expr::BigInt(value) => Ok(Value::BigInt(value.clone())),
-            Expr::DateNow => Ok(Value::Number(self.now_ms)),
-            Expr::PerformanceNow => Ok(Value::Float(self.now_ms as f64)),
+            Expr::DateNow => Ok(Value::Number(self.scheduler.now_ms)),
+            Expr::PerformanceNow => Ok(Value::Float(self.scheduler.now_ms as f64)),
             Expr::DateNew { value } => {
                 let timestamp_ms = if let Some(value) = value {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     self.coerce_date_timestamp_ms(&value)
                 } else {
-                    self.now_ms
+                    self.scheduler.now_ms
                 };
                 Ok(Self::new_date_value(timestamp_ms))
             }
@@ -305,7 +306,7 @@ impl Harness {
                     IntlFormatterKind::DateTimeFormat => {
                         let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
                         let timestamp_ms = if matches!(value, Value::Undefined) {
-                            self.now_ms
+                            self.scheduler.now_ms
                         } else {
                             self.coerce_date_timestamp_ms(&value)
                         };
@@ -416,7 +417,7 @@ impl Harness {
                             Value::Undefined
                         };
                         let timestamp_ms = if matches!(value, Value::Undefined) {
-                            self.now_ms
+                            self.scheduler.now_ms
                         } else {
                             self.coerce_date_timestamp_ms(&value)
                         };
@@ -1347,7 +1348,7 @@ impl Harness {
                         let mut out = Vec::new();
                         for (key, _) in entries.borrow().iter() {
                             if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
-                                if let Some(symbol) = self.symbols_by_id.get(&symbol_id) {
+                                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
                                     out.push(Value::Symbol(symbol.clone()));
                                 }
                             }
@@ -1516,7 +1517,7 @@ impl Harness {
                     let entries = entries.borrow();
                     if Self::is_history_object(&entries) {
                         return Ok(Self::object_get_entry(&entries, "length")
-                            .unwrap_or(Value::Number(self.history_entries.len() as i64)));
+                            .unwrap_or(Value::Number(self.location_history.history_entries.len() as i64)));
                     }
                     if Self::is_window_object(&entries) {
                         return Ok(
@@ -2976,20 +2977,21 @@ impl Harness {
                 let request = self
                     .eval_expr(request, env, event_param, event)?
                     .as_string();
-                self.fetch_calls.push(request.clone());
-                let response = self.fetch_mocks.get(&request).cloned().ok_or_else(|| {
+                self.platform_mocks.fetch_calls.push(request.clone());
+                let response = self.platform_mocks.fetch_mocks.get(&request).cloned().ok_or_else(|| {
                     Error::ScriptRuntime(format!("fetch mock not found for request: {request}"))
                 })?;
                 Ok(Value::String(response))
             }
             Expr::MatchMedia(query) => {
                 let query = self.eval_expr(query, env, event_param, event)?.as_string();
-                self.match_media_calls.push(query.clone());
+                self.platform_mocks.match_media_calls.push(query.clone());
                 let matches = self
+                    .platform_mocks
                     .match_media_mocks
                     .get(&query)
                     .copied()
-                    .unwrap_or(self.default_match_media_matches);
+                    .unwrap_or(self.platform_mocks.default_match_media_matches);
                 Ok(Self::new_object_value(vec![
                     ("matches".into(), Value::Bool(matches)),
                     ("media".into(), Value::String(query)),
@@ -2997,12 +2999,13 @@ impl Harness {
             }
             Expr::MatchMediaProp { query, prop } => {
                 let query = self.eval_expr(query, env, event_param, event)?.as_string();
-                self.match_media_calls.push(query.clone());
+                self.platform_mocks.match_media_calls.push(query.clone());
                 let matches = self
+                    .platform_mocks
                     .match_media_mocks
                     .get(&query)
                     .copied()
-                    .unwrap_or(self.default_match_media_matches);
+                    .unwrap_or(self.platform_mocks.default_match_media_matches);
                 match prop {
                     MatchMediaProp::Matches => Ok(Value::Bool(matches)),
                     MatchMediaProp::Media => Ok(Value::String(query)),
@@ -3012,15 +3015,16 @@ impl Harness {
                 let message = self
                     .eval_expr(message, env, event_param, event)?
                     .as_string();
-                self.alert_messages.push(message);
+                self.platform_mocks.alert_messages.push(message);
                 Ok(Value::Undefined)
             }
             Expr::Confirm(message) => {
                 let _ = self.eval_expr(message, env, event_param, event)?;
                 let accepted = self
+                    .platform_mocks
                     .confirm_responses
                     .pop_front()
-                    .unwrap_or(self.default_confirm_response);
+                    .unwrap_or(self.platform_mocks.default_confirm_response);
                 Ok(Value::Bool(accepted))
             }
             Expr::Prompt { message, default } => {
@@ -3031,9 +3035,10 @@ impl Harness {
                     .transpose()?
                     .map(|value| value.as_string());
                 let response = self
+                    .platform_mocks
                     .prompt_responses
                     .pop_front()
-                    .unwrap_or_else(|| self.default_prompt_response.clone().or(default_value));
+                    .unwrap_or_else(|| self.platform_mocks.default_prompt_response.clone().or(default_value));
                 match response {
                     Some(value) => Ok(Value::String(value)),
                     None => Ok(Value::Null),
@@ -3179,7 +3184,7 @@ impl Harness {
 
                 if let Value::UrlConstructor = &receiver {
                     let url_constructor_override = {
-                        let entries = self.url_constructor_properties.borrow();
+                        let entries = self.browser_apis.url_constructor_properties.borrow();
                         Self::object_get_entry(&entries, member)
                     };
                     if let Some(callee) = url_constructor_override {
@@ -3341,7 +3346,7 @@ impl Harness {
             }
             Expr::RequestAnimationFrame { callback } => {
                 const FRAME_DELAY_MS: i64 = 16;
-                let callback_args = vec![Value::Number(self.now_ms.saturating_add(FRAME_DELAY_MS))];
+                let callback_args = vec![Value::Number(self.scheduler.now_ms.saturating_add(FRAME_DELAY_MS))];
                 let id =
                     self.schedule_timeout(callback.clone(), FRAME_DELAY_MS, callback_args, env);
                 Ok(Value::Number(id))
@@ -3611,7 +3616,7 @@ impl Harness {
                     DomProp::Url | DomProp::DocumentUri => {
                         Ok(Value::String(self.document_url.clone()))
                     }
-                    DomProp::Location => Ok(Value::Object(self.location_object.clone())),
+                    DomProp::Location => Ok(Value::Object(self.dom_runtime.location_object.clone())),
                     DomProp::LocationHref => Ok(Value::String(self.document_url.clone())),
                     DomProp::LocationProtocol => {
                         Ok(Value::String(self.current_location_parts().protocol()))
@@ -3639,11 +3644,11 @@ impl Harness {
                         Ok(Value::String(self.current_location_parts().origin()))
                     }
                     DomProp::LocationAncestorOrigins => Ok(Self::new_array_value(Vec::new())),
-                    DomProp::History => Ok(Value::Object(self.history_object.clone())),
-                    DomProp::HistoryLength => Ok(Value::Number(self.history_entries.len() as i64)),
+                    DomProp::History => Ok(Value::Object(self.location_history.history_object.clone())),
+                    DomProp::HistoryLength => Ok(Value::Number(self.location_history.history_entries.len() as i64)),
                     DomProp::HistoryState => Ok(self.current_history_state()),
                     DomProp::HistoryScrollRestoration => {
-                        Ok(Value::String(self.history_scroll_restoration.clone()))
+                        Ok(Value::String(self.location_history.history_scroll_restoration.clone()))
                     }
                     DomProp::DefaultView => {
                         Ok(env.get("window").cloned().unwrap_or(Value::Undefined))
@@ -3870,14 +3875,14 @@ impl Harness {
                 ClipboardMethod::ReadText => {
                     let _ = args;
                     let promise = self.new_pending_promise();
-                    self.promise_resolve(&promise, Value::String(self.clipboard_text.clone()))?;
+                    self.promise_resolve(&promise, Value::String(self.platform_mocks.clipboard_text.clone()))?;
                     Ok(Value::Promise(promise))
                 }
                 ClipboardMethod::WriteText => {
                     let text = self
                         .eval_expr(&args[0], env, event_param, event)?
                         .as_string();
-                    self.clipboard_text = text;
+                    self.platform_mocks.clipboard_text = text;
                     let promise = self.new_pending_promise();
                     self.promise_resolve(&promise, Value::Undefined)?;
                     Ok(Value::Promise(promise))
@@ -5863,7 +5868,7 @@ impl Harness {
                     return Value::String(wrapped);
                 }
                 if let Some(id) = Self::symbol_wrapper_id_from_object(&entries.borrow()) {
-                    if let Some(symbol) = self.symbols_by_id.get(&id) {
+                    if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&id) {
                         return Value::Symbol(symbol.clone());
                     }
                 }
@@ -6323,6 +6328,7 @@ impl Harness {
                         Ok(Value::Number(select_options().len() as i64))
                     }
                     _ => Ok(self
+                        .dom_runtime
                         .node_expando_props
                         .get(&(*node, key.to_string()))
                         .cloned()
@@ -6516,7 +6522,7 @@ impl Harness {
             }
             Value::UrlConstructor => {
                 if let Some(value) =
-                    Self::object_get_entry(&self.url_constructor_properties.borrow(), key)
+                    Self::object_get_entry(&self.browser_apis.url_constructor_properties.borrow(), key)
                 {
                     return Ok(value);
                 }
@@ -9899,8 +9905,7 @@ impl Harness {
         let mut parts =
             LocationParts::parse(href).ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
         Self::normalize_url_parts_for_serialization(&mut parts);
-        let id = self.next_url_object_id;
-        self.next_url_object_id = self.next_url_object_id.saturating_add(1);
+        let id = self.browser_apis.allocate_url_object_id();
 
         let mut entries = vec![
             (INTERNAL_URL_OBJECT_KEY.to_string(), Value::Bool(true)),
@@ -9911,7 +9916,7 @@ impl Harness {
         ];
         self.sync_url_object_entries_from_parts(&mut entries, &parts);
         let object = Rc::new(RefCell::new(ObjectValue::new(entries)));
-        self.url_objects.insert(id, object.clone());
+        self.browser_apis.url_objects.insert(id, object.clone());
         Ok(Value::Object(object))
     }
 
@@ -10016,7 +10021,7 @@ impl Harness {
         let Some(owner_id) = owner_id else {
             return;
         };
-        let Some(url_object) = self.url_objects.get(&owner_id).cloned() else {
+        let Some(url_object) = self.browser_apis.url_objects.get(&owner_id).cloned() else {
             return;
         };
 
@@ -10375,7 +10380,7 @@ impl Harness {
             .map(|arg| self.eval_expr(arg, env, event_param, event))
             .collect::<Result<Vec<_>>>()?;
         let url_constructor_override = {
-            let entries = self.url_constructor_properties.borrow();
+            let entries = self.browser_apis.url_constructor_properties.borrow();
             Self::object_get_entry(&entries, member)
         };
         if let Some(callee) = url_constructor_override {
@@ -10435,9 +10440,8 @@ impl Harness {
                         "URL.createObjectURL requires a Blob argument".into(),
                     ));
                 };
-                let object_url = format!("blob:bt-{}", self.next_blob_url_id);
-                self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
-                self.blob_url_objects.insert(object_url.clone(), blob);
+                let object_url = self.browser_apis.allocate_blob_url();
+                self.browser_apis.blob_url_objects.insert(object_url.clone(), blob);
                 Ok(Some(Value::String(object_url)))
             }
             "revokeObjectURL" => {
@@ -10446,7 +10450,7 @@ impl Harness {
                         "URL.revokeObjectURL requires exactly one argument".into(),
                     ));
                 }
-                self.blob_url_objects.remove(&args[0].as_string());
+                self.browser_apis.blob_url_objects.remove(&args[0].as_string());
                 Ok(Some(Value::Undefined))
             }
             _ => Ok(None),
@@ -11528,14 +11532,13 @@ impl Harness {
         description: Option<String>,
         registry_key: Option<String>,
     ) -> Value {
-        let id = self.next_symbol_id;
-        self.next_symbol_id = self.next_symbol_id.saturating_add(1);
+        let id = self.symbol_runtime.allocate_symbol_id();
         let symbol = Rc::new(SymbolValue {
             id,
             description,
             registry_key,
         });
-        self.symbols_by_id.insert(id, symbol.clone());
+        self.symbol_runtime.symbols_by_id.insert(id, symbol.clone());
         Value::Symbol(symbol)
     }
 
@@ -11638,14 +11641,14 @@ impl Harness {
                 let key = self
                     .eval_expr(&args[0], env, event_param, event)?
                     .as_string();
-                if let Some(symbol) = self.symbol_registry.get(&key) {
+                if let Some(symbol) = self.symbol_runtime.symbol_registry.get(&key) {
                     return Ok(Value::Symbol(symbol.clone()));
                 }
                 let symbol = match self.new_symbol_value(Some(key.clone()), Some(key.clone())) {
                     Value::Symbol(symbol) => symbol,
                     _ => unreachable!("new_symbol_value must create Symbol"),
                 };
-                self.symbol_registry.insert(key, symbol.clone());
+                self.symbol_runtime.symbol_registry.insert(key, symbol.clone());
                 Ok(Value::Symbol(symbol))
             }
             SymbolStaticMethod::KeyFor => {
@@ -11691,14 +11694,14 @@ impl Harness {
 
     pub(super) fn eval_symbol_static_property(&mut self, property: SymbolStaticProperty) -> Value {
         let name = Self::symbol_static_property_name(property).to_string();
-        if let Some(symbol) = self.well_known_symbols.get(&name) {
+        if let Some(symbol) = self.symbol_runtime.well_known_symbols.get(&name) {
             return Value::Symbol(symbol.clone());
         }
         let symbol = match self.new_symbol_value(Some(name.clone()), None) {
             Value::Symbol(symbol) => symbol,
             _ => unreachable!("new_symbol_value must create Symbol"),
         };
-        self.well_known_symbols.insert(name, symbol.clone());
+        self.symbol_runtime.well_known_symbols.insert(name, symbol.clone());
         Value::Symbol(symbol)
     }
 
@@ -11841,8 +11844,7 @@ impl Harness {
     }
 
     pub(super) fn new_pending_promise(&mut self) -> Rc<RefCell<PromiseValue>> {
-        let id = self.next_promise_id;
-        self.next_promise_id = self.next_promise_id.saturating_add(1);
+        let id = self.promise_runtime.allocate_promise_id();
         Rc::new(RefCell::new(PromiseValue {
             id,
             state: PromiseState::Pending,
@@ -11977,7 +11979,7 @@ impl Harness {
             if let Some(then) = then {
                 if self.is_callable_value(&then) {
                     let (resolve, reject) = self.new_promise_capability_functions(promise.clone());
-                    let event = EventState::new("microtask", self.dom.root, self.now_ms);
+                    let event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
                     match self.execute_callable_value(&then, &[resolve, reject], &event) {
                         Ok(_) => {}
                         Err(err) => self.promise_reject(promise, Self::promise_error_reason(err)),
@@ -12400,7 +12402,7 @@ impl Harness {
         reaction: PromiseReactionKind,
         settled: PromiseSettledValue,
     ) -> Result<()> {
-        let event = EventState::new("microtask", self.dom.root, self.now_ms);
+        let event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
         match reaction {
             PromiseReactionKind::Then {
                 on_fulfilled,
@@ -14448,7 +14450,7 @@ impl Harness {
             DomIndex::Static(index) => Ok(*index),
             DomIndex::Dynamic(expr_src) => {
                 let expr = parse_expr(expr_src)?;
-                let event = EventState::new("script", self.dom.root, self.now_ms);
+                let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
                 let value = self.eval_expr(
                     &expr,
                     env.ok_or_else(|| {
@@ -14717,19 +14719,17 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> i64 {
         let delay_ms = delay_ms.max(0);
-        let due_at = self.now_ms + delay_ms;
-        let id = self.next_timer_id;
-        self.next_timer_id += 1;
-        let order = self.next_task_order;
-        self.next_task_order += 1;
-        self.task_queue.push(ScheduledTask {
+        let due_at = self.scheduler.now_ms + delay_ms;
+        let id = self.scheduler.allocate_timer_id();
+        let order = self.scheduler.allocate_task_order();
+        self.scheduler.task_queue.push(ScheduledTask {
             id,
             due_at,
             order,
             interval_ms: None,
             callback,
             callback_args,
-            env: env.clone(),
+            env: ScriptEnv::from_snapshot(env),
         });
         self.trace_timer_line(format!(
             "[timer] schedule timeout id={} due_at={} delay_ms={}",
@@ -14746,19 +14746,17 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> i64 {
         let interval_ms = interval_ms.max(0);
-        let due_at = self.now_ms + interval_ms;
-        let id = self.next_timer_id;
-        self.next_timer_id += 1;
-        let order = self.next_task_order;
-        self.next_task_order += 1;
-        self.task_queue.push(ScheduledTask {
+        let due_at = self.scheduler.now_ms + interval_ms;
+        let id = self.scheduler.allocate_timer_id();
+        let order = self.scheduler.allocate_task_order();
+        self.scheduler.task_queue.push(ScheduledTask {
             id,
             due_at,
             order,
             interval_ms: Some(interval_ms),
             callback,
             callback_args,
-            env: env.clone(),
+            env: ScriptEnv::from_snapshot(env),
         });
         self.trace_timer_line(format!(
             "[timer] schedule interval id={} due_at={} interval_ms={}",
@@ -14768,12 +14766,12 @@ impl Harness {
     }
 
     pub(super) fn clear_timeout(&mut self, id: i64) {
-        let before = self.task_queue.len();
-        self.task_queue.retain(|task| task.id != id);
-        let removed = before.saturating_sub(self.task_queue.len());
+        let before = self.scheduler.task_queue.len();
+        self.scheduler.task_queue.retain(|task| task.id != id);
+        let removed = before.saturating_sub(self.scheduler.task_queue.len());
         let mut running_canceled = false;
-        if self.running_timer_id == Some(id) {
-            self.running_timer_canceled = true;
+        if self.scheduler.running_timer_id == Some(id) {
+            self.scheduler.running_timer_canceled = true;
             running_canceled = true;
         }
         self.trace_timer_line(format!(
@@ -14785,7 +14783,7 @@ impl Harness {
     pub(super) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
         let stmts = parse_block_statements(script)?;
         self.with_script_env(|this, env| {
-            let mut event = EventState::new("script", this.dom.root, this.now_ms);
+            let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
             this.run_in_task_context(|inner| {
                 inner
                     .execute_stmts(&stmts, &None, &mut event, env)

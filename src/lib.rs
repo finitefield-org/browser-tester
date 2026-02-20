@@ -4666,14 +4666,14 @@ struct ScheduledTask {
     interval_ms: Option<i64>,
     callback: TimerCallback,
     callback_args: Vec<Value>,
-    env: HashMap<String, Value>,
+    env: ScriptEnv,
 }
 
 #[derive(Debug, Clone)]
 enum ScheduledMicrotask {
     Script {
         handler: ScriptHandler,
-        env: HashMap<String, Value>,
+        env: ScriptEnv,
     },
     Promise {
         reaction: PromiseReactionKind,
@@ -4710,7 +4710,35 @@ struct HistoryEntry {
     state: Value,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
+struct LocationHistoryState {
+    history_object: Rc<RefCell<ObjectValue>>,
+    history_entries: Vec<HistoryEntry>,
+    history_index: usize,
+    history_scroll_restoration: String,
+    location_mock_pages: HashMap<String, String>,
+    location_navigations: Vec<LocationNavigation>,
+    location_reload_count: usize,
+}
+
+impl LocationHistoryState {
+    fn new(initial_url: &str) -> Self {
+        Self {
+            history_object: Rc::new(RefCell::new(ObjectValue::default())),
+            history_entries: vec![HistoryEntry {
+                url: initial_url.to_string(),
+                state: Value::Null,
+            }],
+            history_index: 0,
+            history_scroll_restoration: "auto".to_string(),
+            location_mock_pages: HashMap::new(),
+            location_navigations: Vec::new(),
+            location_reload_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 struct ScriptEnv {
     inner: Arc<HashMap<String, Value>>,
 }
@@ -4720,6 +4748,16 @@ impl ScriptEnv {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+
+    fn from_snapshot(env: &HashMap<String, Value>) -> Self {
+        Self {
+            inner: Arc::new(env.clone()),
+        }
+    }
+
+    fn to_map(&self) -> HashMap<String, Value> {
+        self.inner.as_ref().clone()
     }
 }
 
@@ -4745,42 +4783,30 @@ struct ScriptRuntimeState {
 }
 
 #[derive(Debug)]
-pub struct Harness {
-    dom: Dom,
-    listeners: ListenerStore,
-    node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
-    node_expando_props: HashMap<(NodeId, String), Value>,
-    script_runtime: ScriptRuntimeState,
-    document_url: String,
+struct DomRuntimeState {
     window_object: Rc<RefCell<ObjectValue>>,
     document_object: Rc<RefCell<ObjectValue>>,
     location_object: Rc<RefCell<ObjectValue>>,
-    history_object: Rc<RefCell<ObjectValue>>,
-    history_entries: Vec<HistoryEntry>,
-    history_index: usize,
-    history_scroll_restoration: String,
-    location_mock_pages: HashMap<String, String>,
-    location_navigations: Vec<LocationNavigation>,
-    location_reload_count: usize,
-    task_queue: Vec<ScheduledTask>,
-    microtask_queue: VecDeque<ScheduledMicrotask>,
+    node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
+    node_expando_props: HashMap<(NodeId, String), Value>,
     dialog_return_values: HashMap<NodeId, String>,
-    now_ms: i64,
-    timer_step_limit: usize,
-    next_timer_id: i64,
-    next_task_order: i64,
-    next_promise_id: usize,
-    next_symbol_id: usize,
-    next_url_object_id: usize,
-    url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
-    url_constructor_properties: Rc<RefCell<ObjectValue>>,
-    local_storage_object: Rc<RefCell<ObjectValue>>,
-    next_blob_url_id: usize,
-    blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
-    task_depth: usize,
-    running_timer_id: Option<i64>,
-    running_timer_canceled: bool,
-    rng_state: u64,
+}
+
+impl Default for DomRuntimeState {
+    fn default() -> Self {
+        Self {
+            window_object: Rc::new(RefCell::new(ObjectValue::default())),
+            document_object: Rc::new(RefCell::new(ObjectValue::default())),
+            location_object: Rc::new(RefCell::new(ObjectValue::default())),
+            node_event_handler_props: HashMap::new(),
+            node_expando_props: HashMap::new(),
+            dialog_return_values: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PlatformMockState {
     clipboard_text: String,
     fetch_mocks: HashMap<String, String>,
     fetch_calls: Vec<String>,
@@ -4792,15 +4818,172 @@ pub struct Harness {
     default_confirm_response: bool,
     prompt_responses: VecDeque<Option<String>>,
     default_prompt_response: Option<String>,
+}
+
+#[derive(Debug)]
+struct TraceState {
+    enabled: bool,
+    events: bool,
+    timers: bool,
+    logs: VecDeque<String>,
+    log_limit: usize,
+    to_stderr: bool,
+}
+
+impl Default for TraceState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            events: true,
+            timers: true,
+            logs: VecDeque::new(),
+            log_limit: 10_000,
+            to_stderr: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BrowserApiState {
+    next_url_object_id: usize,
+    url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
+    url_constructor_properties: Rc<RefCell<ObjectValue>>,
+    local_storage_object: Rc<RefCell<ObjectValue>>,
+    next_blob_url_id: usize,
+    blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
+}
+
+impl Default for BrowserApiState {
+    fn default() -> Self {
+        Self {
+            next_url_object_id: 1,
+            url_objects: HashMap::new(),
+            url_constructor_properties: Rc::new(RefCell::new(ObjectValue::default())),
+            local_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
+            next_blob_url_id: 1,
+            blob_url_objects: HashMap::new(),
+        }
+    }
+}
+
+impl BrowserApiState {
+    fn allocate_url_object_id(&mut self) -> usize {
+        let id = self.next_url_object_id;
+        self.next_url_object_id = self.next_url_object_id.saturating_add(1);
+        id
+    }
+
+    fn allocate_blob_url(&mut self) -> String {
+        let object_url = format!("blob:bt-{}", self.next_blob_url_id);
+        self.next_blob_url_id = self.next_blob_url_id.saturating_add(1);
+        object_url
+    }
+}
+
+#[derive(Debug)]
+struct PromiseRuntimeState {
+    next_promise_id: usize,
+}
+
+impl Default for PromiseRuntimeState {
+    fn default() -> Self {
+        Self { next_promise_id: 1 }
+    }
+}
+
+impl PromiseRuntimeState {
+    fn allocate_promise_id(&mut self) -> usize {
+        let id = self.next_promise_id;
+        self.next_promise_id = self.next_promise_id.saturating_add(1);
+        id
+    }
+}
+
+#[derive(Debug)]
+struct SymbolRuntimeState {
+    next_symbol_id: usize,
     symbol_registry: HashMap<String, Rc<SymbolValue>>,
     symbols_by_id: HashMap<usize, Rc<SymbolValue>>,
     well_known_symbols: HashMap<String, Rc<SymbolValue>>,
-    trace: bool,
-    trace_events: bool,
-    trace_timers: bool,
-    trace_logs: VecDeque<String>,
-    trace_log_limit: usize,
-    trace_to_stderr: bool,
+}
+
+impl Default for SymbolRuntimeState {
+    fn default() -> Self {
+        Self {
+            next_symbol_id: 1,
+            symbol_registry: HashMap::new(),
+            symbols_by_id: HashMap::new(),
+            well_known_symbols: HashMap::new(),
+        }
+    }
+}
+
+impl SymbolRuntimeState {
+    fn allocate_symbol_id(&mut self) -> usize {
+        let id = self.next_symbol_id;
+        self.next_symbol_id = self.next_symbol_id.saturating_add(1);
+        id
+    }
+}
+
+#[derive(Debug)]
+struct SchedulerState {
+    task_queue: Vec<ScheduledTask>,
+    microtask_queue: VecDeque<ScheduledMicrotask>,
+    now_ms: i64,
+    timer_step_limit: usize,
+    next_timer_id: i64,
+    next_task_order: i64,
+    task_depth: usize,
+    running_timer_id: Option<i64>,
+    running_timer_canceled: bool,
+}
+
+impl Default for SchedulerState {
+    fn default() -> Self {
+        Self {
+            task_queue: Vec::new(),
+            microtask_queue: VecDeque::new(),
+            now_ms: 0,
+            timer_step_limit: 10_000,
+            next_timer_id: 1,
+            next_task_order: 0,
+            task_depth: 0,
+            running_timer_id: None,
+            running_timer_canceled: false,
+        }
+    }
+}
+
+impl SchedulerState {
+    fn allocate_timer_id(&mut self) -> i64 {
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+        id
+    }
+
+    fn allocate_task_order(&mut self) -> i64 {
+        let order = self.next_task_order;
+        self.next_task_order += 1;
+        order
+    }
+}
+
+#[derive(Debug)]
+pub struct Harness {
+    dom: Dom,
+    listeners: ListenerStore,
+    dom_runtime: DomRuntimeState,
+    script_runtime: ScriptRuntimeState,
+    document_url: String,
+    location_history: LocationHistoryState,
+    scheduler: SchedulerState,
+    promise_runtime: PromiseRuntimeState,
+    symbol_runtime: SymbolRuntimeState,
+    browser_apis: BrowserApiState,
+    rng_state: u64,
+    platform_mocks: PlatformMockState,
+    trace_state: TraceState,
 }
 
 #[derive(Debug)]

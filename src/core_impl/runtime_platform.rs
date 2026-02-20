@@ -12,62 +12,17 @@ impl Harness {
         let mut harness = Self {
             dom,
             listeners: ListenerStore::default(),
-            node_event_handler_props: HashMap::new(),
-            node_expando_props: HashMap::new(),
+            dom_runtime: DomRuntimeState::default(),
             script_runtime: ScriptRuntimeState::default(),
             document_url: url.to_string(),
-            window_object: Rc::new(RefCell::new(ObjectValue::default())),
-            document_object: Rc::new(RefCell::new(ObjectValue::default())),
-            location_object: Rc::new(RefCell::new(ObjectValue::default())),
-            history_object: Rc::new(RefCell::new(ObjectValue::default())),
-            history_entries: vec![HistoryEntry {
-                url: url.to_string(),
-                state: Value::Null,
-            }],
-            history_index: 0,
-            history_scroll_restoration: "auto".to_string(),
-            location_mock_pages: HashMap::new(),
-            location_navigations: Vec::new(),
-            location_reload_count: 0,
-            task_queue: Vec::new(),
-            microtask_queue: VecDeque::new(),
-            dialog_return_values: HashMap::new(),
-            now_ms: 0,
-            timer_step_limit: 10_000,
-            next_timer_id: 1,
-            next_task_order: 0,
-            next_promise_id: 1,
-            next_symbol_id: 1,
-            next_url_object_id: 1,
-            url_objects: HashMap::new(),
-            url_constructor_properties: Rc::new(RefCell::new(ObjectValue::default())),
-            local_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
-            next_blob_url_id: 1,
-            blob_url_objects: HashMap::new(),
-            task_depth: 0,
-            running_timer_id: None,
-            running_timer_canceled: false,
+            location_history: LocationHistoryState::new(url),
+            scheduler: SchedulerState::default(),
+            promise_runtime: PromiseRuntimeState::default(),
+            symbol_runtime: SymbolRuntimeState::default(),
+            browser_apis: BrowserApiState::default(),
             rng_state: 0x9E37_79B9_7F4A_7C15,
-            clipboard_text: String::new(),
-            fetch_mocks: HashMap::new(),
-            fetch_calls: Vec::new(),
-            match_media_mocks: HashMap::new(),
-            match_media_calls: Vec::new(),
-            default_match_media_matches: false,
-            alert_messages: Vec::new(),
-            confirm_responses: VecDeque::new(),
-            default_confirm_response: false,
-            prompt_responses: VecDeque::new(),
-            default_prompt_response: None,
-            symbol_registry: HashMap::new(),
-            symbols_by_id: HashMap::new(),
-            well_known_symbols: HashMap::new(),
-            trace: false,
-            trace_events: true,
-            trace_timers: true,
-            trace_logs: VecDeque::new(),
-            trace_log_limit: 10_000,
-            trace_to_stderr: true,
+            platform_mocks: PlatformMockState::default(),
+            trace_state: TraceState::default(),
         };
 
         harness.initialize_global_bindings();
@@ -106,11 +61,11 @@ impl Harness {
     pub(super) fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
         self.sync_history_object();
-        self.window_object = Rc::new(RefCell::new(ObjectValue::default()));
-        self.document_object = Rc::new(RefCell::new(ObjectValue::default()));
-        self.url_constructor_properties.borrow_mut().clear();
+        self.dom_runtime.window_object = Rc::new(RefCell::new(ObjectValue::default()));
+        self.dom_runtime.document_object = Rc::new(RefCell::new(ObjectValue::default()));
+        self.browser_apis.url_constructor_properties.borrow_mut().clear();
         let local_storage_items = {
-            let entries = self.local_storage_object.borrow();
+            let entries = self.browser_apis.local_storage_object.borrow();
             if Self::is_storage_object(&entries) {
                 Self::storage_pairs_from_object_entries(&entries)
             } else {
@@ -120,14 +75,14 @@ impl Harness {
         let mut local_storage_entries =
             vec![(INTERNAL_STORAGE_OBJECT_KEY.to_string(), Value::Bool(true))];
         Self::set_storage_pairs(&mut local_storage_entries, &local_storage_items);
-        *self.local_storage_object.borrow_mut() = local_storage_entries.into();
+        *self.browser_apis.local_storage_object.borrow_mut() = local_storage_entries.into();
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
             ("readText".into(), Self::new_builtin_placeholder_function()),
             ("writeText".into(), Self::new_builtin_placeholder_function()),
         ]);
-        let location = Value::Object(self.location_object.clone());
-        let history = Value::Object(self.history_object.clone());
+        let location = Value::Object(self.dom_runtime.location_object.clone());
+        let history = Value::Object(self.location_history.history_object.clone());
 
         let navigator = Self::new_object_value(vec![
             (INTERNAL_NAVIGATOR_OBJECT_KEY.into(), Value::Bool(true)),
@@ -196,7 +151,7 @@ impl Harness {
         let url_constructor = Value::UrlConstructor;
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
-        let local_storage = Value::Object(self.local_storage_object.clone());
+        let local_storage = Value::Object(self.browser_apis.local_storage_object.clone());
 
         self.sync_document_object();
         self.sync_window_object(
@@ -210,8 +165,8 @@ impl Harness {
             &local_storage,
         );
 
-        let window = Value::Object(self.window_object.clone());
-        let document = Value::Object(self.document_object.clone());
+        let window = Value::Object(self.dom_runtime.window_object.clone());
+        let document = Value::Object(self.dom_runtime.document_object.clone());
 
         self.script_runtime.env.insert("document".to_string(), document);
         self.script_runtime.env
@@ -272,7 +227,7 @@ impl Harness {
     pub(super) fn sync_document_object(&mut self) {
         let mut extras = Vec::new();
         {
-            let entries = self.document_object.borrow();
+            let entries = self.dom_runtime.document_object.borrow();
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
                     continue;
@@ -291,11 +246,11 @@ impl Harness {
             (INTERNAL_DOCUMENT_OBJECT_KEY.to_string(), Value::Bool(true)),
             (
                 "defaultView".to_string(),
-                Value::Object(self.window_object.clone()),
+                Value::Object(self.dom_runtime.window_object.clone()),
             ),
             (
                 "location".to_string(),
-                Value::Object(self.location_object.clone()),
+                Value::Object(self.dom_runtime.location_object.clone()),
             ),
             ("URL".to_string(), Value::String(self.document_url.clone())),
             (
@@ -304,7 +259,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.document_object.borrow_mut() = entries.into();
+        *self.dom_runtime.document_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn window_builtin_keys() -> &'static [&'static str] {
@@ -348,7 +303,7 @@ impl Harness {
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
         {
-            let entries = self.window_object.borrow();
+            let entries = self.dom_runtime.window_object.borrow();
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
                     continue;
@@ -367,7 +322,7 @@ impl Harness {
             }
         }
 
-        let window_ref = Value::Object(self.window_object.clone());
+        let window_ref = Value::Object(self.dom_runtime.window_object.clone());
         let mut entries = vec![
             (INTERNAL_WINDOW_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("window".to_string(), window_ref.clone()),
@@ -379,17 +334,17 @@ impl Harness {
             ("closed".to_string(), Value::Bool(false)),
             (
                 "location".to_string(),
-                Value::Object(self.location_object.clone()),
+                Value::Object(self.dom_runtime.location_object.clone()),
             ),
             (
                 "history".to_string(),
-                Value::Object(self.history_object.clone()),
+                Value::Object(self.location_history.history_object.clone()),
             ),
             ("navigator".to_string(), navigator.clone()),
             ("clientInformation".to_string(), navigator.clone()),
             (
                 "document".to_string(),
-                Value::Object(self.document_object.clone()),
+                Value::Object(self.dom_runtime.document_object.clone()),
             ),
             ("localStorage".to_string(), local_storage.clone()),
             (
@@ -415,11 +370,11 @@ impl Harness {
             ("name".to_string(), name_value),
         ];
         entries.extend(extras);
-        *self.window_object.borrow_mut() = entries.into();
+        *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn sync_window_runtime_properties(&mut self) {
-        let mut entries = self.window_object.borrow_mut();
+        let mut entries = self.dom_runtime.window_object.borrow_mut();
         Self::object_set_entry(
             &mut entries,
             "origin".to_string(),
@@ -454,7 +409,7 @@ impl Harness {
     pub(super) fn sync_location_object(&mut self) {
         let mut extras = Vec::new();
         {
-            let entries = self.location_object.borrow();
+            let entries = self.dom_runtime.location_object.borrow();
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
                     continue;
@@ -517,7 +472,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.location_object.borrow_mut() = entries.into();
+        *self.dom_runtime.location_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn is_location_object(entries: &[(String, Value)]) -> bool {
@@ -541,8 +496,8 @@ impl Harness {
     }
 
     pub(super) fn current_history_state(&self) -> Value {
-        self.history_entries
-            .get(self.history_index)
+        self.location_history.history_entries
+            .get(self.location_history.history_index)
             .map(|entry| entry.state.clone())
             .unwrap_or(Value::Null)
     }
@@ -550,7 +505,7 @@ impl Harness {
     pub(super) fn sync_history_object(&mut self) {
         let mut extras = Vec::new();
         {
-            let entries = self.history_object.borrow();
+            let entries = self.location_history.history_object.borrow();
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
                     continue;
@@ -569,11 +524,11 @@ impl Harness {
             (INTERNAL_HISTORY_OBJECT_KEY.to_string(), Value::Bool(true)),
             (
                 "length".to_string(),
-                Value::Number(self.history_entries.len() as i64),
+                Value::Number(self.location_history.history_entries.len() as i64),
             ),
             (
                 "scrollRestoration".to_string(),
-                Value::String(self.history_scroll_restoration.clone()),
+                Value::String(self.location_history.history_scroll_restoration.clone()),
             ),
             ("state".to_string(), self.current_history_state()),
             ("back".to_string(), Self::new_builtin_placeholder_function()),
@@ -592,7 +547,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.history_object.borrow_mut() = entries.into();
+        *self.location_history.history_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn is_history_object(entries: &[(String, Value)]) -> bool {
@@ -650,7 +605,7 @@ impl Harness {
             "location" => self.set_location_property("href", value),
             "name" => {
                 Self::object_set_entry(
-                    &mut self.window_object.borrow_mut(),
+                    &mut self.dom_runtime.window_object.borrow_mut(),
                     "name".to_string(),
                     Value::String(value.as_string()),
                 );
@@ -658,7 +613,7 @@ impl Harness {
             }
             _ => {
                 Self::object_set_entry(
-                    &mut self.window_object.borrow_mut(),
+                    &mut self.dom_runtime.window_object.borrow_mut(),
                     key.to_string(),
                     value,
                 );
@@ -669,7 +624,7 @@ impl Harness {
 
     pub(super) fn set_url_constructor_property(&mut self, key: &str, value: Value) {
         Self::object_set_entry(
-            &mut self.url_constructor_properties.borrow_mut(),
+            &mut self.browser_apis.url_constructor_properties.borrow_mut(),
             key.to_string(),
             value,
         );
@@ -712,14 +667,14 @@ impl Harness {
                         "history.scrollRestoration must be 'auto' or 'manual'".into(),
                     ));
                 }
-                self.history_scroll_restoration = mode;
+                self.location_history.history_scroll_restoration = mode;
                 self.sync_history_object();
                 self.sync_window_runtime_properties();
                 Ok(())
             }
             _ => {
                 Self::object_set_entry(
-                    &mut self.history_object.borrow_mut(),
+                    &mut self.location_history.history_object.borrow_mut(),
                     key.to_string(),
                     value,
                 );
@@ -743,6 +698,7 @@ impl Harness {
 
         let event_type = raw_event_type.to_ascii_lowercase();
         if let Some(previous_handler) = self
+            .dom_runtime
             .node_event_handler_props
             .remove(&(node, event_type.clone()))
         {
@@ -765,7 +721,7 @@ impl Harness {
                         .clone(),
                 },
             );
-            self.node_event_handler_props
+            self.dom_runtime.node_event_handler_props
                 .insert((node, event_type), handler);
         }
         Ok(true)
@@ -866,7 +822,7 @@ impl Harness {
             "rev" => self.dom.set_attr(node, "rev", &value.as_string())?,
             "shape" => self.dom.set_attr(node, "shape", &value.as_string())?,
             _ => {
-                self.node_expando_props.insert((node, key.to_string()), value);
+                self.dom_runtime.node_expando_props.insert((node, key.to_string()), value);
             }
         }
         Ok(())
@@ -1154,7 +1110,7 @@ impl Harness {
         self.sync_history_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
-        self.location_navigations.push(LocationNavigation {
+        self.location_history.location_navigations.push(LocationNavigation {
             kind,
             from,
             to: to.clone(),
@@ -1162,6 +1118,7 @@ impl Harness {
 
         if !Self::is_hash_only_navigation(
             &self
+                .location_history
                 .location_navigations
                 .last()
                 .map(|nav| nav.from.clone())
@@ -1174,9 +1131,9 @@ impl Harness {
     }
 
     pub(super) fn reload_location(&mut self) -> Result<()> {
-        self.location_reload_count += 1;
+        self.location_history.location_reload_count += 1;
         let current = self.document_url.clone();
-        self.location_navigations.push(LocationNavigation {
+        self.location_history.location_navigations.push(LocationNavigation {
             kind: LocationNavigationKind::Reload,
             from: current.clone(),
             to: current.clone(),
@@ -1190,7 +1147,7 @@ impl Harness {
     }
 
     pub(super) fn load_location_mock_page_if_exists(&mut self, url: &str) -> Result<bool> {
-        let Some(html) = self.location_mock_pages.get(url).cloned() else {
+        let Some(html) = self.location_history.location_mock_pages.get(url).cloned() else {
             return Ok(false);
         };
         self.replace_document_with_html(&html)?;
@@ -1199,34 +1156,36 @@ impl Harness {
 
     pub(super) fn history_push_entry(&mut self, url: &str, state: Value) {
         let next = self
+            .location_history
             .history_index
             .saturating_add(1)
-            .min(self.history_entries.len());
-        self.history_entries.truncate(next);
-        self.history_entries.push(HistoryEntry {
+            .min(self.location_history.history_entries.len());
+        self.location_history.history_entries.truncate(next);
+        self.location_history.history_entries.push(HistoryEntry {
             url: url.to_string(),
             state,
         });
-        self.history_index = self.history_entries.len().saturating_sub(1);
+        self.location_history.history_index = self.location_history.history_entries.len().saturating_sub(1);
     }
 
     pub(super) fn history_replace_current_entry(&mut self, url: &str, state: Value) {
-        if self.history_entries.is_empty() {
-            self.history_entries.push(HistoryEntry {
+        if self.location_history.history_entries.is_empty() {
+            self.location_history.history_entries.push(HistoryEntry {
                 url: url.to_string(),
                 state,
             });
-            self.history_index = 0;
+            self.location_history.history_index = 0;
             return;
         }
         let index = self
+            .location_history
             .history_index
-            .min(self.history_entries.len().saturating_sub(1));
-        self.history_entries[index] = HistoryEntry {
+            .min(self.location_history.history_entries.len().saturating_sub(1));
+        self.location_history.history_entries[index] = HistoryEntry {
             url: url.to_string(),
             state,
         };
-        self.history_index = index;
+        self.location_history.history_index = index;
     }
 
     pub(super) fn history_push_state(
@@ -1258,19 +1217,20 @@ impl Harness {
             return Ok(());
         }
 
-        let current = self.history_index as i64;
+        let current = self.location_history.history_index as i64;
         let target = current.saturating_add(delta);
-        if target < 0 || target >= self.history_entries.len() as i64 {
+        if target < 0 || target >= self.location_history.history_entries.len() as i64 {
             return Ok(());
         }
         let target = target as usize;
-        if target == self.history_index {
+        if target == self.location_history.history_index {
             return Ok(());
         }
 
         let from = self.document_url.clone();
-        self.history_index = target;
+        self.location_history.history_index = target;
         let entry = self
+            .location_history
             .history_entries
             .get(target)
             .cloned()
@@ -1309,13 +1269,13 @@ impl Harness {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         self.dom = dom;
         self.listeners = ListenerStore::default();
-        self.node_event_handler_props.clear();
-        self.node_expando_props.clear();
+        self.dom_runtime.node_event_handler_props.clear();
+        self.dom_runtime.node_expando_props.clear();
         self.script_runtime.env.clear();
-        self.task_queue.clear();
-        self.microtask_queue.clear();
-        self.running_timer_id = None;
-        self.running_timer_canceled = false;
+        self.scheduler.task_queue.clear();
+        self.scheduler.microtask_queue.clear();
+        self.scheduler.running_timer_id = None;
+        self.scheduler.running_timer_canceled = false;
         self.script_runtime.pending_function_decls.clear();
         self.script_runtime.listener_capture_env_stack.clear();
         self.dom.set_active_element(None);
@@ -1391,7 +1351,7 @@ impl Harness {
             }
             _ => {
                 Self::object_set_entry(
-                    &mut self.location_object.borrow_mut(),
+                    &mut self.dom_runtime.location_object.borrow_mut(),
                     key.to_string(),
                     value,
                 );
@@ -1497,23 +1457,23 @@ impl Harness {
     }
 
     pub fn enable_trace(&mut self, enabled: bool) {
-        self.trace = enabled;
+        self.trace_state.enabled = enabled;
     }
 
     pub fn take_trace_logs(&mut self) -> Vec<String> {
-        self.trace_logs.drain(..).collect()
+        self.trace_state.logs.drain(..).collect()
     }
 
     pub fn set_trace_stderr(&mut self, enabled: bool) {
-        self.trace_to_stderr = enabled;
+        self.trace_state.to_stderr = enabled;
     }
 
     pub fn set_trace_events(&mut self, enabled: bool) {
-        self.trace_events = enabled;
+        self.trace_state.events = enabled;
     }
 
     pub fn set_trace_timers(&mut self, enabled: bool) {
-        self.trace_timers = enabled;
+        self.trace_state.timers = enabled;
     }
 
     pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()> {
@@ -1522,9 +1482,9 @@ impl Harness {
                 "set_trace_log_limit requires at least 1 entry".into(),
             ));
         }
-        self.trace_log_limit = max_entries;
-        while self.trace_logs.len() > self.trace_log_limit {
-            self.trace_logs.pop_front();
+        self.trace_state.log_limit = max_entries;
+        while self.trace_state.logs.len() > self.trace_state.log_limit {
+            self.trace_state.logs.pop_front();
         }
         Ok(())
     }
@@ -1538,78 +1498,78 @@ impl Harness {
     }
 
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
-        self.fetch_mocks.insert(url.to_string(), body.to_string());
+        self.platform_mocks.fetch_mocks.insert(url.to_string(), body.to_string());
     }
 
     pub fn set_clipboard_text(&mut self, text: &str) {
-        self.clipboard_text = text.to_string();
+        self.platform_mocks.clipboard_text = text.to_string();
     }
 
     pub fn clipboard_text(&self) -> String {
-        self.clipboard_text.clone()
+        self.platform_mocks.clipboard_text.clone()
     }
 
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
         let normalized = self.resolve_location_target_url(url);
-        self.location_mock_pages
+        self.location_history.location_mock_pages
             .insert(normalized, html.to_string());
     }
 
     pub fn clear_location_mock_pages(&mut self) {
-        self.location_mock_pages.clear();
+        self.location_history.location_mock_pages.clear();
     }
 
     pub fn take_location_navigations(&mut self) -> Vec<LocationNavigation> {
-        std::mem::take(&mut self.location_navigations)
+        std::mem::take(&mut self.location_history.location_navigations)
     }
 
     pub fn location_reload_count(&self) -> usize {
-        self.location_reload_count
+        self.location_history.location_reload_count
     }
 
     pub fn clear_fetch_mocks(&mut self) {
-        self.fetch_mocks.clear();
+        self.platform_mocks.fetch_mocks.clear();
     }
 
     pub fn take_fetch_calls(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.fetch_calls)
+        std::mem::take(&mut self.platform_mocks.fetch_calls)
     }
 
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool) {
-        self.match_media_mocks.insert(query.to_string(), matches);
+        self.platform_mocks.match_media_mocks.insert(query.to_string(), matches);
     }
 
     pub fn clear_match_media_mocks(&mut self) {
-        self.match_media_mocks.clear();
+        self.platform_mocks.match_media_mocks.clear();
     }
 
     pub fn set_default_match_media_matches(&mut self, matches: bool) {
-        self.default_match_media_matches = matches;
+        self.platform_mocks.default_match_media_matches = matches;
     }
 
     pub fn take_match_media_calls(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.match_media_calls)
+        std::mem::take(&mut self.platform_mocks.match_media_calls)
     }
 
     pub fn enqueue_confirm_response(&mut self, accepted: bool) {
-        self.confirm_responses.push_back(accepted);
+        self.platform_mocks.confirm_responses.push_back(accepted);
     }
 
     pub fn set_default_confirm_response(&mut self, accepted: bool) {
-        self.default_confirm_response = accepted;
+        self.platform_mocks.default_confirm_response = accepted;
     }
 
     pub fn enqueue_prompt_response(&mut self, value: Option<&str>) {
-        self.prompt_responses
+        self.platform_mocks.prompt_responses
             .push_back(value.map(std::string::ToString::to_string));
     }
 
     pub fn set_default_prompt_response(&mut self, value: Option<&str>) {
-        self.default_prompt_response = value.map(std::string::ToString::to_string);
+        self.platform_mocks.default_prompt_response = value.map(std::string::ToString::to_string);
     }
 
     pub fn take_alert_messages(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.alert_messages)
+        std::mem::take(&mut self.platform_mocks.alert_messages)
     }
 
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
@@ -1618,7 +1578,7 @@ impl Harness {
                 "set_timer_step_limit requires at least 1 step".into(),
             ));
         }
-        self.timer_step_limit = max_steps;
+        self.scheduler.timer_step_limit = max_steps;
         Ok(())
     }
 
@@ -2027,21 +1987,21 @@ impl Harness {
     }
 
     pub fn now_ms(&self) -> i64 {
-        self.now_ms
+        self.scheduler.now_ms
     }
 
     pub fn clear_timer(&mut self, timer_id: i64) -> bool {
-        let existed = self.running_timer_id == Some(timer_id)
-            || self.task_queue.iter().any(|task| task.id == timer_id);
+        let existed = self.scheduler.running_timer_id == Some(timer_id)
+            || self.scheduler.task_queue.iter().any(|task| task.id == timer_id);
         self.clear_timeout(timer_id);
         existed
     }
 
     pub fn clear_all_timers(&mut self) -> usize {
-        let cleared = self.task_queue.len();
-        self.task_queue.clear();
-        if self.running_timer_id.is_some() {
-            self.running_timer_canceled = true;
+        let cleared = self.scheduler.task_queue.len();
+        self.scheduler.task_queue.clear();
+        if self.scheduler.running_timer_id.is_some() {
+            self.scheduler.running_timer_canceled = true;
         }
         self.trace_timer_line(format!("[timer] clear_all cleared={cleared}"));
         cleared
@@ -2049,6 +2009,7 @@ impl Harness {
 
     pub fn pending_timers(&self) -> Vec<PendingTimer> {
         let mut timers = self
+            .scheduler
             .task_queue
             .iter()
             .map(|task| PendingTimer {
@@ -2068,39 +2029,39 @@ impl Harness {
                 "advance_time requires non-negative milliseconds".into(),
             ));
         }
-        let from = self.now_ms;
-        self.now_ms = self.now_ms.saturating_add(delta_ms);
+        let from = self.scheduler.now_ms;
+        self.scheduler.now_ms = self.scheduler.now_ms.saturating_add(delta_ms);
         let ran = self.run_due_timers_internal()?;
         self.trace_timer_line(format!(
             "[timer] advance delta_ms={} from={} to={} ran_due={}",
-            delta_ms, from, self.now_ms, ran
+            delta_ms, from, self.scheduler.now_ms, ran
         ));
         Ok(())
     }
 
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()> {
-        if target_ms < self.now_ms {
+        if target_ms < self.scheduler.now_ms {
             return Err(Error::ScriptRuntime(format!(
                 "advance_time_to requires target >= now_ms (target={target_ms}, now_ms={})",
-                self.now_ms
+                self.scheduler.now_ms
             )));
         }
-        let from = self.now_ms;
-        self.now_ms = target_ms;
+        let from = self.scheduler.now_ms;
+        self.scheduler.now_ms = target_ms;
         let ran = self.run_due_timers_internal()?;
         self.trace_timer_line(format!(
             "[timer] advance_to from={} to={} ran_due={}",
-            from, self.now_ms, ran
+            from, self.scheduler.now_ms, ran
         ));
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        let from = self.now_ms;
+        let from = self.scheduler.now_ms;
         let ran = self.run_timer_queue(None, true)?;
         self.trace_timer_line(format!(
             "[timer] flush from={} to={} ran={}",
-            from, self.now_ms, ran
+            from, self.scheduler.now_ms, ran
         ));
         Ok(())
     }
@@ -2111,21 +2072,21 @@ impl Harness {
             return Ok(false);
         };
 
-        let task = self.task_queue.remove(next_idx);
-        if task.due_at > self.now_ms {
-            self.now_ms = task.due_at;
+        let task = self.scheduler.task_queue.remove(next_idx);
+        if task.due_at > self.scheduler.now_ms {
+            self.scheduler.now_ms = task.due_at;
         }
         self.execute_timer_task(task)?;
         Ok(true)
     }
 
     pub fn run_next_due_timer(&mut self) -> Result<bool> {
-        let Some(next_idx) = self.next_task_index(Some(self.now_ms)) else {
+        let Some(next_idx) = self.next_task_index(Some(self.scheduler.now_ms)) else {
             self.trace_timer_line("[timer] run_next_due none".into());
             return Ok(false);
         };
 
-        let task = self.task_queue.remove(next_idx);
+        let task = self.scheduler.task_queue.remove(next_idx);
         self.execute_timer_task(task)?;
         Ok(true)
     }
@@ -2134,13 +2095,13 @@ impl Harness {
         let ran = self.run_due_timers_internal()?;
         self.trace_timer_line(format!(
             "[timer] run_due now_ms={} ran={}",
-            self.now_ms, ran
+            self.scheduler.now_ms, ran
         ));
         Ok(ran)
     }
 
     pub(super) fn run_due_timers_internal(&mut self) -> Result<usize> {
-        self.run_timer_queue(Some(self.now_ms), false)
+        self.run_timer_queue(Some(self.scheduler.now_ms), false)
     }
 
     pub(super) fn run_timer_queue(
@@ -2151,12 +2112,16 @@ impl Harness {
         let mut steps = 0usize;
         while let Some(next_idx) = self.next_task_index(due_limit) {
             steps += 1;
-            if steps > self.timer_step_limit {
-                return Err(self.timer_step_limit_error(self.timer_step_limit, steps, due_limit));
+            if steps > self.scheduler.timer_step_limit {
+                return Err(self.timer_step_limit_error(
+                    self.scheduler.timer_step_limit,
+                    steps,
+                    due_limit,
+                ));
             }
-            let task = self.task_queue.remove(next_idx);
-            if advance_clock && task.due_at > self.now_ms {
-                self.now_ms = task.due_at;
+            let task = self.scheduler.task_queue.remove(next_idx);
+            if advance_clock && task.due_at > self.scheduler.now_ms {
+                self.scheduler.now_ms = task.due_at;
             }
             self.execute_timer_task(task)?;
         }
@@ -2175,7 +2140,7 @@ impl Harness {
 
         let next_task_desc = self
             .next_task_index(due_limit)
-            .and_then(|idx| self.task_queue.get(idx))
+            .and_then(|idx| self.scheduler.task_queue.get(idx))
             .map(|task| {
                 let interval_desc = task
                     .interval_ms
@@ -2190,15 +2155,15 @@ impl Harness {
 
         Error::ScriptRuntime(format!(
             "flush exceeded max task steps (possible uncleared setInterval): limit={max_steps}, steps={steps}, now_ms={}, due_limit={}, pending_tasks={}, next_task={}",
-            self.now_ms,
+            self.scheduler.now_ms,
             due_limit_desc,
-            self.task_queue.len(),
+            self.scheduler.task_queue.len(),
             next_task_desc
         ))
     }
 
     pub(super) fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
-        self.task_queue
+        self.scheduler.task_queue
             .iter()
             .enumerate()
             .filter(|(_, task)| {
@@ -2223,12 +2188,12 @@ impl Harness {
             .unwrap_or_else(|| "none".into());
         self.trace_timer_line(format!(
             "[timer] run id={} due_at={} interval_ms={} now_ms={}",
-            task.id, task.due_at, interval_desc, self.now_ms
+            task.id, task.due_at, interval_desc, self.scheduler.now_ms
         ));
 
-        self.running_timer_id = Some(task.id);
-        self.running_timer_canceled = false;
-        let mut event = EventState::new("timeout", self.dom.root, self.now_ms);
+        self.scheduler.running_timer_id = Some(task.id);
+        self.scheduler.running_timer_canceled = false;
+        let mut event = EventState::new("timeout", self.dom.root, self.scheduler.now_ms);
         self.run_in_task_context(|this| {
             this.execute_timer_task_callback(
                 &task.callback,
@@ -2238,17 +2203,16 @@ impl Harness {
             )
             .map(|_| ())
         })?;
-        let canceled = self.running_timer_canceled;
-        self.running_timer_id = None;
-        self.running_timer_canceled = false;
+        let canceled = self.scheduler.running_timer_canceled;
+        self.scheduler.running_timer_id = None;
+        self.scheduler.running_timer_canceled = false;
 
         if let Some(interval_ms) = task.interval_ms {
             if !canceled {
                 let delay_ms = interval_ms.max(0);
                 let due_at = task.due_at.saturating_add(delay_ms);
-                let order = self.next_task_order;
-                self.next_task_order += 1;
-                self.task_queue.push(ScheduledTask {
+                let order = self.scheduler.allocate_task_order();
+                self.scheduler.task_queue.push(ScheduledTask {
                     id: task.id,
                     due_at,
                     order,
@@ -2532,9 +2496,9 @@ impl Harness {
         trusted: bool,
     ) -> Result<EventState> {
         let event = if trusted {
-            EventState::new(event_type, target, self.now_ms)
+            EventState::new(event_type, target, self.scheduler.now_ms)
         } else {
-            EventState::new_untrusted(event_type, target, self.now_ms)
+            EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
         self.dispatch_prepared_event_with_env(event, env)
     }
@@ -2552,9 +2516,9 @@ impl Harness {
         new_state: Option<&str>,
     ) -> Result<EventState> {
         let mut event = if trusted {
-            EventState::new(event_type, target, self.now_ms)
+            EventState::new(event_type, target, self.scheduler.now_ms)
         } else {
-            EventState::new_untrusted(event_type, target, self.now_ms)
+            EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
         event.bubbles = bubbles;
         event.cancelable = cancelable;
@@ -2703,6 +2667,7 @@ impl Harness {
     pub(super) fn dialog_return_value(&self, dialog: NodeId) -> Result<String> {
         self.ensure_dialog_target(dialog, "returnValue")?;
         Ok(self
+            .dom_runtime
             .dialog_return_values
             .get(&dialog)
             .cloned()
@@ -2711,7 +2676,7 @@ impl Harness {
 
     pub(super) fn set_dialog_return_value(&mut self, dialog: NodeId, value: String) -> Result<()> {
         self.ensure_dialog_target(dialog, "returnValue")?;
-        self.dialog_return_values.insert(dialog, value);
+        self.dom_runtime.dialog_return_values.insert(dialog, value);
         Ok(())
     }
 
@@ -2853,7 +2818,7 @@ impl Harness {
                     script_env_before.insert(key.clone(), value);
                 }
             }
-            if self.trace {
+            if self.trace_state.enabled {
                 let phase = if capture { "capture" } else { "bubble" };
                 let target_label = self.trace_node_label(event.target);
                 let current_label = self.trace_node_label(event.current_target);
@@ -2933,33 +2898,33 @@ impl Harness {
     }
 
     pub(super) fn trace_event_line(&mut self, line: String) {
-        if self.trace && self.trace_events {
+        if self.trace_state.enabled && self.trace_state.events {
             self.trace_line(line);
         }
     }
 
     pub(super) fn trace_timer_line(&mut self, line: String) {
-        if self.trace && self.trace_timers {
+        if self.trace_state.enabled && self.trace_state.timers {
             self.trace_line(line);
         }
     }
 
     pub(super) fn trace_line(&mut self, line: String) {
-        if self.trace {
-            if self.trace_to_stderr {
+        if self.trace_state.enabled {
+            if self.trace_state.to_stderr {
                 eprintln!("{line}");
             }
-            if self.trace_logs.len() >= self.trace_log_limit {
-                self.trace_logs.pop_front();
+            if self.trace_state.logs.len() >= self.trace_state.log_limit {
+                self.trace_state.logs.pop_front();
             }
-            self.trace_logs.push_back(line);
+            self.trace_state.logs.push_back(line);
         }
     }
 
     pub(super) fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
-        self.microtask_queue.push_back(ScheduledMicrotask::Script {
+        self.scheduler.microtask_queue.push_back(ScheduledMicrotask::Script {
             handler,
-            env: env.clone(),
+            env: ScriptEnv::from_snapshot(env),
         });
     }
 
@@ -2968,7 +2933,7 @@ impl Harness {
         reaction: PromiseReactionKind,
         settled: PromiseSettledValue,
     ) {
-        self.microtask_queue
+        self.scheduler.microtask_queue
             .push_back(ScheduledMicrotask::Promise { reaction, settled });
     }
 
@@ -2976,21 +2941,22 @@ impl Harness {
         self.with_task_depth(|this| {
             let mut steps = 0usize;
             loop {
-                let Some(task) = this.microtask_queue.pop_front() else {
+                let Some(task) = this.scheduler.microtask_queue.pop_front() else {
                     return Ok(steps);
                 };
                 steps += 1;
-                if steps > this.timer_step_limit {
+                if steps > this.scheduler.timer_step_limit {
                     return Err(this.timer_step_limit_error(
-                        this.timer_step_limit,
+                        this.scheduler.timer_step_limit,
                         steps,
-                        Some(this.now_ms),
+                        Some(this.scheduler.now_ms),
                     ));
                 }
 
                 match task {
                     ScheduledMicrotask::Script { handler, mut env } => {
-                        let mut event = EventState::new("microtask", this.dom.root, this.now_ms);
+                        let mut event =
+                            EventState::new("microtask", this.dom.root, this.scheduler.now_ms);
                         let event_param = handler
                             .first_event_param()
                             .map(|event_param| event_param.to_string());
@@ -3015,9 +2981,9 @@ impl Harness {
     }
 
     fn with_task_depth<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.task_depth += 1;
+        self.scheduler.task_depth += 1;
         let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
-        self.task_depth = self.task_depth.saturating_sub(1);
+        self.scheduler.task_depth = self.scheduler.task_depth.saturating_sub(1);
         match run_result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -3029,7 +2995,7 @@ impl Harness {
         mut run: impl FnMut(&mut Self) -> Result<T>,
     ) -> Result<T> {
         let result = self.with_task_depth(|this| run(this));
-        let should_flush_microtasks = self.task_depth == 0;
+        let should_flush_microtasks = self.scheduler.task_depth == 0;
         match result {
             Ok(value) => {
                 if should_flush_microtasks {
@@ -3159,7 +3125,7 @@ impl Harness {
             .cloned()
             .collect::<Vec<_>>();
         let captured_env = if global_scope {
-            Rc::new(RefCell::new(self.script_runtime.env.clone()))
+            Rc::new(RefCell::new(self.script_runtime.env.to_map()))
         } else if let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() {
             shared_env.clone()
         } else {
@@ -3255,7 +3221,7 @@ impl Harness {
                         let timestamp_ms = args
                             .first()
                             .map(|value| self.coerce_date_timestamp_ms(value))
-                            .unwrap_or(self.now_ms);
+                            .unwrap_or(self.scheduler.now_ms);
                         Ok(Value::String(self.intl_format_date_time(
                             timestamp_ms,
                             &locale,
@@ -3428,7 +3394,7 @@ impl Harness {
                     function.captured_env.borrow().clone()
                 };
                 let mut call_env = if function.global_scope {
-                    this.script_runtime.env.clone()
+                    this.script_runtime.env.to_map()
                 } else {
                     captured_env_before_call.clone()
                 };
