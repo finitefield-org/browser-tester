@@ -468,3 +468,104 @@ fn non_iterable_spread_in_array_literal_is_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn division_by_zero_follows_js_infinity_and_nan_semantics() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const pos = 1 / 0;
+      const neg = -1 / 0;
+      const nan = 0 / 0;
+      document.getElementById("result").textContent =
+        String(pos) + "|" + String(neg) + "|" + String(nan) + "|" + String(pos > 0);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "Infinity|-Infinity|NaN|true")?;
+    Ok(())
+}
+
+#[test]
+fn array_from_map_values_is_usable_with_array_map() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { totalsMap: new Map() };
+      state.totalsMap.set("a", { n: 1 });
+      state.totalsMap.set("b", { n: 2 });
+
+      const totals = Array.from(state.totalsMap.values());
+      const rendered = totals.map((row) => `${row.n}`).join(",");
+      document.getElementById("result").textContent = rendered;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,2")?;
+    Ok(())
+}
+
+#[test]
+fn for_and_while_allow_single_statement_bodies() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [];
+      for (let i = 0; i < 3; i += 1) values.push(i);
+
+      let j = 0;
+      while (j < 3) j += 1;
+
+      document.getElementById("result").textContent = values.join(",") + "|" + String(j);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "0,1,2|3")?;
+    Ok(())
+}
+
+#[test]
+fn ternary_with_object_literal_branches_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const page = {
+        units: {
+          areaUs: "acre",
+          rateUs: "usd",
+          areaMetric: "ha",
+          rateMetric: "eur",
+        }
+      };
+      const snapshot = { unitSystem: "us" };
+      const labels = snapshot.unitSystem === "us"
+        ? { area: page.units.areaUs, rate: page.units.rateUs }
+        : { area: page.units.areaMetric, rate: page.units.rateMetric };
+      document.getElementById("result").textContent = labels.area + "|" + labels.rate;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "acre|usd")?;
+    Ok(())
+}
+
+#[test]
+fn nested_parenthesized_division_in_multiplication_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const row = { valueNum: 2 };
+      const batchL = 100;
+      const x = batchL * (row.valueNum / 100);
+      document.getElementById("result").textContent = String(x);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "2")?;
+    Ok(())
+}

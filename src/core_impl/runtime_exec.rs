@@ -3086,6 +3086,33 @@ impl Harness {
                     }
                 }
 
+                if let Value::Map(map) = &receiver {
+                    let map_member_override = {
+                        let map_ref = map.borrow();
+                        Self::object_get_entry(&map_ref.properties, member)
+                    };
+                    if let Some(callee) = map_member_override {
+                        return self
+                            .execute_callable_value_with_env(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                                    Error::ScriptRuntime(format!("'{}' is not a function", member))
+                                }
+                                other => other,
+                            });
+                    }
+                    if let Some(value) =
+                        self.eval_map_member_call_from_values(map, member, &evaluated_args, event)?
+                    {
+                        return Ok(value);
+                    }
+                }
+
                 if let Value::UrlConstructor = &receiver {
                     let url_constructor_override = {
                         let entries = self.url_constructor_properties.borrow();
@@ -4500,6 +4527,167 @@ impl Harness {
         Ok(Some(value))
     }
 
+    fn eval_map_member_call_from_values(
+        &mut self,
+        map: &Rc<RefCell<MapValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "set" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.set requires exactly two arguments".into(),
+                    ));
+                }
+                self.map_set_entry(
+                    &mut map.borrow_mut(),
+                    evaluated_args[0].clone(),
+                    evaluated_args[1].clone(),
+                );
+                Value::Map(map.clone())
+            }
+            "get" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.get requires exactly one argument".into(),
+                    ));
+                }
+                let map_ref = map.borrow();
+                if let Some(index) = self.map_entry_index(&map_ref, &evaluated_args[0]) {
+                    map_ref.entries[index].1.clone()
+                } else {
+                    Value::Undefined
+                }
+            }
+            "has" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.has requires exactly one argument".into(),
+                    ));
+                }
+                let has = self
+                    .map_entry_index(&map.borrow(), &evaluated_args[0])
+                    .is_some();
+                Value::Bool(has)
+            }
+            "delete" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.delete requires exactly one argument".into(),
+                    ));
+                }
+                let mut map_ref = map.borrow_mut();
+                if let Some(index) = self.map_entry_index(&map_ref, &evaluated_args[0]) {
+                    map_ref.entries.remove(index);
+                    Value::Bool(true)
+                } else {
+                    Value::Bool(false)
+                }
+            }
+            "clear" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Map.clear does not take arguments".into(),
+                    ));
+                }
+                map.borrow_mut().entries.clear();
+                Value::Undefined
+            }
+            "forEach" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                let callback = evaluated_args[0].clone();
+                let snapshot = map.borrow().entries.clone();
+                for (key, value) in snapshot {
+                    let _ = self.execute_callback_value(
+                        &callback,
+                        &[value, key, Value::Map(map.clone())],
+                        event,
+                    )?;
+                }
+                Value::Undefined
+            }
+            "entries" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Map.entries does not take arguments".into(),
+                    ));
+                }
+                Self::new_array_value(self.map_entries_array(map))
+            }
+            "keys" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Map.keys does not take arguments".into(),
+                    ));
+                }
+                Self::new_array_value(
+                    map.borrow()
+                        .entries
+                        .iter()
+                        .map(|(key, _)| key.clone())
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "values" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Map.values does not take arguments".into(),
+                    ));
+                }
+                Self::new_array_value(
+                    map.borrow()
+                        .entries
+                        .iter()
+                        .map(|(_, value)| value.clone())
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "getOrInsert" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.getOrInsert requires exactly two arguments".into(),
+                    ));
+                }
+                let key = evaluated_args[0].clone();
+                let default_value = evaluated_args[1].clone();
+                let mut map_ref = map.borrow_mut();
+                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                    map_ref.entries[index].1.clone()
+                } else {
+                    map_ref.entries.push((key, default_value.clone()));
+                    default_value
+                }
+            }
+            "getOrInsertComputed" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Map.getOrInsertComputed requires exactly two arguments".into(),
+                    ));
+                }
+                let key = evaluated_args[0].clone();
+                {
+                    let map_ref = map.borrow();
+                    if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                        return Ok(Some(map_ref.entries[index].1.clone()));
+                    }
+                }
+                let callback = evaluated_args[1].clone();
+                let computed =
+                    self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
+                map.borrow_mut().entries.push((key, computed.clone()));
+                computed
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
     fn eval_nodelist_member_call(
         &mut self,
         nodes: &[NodeId],
@@ -5508,11 +5696,7 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                let rhs = self.numeric_value(right);
-                if rhs == 0.0 {
-                    return Err(Error::ScriptRuntime("division by zero".into()));
-                }
-                Value::Float(self.numeric_value(left) / rhs)
+                Value::Float(self.numeric_value(left) / self.numeric_value(right))
             }
         };
         Ok(out)
@@ -6204,8 +6388,12 @@ impl Harness {
                     Ok(Value::Number(map.entries.len() as i64))
                 } else if key == "constructor" {
                     Ok(Value::MapConstructor)
+                } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
+                    Ok(value)
+                } else if Self::is_map_method_name(key) {
+                    Ok(Self::new_builtin_placeholder_function())
                 } else {
-                    Ok(Self::object_get_entry(&map.properties, key).unwrap_or(Value::Undefined))
+                    Ok(Value::Undefined)
                 }
             }
             Value::Set(set) => {
@@ -9359,6 +9547,23 @@ impl Harness {
             .iter()
             .map(|(key, value)| Self::new_array_value(vec![key.clone(), value.clone()]))
             .collect::<Vec<_>>()
+    }
+
+    pub(super) fn is_map_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "set"
+                | "get"
+                | "has"
+                | "delete"
+                | "clear"
+                | "forEach"
+                | "entries"
+                | "keys"
+                | "values"
+                | "getOrInsert"
+                | "getOrInsertComputed"
+        )
     }
 
     pub(super) fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {

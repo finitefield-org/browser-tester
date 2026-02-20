@@ -1494,17 +1494,13 @@ fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let cond = parse_expr(cond_src.trim())?;
 
     cursor.skip_ws();
-    let body_src = cursor.read_balanced_block(b'{', b'}')?;
-    let body = parse_block_statements(&body_src)?;
-
-    cursor.skip_ws();
-    cursor.consume_byte(b';');
-    cursor.skip_ws();
-    if !cursor.eof() {
+    let body_raw = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+    if body_raw.is_empty() {
         return Err(Error::ScriptParse(format!(
-            "unsupported while statement tail: {stmt}"
+            "while statement has no body: {stmt}"
         )));
     }
+    let body = parse_if_branch(body_raw)?;
 
     Ok(Some(Stmt::While { cond, body }))
 }
@@ -1759,17 +1755,13 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     if let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(&header_src)? {
         let iterable = parse_expr(iterable_src.trim())?;
         cursor.skip_ws();
-        let body_src = cursor.read_balanced_block(b'{', b'}')?;
-        let body = parse_block_statements(&body_src)?;
-
-        cursor.skip_ws();
-        cursor.consume_byte(b';');
-        cursor.skip_ws();
-        if !cursor.eof() {
+        let body_raw = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+        if body_raw.is_empty() {
             return Err(Error::ScriptParse(format!(
-                "unsupported for statement tail: {stmt}"
+                "for statement has no body: {stmt}"
             )));
         }
+        let body = parse_if_branch(body_raw)?;
 
         let stmt = match kind {
             ForInOfKind::In => Stmt::ForIn {
@@ -1802,17 +1794,13 @@ fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let post = parse_for_clause_stmt(header_parts[2])?;
 
     cursor.skip_ws();
-    let body_src = cursor.read_balanced_block(b'{', b'}')?;
-    let body = parse_block_statements(&body_src)?;
-
-    cursor.skip_ws();
-    cursor.consume_byte(b';');
-    cursor.skip_ws();
-    if !cursor.eof() {
+    let body_raw = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+    if body_raw.is_empty() {
         return Err(Error::ScriptParse(format!(
-            "unsupported for statement tail: {stmt}"
+            "for statement has no body: {stmt}"
         )));
     }
+    let body = parse_if_branch(body_raw)?;
 
     Ok(Some(Stmt::For {
         init,
@@ -2094,6 +2082,10 @@ fn split_top_level_statements(body: &str) -> Vec<String> {
 fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail: &str) -> bool {
     let tail = tail.trim_start();
     if tail.is_empty() {
+        return false;
+    }
+    if tail.starts_with(':') {
+        // Keep ternary expressions intact: `cond ? { ... } : { ... }`.
         return false;
     }
     if tail.starts_with('=') {

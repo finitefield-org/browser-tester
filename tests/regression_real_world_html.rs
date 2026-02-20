@@ -18,6 +18,15 @@ fn ignores_json_ld_script_blocks_and_runs_executable_script() -> browser_tester:
 }
 
 #[test]
+fn json_ld_with_escaped_quotes_does_not_break_script_end_detection() -> browser_tester::Result<()> {
+    let html = r#"<!doctype html><html><body><div id="result">init</div><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\"}</script><script>document.getElementById("result").textContent = "ok";</script></body></html>"#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
 fn script_end_extractor_handles_regex_literals_with_quotes() -> browser_tester::Result<()> {
     let html = r##"
     <div id="result">init</div>

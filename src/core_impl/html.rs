@@ -283,8 +283,12 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
             let node = dom.create_element(parent, tag.clone(), attrs);
 
             if tag.eq_ignore_ascii_case("script") {
-                let close = find_case_insensitive_end_tag(bytes, i, b"script")
-                    .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
+                let close = if executable_script {
+                    find_case_insensitive_end_tag(bytes, i, b"script")
+                } else {
+                    find_case_insensitive_raw_end_tag(bytes, i, b"script")
+                }
+                .ok_or_else(|| Error::HtmlParse("unclosed <script>".into()))?;
                 if let Some(script_body) = html.get(i..close) {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
@@ -872,6 +876,31 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                 i += 1;
             }
         }
+    }
+    None
+}
+
+fn find_case_insensitive_raw_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Option<usize> {
+    fn is_ident_separator(byte: u8) -> bool {
+        !byte.is_ascii_alphanumeric()
+    }
+
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'/') {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let tag_end = j + tag.len();
+            if tag_end <= bytes.len() && bytes[j..tag_end].eq_ignore_ascii_case(tag) {
+                let after = j + tag.len();
+                if after >= bytes.len() || is_ident_separator(bytes[after]) {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
     }
     None
 }
