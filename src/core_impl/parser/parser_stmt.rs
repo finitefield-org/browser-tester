@@ -1,8 +1,3 @@
-use super::parser_expr::{
-    append_concat_expr, find_first_top_level_colon, find_top_level_assignment, parse_dom_access,
-    parse_queue_microtask_stmt, parse_string_literal_exact, split_top_level_by_char,
-    strip_js_comments, strip_outer_parens,
-};
 use super::*;
 
 pub(super) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
