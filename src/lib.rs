@@ -2292,7 +2292,7 @@ impl PartialEq for RegexValue {
 struct FunctionValue {
     handler: ScriptHandler,
     captured_env: Rc<RefCell<ScriptEnv>>,
-    captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
+    captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
     captured_global_names: HashSet<String>,
     local_bindings: HashSet<String>,
     global_scope: bool,
@@ -4518,7 +4518,7 @@ struct Listener {
     capture: bool,
     handler: ScriptHandler,
     captured_env: Rc<RefCell<ScriptEnv>>,
-    captured_pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
+    captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -4769,10 +4769,15 @@ impl std::ops::DerefMut for ScriptEnv {
 }
 
 #[derive(Debug, Default)]
+struct ListenerCaptureFrame {
+    shared_env: Option<Rc<RefCell<ScriptEnv>>>,
+}
+
+#[derive(Debug, Default)]
 struct ScriptRuntimeState {
     env: ScriptEnv,
-    pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
-    listener_capture_env_stack: Vec<Rc<RefCell<ScriptEnv>>>,
+    pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    listener_capture_env_stack: Vec<ListenerCaptureFrame>,
 }
 
 #[derive(Debug)]
