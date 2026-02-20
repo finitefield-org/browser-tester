@@ -355,6 +355,10 @@ pub(crate) enum Expr {
         key: Box<Expr>,
     },
     ArrayLiteral(Vec<Expr>),
+    ArrayConstruct {
+        args: Vec<Expr>,
+        called_with_new: bool,
+    },
     ArrayIsArray(Box<Expr>),
     ArrayFrom {
         source: Box<Expr>,

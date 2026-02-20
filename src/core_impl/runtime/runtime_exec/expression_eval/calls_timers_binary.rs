@@ -169,6 +169,20 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        let is_document_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_document_object {
+                            if let Some(value) =
+                                self.eval_document_member_call(member, &evaluated_args, event)?
+                            {
+                                return Ok(value);
+                            }
+                        }
                         if Self::is_url_object(&object.borrow()) {
                             if let Some(value) =
                                 self.eval_url_member_call(object, member, &evaluated_args)?

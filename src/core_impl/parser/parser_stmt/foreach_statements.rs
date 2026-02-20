@@ -110,8 +110,14 @@ pub(crate) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 if args.len() == 2 && args[1].trim().is_empty() {
                     return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
                 }
-                let callback =
-                    parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")?;
+                let callback = match parse_array_for_each_callback_arg(
+                    args[0],
+                    3,
+                    "array callback parameters",
+                ) {
+                    Ok(callback) => callback,
+                    Err(_) => return Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?))),
+                };
                 if args.len() == 2 {
                     let _ = parse_expr(args[1].trim())?;
                 }
@@ -172,7 +178,11 @@ pub(crate) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     let target = parse_expr(target_src)?;
-    let callback = parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")?;
+    let callback = match parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")
+    {
+        Ok(callback) => callback,
+        Err(_) => return Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?))),
+    };
     if args.len() == 2 {
         let _ = parse_expr(args[1].trim())?;
     }

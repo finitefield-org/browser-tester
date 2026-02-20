@@ -268,6 +268,22 @@ impl Harness {
                         ))),
                     }
                 }
+                Expr::ArrayConstruct { args, .. } => {
+                    let evaluated = self.eval_call_args_with_spread(args, env, event_param, event)?;
+                    if evaluated.is_empty() {
+                        return Ok(Self::new_array_value(Vec::new()));
+                    }
+                    if evaluated.len() == 1 {
+                        let first = &evaluated[0];
+                        if let Some(length) = Self::array_constructor_length_from_value(first)? {
+                            let mut out = Vec::new();
+                            out.resize(length, Value::Undefined);
+                            return Ok(Self::new_array_value(out));
+                        }
+                        return Ok(Self::new_array_value(vec![first.clone()]));
+                    }
+                    Ok(Self::new_array_value(evaluated))
+                }
                 Expr::ArrayLiteral(values) => {
                     let mut out = Vec::with_capacity(values.len());
                     for value in values {
@@ -1151,6 +1167,30 @@ impl Harness {
         match result {
             Err(Error::ScriptRuntime(msg)) if msg == UNHANDLED_EXPR_CHUNK => Ok(None),
             other => other.map(Some),
+        }
+    }
+
+    fn array_constructor_length_from_value(value: &Value) -> Result<Option<usize>> {
+        match value {
+            Value::Number(value) => {
+                if *value < 0 {
+                    return Err(Error::ScriptRuntime("invalid array length".into()));
+                }
+                Ok(Some(
+                    usize::try_from(*value)
+                        .map_err(|_| Error::ScriptRuntime("invalid array length".into()))?,
+                ))
+            }
+            Value::Float(value) => {
+                if !value.is_finite() || *value < 0.0 || value.fract() != 0.0 {
+                    return Err(Error::ScriptRuntime("invalid array length".into()));
+                }
+                if *value > usize::MAX as f64 {
+                    return Err(Error::ScriptRuntime("invalid array length".into()));
+                }
+                Ok(Some(*value as usize))
+            }
+            _ => Ok(None),
         }
     }
 }

@@ -442,6 +442,57 @@ fn from_html_with_local_storage_seeds_values_before_script_execution() -> browse
 }
 
 #[test]
+fn document_member_calls_with_dynamic_arguments_are_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <input name="mode" value="piece" checked>
+    <div id="result"></div>
+    <script>
+      const targetId = "result";
+      const root = document.getElementById(targetId);
+      const field = "mode";
+      const input = document.querySelector(`input[name="${field}"]:checked`);
+      root.textContent = root.id + "|" + input.value;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "result|piece")?;
+    Ok(())
+}
+
+#[test]
+fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="root">
+      <button id="cta-sample">CTA</button>
+      <button id="row-del" data-order-delete="1">DEL</button>
+    </div>
+    <div id="result"></div>
+    <script>
+      const root = document.getElementById("root");
+      root.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const orderDelete = button.getAttribute("data-order-delete");
+        if (orderDelete !== null) {
+          document.getElementById("result").textContent = "delete";
+          return;
+        }
+        if (button.id === "cta-sample") {
+          document.getElementById("result").textContent = "cta";
+        }
+      });
+      document.getElementById("cta-sample").click();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "cta")?;
+    Ok(())
+}
+
+#[test]
 fn dom_expando_properties_round_trip_on_nodes() -> browser_tester::Result<()> {
     let html = r#"
     <div id="root"></div>

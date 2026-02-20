@@ -12,9 +12,8 @@ pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
         }
 
         if let Some(else_branch) = parse_else_fragment(stmt)? {
-            if let Some(Stmt::If { else_stmts, .. }) = stmts.last_mut() {
-                if else_stmts.is_empty() {
-                    *else_stmts = else_branch;
+            if let Some(last_stmt) = stmts.last_mut() {
+                if attach_else_branch_to_if_chain(last_stmt, else_branch) {
                     continue;
                 }
                 return Err(Error::ScriptParse(format!(
@@ -31,6 +30,23 @@ pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
     }
 
     Ok(stmts)
+}
+
+pub(crate) fn attach_else_branch_to_if_chain(stmt: &mut Stmt, else_branch: Vec<Stmt>) -> bool {
+    let Stmt::If { else_stmts, .. } = stmt else {
+        return false;
+    };
+
+    if else_stmts.is_empty() {
+        *else_stmts = else_branch;
+        return true;
+    }
+
+    if else_stmts.len() != 1 {
+        return false;
+    }
+
+    attach_else_branch_to_if_chain(&mut else_stmts[0], else_branch)
 }
 
 pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {

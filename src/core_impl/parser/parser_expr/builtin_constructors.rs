@@ -1013,6 +1013,82 @@ pub(crate) fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BlobConstructor))
 }
 
+pub(crate) fn parse_array_constructor_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Array") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Err(Error::ScriptParse(
+                    "Array constructor arguments cannot be empty".into(),
+                ));
+            }
+            parsed.push(parse_expr(arg)?);
+        }
+
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ArrayConstruct {
+            args: parsed,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::ArrayConstruct {
+                args: Vec::new(),
+                called_with_new: true,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
 pub(crate) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();

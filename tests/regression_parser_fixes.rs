@@ -1257,3 +1257,85 @@ fn optional_chained_add_event_listener_on_node_member_call_is_supported()
     harness.assert_text("#result", "ok")?;
     Ok(())
 }
+
+#[test]
+fn single_line_else_if_chain_parses_without_duplicate_else_error()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function roundStep(value, step, direction) { return value; }
+      function psychRound(value, mode, direction, decimals) { return value; }
+      function applyRounding(value, mode, direction, decimals) {
+        let out = value;
+        if (mode === "step_1") out = roundStep(value, 1, direction);
+        else if (mode === "step_10") out = roundStep(value, 10, direction);
+        else if (mode === "step_100") out = roundStep(value, 100, direction);
+        else if (mode === "psych_99" || mode === "psych_95" || mode === "psych_90") out = psychRound(value, mode, direction, decimals);
+
+        if (mode === "none") return Number(out);
+        if (decimals > 0) return Number(out.toFixed(decimals));
+        return Math.round(out);
+      }
+      document.getElementById("result").textContent = String(applyRounding(12.3, "step_100", 1, 0));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "12")?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_foreach_two_params_arrow_callback_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const params = new URLSearchParams("a=1&b=2");
+      const out = {};
+      params.forEach((value, key) => {
+        out[key] = value;
+      });
+      document.getElementById("result").textContent = out.a + ":" + out.b;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1:2")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_foreach_accepts_function_reference_callback() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const seen = [];
+      const collect = (value) => {
+        seen.push(String(value));
+      };
+      ["x", "y", "z"].forEach(collect);
+      document.getElementById("result").textContent = seen.join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "x|y|z")?;
+    Ok(())
+}
+
+#[test]
+fn new_array_fill_join_chain_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const visibleCount = 3;
+      const cells = new Array(visibleCount).fill("<span></span>").join("");
+      document.getElementById("result").textContent = cells;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<span></span><span></span><span></span>")?;
+    Ok(())
+}

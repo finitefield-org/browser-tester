@@ -237,6 +237,10 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::ArrayLiteral(values));
     }
 
+    if let Some(expr) = parse_array_constructor_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(value) = parse_array_is_array_expr(src)? {
         return Ok(Expr::ArrayIsArray(Box::new(value)));
     }

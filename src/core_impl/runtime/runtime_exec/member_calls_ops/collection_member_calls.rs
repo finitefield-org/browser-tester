@@ -263,6 +263,31 @@ impl Harness {
                 }
                 Value::Bool(all)
             }
+            "fill" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 3 {
+                    return Err(Error::ScriptRuntime(
+                        "fill requires 1 to 3 arguments".into(),
+                    ));
+                }
+                let fill_value = evaluated_args[0].clone();
+                let mut values_ref = values.borrow_mut();
+                let len = values_ref.len();
+                let start = evaluated_args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(0);
+                let end = evaluated_args
+                    .get(2)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(len)
+                    .max(start);
+                for value in values_ref.iter_mut().take(end).skip(start) {
+                    *value = fill_value.clone();
+                }
+                Value::Array(values.clone())
+            }
             "includes" => {
                 if evaluated_args.is_empty() || evaluated_args.len() > 2 {
                     return Err(Error::ScriptRuntime(
