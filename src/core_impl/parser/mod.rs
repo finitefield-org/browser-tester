@@ -18,7 +18,7 @@ pub(super) mod api {
     }
 
     pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
-        super::parser_stmt::callback_and_function_parsing::parse_function_expr(src)
+        super::parser_stmt::callback_expression_parsing::parse_function_expr(src)
     }
 
     pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
@@ -29,13 +29,11 @@ pub(super) mod api {
     pub(crate) fn parse_for_each_callback(
         src: &str,
     ) -> Result<(String, Option<String>, Vec<Stmt>)> {
-        super::parser_stmt::foreach_attributes_and_insert_adjacent::parse_for_each_callback(src)
+        super::parser_stmt::foreach_statements::parse_for_each_callback(src)
     }
 
     pub(crate) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
-        super::parser_stmt::foreach_attributes_and_insert_adjacent::resolve_insert_adjacent_position(
-            src,
-        )
+        super::parser_stmt::insert_adjacent_statements::resolve_insert_adjacent_position(src)
     }
 
     pub(crate) fn strip_js_comments(src: &str) -> String {
@@ -47,7 +45,7 @@ pub(super) mod api {
     }
 
     pub(crate) fn find_first_top_level_colon(src: &str) -> Option<usize> {
-        super::parser_expr::object_member_and_calls::find_first_top_level_colon(src)
+        super::parser_expr::object_expressions::find_first_top_level_colon(src)
     }
 
     pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
