@@ -13,6 +13,67 @@ struct InputValidity {
     valid: bool,
 }
 
+pub(super) trait ObjectEntryLookup {
+    fn get_entry(&self, key: &str) -> Option<Value>;
+}
+
+pub(super) trait ObjectEntryMut {
+    fn set_entry(&mut self, key: String, value: Value);
+}
+
+impl ObjectEntryLookup for [(String, Value)] {
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        self.iter()
+            .find_map(|(name, value)| (name == key).then(|| value.clone()))
+    }
+}
+
+impl ObjectEntryLookup for Vec<(String, Value)> {
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        self.as_slice().get_entry(key)
+    }
+}
+
+impl ObjectEntryLookup for ObjectValue {
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        ObjectValue::get_entry(self, key)
+    }
+}
+
+impl ObjectEntryLookup for std::cell::Ref<'_, ObjectValue> {
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        ObjectValue::get_entry(&*self, key)
+    }
+}
+
+impl ObjectEntryLookup for std::cell::RefMut<'_, ObjectValue> {
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        ObjectValue::get_entry(&*self, key)
+    }
+}
+
+impl ObjectEntryMut for Vec<(String, Value)> {
+    fn set_entry(&mut self, key: String, value: Value) {
+        if let Some((_, existing)) = self.iter_mut().find(|(name, _)| name == &key) {
+            *existing = value;
+        } else {
+            self.push((key, value));
+        }
+    }
+}
+
+impl ObjectEntryMut for ObjectValue {
+    fn set_entry(&mut self, key: String, value: Value) {
+        ObjectValue::set_entry(self, key, value);
+    }
+}
+
+impl ObjectEntryMut for std::cell::RefMut<'_, ObjectValue> {
+    fn set_entry(&mut self, key: String, value: Value) {
+        ObjectValue::set_entry(&mut *self, key, value);
+    }
+}
+
 impl Harness {
     pub(super) fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
         if !matches!(
@@ -1376,7 +1437,7 @@ impl Harness {
                     Value::TypedArray(_) => Ok(Value::TypedArrayConstructor(
                         TypedArrayConstructorKind::Abstract,
                     )),
-                    _ => Ok(Value::Object(Rc::new(RefCell::new(Vec::new())))),
+                    _ => Ok(Value::Object(Rc::new(RefCell::new(ObjectValue::default())))),
                 }
             }
             Expr::ObjectFreeze(value) => {
@@ -5898,7 +5959,7 @@ impl Harness {
     }
 
     fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
-        self.script_env
+        self.script_runtime.env
             .get(name)
             .is_some_and(|expected| self.strict_equal(value, expected))
     }
@@ -6147,7 +6208,7 @@ impl Harness {
     }
 
     pub(super) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
-        Value::Object(Rc::new(RefCell::new(entries)))
+        Value::Object(Rc::new(RefCell::new(ObjectValue::new(entries))))
     }
 
     pub(super) fn new_boolean_constructor_callable() -> Value {
@@ -6164,18 +6225,19 @@ impl Harness {
         )])
     }
 
-    pub(super) fn object_set_entry(entries: &mut Vec<(String, Value)>, key: String, value: Value) {
-        if let Some((_, existing)) = entries.iter_mut().find(|(name, _)| name == &key) {
-            *existing = value;
-        } else {
-            entries.push((key, value));
-        }
+    pub(super) fn object_set_entry(
+        entries: &mut impl ObjectEntryMut,
+        key: String,
+        value: Value,
+    ) {
+        entries.set_entry(key, value);
     }
 
-    pub(super) fn object_get_entry(entries: &[(String, Value)], key: &str) -> Option<Value> {
-        entries
-            .iter()
-            .find_map(|(name, value)| (name == key).then(|| value.clone()))
+    pub(super) fn object_get_entry(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> Option<Value> {
+        entries.get_entry(key)
     }
 
     pub(super) fn callable_kind_from_value(value: &Value) -> Option<&str> {
@@ -7411,7 +7473,7 @@ impl Harness {
             unicode: info.unicode,
             compiled,
             last_index: 0,
-            properties: Vec::new(),
+            properties: ObjectValue::default(),
         }))))
     }
 
@@ -9635,13 +9697,6 @@ impl Harness {
         )
     }
 
-    pub(super) fn url_object_id_from_entries(entries: &[(String, Value)]) -> Option<usize> {
-        match Self::object_get_entry(entries, INTERNAL_URL_OBJECT_ID_KEY) {
-            Some(Value::Number(id)) if id > 0 => usize::try_from(id).ok(),
-            _ => None,
-        }
-    }
-
     pub(super) fn normalize_url_parts_for_serialization(parts: &mut LocationParts) {
         parts.scheme = parts.scheme.to_ascii_lowercase();
         if parts.has_authority {
@@ -9756,7 +9811,7 @@ impl Harness {
 
     pub(super) fn sync_url_object_entries_from_parts(
         &self,
-        entries: &mut Vec<(String, Value)>,
+        entries: &mut (impl ObjectEntryLookup + ObjectEntryMut),
         parts: &LocationParts,
     ) {
         let href = parts.href();
@@ -9813,7 +9868,10 @@ impl Harness {
         );
         Self::object_set_entry(entries, "origin".to_string(), Value::String(parts.origin()));
 
-        let owner_id = Self::url_object_id_from_entries(entries);
+        let owner_id = match Self::object_get_entry(entries, INTERNAL_URL_OBJECT_ID_KEY) {
+            Some(Value::Number(id)) if id >= 0 => usize::try_from(id).ok(),
+            _ => None,
+        };
         let pairs =
             parse_url_search_params_pairs_from_query_string(&parts.search).unwrap_or_default();
         if let Some(Value::Object(search_params_object)) =
@@ -9852,14 +9910,14 @@ impl Harness {
             ),
         ];
         self.sync_url_object_entries_from_parts(&mut entries, &parts);
-        let object = Rc::new(RefCell::new(entries));
+        let object = Rc::new(RefCell::new(ObjectValue::new(entries)));
         self.url_objects.insert(id, object.clone());
         Ok(Value::Object(object))
     }
 
     pub(super) fn set_url_object_property(
         &mut self,
-        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        object: &Rc<RefCell<ObjectValue>>,
         key: &str,
         value: Value,
     ) -> Result<()> {
@@ -9943,7 +10001,7 @@ impl Harness {
 
     pub(super) fn sync_url_search_params_owner(
         &mut self,
-        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        object: &Rc<RefCell<ObjectValue>>,
     ) {
         let (owner_id, pairs) = {
             let entries = object.borrow();
@@ -10025,7 +10083,7 @@ impl Harness {
     }
 
     pub(super) fn set_storage_pairs(
-        entries: &mut Vec<(String, Value)>,
+        entries: &mut impl ObjectEntryMut,
         pairs: &[(String, String)],
     ) {
         Self::object_set_entry(
@@ -10037,7 +10095,7 @@ impl Harness {
 
     pub(super) fn eval_storage_member_call(
         &mut self,
-        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        object: &Rc<RefCell<ObjectValue>>,
         member: &str,
         args: &[Value],
     ) -> Result<Option<Value>> {
@@ -10166,7 +10224,7 @@ impl Harness {
     }
 
     pub(super) fn set_url_search_params_pairs(
-        entries: &mut Vec<(String, Value)>,
+        entries: &mut impl ObjectEntryMut,
         pairs: &[(String, String)],
     ) {
         Self::object_set_entry(
@@ -10199,7 +10257,7 @@ impl Harness {
         &self,
         env: &HashMap<String, Value>,
         target: &str,
-    ) -> Result<Rc<RefCell<Vec<(String, Value)>>>> {
+    ) -> Result<Rc<RefCell<ObjectValue>>> {
         match env.get(target) {
             Some(Value::Object(entries)) => {
                 if Self::is_url_search_params_object(&entries.borrow()) {
@@ -10397,7 +10455,7 @@ impl Harness {
 
     pub(super) fn eval_url_member_call(
         &self,
-        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        object: &Rc<RefCell<ObjectValue>>,
         member: &str,
         args: &[Value],
     ) -> Result<Option<Value>> {
@@ -10422,7 +10480,7 @@ impl Harness {
 
     pub(super) fn eval_url_search_params_member_call(
         &mut self,
-        object: &Rc<RefCell<Vec<(String, Value)>>>,
+        object: &Rc<RefCell<ObjectValue>>,
         member: &str,
         args: &[Value],
         event: &EventState,
@@ -10849,7 +10907,7 @@ impl Harness {
 
         let map = Rc::new(RefCell::new(MapValue {
             entries: Vec::new(),
-            properties: Vec::new(),
+            properties: ObjectValue::default(),
         }));
 
         let Some(iterable) = iterable else {
@@ -10907,7 +10965,7 @@ impl Harness {
                 let values = self.array_like_values_from_value(&iterable)?;
                 let map = Rc::new(RefCell::new(MapValue {
                     entries: Vec::new(),
-                    properties: Vec::new(),
+                    properties: ObjectValue::default(),
                 }));
                 for (index, item) in values.into_iter().enumerate() {
                     let group_key = self.execute_callback_value(
@@ -11294,7 +11352,7 @@ impl Harness {
 
         let set = Rc::new(RefCell::new(SetValue {
             values: Vec::new(),
-            properties: Vec::new(),
+            properties: ObjectValue::default(),
         }));
 
         let Some(iterable) = iterable else {
@@ -11354,7 +11412,7 @@ impl Harness {
                 let other_keys = self.set_like_keys_snapshot(&other)?;
                 let mut out = SetValue {
                     values: set.borrow().values.clone(),
-                    properties: Vec::new(),
+                    properties: ObjectValue::default(),
                 };
                 for key in other_keys {
                     self.set_add_value(&mut out, key);
@@ -11371,7 +11429,7 @@ impl Harness {
                 let snapshot = set.borrow().values.clone();
                 let mut out = SetValue {
                     values: Vec::new(),
-                    properties: Vec::new(),
+                    properties: ObjectValue::default(),
                 };
                 for value in snapshot {
                     if self.set_like_has_value(&other, &value)? {
@@ -11390,7 +11448,7 @@ impl Harness {
                 let snapshot = set.borrow().values.clone();
                 let mut out = SetValue {
                     values: Vec::new(),
-                    properties: Vec::new(),
+                    properties: ObjectValue::default(),
                 };
                 for value in snapshot {
                     if !self.set_like_has_value(&other, &value)? {
@@ -11409,7 +11467,7 @@ impl Harness {
                 let other_keys = self.set_like_keys_snapshot(&other)?;
                 let mut out = SetValue {
                     values: set.borrow().values.clone(),
-                    properties: Vec::new(),
+                    properties: ObjectValue::default(),
                 };
                 for key in other_keys {
                     if let Some(index) = self.set_value_index(&out, &key) {
@@ -14726,13 +14784,14 @@ impl Harness {
 
     pub(super) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
         let stmts = parse_block_statements(script)?;
-        let mut event = EventState::new("script", self.dom.root, self.now_ms);
-        let mut env = self.script_env.clone();
-        self.run_in_task_context(|this| {
-            this.execute_stmts(&stmts, &None, &mut event, &mut env)
-                .map(|_| ())
+        self.with_script_env(|this, env| {
+            let mut event = EventState::new("script", this.dom.root, this.now_ms);
+            this.run_in_task_context(|inner| {
+                inner
+                    .execute_stmts(&stmts, &None, &mut event, env)
+                    .map(|_| ())
+            })
         })?;
-        self.script_env = env;
 
         Ok(())
     }

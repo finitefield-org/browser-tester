@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error as StdError;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
@@ -2026,13 +2027,13 @@ impl TypedArrayValue {
 #[derive(Debug, Clone, PartialEq)]
 struct MapValue {
     entries: Vec<(Value, Value)>,
-    properties: Vec<(String, Value)>,
+    properties: ObjectValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct SetValue {
     values: Vec<Value>,
-    properties: Vec<(String, Value)>,
+    properties: ObjectValue,
 }
 
 #[derive(Debug, Clone)]
@@ -2167,7 +2168,7 @@ enum Value {
     Float(f64),
     BigInt(JsBigInt),
     Array(Rc<RefCell<Vec<Value>>>),
-    Object(Rc<RefCell<Vec<(String, Value)>>>),
+    Object(Rc<RefCell<ObjectValue>>),
     Promise(Rc<RefCell<PromiseValue>>),
     Map(Rc<RefCell<MapValue>>),
     Set(Rc<RefCell<SetValue>>),
@@ -2195,6 +2196,66 @@ enum Value {
     Function(Rc<FunctionValue>),
 }
 
+#[derive(Debug, Clone, Default)]
+struct ObjectValue {
+    entries: Vec<(String, Value)>,
+    index_by_key: HashMap<String, usize>,
+}
+
+impl ObjectValue {
+    fn new(entries: Vec<(String, Value)>) -> Self {
+        let mut value = Self::default();
+        for (key, entry_value) in entries {
+            value.set_entry(key, entry_value);
+        }
+        value
+    }
+
+    fn set_entry(&mut self, key: String, value: Value) {
+        if let Some(index) = self.index_by_key.get(&key).copied() {
+            if let Some((_, existing)) = self.entries.get_mut(index) {
+                *existing = value;
+                return;
+            }
+        }
+        let index = self.entries.len();
+        self.entries.push((key.clone(), value));
+        self.index_by_key.insert(key, index);
+    }
+
+    fn get_entry(&self, key: &str) -> Option<Value> {
+        self.index_by_key
+            .get(key)
+            .and_then(|index| self.entries.get(*index))
+            .map(|(_, value)| value.clone())
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.index_by_key.clear();
+    }
+}
+
+impl From<Vec<(String, Value)>> for ObjectValue {
+    fn from(entries: Vec<(String, Value)>) -> Self {
+        Self::new(entries)
+    }
+}
+
+impl std::ops::Deref for ObjectValue {
+    type Target = [(String, Value)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl PartialEq for ObjectValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RegexValue {
     source: String,
@@ -2208,7 +2269,7 @@ struct RegexValue {
     unicode: bool,
     compiled: Regex,
     last_index: usize,
-    properties: Vec<(String, Value)>,
+    properties: ObjectValue,
 }
 
 impl PartialEq for RegexValue {
@@ -4649,18 +4710,52 @@ struct HistoryEntry {
     state: Value,
 }
 
+#[derive(Debug, Default)]
+struct ScriptEnv {
+    inner: Arc<HashMap<String, Value>>,
+}
+
+impl ScriptEnv {
+    fn share(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl std::ops::Deref for ScriptEnv {
+    type Target = HashMap<String, Value>;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for ScriptEnv {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.inner)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScriptRuntimeState {
+    env: ScriptEnv,
+    pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
+    listener_capture_env_stack: Vec<Rc<RefCell<HashMap<String, Value>>>>,
+}
+
 #[derive(Debug)]
 pub struct Harness {
     dom: Dom,
     listeners: ListenerStore,
     node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
     node_expando_props: HashMap<(NodeId, String), Value>,
-    script_env: HashMap<String, Value>,
+    script_runtime: ScriptRuntimeState,
     document_url: String,
-    window_object: Rc<RefCell<Vec<(String, Value)>>>,
-    document_object: Rc<RefCell<Vec<(String, Value)>>>,
-    location_object: Rc<RefCell<Vec<(String, Value)>>>,
-    history_object: Rc<RefCell<Vec<(String, Value)>>>,
+    window_object: Rc<RefCell<ObjectValue>>,
+    document_object: Rc<RefCell<ObjectValue>>,
+    location_object: Rc<RefCell<ObjectValue>>,
+    history_object: Rc<RefCell<ObjectValue>>,
     history_entries: Vec<HistoryEntry>,
     history_index: usize,
     history_scroll_restoration: String,
@@ -4677,9 +4772,9 @@ pub struct Harness {
     next_promise_id: usize,
     next_symbol_id: usize,
     next_url_object_id: usize,
-    url_objects: HashMap<usize, Rc<RefCell<Vec<(String, Value)>>>>,
-    url_constructor_properties: Rc<RefCell<Vec<(String, Value)>>>,
-    local_storage_object: Rc<RefCell<Vec<(String, Value)>>>,
+    url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
+    url_constructor_properties: Rc<RefCell<ObjectValue>>,
+    local_storage_object: Rc<RefCell<ObjectValue>>,
     next_blob_url_id: usize,
     blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
     task_depth: usize,
@@ -4706,8 +4801,6 @@ pub struct Harness {
     trace_logs: VecDeque<String>,
     trace_log_limit: usize,
     trace_to_stderr: bool,
-    pending_function_decls: Vec<HashMap<String, (ScriptHandler, bool)>>,
-    listener_capture_env_stack: Vec<Rc<RefCell<HashMap<String, Value>>>>,
 }
 
 #[derive(Debug)]
@@ -4718,7 +4811,6 @@ pub struct MockWindow {
 
 #[derive(Debug)]
 pub struct MockPage {
-    pub url: String,
     harness: Harness,
 }
 
@@ -4731,10 +4823,7 @@ impl MockWindow {
             .pages
             .get_mut(self.current)
             .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))?;
-        page.sync_url_from_harness();
-        let result = f(&mut page.harness)?;
-        page.sync_url_from_harness();
-        Ok(result)
+        f(&mut page.harness)
     }
 
     pub fn new() -> Self {
@@ -4751,17 +4840,11 @@ impl MockWindow {
             .iter()
             .position(|page| page.harness.document_url == url)
         {
-            self.pages[index] = MockPage {
-                url: url.to_string(),
-                harness,
-            };
+            self.pages[index] = MockPage { harness };
             self.current = index;
             Ok(index)
         } else {
-            self.pages.push(MockPage {
-                url: url.to_string(),
-                harness,
-            });
+            self.pages.push(MockPage { harness });
             self.current = self.pages.len() - 1;
             Ok(self.current)
         }
@@ -4799,12 +4882,10 @@ impl MockWindow {
     }
 
     pub fn current_document_mut(&mut self) -> Result<&mut Harness> {
-        let page = self
-            .pages
+        self.pages
             .get_mut(self.current)
-            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))?;
-        page.sync_url_from_harness();
-        Ok(&mut page.harness)
+            .map(|page| &mut page.harness)
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
     }
 
     pub fn current_document(&self) -> Result<&Harness> {
@@ -4863,10 +4944,6 @@ impl MockWindow {
 }
 
 impl MockPage {
-    fn sync_url_from_harness(&mut self) {
-        self.url = self.harness.document_url.clone();
-    }
-
     pub fn url(&self) -> &str {
         self.harness.document_url.as_str()
     }

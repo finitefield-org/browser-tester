@@ -14,12 +14,12 @@ impl Harness {
             listeners: ListenerStore::default(),
             node_event_handler_props: HashMap::new(),
             node_expando_props: HashMap::new(),
-            script_env: HashMap::new(),
+            script_runtime: ScriptRuntimeState::default(),
             document_url: url.to_string(),
-            window_object: Rc::new(RefCell::new(Vec::new())),
-            document_object: Rc::new(RefCell::new(Vec::new())),
-            location_object: Rc::new(RefCell::new(Vec::new())),
-            history_object: Rc::new(RefCell::new(Vec::new())),
+            window_object: Rc::new(RefCell::new(ObjectValue::default())),
+            document_object: Rc::new(RefCell::new(ObjectValue::default())),
+            location_object: Rc::new(RefCell::new(ObjectValue::default())),
+            history_object: Rc::new(RefCell::new(ObjectValue::default())),
             history_entries: vec![HistoryEntry {
                 url: url.to_string(),
                 state: Value::Null,
@@ -40,8 +40,8 @@ impl Harness {
             next_symbol_id: 1,
             next_url_object_id: 1,
             url_objects: HashMap::new(),
-            url_constructor_properties: Rc::new(RefCell::new(Vec::new())),
-            local_storage_object: Rc::new(RefCell::new(Vec::new())),
+            url_constructor_properties: Rc::new(RefCell::new(ObjectValue::default())),
+            local_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
             next_blob_url_id: 1,
             blob_url_objects: HashMap::new(),
             task_depth: 0,
@@ -68,8 +68,6 @@ impl Harness {
             trace_logs: VecDeque::new(),
             trace_log_limit: 10_000,
             trace_to_stderr: true,
-            pending_function_decls: Vec::new(),
-            listener_capture_env_stack: Vec::new(),
         };
 
         harness.initialize_global_bindings();
@@ -81,11 +79,35 @@ impl Harness {
         Ok(harness)
     }
 
+    pub(super) fn with_script_env<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut HashMap<String, Value>) -> Result<R>,
+    ) -> Result<R> {
+        let mut env = self.script_runtime.env.share();
+        match f(self, &mut env) {
+            Ok(value) => {
+                self.script_runtime.env = env;
+                Ok(value)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) fn with_script_env_always<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut HashMap<String, Value>) -> Result<R>,
+    ) -> Result<R> {
+        let mut env = self.script_runtime.env.share();
+        let result = f(self, &mut env);
+        self.script_runtime.env = env;
+        result
+    }
+
     pub(super) fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
         self.sync_history_object();
-        self.window_object = Rc::new(RefCell::new(Vec::new()));
-        self.document_object = Rc::new(RefCell::new(Vec::new()));
+        self.window_object = Rc::new(RefCell::new(ObjectValue::default()));
+        self.document_object = Rc::new(RefCell::new(ObjectValue::default()));
         self.url_constructor_properties.borrow_mut().clear();
         let local_storage_items = {
             let entries = self.local_storage_object.borrow();
@@ -98,7 +120,7 @@ impl Harness {
         let mut local_storage_entries =
             vec![(INTERNAL_STORAGE_OBJECT_KEY.to_string(), Value::Bool(true))];
         Self::set_storage_pairs(&mut local_storage_entries, &local_storage_items);
-        *self.local_storage_object.borrow_mut() = local_storage_entries;
+        *self.local_storage_object.borrow_mut() = local_storage_entries.into();
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
             ("readText".into(), Self::new_builtin_placeholder_function()),
@@ -191,33 +213,33 @@ impl Harness {
         let window = Value::Object(self.window_object.clone());
         let document = Value::Object(self.document_object.clone());
 
-        self.script_env.insert("document".to_string(), document);
-        self.script_env
+        self.script_runtime.env.insert("document".to_string(), document);
+        self.script_runtime.env
             .insert("navigator".to_string(), navigator.clone());
-        self.script_env
+        self.script_runtime.env
             .insert("clientInformation".to_string(), navigator.clone());
-        self.script_env.insert("Intl".to_string(), intl);
-        self.script_env
+        self.script_runtime.env.insert("Intl".to_string(), intl);
+        self.script_runtime.env
             .insert("String".to_string(), string_constructor);
-        self.script_env
+        self.script_runtime.env
             .insert("Boolean".to_string(), boolean_constructor);
-        self.script_env.insert("URL".to_string(), url_constructor);
-        self.script_env
+        self.script_runtime.env.insert("URL".to_string(), url_constructor);
+        self.script_runtime.env
             .insert("HTMLElement".to_string(), html_element_constructor);
-        self.script_env.insert(
+        self.script_runtime.env.insert(
             "HTMLInputElement".to_string(),
             html_input_element_constructor,
         );
-        self.script_env.insert("location".to_string(), location);
-        self.script_env.insert("history".to_string(), history);
-        self.script_env
+        self.script_runtime.env.insert("location".to_string(), location);
+        self.script_runtime.env.insert("history".to_string(), history);
+        self.script_runtime.env
             .insert("localStorage".to_string(), local_storage);
-        self.script_env.insert("window".to_string(), window.clone());
-        self.script_env.insert("self".to_string(), window.clone());
-        self.script_env.insert("top".to_string(), window.clone());
-        self.script_env.insert("parent".to_string(), window.clone());
-        self.script_env.insert("frames".to_string(), window);
-        self.script_env
+        self.script_runtime.env.insert("window".to_string(), window.clone());
+        self.script_runtime.env.insert("self".to_string(), window.clone());
+        self.script_runtime.env.insert("top".to_string(), window.clone());
+        self.script_runtime.env.insert("parent".to_string(), window.clone());
+        self.script_runtime.env.insert("frames".to_string(), window);
+        self.script_runtime.env
             .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
     }
 
@@ -282,7 +304,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.document_object.borrow_mut() = entries;
+        *self.document_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn window_builtin_keys() -> &'static [&'static str] {
@@ -393,7 +415,7 @@ impl Harness {
             ("name".to_string(), name_value),
         ];
         entries.extend(extras);
-        *self.window_object.borrow_mut() = entries;
+        *self.window_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn sync_window_runtime_properties(&mut self) {
@@ -495,7 +517,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.location_object.borrow_mut() = entries;
+        *self.location_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn is_location_object(entries: &[(String, Value)]) -> bool {
@@ -570,7 +592,7 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.history_object.borrow_mut() = entries;
+        *self.history_object.borrow_mut() = entries.into();
     }
 
     pub(super) fn is_history_object(entries: &[(String, Value)]) -> bool {
@@ -603,7 +625,7 @@ impl Harness {
 
     pub(super) fn set_navigator_property(
         &mut self,
-        navigator_object: &Rc<RefCell<Vec<(String, Value)>>>,
+        navigator_object: &Rc<RefCell<ObjectValue>>,
         key: &str,
         value: Value,
     ) -> Result<()> {
@@ -655,7 +677,7 @@ impl Harness {
 
     pub(super) fn set_storage_object_property(
         &mut self,
-        storage_object: &Rc<RefCell<Vec<(String, Value)>>>,
+        storage_object: &Rc<RefCell<ObjectValue>>,
         key: &str,
         value: Value,
     ) -> Result<()> {
@@ -1266,19 +1288,20 @@ impl Harness {
             let _ = self.load_location_mock_page_if_exists(&entry.url)?;
         }
 
-        let mut pop_env = self.script_env.clone();
-        let _ = self.dispatch_event_with_options(
-            self.dom.root,
-            "popstate",
-            &mut pop_env,
-            true,
-            false,
-            false,
-            Some(entry.state),
-            None,
-            None,
-        )?;
-        self.script_env = pop_env;
+        self.with_script_env_always(|this, env| {
+            let _ = this.dispatch_event_with_options(
+                this.dom.root,
+                "popstate",
+                env,
+                true,
+                false,
+                false,
+                Some(entry.state),
+                None,
+                None,
+            )?;
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -1288,13 +1311,13 @@ impl Harness {
         self.listeners = ListenerStore::default();
         self.node_event_handler_props.clear();
         self.node_expando_props.clear();
-        self.script_env.clear();
+        self.script_runtime.env.clear();
         self.task_queue.clear();
         self.microtask_queue.clear();
         self.running_timer_id = None;
         self.running_timer_canceled = false;
-        self.pending_function_decls.clear();
-        self.listener_capture_env_stack.clear();
+        self.script_runtime.pending_function_decls.clear();
+        self.script_runtime.listener_capture_env_stack.clear();
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();
@@ -1865,10 +1888,9 @@ impl Harness {
     }
 
     pub(super) fn click_node(&mut self, target: NodeId) -> Result<()> {
-        let mut env = self.script_env.clone();
-        let result = stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, &mut env));
-        self.script_env = env;
-        result
+        self.with_script_env_always(|this, env| {
+            stacker::grow(32 * 1024 * 1024, || this.click_node_with_env(target, env))
+        })
     }
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
@@ -1896,12 +1918,14 @@ impl Harness {
             };
 
             if let Some(form_id) = form {
-                let submit_outcome = self.dispatch_event(form_id, "submit")?;
-                if !submit_outcome.default_prevented {
-                    let mut env = self.script_env.clone();
-                    self.maybe_close_dialog_for_form_submit_with_env(form_id, &mut env)?;
-                    self.script_env = env;
-                }
+                self.with_script_env(|this, env| {
+                    let submit_outcome =
+                        this.dispatch_event_with_env(form_id, "submit", env, true)?;
+                    if !submit_outcome.default_prevented {
+                        this.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+                    }
+                    Ok(())
+                })?;
             }
 
             Ok(())
@@ -1994,11 +2018,11 @@ impl Harness {
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        stacker::grow(32 * 1024 * 1024, || {
-            let mut env = self.script_env.clone();
-            let _ = self.dispatch_event_with_env(target, event, &mut env, false)?;
-            self.script_env = env;
-            Ok(())
+        self.with_script_env(|this, env| {
+            stacker::grow(32 * 1024 * 1024, || {
+                let _ = this.dispatch_event_with_env(target, event, env, false)?;
+                Ok(())
+            })
         })
     }
 
@@ -2497,10 +2521,7 @@ impl Harness {
         target: NodeId,
         event_type: &str,
     ) -> Result<EventState> {
-        let mut env = self.script_env.clone();
-        let event = self.dispatch_event_with_env(target, event_type, &mut env, true)?;
-        self.script_env = env;
-        Ok(event)
+        self.with_script_env(|this, env| this.dispatch_event_with_env(target, event_type, env, true))
     }
 
     pub(super) fn dispatch_event_with_env(
@@ -2613,10 +2634,7 @@ impl Harness {
     }
 
     pub(super) fn focus_node(&mut self, node: NodeId) -> Result<()> {
-        let mut env = self.script_env.clone();
-        self.focus_node_with_env(node, &mut env)?;
-        self.script_env = env;
-        Ok(())
+        self.with_script_env(|this, env| this.focus_node_with_env(node, env))
     }
 
     pub(super) fn focus_node_with_env(
@@ -2643,10 +2661,7 @@ impl Harness {
     }
 
     pub(super) fn blur_node(&mut self, node: NodeId) -> Result<()> {
-        let mut env = self.script_env.clone();
-        self.blur_node_with_env(node, &mut env)?;
-        self.script_env = env;
-        Ok(())
+        self.with_script_env(|this, env| this.blur_node_with_env(node, env))
     }
 
     pub(super) fn blur_node_with_env(
@@ -2834,7 +2849,7 @@ impl Harness {
             let current_keys = env.keys().cloned().collect::<Vec<_>>();
             let mut script_env_before = HashMap::new();
             for key in &current_keys {
-                if let Some(value) = self.script_env.get(key).cloned() {
+                if let Some(value) = self.script_runtime.env.get(key).cloned() {
                     script_env_before.insert(key.clone(), value);
                 }
             }
@@ -2848,11 +2863,11 @@ impl Harness {
                 ));
             }
             for scope in &listener.captured_pending_function_decls {
-                self.pending_function_decls.push(scope.clone());
+                self.script_runtime.pending_function_decls.push(scope.clone());
             }
             let call_result = self.execute_handler(&listener.handler, event, &mut listener_env);
             for _ in 0..listener.captured_pending_function_decls.len() {
-                self.pending_function_decls.pop();
+                self.script_runtime.pending_function_decls.pop();
             }
             call_result?;
             {
@@ -2879,7 +2894,7 @@ impl Harness {
             for key in current_keys {
                 let listener_value = listener_env.get(&key).cloned();
                 let before = script_env_before.get(&key);
-                let after = self.script_env.get(&key).cloned();
+                let after = self.script_runtime.env.get(&key).cloned();
                 let script_changed = match (before, after.as_ref()) {
                     (Some(prev), Some(next)) => !self.strict_equal(prev, next),
                     (None, Some(_)) => true,
@@ -3123,7 +3138,7 @@ impl Harness {
         value: &Value,
     ) {
         if Self::env_should_sync_global_name(env, name) {
-            self.script_env.insert(name.to_string(), value.clone());
+            self.script_runtime.env.insert(name.to_string(), value.clone());
         }
     }
 
@@ -3137,14 +3152,15 @@ impl Harness {
         let local_bindings = Self::collect_function_scope_bindings(&handler);
         let scope_depth = Self::env_scope_depth(env);
         let captured_pending_function_decls = self
+            .script_runtime
             .pending_function_decls
             .iter()
             .filter(|scope| !scope.is_empty())
             .cloned()
             .collect::<Vec<_>>();
         let captured_env = if global_scope {
-            Rc::new(RefCell::new(self.script_env.clone()))
-        } else if let Some(shared_env) = self.listener_capture_env_stack.last() {
+            Rc::new(RefCell::new(self.script_runtime.env.clone()))
+        } else if let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() {
             shared_env.clone()
         } else {
             Rc::new(RefCell::new(env.clone()))
@@ -3159,7 +3175,7 @@ impl Harness {
                 captured_global_names.insert(name.clone());
                 continue;
             }
-            let Some(global_value) = self.script_env.get(name) else {
+            let Some(global_value) = self.script_runtime.env.get(name) else {
                 continue;
             };
             if global_scope || self.strict_equal(global_value, value) {
@@ -3402,7 +3418,7 @@ impl Harness {
         let run =
             |this: &mut Self, caller_env: Option<&HashMap<String, Value>>| -> Result<Value> {
             for scope in &function.captured_pending_function_decls {
-                this.pending_function_decls.push(scope.clone());
+                this.script_runtime.pending_function_decls.push(scope.clone());
             }
 
             let result = (|| -> Result<Value> {
@@ -3412,7 +3428,7 @@ impl Harness {
                     function.captured_env.borrow().clone()
                 };
                 let mut call_env = if function.global_scope {
-                    this.script_env.clone()
+                    this.script_runtime.env.clone()
                 } else {
                     captured_env_before_call.clone()
                 };
@@ -3429,13 +3445,13 @@ impl Harness {
                         continue;
                     }
                     global_sync_keys.insert(name.clone());
-                    if let Some(global_value) = this.script_env.get(name).cloned() {
+                    if let Some(global_value) = this.script_runtime.env.get(name).cloned() {
                         call_env.insert(name.clone(), global_value);
                     } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
                         call_env.insert(name.clone(), value);
                     }
                 }
-                for (name, global_value) in &this.script_env {
+                for (name, global_value) in this.script_runtime.env.iter() {
                     if Self::is_internal_env_key(name)
                         || function.local_bindings.contains(name)
                         || call_env.contains_key(name)
@@ -3455,7 +3471,7 @@ impl Harness {
                 }
                 let mut global_values_before_call = HashMap::new();
                 for name in &global_sync_keys {
-                    if let Some(value) = this.script_env.get(name).cloned() {
+                    if let Some(value) = this.script_runtime.env.get(name).cloned() {
                         global_values_before_call.insert(name.clone(), value);
                     }
                 }
@@ -3479,7 +3495,7 @@ impl Harness {
                         continue;
                     }
                     let before = global_values_before_call.get(name);
-                    let global_after = this.script_env.get(name).cloned();
+                    let global_after = this.script_runtime.env.get(name).cloned();
                     let call_after = call_env.get(name).cloned();
                     let global_changed = match (before, global_after.as_ref()) {
                         (Some(prev), Some(next)) => !this.strict_equal(prev, next),
@@ -3497,7 +3513,7 @@ impl Harness {
                         continue;
                     }
                     if let Some(next) = call_after {
-                        this.script_env.insert(name.clone(), next);
+                        this.script_runtime.env.insert(name.clone(), next);
                     }
                 }
                 if !function.global_scope {
@@ -3541,7 +3557,7 @@ impl Harness {
             })();
 
             for _ in 0..function.captured_pending_function_decls.len() {
-                this.pending_function_decls.pop();
+                this.script_runtime.pending_function_decls.pop();
             }
             result
         };
@@ -3795,7 +3811,7 @@ impl Harness {
         name: &str,
         env: &HashMap<String, Value>,
     ) -> Option<Value> {
-        for scope in self.pending_function_decls.iter().rev() {
+        for scope in self.script_runtime.pending_function_decls.iter().rev() {
             let Some((handler, is_async)) = scope.get(name) else {
                 continue;
             };
@@ -3812,13 +3828,13 @@ impl Harness {
         env: &mut HashMap<String, Value>,
     ) -> Result<ExecFlow> {
         let pending = Self::collect_function_decls(stmts);
-        self.pending_function_decls.push(pending);
-        self.listener_capture_env_stack
+        self.script_runtime.pending_function_decls.push(pending);
+        self.script_runtime.listener_capture_env_stack
             .push(Rc::new(RefCell::new(env.clone())));
 
         let result = (|| -> Result<ExecFlow> {
             for stmt in stmts {
-                if let Some(shared_env) = self.listener_capture_env_stack.last() {
+                if let Some(shared_env) = self.script_runtime.listener_capture_env_stack.last() {
                     *shared_env.borrow_mut() = env.clone();
                 }
                 match stmt {
@@ -4924,6 +4940,7 @@ impl Harness {
                     match op {
                         ListenerRegistrationOp::Add => {
                             let captured_env = self
+                                .script_runtime
                                 .listener_capture_env_stack
                                 .last()
                                 .cloned()
@@ -4937,6 +4954,7 @@ impl Harness {
                                     handler: handler.clone(),
                                     captured_env,
                                     captured_pending_function_decls: self
+                                        .script_runtime
                                         .pending_function_decls
                                         .iter()
                                         .filter(|scope| !scope.is_empty())
@@ -4998,8 +5016,8 @@ impl Harness {
             Ok(ExecFlow::Continue)
         })();
 
-        self.listener_capture_env_stack.pop();
-        self.pending_function_decls.pop();
+        self.script_runtime.listener_capture_env_stack.pop();
+        self.script_runtime.pending_function_decls.pop();
         result
     }
 

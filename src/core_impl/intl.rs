@@ -4136,7 +4136,7 @@ impl Harness {
     }
 
     pub(super) fn intl_constructor_value(&self, constructor_name: &str) -> Value {
-        let Some(Value::Object(entries)) = self.script_env.get("Intl") else {
+        let Some(Value::Object(entries)) = self.script_runtime.env.get("Intl") else {
             return Self::new_builtin_placeholder_function();
         };
         Self::object_get_entry(&entries.borrow(), constructor_name)
