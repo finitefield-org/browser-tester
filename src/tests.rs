@@ -101,6 +101,50 @@ fn mock_window_treats_page_urls_as_case_sensitive() -> Result<()> {
 }
 
 #[test]
+fn mock_window_current_url_tracks_location_navigation() -> Result<()> {
+    let mut win = MockWindow::new();
+    win.open_page(
+        "https://app.local/start",
+        r#"
+            <button id='go'>go</button>
+            <script>
+              document.getElementById('go').addEventListener('click', () => {
+                location.assign('/next');
+              });
+            </script>
+        "#,
+    )?;
+
+    win.click("#go")?;
+    assert_eq!(win.current_url()?, "https://app.local/next");
+    Ok(())
+}
+
+#[test]
+fn mock_window_switch_to_accepts_navigated_url() -> Result<()> {
+    let mut win = MockWindow::new();
+    win.open_page(
+        "https://app.local/a",
+        r#"
+            <button id='go'>go</button>
+            <script>
+              document.getElementById('go').addEventListener('click', () => {
+                location.assign('/a2');
+              });
+            </script>
+        "#,
+    )?;
+    win.open_page("https://app.local/b", "<p id='result'>B</p>")?;
+
+    win.switch_to("https://app.local/a")?;
+    win.click("#go")?;
+    win.switch_to("https://app.local/b")?;
+    win.switch_to("https://app.local/a2")?;
+    win.assert_exists("#go")?;
+    Ok(())
+}
+
+#[test]
 fn window_aliases_document_in_script_parser() -> Result<()> {
     let html = r#"
         <p id='result'>before</p>

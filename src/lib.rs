@@ -4723,6 +4723,20 @@ pub struct MockPage {
 }
 
 impl MockWindow {
+    fn with_current_harness_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut Harness) -> Result<R>,
+    ) -> Result<R> {
+        let page = self
+            .pages
+            .get_mut(self.current)
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))?;
+        page.sync_url_from_harness();
+        let result = f(&mut page.harness)?;
+        page.sync_url_from_harness();
+        Ok(result)
+    }
+
     pub fn new() -> Self {
         Self {
             pages: Vec::new(),
@@ -4735,7 +4749,7 @@ impl MockWindow {
         if let Some(index) = self
             .pages
             .iter()
-            .position(|page| page.url == url)
+            .position(|page| page.harness.document_url == url)
         {
             self.pages[index] = MockPage {
                 url: url.to_string(),
@@ -4761,7 +4775,7 @@ impl MockWindow {
         let index = self
             .pages
             .iter()
-            .position(|page| page.url == url)
+            .position(|page| page.harness.document_url == url)
             .ok_or_else(|| Error::ScriptRuntime(format!("unknown page: {url}")))?;
         self.current = index;
         Ok(())
@@ -4780,15 +4794,17 @@ impl MockWindow {
     pub fn current_url(&self) -> Result<&str> {
         self.pages
             .get(self.current)
-            .map(|page| page.url.as_str())
+            .map(|page| page.harness.document_url.as_str())
             .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
     }
 
     pub fn current_document_mut(&mut self) -> Result<&mut Harness> {
-        self.pages
+        let page = self
+            .pages
             .get_mut(self.current)
-            .map(|page| &mut page.harness)
-            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
+            .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))?;
+        page.sync_url_from_harness();
+        Ok(&mut page.harness)
     }
 
     pub fn current_document(&self) -> Result<&Harness> {
@@ -4802,64 +4818,57 @@ impl MockWindow {
         &mut self,
         f: impl FnOnce(&mut Harness) -> Result<R>,
     ) -> Result<R> {
-        let harness = self.current_document_mut()?;
-        f(harness)
+        self.with_current_harness_mut(f)
     }
 
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.type_text(selector, text)
+        self.with_current_harness_mut(|page| page.type_text(selector, text))
     }
 
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.set_checked(selector, checked)
+        self.with_current_harness_mut(|page| page.set_checked(selector, checked))
     }
 
     pub fn click(&mut self, selector: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.click(selector)
+        self.with_current_harness_mut(|page| page.click(selector))
     }
 
     pub fn submit(&mut self, selector: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.submit(selector)
+        self.with_current_harness_mut(|page| page.submit(selector))
     }
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.dispatch(selector, event)
+        self.with_current_harness_mut(|page| page.dispatch(selector, event))
     }
 
     pub fn assert_text(&mut self, selector: &str, expected: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.assert_text(selector, expected)
+        self.with_current_harness_mut(|page| page.assert_text(selector, expected))
     }
 
     pub fn assert_value(&mut self, selector: &str, expected: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.assert_value(selector, expected)
+        self.with_current_harness_mut(|page| page.assert_value(selector, expected))
     }
 
     pub fn assert_checked(&mut self, selector: &str, expected: bool) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.assert_checked(selector, expected)
+        self.with_current_harness_mut(|page| page.assert_checked(selector, expected))
     }
 
     pub fn assert_exists(&mut self, selector: &str) -> Result<()> {
-        let page = self.current_document_mut()?;
-        page.assert_exists(selector)
+        self.with_current_harness_mut(|page| page.assert_exists(selector))
     }
 
     pub fn take_trace_logs(&mut self) -> Result<Vec<String>> {
-        let page = self.current_document_mut()?;
-        Ok(page.take_trace_logs())
+        self.with_current_harness_mut(|page| Ok(page.take_trace_logs()))
     }
 }
 
 impl MockPage {
+    fn sync_url_from_harness(&mut self) {
+        self.url = self.harness.document_url.clone();
+    }
+
     pub fn url(&self) -> &str {
-        self.url.as_str()
+        self.harness.document_url.as_str()
     }
 
     pub fn harness(&self) -> &Harness {

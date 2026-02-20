@@ -3119,7 +3119,7 @@ impl Harness {
                 if let Value::UrlConstructor = &receiver {
                     let url_constructor_override = {
                         let entries = self.url_constructor_properties.borrow();
-                        Self::object_get_entry_with_case_fallback(&entries, member)
+                        Self::object_get_entry(&entries, member)
                     };
                     if let Some(callee) = url_constructor_override {
                         return self
@@ -6178,13 +6178,6 @@ impl Harness {
             .find_map(|(name, value)| (name == key).then(|| value.clone()))
     }
 
-    fn object_get_entry_with_case_fallback(
-        entries: &[(String, Value)],
-        key: &str,
-    ) -> Option<Value> {
-        Self::object_get_entry(entries, key)
-    }
-
     pub(super) fn callable_kind_from_value(value: &Value) -> Option<&str> {
         let Value::Object(entries) = value else {
             return None;
@@ -6351,7 +6344,7 @@ impl Harness {
                         let len = Self::storage_pairs_from_object_entries(&entries).len();
                         return Ok(Value::Number(len as i64));
                     }
-                    if let Some(value) = Self::object_get_entry_with_case_fallback(&entries, key) {
+                    if let Some(value) = Self::object_get_entry(&entries, key) {
                         return Ok(value);
                     }
                     if Self::is_storage_method_name(key) {
@@ -6368,7 +6361,7 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                Ok(Self::object_get_entry_with_case_fallback(&entries, key)
+                Ok(Self::object_get_entry(&entries, key)
                     .unwrap_or(Value::Undefined))
             }
             Value::Promise(promise) => {
@@ -6461,7 +6454,7 @@ impl Harness {
             }
             Value::UrlConstructor => {
                 if let Some(value) =
-                    Self::object_get_entry_with_case_fallback(&self.url_constructor_properties.borrow(), key)
+                    Self::object_get_entry(&self.url_constructor_properties.borrow(), key)
                 {
                     return Ok(value);
                 }
@@ -10325,7 +10318,7 @@ impl Harness {
             .collect::<Result<Vec<_>>>()?;
         let url_constructor_override = {
             let entries = self.url_constructor_properties.borrow();
-            Self::object_get_entry_with_case_fallback(&entries, member)
+            Self::object_get_entry(&entries, member)
         };
         if let Some(callee) = url_constructor_override {
             return self
