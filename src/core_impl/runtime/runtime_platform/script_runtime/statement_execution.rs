@@ -950,8 +950,7 @@ impl Harness {
                             Value::Null | Value::Undefined => Vec::new(),
                             _ => {
                                 return Err(Error::ScriptRuntime(
-                                    "for...in iterable must be a NodeList, Array, or Object"
-                                        .into(),
+                                    "for...in iterable must be a NodeList, Array, or Object".into(),
                                 ));
                             }
                         };

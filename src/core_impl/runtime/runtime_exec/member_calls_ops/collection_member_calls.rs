@@ -39,7 +39,7 @@ impl Harness {
                     _ => {
                         return Err(Error::ScriptRuntime(format!(
                             "invalid normalization form: {form}"
-                        )))
+                        )));
                     }
                 };
                 Value::String(normalized)

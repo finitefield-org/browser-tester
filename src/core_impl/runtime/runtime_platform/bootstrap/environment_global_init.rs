@@ -2,14 +2,33 @@ use super::*;
 
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self> {
-        Self::from_html_impl("about:blank", html)
+        Self::from_html_impl("about:blank", html, &[])
     }
 
     pub fn from_html_with_url(url: &str, html: &str) -> Result<Self> {
-        Self::from_html_impl(url, html)
+        Self::from_html_impl(url, html, &[])
     }
 
-    pub(crate) fn from_html_impl(url: &str, html: &str) -> Result<Self> {
+    pub fn from_html_with_local_storage(
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self> {
+        Self::from_html_impl("about:blank", html, initial_local_storage)
+    }
+
+    pub fn from_html_with_url_and_local_storage(
+        url: &str,
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self> {
+        Self::from_html_impl(url, html, initial_local_storage)
+    }
+
+    pub(crate) fn from_html_impl(
+        url: &str,
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         let mut harness = Self {
             dom,
@@ -28,12 +47,32 @@ impl Harness {
         };
 
         harness.initialize_global_bindings();
+        harness.seed_initial_local_storage(initial_local_storage);
 
         for script in scripts {
             harness.compile_and_register_script(&script)?;
         }
 
         Ok(harness)
+    }
+
+    pub(crate) fn seed_initial_local_storage(&mut self, initial_local_storage: &[(&str, &str)]) {
+        if initial_local_storage.is_empty() {
+            return;
+        }
+
+        let mut pairs = Vec::new();
+        for (key, value) in initial_local_storage {
+            if let Some((_, stored)) = pairs.iter_mut().find(|(name, _)| name == key) {
+                *stored = (*value).to_string();
+            } else {
+                pairs.push(((*key).to_string(), (*value).to_string()));
+            }
+        }
+        Self::set_storage_pairs(
+            &mut self.browser_apis.local_storage_object.borrow_mut(),
+            &pairs,
+        );
     }
 
     pub(crate) fn with_script_env<R>(

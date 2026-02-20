@@ -85,7 +85,11 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `confirm` / `prompt` provide APIs for injecting mocked return values.
 - `location` navigation can load mocked HTML for a target URL.
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
+- `localStorage` can be seeded at harness creation for deterministic initial-state tests.
+- `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - Main APIs:
+  - `Harness::from_html_with_local_storage(html, &[("key", "value"), ...])`
+  - `Harness::from_html_with_url_and_local_storage(url, html, &[("key", "value"), ...])`
   - `Harness::set_fetch_mock(url, body)`
   - `Harness::set_clipboard_text(text)`
   - `Harness::clipboard_text()`
@@ -175,6 +179,25 @@ fn main() -> browser_tester::Result<()> {
     h.set_clipboard_text("seeded");
     h.click("#run")?;
     h.assert_text("#out", "seeded")?;
+    Ok(())
+}
+```
+
+localStorage initial seed example:
+
+```rust
+use browser_tester::Harness;
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        document.getElementById('out').textContent = localStorage.getItem('token') || 'missing';
+      </script>
+    "#;
+
+    let h = Harness::from_html_with_local_storage(html, &[("token", "seeded-token")])?;
+    h.assert_text("#out", "seeded-token")?;
     Ok(())
 }
 ```
@@ -335,7 +358,8 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `arrayBuffer()`, `bytes()`, `slice(start?, end?)`, `stream()`, `text()`
 - Window API (core subset): `window`, `self`, `top`, `parent`, `frames`,
   `window.length`, `window.closed`, `window.document`, `document.defaultView`,
-  `window.navigator`, `window.clientInformation`, `window.origin`, `window.isSecureContext`
+  `window.navigator`, `window.clientInformation`, `window.origin`, `window.isSecureContext`,
+  `window.localStorage` (assignable for test stubs)
 - Timers: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   (returns timer ID. No real-time waiting; execute via `harness.advance_time(ms)` / `harness.flush()`),
   `clearTimeout(timerId)` / `clearInterval(timerId)`,
@@ -442,6 +466,16 @@ pub struct Harness { /* runtime */ }
 
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self>;
+    pub fn from_html_with_url(url: &str, html: &str) -> Result<Self>;
+    pub fn from_html_with_local_storage(
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self>;
+    pub fn from_html_with_url_and_local_storage(
+        url: &str,
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self>;
 
     // Action
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()>;

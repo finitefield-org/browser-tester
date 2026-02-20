@@ -50,10 +50,21 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "URL" | "HTMLElement" | "HTMLInputElement" | "localStorage" => {
+            | "URL" | "HTMLElement" | "HTMLInputElement" => {
                 Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
             }
             "location" => self.set_location_property("href", value),
+            "localStorage" => {
+                Self::object_set_entry(
+                    &mut self.dom_runtime.window_object.borrow_mut(),
+                    "localStorage".to_string(),
+                    value.clone(),
+                );
+                self.script_runtime
+                    .env
+                    .insert("localStorage".to_string(), value);
+                Ok(())
+            }
             "name" => {
                 Self::object_set_entry(
                     &mut self.dom_runtime.window_object.borrow_mut(),
@@ -427,7 +438,7 @@ impl Harness {
         target: &str,
         path: &[Expr],
         expr: &Expr,
-        env: &HashMap<String, Value>,
+        env: &mut HashMap<String, Value>,
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<()> {
@@ -455,6 +466,23 @@ impl Harness {
         let final_key = keys
             .last()
             .ok_or_else(|| Error::ScriptRuntime("object assignment key cannot be empty".into()))?;
-        self.set_object_assignment_property(&container, final_key, value, target)
+        let assigns_window_local_storage = if let Value::Object(object) = &container {
+            let key = self.property_key_to_storage_key(final_key);
+            if key == "localStorage" {
+                let entries = object.borrow();
+                Self::is_window_object(&entries)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        self.set_object_assignment_property(&container, final_key, value.clone(), target)?;
+        if assigns_window_local_storage {
+            env.insert("localStorage".to_string(), value.clone());
+            self.sync_global_binding_if_needed(env, "localStorage", &value);
+        }
+        Ok(())
     }
 }

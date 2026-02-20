@@ -407,6 +407,41 @@ fn local_storage_basic_methods_are_available() -> browser_tester::Result<()> {
 }
 
 #[test]
+fn window_local_storage_is_assignable_for_stub_usage() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      window.localStorage = {
+        getItem: (key) => key === "token" ? "stubbed" : null
+      };
+      document.getElementById("result").textContent =
+        String(localStorage.getItem("token")) + "|" + String(window.localStorage.getItem("token"));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "stubbed|stubbed")?;
+    Ok(())
+}
+
+#[test]
+fn from_html_with_local_storage_seeds_values_before_script_execution() -> browser_tester::Result<()>
+{
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent =
+        String(localStorage.getItem("token")) + "|" + String(localStorage.getItem("mode"));
+    </script>
+    "#;
+
+    let harness =
+        Harness::from_html_with_local_storage(html, &[("token", "seed"), ("mode", "debug")])?;
+    harness.assert_text("#result", "seed|debug")?;
+    Ok(())
+}
+
+#[test]
 fn dom_expando_properties_round_trip_on_nodes() -> browser_tester::Result<()> {
     let html = r#"
     <div id="root"></div>

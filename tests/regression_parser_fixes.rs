@@ -615,7 +615,10 @@ fn parenthesized_multi_parameter_arrow_callback_in_dom_assignment_parses()
 
     let harness = Harness::from_html(html)?;
     let dumped = harness.dump_dom("#result")?;
-    assert!(dumped.contains("data-order-index=\"1\""), "unexpected dom: {dumped}");
+    assert!(
+        dumped.contains("data-order-index=\"1\""),
+        "unexpected dom: {dumped}"
+    );
     Ok(())
 }
 
@@ -1030,8 +1033,8 @@ fn member_named_return_followed_by_division_is_not_treated_as_regex_start()
 }
 
 #[test]
-fn array_literal_map_callback_result_can_be_joined_after_assignment()
--> browser_tester::Result<()> {
+fn array_literal_map_callback_result_can_be_joined_after_assignment() -> browser_tester::Result<()>
+{
     let html = r#"
     <div id="result"></div>
     <script>
@@ -1047,8 +1050,7 @@ fn array_literal_map_callback_result_can_be_joined_after_assignment()
 }
 
 #[test]
-fn concat_chain_with_nested_map_keeps_array_type_for_join()
--> browser_tester::Result<()> {
+fn concat_chain_with_nested_map_keeps_array_type_for_join() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
     <script>
@@ -1070,8 +1072,7 @@ fn concat_chain_with_nested_map_keeps_array_type_for_join()
 }
 
 #[test]
-fn array_literal_with_template_elements_can_be_joined()
--> browser_tester::Result<()> {
+fn array_literal_with_template_elements_can_be_joined() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
     <script>
@@ -1087,8 +1088,7 @@ fn array_literal_with_template_elements_can_be_joined()
 }
 
 #[test]
-fn concat_chain_with_nested_map_keeps_array_runtime_type()
--> browser_tester::Result<()> {
+fn concat_chain_with_nested_map_keeps_array_runtime_type() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
     <script>
@@ -1107,8 +1107,7 @@ fn concat_chain_with_nested_map_keeps_array_runtime_type()
 }
 
 #[test]
-fn identifier_starting_with_var_is_not_treated_as_var_declaration()
--> browser_tester::Result<()> {
+fn identifier_starting_with_var_is_not_treated_as_var_declaration() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
     <script>
