@@ -653,6 +653,10 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
         !byte.is_ascii_alphanumeric()
     }
 
+    fn is_ident_char(byte: u8) -> bool {
+        byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
+    }
+
     let mut i = from;
     #[derive(Clone, Copy)]
     enum State {
@@ -665,6 +669,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
     }
     let mut state_stack = vec![State::Normal];
     let mut previous_significant = None;
+    let mut previous_identifier_allows_regex = false;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -675,18 +680,32 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     i += 1;
                     continue;
                 }
+                if b == b'_' || b == b'$' || b.is_ascii_alphabetic() {
+                    let start = i;
+                    i += 1;
+                    while i < bytes.len() && is_ident_char(bytes[i]) {
+                        i += 1;
+                    }
+                    previous_significant = Some(bytes[i - 1]);
+                    previous_identifier_allows_regex =
+                        super::parser::identifier_allows_regex_start(&bytes[start..i]);
+                    continue;
+                }
                 if b == b'\'' {
                     state_stack.push(State::Single);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 if b == b'"' {
                     state_stack.push(State::Double);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 if b == b'`' {
                     state_stack.push(State::TemplateText);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
@@ -710,12 +729,16 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     continue;
                 }
                 if b == b'/' {
-                    if can_start_regex_literal(previous_significant) {
+                    if can_start_regex_literal(previous_significant)
+                        || previous_identifier_allows_regex
+                    {
                         state_stack.push(State::Regex { in_class: false });
+                        previous_identifier_allows_regex = false;
                         i += 1;
                         continue;
                     }
                     previous_significant = Some(b);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
@@ -735,6 +758,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     }
                 }
                 previous_significant = Some(b);
+                previous_identifier_allows_regex = false;
                 i += 1;
             }
             State::Single => {
@@ -744,6 +768,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     if b == b'\'' {
                         state_stack.pop();
                         previous_significant = Some(b'\'');
+                        previous_identifier_allows_regex = false;
                     }
                     i += 1;
                 }
@@ -755,6 +780,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     if b == b'"' {
                         state_stack.pop();
                         previous_significant = Some(b'"');
+                        previous_identifier_allows_regex = false;
                     }
                     i += 1;
                 }
@@ -766,12 +792,14 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     if b == b'`' {
                         state_stack.pop();
                         previous_significant = Some(b'`');
+                        previous_identifier_allows_regex = false;
                         i += 1;
                         continue;
                     }
                     if b == b'$' && bytes.get(i + 1) == Some(&b'{') {
                         state_stack.push(State::TemplateExpr { brace_depth: 1 });
                         previous_significant = None;
+                        previous_identifier_allows_regex = false;
                         i += 2;
                         continue;
                     }
@@ -783,11 +811,23 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     i += 1;
                     continue;
                 }
+                if b == b'_' || b == b'$' || b.is_ascii_alphabetic() {
+                    let start = i;
+                    i += 1;
+                    while i < bytes.len() && is_ident_char(bytes[i]) {
+                        i += 1;
+                    }
+                    previous_significant = Some(bytes[i - 1]);
+                    previous_identifier_allows_regex =
+                        super::parser::identifier_allows_regex_start(&bytes[start..i]);
+                    continue;
+                }
                 if b == b'{' {
                     if let Some(State::TemplateExpr { brace_depth }) = state_stack.last_mut() {
                         *brace_depth += 1;
                     }
                     previous_significant = Some(b'{');
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
@@ -799,21 +839,25 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                         *brace_depth -= 1;
                     }
                     previous_significant = Some(b'}');
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 if b == b'\'' {
                     state_stack.push(State::Single);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 if b == b'"' {
                     state_stack.push(State::Double);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 if b == b'`' {
                     state_stack.push(State::TemplateText);
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
@@ -837,16 +881,21 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     continue;
                 }
                 if b == b'/' {
-                    if can_start_regex_literal(previous_significant) {
+                    if can_start_regex_literal(previous_significant)
+                        || previous_identifier_allows_regex
+                    {
                         state_stack.push(State::Regex { in_class: false });
+                        previous_identifier_allows_regex = false;
                         i += 1;
                         continue;
                     }
                     previous_significant = Some(b'/');
+                    previous_identifier_allows_regex = false;
                     i += 1;
                     continue;
                 }
                 previous_significant = Some(b);
+                previous_identifier_allows_regex = false;
                 i += 1;
             }
             State::Regex { in_class } => {
@@ -875,6 +924,7 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     }
                     state_stack.pop();
                     previous_significant = Some(b'/');
+                    previous_identifier_allows_regex = false;
                     continue;
                 }
                 i += 1;

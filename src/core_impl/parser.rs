@@ -17,6 +17,23 @@ pub(super) fn is_ident(value: &str) -> bool {
     chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
 }
 
+pub(super) fn identifier_allows_regex_start(ident: &[u8]) -> bool {
+    matches!(
+        ident,
+        b"return"
+            | b"throw"
+            | b"case"
+            | b"delete"
+            | b"typeof"
+            | b"void"
+            | b"yield"
+            | b"await"
+            | b"in"
+            | b"of"
+            | b"instanceof"
+    )
+}
+
 pub(super) fn is_form_control(dom: &Dom, node_id: NodeId) -> bool {
     let Some(element) = dom.element(node_id) else {
         return false;
@@ -168,23 +185,6 @@ impl JsLexScanner {
     }
 
     pub(super) fn advance(&mut self, bytes: &[u8], i: usize) -> usize {
-        fn can_start_regex_after_identifier(ident: &[u8]) -> bool {
-            matches!(
-                ident,
-                b"return"
-                    | b"throw"
-                    | b"case"
-                    | b"delete"
-                    | b"typeof"
-                    | b"void"
-                    | b"yield"
-                    | b"await"
-                    | b"in"
-                    | b"of"
-                    | b"instanceof"
-            )
-        }
-
         let b = bytes[i];
         match self.mode {
             JsLexMode::Normal => {
@@ -199,7 +199,7 @@ impl JsLexScanner {
                     }
                     self.previous_significant = Some(bytes[end - 1]);
                     self.previous_identifier_allows_regex =
-                        can_start_regex_after_identifier(&bytes[start..end]);
+                        identifier_allows_regex_start(&bytes[start..end]);
                     return end;
                 }
                 match b {
@@ -293,7 +293,7 @@ impl JsLexScanner {
                     }
                     self.previous_significant = Some(bytes[end - 1]);
                     self.previous_identifier_allows_regex =
-                        can_start_regex_after_identifier(&bytes[start..end]);
+                        identifier_allows_regex_start(&bytes[start..end]);
                     return end;
                 }
                 match b {

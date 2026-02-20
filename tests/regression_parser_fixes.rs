@@ -881,3 +881,36 @@ fn comments_stripper_does_not_break_return_regex_char_class_with_double_slash()
     harness.assert_text("#result", "ok")?;
     Ok(())
 }
+
+#[test]
+fn if_body_can_start_with_regex_literal() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      if (true) /[}]/.test("}");
+      document.getElementById("result").textContent = "ok";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn return_regex_containing_script_end_marker_does_not_break_html_extractor()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /<\/script>/.test("</script>");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
