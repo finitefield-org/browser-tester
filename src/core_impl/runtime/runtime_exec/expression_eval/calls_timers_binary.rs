@@ -61,6 +61,14 @@ impl Harness {
                         }
                     }
 
+                    if let Value::String(text) = &receiver {
+                        if let Some(value) =
+                            self.eval_string_member_call(text, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                    }
+
                     if let Value::NodeList(nodes) = &receiver {
                         if let Some(value) =
                             self.eval_nodelist_member_call(nodes, member, &evaluated_args, event)?

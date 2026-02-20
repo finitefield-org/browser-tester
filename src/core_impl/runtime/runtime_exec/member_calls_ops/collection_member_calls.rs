@@ -1,6 +1,25 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn eval_string_member_call(
+        &mut self,
+        text: &str,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "concat" => {
+                let mut out = text.to_string();
+                for arg in evaluated_args {
+                    out.push_str(&arg.as_string());
+                }
+                Value::String(out)
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
     pub(crate) fn eval_array_member_call(
         &mut self,
         values: &Rc<RefCell<Vec<Value>>>,
@@ -281,6 +300,16 @@ impl Harness {
                     out.push_str(&value.as_string());
                 }
                 Value::String(out)
+            }
+            "concat" => {
+                let mut out = values.borrow().clone();
+                for arg in evaluated_args {
+                    match arg {
+                        Value::Array(other) => out.extend(other.borrow().iter().cloned()),
+                        _ => out.push(arg.clone()),
+                    }
+                }
+                Self::new_array_value(out)
             }
             "push" => {
                 let mut values_ref = values.borrow_mut();

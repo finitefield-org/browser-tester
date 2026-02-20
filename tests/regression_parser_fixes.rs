@@ -305,6 +305,29 @@ fn object_entries_foreach_updates_outer_variable() -> browser_tester::Result<()>
 }
 
 #[test]
+fn map_get_with_member_expression_argument_parses_without_formdata_conflict()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const allocations = new Map();
+      const base = new Map();
+      base.set("A", 1);
+      allocations.set("w", base);
+      const opt = { warehouse: "w" };
+      const sku = "A";
+      const alloc = 1;
+      allocations.get(opt.warehouse).set(sku, (allocations.get(opt.warehouse).get(sku) || 0) + alloc);
+      document.getElementById("result").textContent = String(allocations.get("w").get("A"));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
 fn expression_foreach_listener_keeps_item_variable_scope() -> browser_tester::Result<()> {
     let html = r#"
     <button id="a">A</button>
@@ -519,6 +542,80 @@ fn parenthesized_arrow_parameter_list_in_const_assignment_parses() -> browser_te
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "a,b")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const out = [1, 2].map((row, index) => row + index);
+      document.getElementById("result").textContent = out.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,3")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_allows_harness_construction() {
+    let html = r#"<script>const out = [1, 2].map((row, index) => row + index);</script>"#;
+    Harness::from_html(html).expect("Harness::from_html should parse multi-parameter callbacks");
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_with_template_literal_body_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const rows = [
+        { sku: "A", qty: 1 },
+        { sku: "B", qty: 2 },
+      ];
+      const rendered = rows.map((row, index) => `
+        <tr data-idx="${index}">
+          <td>${String(row.sku || "").replace(/"/g, "&quot;")}</td>
+          <td>${String(row.qty || "").replace(/"/g, "&quot;")}</td>
+        </tr>
+      `).join("");
+      document.getElementById("result").textContent = rendered.includes('data-idx="1"')
+        ? "ok"
+        : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_in_dom_assignment_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const rows = [
+        { sku: "A", qty: 1 },
+        { sku: "B", qty: 2 },
+      ];
+      const els = { orderBody: document.getElementById("result") };
+      els.orderBody.innerHTML = rows.map((row, index) => `
+        <tr data-order-index="${index}">
+          <td>${String(row.sku || "").replace(/"/g, "&quot;")}</td>
+          <td>${String(row.qty || "").replace(/"/g, "&quot;")}</td>
+        </tr>
+      `).join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    let dumped = harness.dump_dom("#result")?;
+    assert!(dumped.contains("data-order-index=\"1\""), "unexpected dom: {dumped}");
     Ok(())
 }
 
@@ -929,5 +1026,82 @@ fn member_named_return_followed_by_division_is_not_treated_as_regex_start()
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "4")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_map_callback_result_can_be_joined_after_assignment()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "A", b: "B", c: "C", d: "D" };
+      const head = [copy.a, copy.b, copy.c, copy.d].map((x) => `<th>${x}</th>`);
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<th>A</th><th>B</th><th>C</th><th>D</th>")?;
+    Ok(())
+}
+
+#[test]
+fn concat_chain_with_nested_map_keeps_array_type_for_join()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty", c: "Unfilled" };
+      const main = { usedWarehouses: ["W1", "W2"] };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`]
+        .concat(main.usedWarehouses.map((w) => `<th>${w}</th>`))
+        .concat([`<th>${copy.c}</th>`]);
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text(
+        "#result",
+        "<th>SKU</th><th>Qty</th><th>W1</th><th>W2</th><th>Unfilled</th>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_with_template_elements_can_be_joined()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty" };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`];
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<th>SKU</th><th>Qty</th>")?;
+    Ok(())
+}
+
+#[test]
+fn concat_chain_with_nested_map_keeps_array_runtime_type()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty", c: "Unfilled" };
+      const main = { usedWarehouses: ["W1", "W2"] };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`]
+        .concat(main.usedWarehouses.map((w) => `<th>${w}</th>`))
+        .concat([`<th>${copy.c}</th>`]);
+      document.getElementById("result").textContent = Array.isArray(head) ? "array" : "not-array";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "array")?;
     Ok(())
 }

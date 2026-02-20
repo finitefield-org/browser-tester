@@ -47,11 +47,33 @@ pub(crate) fn parse_form_data_get_all_length_expr(
     }
 
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let name = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() != 1 {
+        return match source {
+            FormDataSource::NewForm(_) => Err(Error::ScriptParse(
+                "FormData.getAll requires exactly one string argument".into(),
+            )),
+            FormDataSource::Var(_) => Ok(None),
+        };
+    }
+    let arg = args[0].trim();
+    let name = match parse_string_literal_exact(arg) {
+        Ok(name) => name,
+        Err(_) => {
+            return match source {
+                FormDataSource::NewForm(_) => Err(Error::ScriptParse(
+                    "FormData.getAll requires exactly one string argument".into(),
+                )),
+                FormDataSource::Var(_) => Ok(None),
+            };
+        }
+    };
     cursor.skip_ws();
 
     if !cursor.consume_byte(b'.') {
@@ -92,11 +114,33 @@ pub(crate) fn parse_form_data_method_expr(
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let name = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() != 1 {
+        return match source {
+            FormDataSource::NewForm(_) => Err(Error::ScriptParse(format!(
+                "FormData.{method} requires exactly one string argument"
+            ))),
+            FormDataSource::Var(_) => Ok(None),
+        };
+    }
+    let arg = args[0].trim();
+    let name = match parse_string_literal_exact(arg) {
+        Ok(name) => name,
+        Err(_) => {
+            return match source {
+                FormDataSource::NewForm(_) => Err(Error::ScriptParse(format!(
+                    "FormData.{method} requires exactly one string argument"
+                ))),
+                FormDataSource::Var(_) => Ok(None),
+            };
+        }
+    };
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);

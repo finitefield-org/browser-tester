@@ -428,7 +428,6 @@ pub(crate) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 | "charCodeAt"
                 | "codePointAt"
                 | "at"
-                | "concat"
                 | "trim"
                 | "trimStart"
                 | "trimEnd"
