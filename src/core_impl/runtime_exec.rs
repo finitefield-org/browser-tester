@@ -7396,7 +7396,7 @@ impl Harness {
     pub(super) fn compile_regex(
         pattern: &str,
         info: RegexFlags,
-    ) -> std::result::Result<Regex, regex::Error> {
+    ) -> std::result::Result<Regex, RegexError> {
         let mut builder = RegexBuilder::new(pattern);
         builder.case_insensitive(info.ignore_case);
         builder.multi_line(info.multiline);
@@ -7449,7 +7449,7 @@ impl Harness {
         }
     }
 
-    pub(super) fn map_regex_runtime_error(err: regex::Error) -> Error {
+    pub(super) fn map_regex_runtime_error(err: RegexError) -> Error {
         Error::ScriptRuntime(format!("regular expression runtime error: {err}"))
     }
 
@@ -11748,7 +11748,7 @@ impl Harness {
                     ));
                 }
                 let value = self.eval_expr(&args[0], env, event_param, event)?;
-                Ok(Value::String(regex::escape(&value.as_string()).into_owned()))
+                Ok(Value::String(regex_escape(&value.as_string()).into_owned()))
             }
         }
     }
@@ -11768,8 +11768,10 @@ impl Harness {
         if global {
             let compiled = regex.borrow().compiled.clone();
             let mut matches = Vec::new();
-            for matched in compiled.find_iter(value) {
-                let matched = matched.map_err(Self::map_regex_runtime_error)?;
+            for matched in compiled
+                .find_all(value)
+                .map_err(Self::map_regex_runtime_error)?
+            {
                 matches.push(Value::String(matched.as_str().to_string()));
             }
             regex.borrow_mut().last_index = 0;
@@ -13632,9 +13634,11 @@ impl Harness {
     ) -> Result<Vec<Value>> {
         let compiled = regex.borrow().compiled.clone();
         let mut parts = Vec::new();
-        for part in compiled.split(value) {
-            let part = part.map_err(Self::map_regex_runtime_error)?;
-            parts.push(Value::String(part.to_string()));
+        for part in compiled
+            .split_all(value)
+            .map_err(Self::map_regex_runtime_error)?
+        {
+            parts.push(Value::String(part));
         }
         if let Some(limit) = limit {
             if limit == 0 {
@@ -13646,7 +13650,7 @@ impl Harness {
         Ok(parts)
     }
 
-    pub(super) fn expand_regex_replacement(template: &str, captures: &Captures<'_>) -> String {
+    pub(super) fn expand_regex_replacement(template: &str, captures: &Captures) -> String {
         let chars = template.chars().collect::<Vec<_>>();
         let mut i = 0usize;
         let mut out = String::new();
@@ -13716,8 +13720,10 @@ impl Harness {
         if global {
             let mut out = String::new();
             let mut last_end = 0usize;
-            for captures in compiled.captures_iter(value) {
-                let captures = captures.map_err(Self::map_regex_runtime_error)?;
+            for captures in compiled
+                .captures_all(value)
+                .map_err(Self::map_regex_runtime_error)?
+            {
                 let Some(full) = captures.get(0) else {
                     continue;
                 };
