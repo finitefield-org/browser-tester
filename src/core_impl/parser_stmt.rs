@@ -727,24 +727,75 @@ fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> 
         let raw = src
             .get(0..end)
             .ok_or_else(|| Error::ScriptParse("invalid callback body".into()))?;
-        let expr_src = raw.trim();
-        if expr_src.is_empty() {
-            break;
+        let stripped = strip_js_comments(raw);
+        let stripped = stripped.trim();
+        if stripped.is_empty() {
+            end -= 1;
+            continue;
         }
 
-        let stripped = strip_js_comments(expr_src);
-        let stripped = stripped.trim();
-        if !stripped.is_empty() {
-            if parse_expr(stripped).is_ok() {
-                cursor.set_pos(cursor.i + expr_src.len());
-                return Ok((stripped.to_string(), true));
-            }
+        let suffix = src.get(end..).unwrap_or_default();
+        if !is_valid_callback_body_suffix(suffix) {
+            end -= 1;
+            continue;
+        }
+
+        if parse_expr(stripped).is_ok() {
+            cursor.set_pos(cursor.i + end);
+            return Ok((stripped.to_string(), true));
+        }
+
+        if let Some(rewritten) = rewrite_assignment_arrow_body(stripped)? {
+            cursor.set_pos(cursor.i + end);
+            return Ok((rewritten, false));
         }
 
         end -= 1;
     }
 
     Err(Error::ScriptParse("expected callback body".into()))
+}
+
+fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
+    let expr_src = strip_outer_parens(expr_src).trim();
+    let Some((eq_pos, op_len)) = find_top_level_assignment(expr_src) else {
+        return Ok(None);
+    };
+
+    let lhs_raw = expr_src[..eq_pos].trim();
+    let rhs_src = expr_src[eq_pos + op_len..].trim();
+    if lhs_raw.is_empty() || rhs_src.is_empty() {
+        return Ok(None);
+    }
+
+    let lhs = strip_outer_parens(lhs_raw).trim();
+    if lhs.is_empty() {
+        return Ok(None);
+    }
+
+    let op = expr_src
+        .get(eq_pos..eq_pos + op_len)
+        .ok_or_else(|| Error::ScriptParse("invalid assignment operator".into()))?;
+    let assignment_src = format!("{lhs} {op} {rhs_src}");
+
+    let supported = parse_var_assign(&assignment_src)?.is_some()
+        || parse_object_assign(&assignment_src)?.is_some()
+        || (op_len == 1 && parse_dom_assignment(&assignment_src)?.is_some());
+    if !supported {
+        return Ok(None);
+    }
+
+    if parse_expr(lhs).is_err() {
+        return Ok(None);
+    }
+
+    Ok(Some(format!("{assignment_src}; return {lhs};")))
+}
+
+fn is_valid_callback_body_suffix(suffix: &str) -> bool {
+    suffix.chars().all(|ch| {
+        ch.is_ascii_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';')
+    })
 }
 
 fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {

@@ -3572,6 +3572,38 @@ fn async_identifier_arrow_form_still_parses_as_normal_arrow() -> Result<()> {
 }
 
 #[test]
+fn arrow_function_concise_assignment_expression_returns_assigned_value() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const fn = (value) => ((value) = value + 1);
+          document.getElementById('result').textContent = String(fn(4));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "5")?;
+    Ok(())
+}
+
+#[test]
+fn for_each_arrow_concise_assignment_expression_updates_outer_binding() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const values = [1, 2, 3];
+          let sum = 0;
+          values.forEach((value) => (sum = sum + value));
+          document.getElementById('result').textContent = String(sum);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "6")?;
+    Ok(())
+}
+
+#[test]
 fn arrow_function_line_break_before_arrow_is_rejected() {
     let err = Harness::from_html(
         "<script>const fn = (a, b)\n=> a + b; document.body.textContent = String(fn(1, 2));</script>",

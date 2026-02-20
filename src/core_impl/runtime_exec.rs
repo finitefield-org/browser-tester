@@ -2462,24 +2462,118 @@ impl Harness {
                 Ok(Value::Bool(hay.ends_with(&search)))
             }
             Expr::StringSlice { value, start, end } => {
-                let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                let len = value.chars().count();
-                let start = start
-                    .as_ref()
-                    .map(|value| self.eval_expr(value, env, event_param, event))
-                    .transpose()?
-                    .map(|value| Self::value_to_i64(&value))
-                    .map(|value| Self::normalize_slice_index(len, value))
-                    .unwrap_or(0);
-                let end = end
-                    .as_ref()
-                    .map(|value| self.eval_expr(value, env, event_param, event))
-                    .transpose()?
-                    .map(|value| Self::value_to_i64(&value))
-                    .map(|value| Self::normalize_slice_index(len, value))
-                    .unwrap_or(len);
-                let end = end.max(start);
-                Ok(Value::String(Self::substring_chars(&value, start, end)))
+                let source = self.eval_expr(value, env, event_param, event)?;
+                match source {
+                    Value::Array(values) => {
+                        let values_ref = values.borrow();
+                        let len = values_ref.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Self::new_array_value(values_ref[start..end].to_vec()))
+                    }
+                    Value::TypedArray(values) => {
+                        let snapshot = self.typed_array_snapshot(&values)?;
+                        let kind = values.borrow().kind;
+                        let len = snapshot.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        self.new_typed_array_from_values(kind, &snapshot[start..end])
+                    }
+                    Value::ArrayBuffer(buffer) => {
+                        Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
+                        let source = buffer.borrow();
+                        let len = source.bytes.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(ArrayBufferValue {
+                            bytes: source.bytes[start..end].to_vec(),
+                            max_byte_length: None,
+                            detached: false,
+                        }))))
+                    }
+                    Value::Blob(blob) => {
+                        let source = blob.borrow();
+                        let len = source.bytes.len();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Self::new_blob_value(
+                            source.bytes[start..end].to_vec(),
+                            String::new(),
+                        ))
+                    }
+                    other => {
+                        let text = other.as_string();
+                        let len = text.chars().count();
+                        let start = start
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(0);
+                        let end = end
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .map(|value| Self::normalize_slice_index(len, value))
+                            .unwrap_or(len);
+                        let end = end.max(start);
+                        Ok(Value::String(Self::substring_chars(&text, start, end)))
+                    }
+                }
             }
             Expr::StringSubstring { value, start, end } => {
                 let value = self.eval_expr(value, env, event_param, event)?.as_string();

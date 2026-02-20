@@ -368,9 +368,7 @@ impl Dom {
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
         if is_checkbox_or_radio_input_element(element) {
-            element
-                .attrs
-                .insert("value".to_string(), value.to_string());
+            element.attrs.insert("value".to_string(), value.to_string());
         }
         element.value = value.to_string();
         let len = element.value.chars().count();
@@ -415,9 +413,9 @@ impl Dom {
     }
 
     pub(super) fn selection_start(&self, node_id: NodeId) -> Result<usize> {
-        let element = self
-            .element(node_id)
-            .ok_or_else(|| Error::ScriptRuntime("selectionStart target is not an element".into()))?;
+        let element = self.element(node_id).ok_or_else(|| {
+            Error::ScriptRuntime("selectionStart target is not an element".into())
+        })?;
         Ok(element.selection_start)
     }
 
@@ -1540,9 +1538,9 @@ impl Dom {
                 SelectorPseudoClass::Checked => {
                     self.element(node_id).is_some_and(|node| node.checked)
                 }
-                SelectorPseudoClass::Indeterminate => self.element(node_id).is_some_and(|node| {
-                    node.indeterminate && !node.attrs.contains_key("switch")
-                }),
+                SelectorPseudoClass::Indeterminate => self
+                    .element(node_id)
+                    .is_some_and(|node| node.indeterminate && !node.attrs.contains_key("switch")),
                 SelectorPseudoClass::Disabled => {
                     self.element(node_id).is_some_and(|node| node.disabled)
                 }
