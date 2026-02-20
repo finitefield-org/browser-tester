@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn value(&self, node_id: NodeId) -> Result<String> {
+    pub(crate) fn value(&self, node_id: NodeId) -> Result<String> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
@@ -9,7 +11,7 @@ impl Dom {
         Ok(element.value.clone())
     }
 
-    pub(super) fn set_value(&mut self, node_id: NodeId, value: &str) -> Result<()> {
+    pub(crate) fn set_value(&mut self, node_id: NodeId, value: &str) -> Result<()> {
         if self
             .tag_name(node_id)
             .map(|tag| tag.eq_ignore_ascii_case("select"))
@@ -32,14 +34,14 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn indeterminate(&self, node_id: NodeId) -> Result<bool> {
+    pub(crate) fn indeterminate(&self, node_id: NodeId) -> Result<bool> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("indeterminate target is not an element".into()))?;
         Ok(element.indeterminate)
     }
 
-    pub(super) fn set_indeterminate(&mut self, node_id: NodeId, indeterminate: bool) -> Result<()> {
+    pub(crate) fn set_indeterminate(&mut self, node_id: NodeId, indeterminate: bool) -> Result<()> {
         let element = self
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("indeterminate target is not an element".into()))?;
@@ -47,14 +49,14 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn custom_validity_message(&self, node_id: NodeId) -> Result<String> {
+    pub(crate) fn custom_validity_message(&self, node_id: NodeId) -> Result<String> {
         let element = self.element(node_id).ok_or_else(|| {
             Error::ScriptRuntime("custom validity target is not an element".into())
         })?;
         Ok(element.custom_validity_message.clone())
     }
 
-    pub(super) fn set_custom_validity_message(
+    pub(crate) fn set_custom_validity_message(
         &mut self,
         node_id: NodeId,
         message: &str,
@@ -66,28 +68,28 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn selection_start(&self, node_id: NodeId) -> Result<usize> {
+    pub(crate) fn selection_start(&self, node_id: NodeId) -> Result<usize> {
         let element = self.element(node_id).ok_or_else(|| {
             Error::ScriptRuntime("selectionStart target is not an element".into())
         })?;
         Ok(element.selection_start)
     }
 
-    pub(super) fn selection_end(&self, node_id: NodeId) -> Result<usize> {
+    pub(crate) fn selection_end(&self, node_id: NodeId) -> Result<usize> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("selectionEnd target is not an element".into()))?;
         Ok(element.selection_end)
     }
 
-    pub(super) fn selection_direction(&self, node_id: NodeId) -> Result<String> {
+    pub(crate) fn selection_direction(&self, node_id: NodeId) -> Result<String> {
         let element = self.element(node_id).ok_or_else(|| {
             Error::ScriptRuntime("selectionDirection target is not an element".into())
         })?;
         Ok(element.selection_direction.clone())
     }
 
-    pub(super) fn set_selection_range(
+    pub(crate) fn set_selection_range(
         &mut self,
         node_id: NodeId,
         start: usize,
@@ -110,5 +112,4 @@ impl Dom {
         element.selection_direction = direction.to_string();
         Ok(())
     }
-
 }

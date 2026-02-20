@@ -1,4 +1,6 @@
-pub(super) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+use super::*;
+
+pub(crate) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -72,7 +74,7 @@ pub(super) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> 
     }))
 }
 
-pub(super) fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -107,7 +109,7 @@ pub(super) fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::NodeRemove { target }))
 }
 
-pub(super) fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -174,7 +176,7 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
     Ok(ListenerCallbackParseResult::Inline { params, body })
 }
 
-pub(super) fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
+pub(crate) fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
     let mut event_param = String::from("__bt_listener_event");
     while event_param == callback_name {
         event_param.push('_');
@@ -190,7 +192,7 @@ pub(super) fn build_listener_reference_handler(callback_name: &str) -> Result<Sc
     })
 }
 
-pub(super) fn parse_listener_option_key(raw: &str) -> Option<&str> {
+pub(crate) fn parse_listener_option_key(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
     if trimmed.len() >= 2 {
         let bytes = trimmed.as_bytes();
@@ -203,7 +205,7 @@ pub(super) fn parse_listener_option_key(raw: &str) -> Option<&str> {
     Some(trimmed)
 }
 
-pub(super) fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>> {
+pub(crate) fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>> {
     let mut capture = None;
     for raw_entry in split_top_level_by_char(src, b',') {
         let entry = raw_entry.trim();
@@ -233,7 +235,7 @@ pub(super) fn parse_listener_capture_from_options_object(src: &str) -> Result<Op
     Ok(capture)
 }
 
-pub(super) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -310,7 +312,7 @@ pub(super) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_event_call_stmt(stmt: &str) -> Option<Stmt> {
+pub(crate) fn parse_event_call_stmt(stmt: &str) -> Option<Stmt> {
     let stmt = stmt.trim();
     let open = stmt.find('(')?;
     let close = stmt.rfind(')')?;

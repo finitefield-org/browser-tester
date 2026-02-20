@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn set_trace_stderr(&mut self, enabled: bool) {
         self.trace_state.to_stderr = enabled;
@@ -123,14 +125,14 @@ impl Harness {
         Ok(())
     }
 
-    fn input_supports_required(kind: &str) -> bool {
+    pub(crate) fn input_supports_required(kind: &str) -> bool {
         !matches!(
             kind,
             "hidden" | "range" | "color" | "button" | "submit" | "reset" | "image"
         )
     }
 
-    fn is_labelable_control(&self, node: NodeId) -> bool {
+    pub(crate) fn is_labelable_control(&self, node: NodeId) -> bool {
         let Some(tag) = self.dom.tag_name(node) else {
             return false;
         };
@@ -149,7 +151,7 @@ impl Harness {
             || tag.eq_ignore_ascii_case("textarea")
     }
 
-    fn resolve_label_control(&self, label: NodeId) -> Option<NodeId> {
+    pub(crate) fn resolve_label_control(&self, label: NodeId) -> Option<NodeId> {
         if !self
             .dom
             .tag_name(label)
@@ -174,7 +176,7 @@ impl Harness {
             .find(|candidate| self.is_labelable_control(*candidate))
     }
 
-    fn resolve_details_for_summary_click(&self, target: NodeId) -> Option<NodeId> {
+    pub(crate) fn resolve_details_for_summary_click(&self, target: NodeId) -> Option<NodeId> {
         let summary = if self
             .dom
             .tag_name(target)
@@ -232,5 +234,4 @@ impl Harness {
 
         false
     }
-
 }

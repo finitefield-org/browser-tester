@@ -1,8 +1,14 @@
 use super::*;
 
-include!("json_regex_number_modules/json_parse.rs");
-include!("json_regex_number_modules/json_stringify_and_structured_clone.rs");
-include!("json_regex_number_modules/regex_runtime.rs");
-include!("json_regex_number_modules/math_and_number_methods.rs");
-include!("json_regex_number_modules/bigint_core.rs");
-include!("json_regex_number_modules/number_format_and_float16.rs");
+#[path = "json_regex_number_modules/bigint_core.rs"]
+mod bigint_core;
+#[path = "json_regex_number_modules/json_parse.rs"]
+mod json_parse;
+#[path = "json_regex_number_modules/json_stringify_and_structured_clone.rs"]
+mod json_stringify_and_structured_clone;
+#[path = "json_regex_number_modules/math_and_number_methods.rs"]
+mod math_and_number_methods;
+#[path = "json_regex_number_modules/number_format_and_float16.rs"]
+mod number_format_and_float16;
+#[path = "json_regex_number_modules/regex_runtime.rs"]
+mod regex_runtime;

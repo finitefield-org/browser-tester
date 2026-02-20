@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn anchor_rel_tokens(&self, node: NodeId) -> Vec<String> {
         self.dom

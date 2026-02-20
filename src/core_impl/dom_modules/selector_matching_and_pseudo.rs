@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn matches_step(&self, node_id: NodeId, step: &SelectorStep) -> bool {
+    pub(crate) fn matches_step(&self, node_id: NodeId, step: &SelectorStep) -> bool {
         let Some(element) = self.element(node_id) else {
             return false;
         };
@@ -141,15 +143,15 @@ impl Dom {
         true
     }
 
-    pub(super) fn is_first_element_child(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_first_element_child(&self, node_id: NodeId) -> bool {
         self.previous_element_sibling(node_id).is_none()
     }
 
-    pub(super) fn is_last_element_child(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_last_element_child(&self, node_id: NodeId) -> bool {
         self.next_element_sibling(node_id).is_none()
     }
 
-    pub(super) fn is_only_element_child(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_only_element_child(&self, node_id: NodeId) -> bool {
         let Some(parent) = self.parent(node_id) else {
             return false;
         };
@@ -162,7 +164,7 @@ impl Dom {
         count == 1
     }
 
-    pub(super) fn is_nth_element_child(
+    pub(crate) fn is_nth_element_child(
         &self,
         node_id: NodeId,
         selector: &NthChildSelector,
@@ -173,7 +175,7 @@ impl Dom {
         self.is_nth_index_element_child(index, selector)
     }
 
-    pub(super) fn is_nth_last_element_child(
+    pub(crate) fn is_nth_last_element_child(
         &self,
         node_id: NodeId,
         selector: &NthChildSelector,
@@ -200,7 +202,7 @@ impl Dom {
         self.is_nth_index_element_child(index_from_last, selector)
     }
 
-    pub(super) fn is_nth_element_of_type(
+    pub(crate) fn is_nth_element_of_type(
         &self,
         node_id: NodeId,
         selector: &NthChildSelector,
@@ -231,7 +233,7 @@ impl Dom {
         self.is_nth_index_element_child(target, selector)
     }
 
-    pub(super) fn is_nth_last_element_of_type(
+    pub(crate) fn is_nth_last_element_of_type(
         &self,
         node_id: NodeId,
         selector: &NthChildSelector,
@@ -264,7 +266,7 @@ impl Dom {
         self.is_nth_index_element_child(index_from_last, selector)
     }
 
-    pub(super) fn is_first_of_type(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_first_of_type(&self, node_id: NodeId) -> bool {
         let Some(parent) = self.parent(node_id) else {
             return false;
         };
@@ -283,7 +285,7 @@ impl Dom {
         false
     }
 
-    pub(super) fn is_only_of_type(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_only_of_type(&self, node_id: NodeId) -> bool {
         let Some(parent) = self.parent(node_id) else {
             return false;
         };
@@ -302,7 +304,7 @@ impl Dom {
         same_type_count == 1
     }
 
-    pub(super) fn is_last_of_type(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_last_of_type(&self, node_id: NodeId) -> bool {
         let Some(parent) = self.parent(node_id) else {
             return false;
         };
@@ -321,7 +323,7 @@ impl Dom {
         false
     }
 
-    pub(super) fn is_nth_index_element_child(
+    pub(crate) fn is_nth_index_element_child(
         &self,
         index: usize,
         selector: &NthChildSelector,
@@ -341,7 +343,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn element_index(&self, node_id: NodeId) -> Option<usize> {
+    pub(crate) fn element_index(&self, node_id: NodeId) -> Option<usize> {
         let parent = self.parent(node_id)?;
         let mut index = 0usize;
         for child in &self.nodes[parent.0].children {
@@ -356,7 +358,7 @@ impl Dom {
         None
     }
 
-    pub(super) fn next_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
+    pub(crate) fn next_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
         let parent = self.parent(node_id)?;
         let children = &self.nodes[parent.0].children;
         let pos = children.iter().position(|id| *id == node_id)?;
@@ -368,7 +370,7 @@ impl Dom {
         None
     }
 
-    pub(super) fn previous_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
+    pub(crate) fn previous_element_sibling(&self, node_id: NodeId) -> Option<NodeId> {
         let parent = self.parent(node_id)?;
         let children = &self.nodes[parent.0].children;
         let pos = children.iter().position(|id| *id == node_id)?;
@@ -380,7 +382,7 @@ impl Dom {
         None
     }
 
-    pub(super) fn find_ancestor_by_tag(&self, node_id: NodeId, tag: &str) -> Option<NodeId> {
+    pub(crate) fn find_ancestor_by_tag(&self, node_id: NodeId, tag: &str) -> Option<NodeId> {
         let mut cursor = self.parent(node_id);
         while let Some(current) = cursor {
             if self
@@ -394,5 +396,4 @@ impl Dom {
         }
         None
     }
-
 }

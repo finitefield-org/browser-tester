@@ -1,5 +1,7 @@
+use super::*;
+
 impl Harness {
-    fn eval_expr_events_unary_control(
+    pub(crate) fn eval_expr_events_unary_control(
         &mut self,
         expr: &Expr,
         env: &HashMap<String, Value>,

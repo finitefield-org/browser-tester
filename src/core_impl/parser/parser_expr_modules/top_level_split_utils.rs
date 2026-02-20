@@ -1,4 +1,6 @@
-pub(super) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
+use super::*;
+
+pub(crate) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut start = 0usize;
@@ -23,7 +25,7 @@ pub(super) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     parts
 }
 
-pub(super) fn split_top_level_by_ops<'a>(
+pub(crate) fn split_top_level_by_ops<'a>(
     src: &'a str,
     ops: &[&'a str],
 ) -> (Vec<&'a str>, Vec<&'a str>) {
@@ -85,7 +87,7 @@ pub(super) fn split_top_level_by_ops<'a>(
     (parts, found_ops)
 }
 
-pub(super) fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
+pub(crate) fn find_matching_brace(src: &str, start: usize) -> Result<usize> {
     let bytes = src.as_bytes();
     let mut i = start;
     let mut scanner = JsLexScanner {

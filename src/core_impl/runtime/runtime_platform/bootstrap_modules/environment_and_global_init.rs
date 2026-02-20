@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self> {
         Self::from_html_impl("about:blank", html)
@@ -7,7 +9,7 @@ impl Harness {
         Self::from_html_impl(url, html)
     }
 
-    fn from_html_impl(url: &str, html: &str) -> Result<Self> {
+    pub(crate) fn from_html_impl(url: &str, html: &str) -> Result<Self> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         let mut harness = Self {
             dom,
@@ -223,5 +225,4 @@ impl Harness {
             .env
             .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
     }
-
 }

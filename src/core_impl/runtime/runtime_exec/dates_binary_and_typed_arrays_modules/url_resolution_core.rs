@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn is_url_object(entries: &[(String, Value)]) -> bool {
         matches!(
@@ -313,5 +315,4 @@ impl Harness {
         self.sync_url_object_entries_from_parts(&mut object.borrow_mut(), &parts);
         Ok(())
     }
-
 }

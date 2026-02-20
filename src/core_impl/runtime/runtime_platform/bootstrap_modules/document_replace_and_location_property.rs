@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
@@ -93,5 +95,4 @@ impl Harness {
             }
         }
     }
-
 }

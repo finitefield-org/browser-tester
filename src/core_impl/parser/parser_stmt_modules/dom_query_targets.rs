@@ -1,4 +1,6 @@
-pub(super) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
+use super::*;
+
+pub(crate) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
     match target {
         DomQuery::Var(base) => Some(DomQuery::VarPath {
             base: base.clone(),
@@ -16,7 +18,7 @@ pub(super) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> O
     }
 }
 
-pub(super) fn is_dom_target_chain_stop(ident: &str) -> bool {
+pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
     if ident.starts_with("aria") {
         return true;
     }
@@ -165,7 +167,7 @@ pub(super) fn is_dom_target_chain_stop(ident: &str) -> bool {
     )
 }
 
-pub(super) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(crate) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
     let mut target = if let Ok(target) = parse_form_elements_item_target(cursor) {
@@ -287,7 +289,7 @@ pub(super) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> 
     Ok(target)
 }
 
-pub(super) fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(crate) fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let start = cursor.pos();
     if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
@@ -319,7 +321,7 @@ pub(super) fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<Do
     )))
 }
 
-pub(super) fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(crate) fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let form = parse_form_elements_base(cursor)?;
     cursor.skip_ws();
     cursor.expect_byte(b'.')?;
@@ -338,7 +340,7 @@ pub(super) fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result
     })
 }
 
-pub(super) fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
+pub(crate) fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
     let src = strip_js_comments(src).trim().to_string();
     if src.is_empty() {
         return Err(Error::ScriptParse("empty index".into()));
@@ -354,7 +356,7 @@ pub(super) fn parse_dom_query_index(src: &str) -> Result<DomIndex> {
     Ok(DomIndex::Dynamic(src))
 }
 
-pub(super) fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(crate) fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     let start = cursor.pos();
     if let Ok(target) = parse_document_element_call(cursor) {
         return Ok(target);
@@ -369,7 +371,7 @@ pub(super) fn parse_form_elements_base(cursor: &mut Cursor<'_>) -> Result<DomQue
     )))
 }
 
-pub(super) fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
+pub(crate) fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
         cursor.skip_ws();
@@ -411,7 +413,7 @@ pub(super) fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<Dom
     }
 }
 
-pub(super) fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
+pub(crate) fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
     let tag_name = tag_name.trim();
     if tag_name.is_empty() {
         return Err(Error::ScriptParse(
@@ -424,7 +426,7 @@ pub(super) fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<Strin
     Ok(tag_name.to_ascii_lowercase())
 }
 
-pub(super) fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
+pub(crate) fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
     let mut selector = String::new();
     let classes: Vec<&str> = class_names
         .split_whitespace()
@@ -445,7 +447,7 @@ pub(super) fn normalize_get_elements_by_class_name(class_names: &str) -> Result<
     Ok(selector)
 }
 
-pub(super) fn normalize_get_elements_by_name(name: &str) -> Result<String> {
+pub(crate) fn normalize_get_elements_by_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::ScriptParse(

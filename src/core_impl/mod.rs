@@ -14,7 +14,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
 
 #[cfg(test)]
 pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
-    parser::parse_for_each_callback(src)
+    parser::api::parse_for_each_callback(src)
 }
 
 pub(super) fn unescape_string(src: &str) -> String {

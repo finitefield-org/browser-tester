@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()> {
         let target = self.select_one(selector)?;
@@ -264,5 +266,4 @@ impl Harness {
             self.collect_form_controls(*child, out);
         }
     }
-
 }

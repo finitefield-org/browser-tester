@@ -1,4 +1,6 @@
-pub(super) fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+use super::*;
+
+pub(crate) fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -47,7 +49,7 @@ pub(super) fn parse_parse_int_expr(src: &str) -> Result<Option<(Expr, Option<Exp
     Ok(Some((value, radix)))
 }
 
-pub(super) fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -85,7 +87,7 @@ pub(super) fn parse_parse_float_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-pub(super) fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -137,7 +139,7 @@ pub(super) fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-pub(super) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -188,7 +190,7 @@ pub(super) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-pub(super) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
+pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'{') {
@@ -276,7 +278,7 @@ pub(super) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
     Ok(Some(out))
 }
 
-pub(super) fn find_first_top_level_colon(src: &str) -> Option<usize> {
+pub(crate) fn find_first_top_level_colon(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -291,7 +293,7 @@ pub(super) fn find_first_top_level_colon(src: &str) -> Option<usize> {
     None
 }
 
-pub(super) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -441,7 +443,7 @@ pub(super) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-pub(super) fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -520,7 +522,7 @@ pub(super) fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Re
     }))
 }
 
-pub(super) fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -560,7 +562,7 @@ pub(super) fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Exp
     }))
 }
 
-pub(super) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -596,7 +598,7 @@ pub(super) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ObjectPathGet { target, path }))
 }
 
-pub(super) fn parse_call_args<'a>(
+pub(crate) fn parse_call_args<'a>(
     args_src: &'a str,
     empty_err: &'static str,
 ) -> Result<Vec<&'a str>> {
@@ -614,7 +616,7 @@ pub(super) fn parse_call_args<'a>(
     Ok(args)
 }
 
-pub(super) fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
+pub(crate) fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
     let arg_src = arg_src.trim();
     if let Some(rest) = arg_src.strip_prefix("...") {
         let rest = rest.trim();
@@ -629,7 +631,7 @@ pub(super) fn parse_call_arg_expr(arg_src: &str) -> Result<Expr> {
     }
 }
 
-pub(super) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -683,7 +685,7 @@ pub(super) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -726,7 +728,7 @@ pub(super) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let bytes = src.as_bytes();
     let mut brackets = Vec::new();
@@ -798,7 +800,7 @@ pub(super) fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     let parse_args = |args_src: &str| -> Result<Vec<Expr>> {
         let args = parse_call_args(args_src, "function call arguments cannot be empty")?;
 
@@ -859,11 +861,11 @@ pub(super) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_fetch_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "fetch", "fetch requires exactly one argument")
 }
 
-pub(super) fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -920,4 +922,3 @@ pub(super) fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
     }
     Ok(Some(Expr::MatchMedia(Box::new(query))))
 }
-

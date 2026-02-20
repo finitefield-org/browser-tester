@@ -1,4 +1,6 @@
-pub(super) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
+use super::*;
+
+pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
     let sanitized = strip_js_comments(body);
     let raw_stmts = split_top_level_statements(sanitized.as_str());
     let mut stmts = Vec::new();
@@ -31,7 +33,7 @@ pub(super) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
     Ok(stmts)
 }
 
-pub(super) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
+pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     let stmt = stmt.trim();
 
     if let Some(parsed) = parse_if_stmt(stmt)? {
@@ -178,7 +180,7 @@ pub(super) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     Ok(Stmt::Expr(expr))
 }
 
-pub(super) fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
+pub(crate) fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
     let trimmed = stmt.trim_start();
     let Some(rest) = strip_else_prefix(trimmed) else {
         return Ok(None);
@@ -187,7 +189,7 @@ pub(super) fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
     Ok(Some(branch))
 }
 
-pub(super) fn strip_else_prefix(src: &str) -> Option<&str> {
+pub(crate) fn strip_else_prefix(src: &str) -> Option<&str> {
     if !src.starts_with("else") {
         return None;
     }
@@ -199,7 +201,7 @@ pub(super) fn strip_else_prefix(src: &str) -> Option<&str> {
     Some(&src[after..])
 }
 
-pub(super) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
+pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
     let src = src.trim();
     if src.is_empty() {
         return Err(Error::ScriptParse("empty if branch".into()));
@@ -226,7 +228,7 @@ pub(super) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
     Ok(vec![parse_single_statement(single)?])
 }
 
-pub(super) fn trim_optional_trailing_semicolon(src: &str) -> &str {
+pub(crate) fn trim_optional_trailing_semicolon(src: &str) -> &str {
     let mut trimmed = src.trim_end();
     if let Some(without) = trimmed.strip_suffix(';') {
         trimmed = without.trim_end();
@@ -234,7 +236,7 @@ pub(super) fn trim_optional_trailing_semicolon(src: &str) -> &str {
     trimmed
 }
 
-pub(super) fn find_top_level_else_keyword(src: &str) -> Option<usize> {
+pub(crate) fn find_top_level_else_keyword(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -255,11 +257,11 @@ pub(super) fn find_top_level_else_keyword(src: &str) -> Option<usize> {
     None
 }
 
-pub(super) fn is_ident_char(b: u8) -> bool {
+pub(crate) fn is_ident_char(b: u8) -> bool {
     b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
 }
 
-pub(super) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -338,7 +340,7 @@ pub(super) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -367,7 +369,7 @@ pub(super) fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::While { cond, body }))
 }
 
-pub(super) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -414,7 +416,7 @@ pub(super) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DoWhile { cond, body }))
 }
 
-pub(super) fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
+pub(crate) fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii(keyword) {
         return false;
@@ -426,7 +428,7 @@ pub(super) fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
     true
 }
 
-pub(super) fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
+pub(crate) fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
     let src = src.trim();
     if src.is_empty() {
         return Err(Error::ScriptParse("catch binding cannot be empty".into()));
@@ -447,7 +449,7 @@ pub(super) fn parse_catch_binding(src: &str) -> Result<CatchBinding> {
     )))
 }
 
-pub(super) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "try") {
@@ -504,7 +506,7 @@ pub(super) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "throw") {
@@ -529,7 +531,7 @@ pub(super) fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Throw { value }))
 }
 
-pub(super) fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("return") {
@@ -555,7 +557,7 @@ pub(super) fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Return { value: Some(value) }))
 }
 
-pub(super) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("break") {
@@ -577,7 +579,7 @@ pub(super) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Break))
 }
 
-pub(super) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !cursor.consume_ascii("continue") {
@@ -599,7 +601,7 @@ pub(super) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Continue))
 }
 
-pub(super) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
 
@@ -710,7 +712,7 @@ fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &st
     Ok(Some((kind, item_var, right)))
 }
 
-pub(super) fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
+pub(crate) fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {
     let bytes = src.as_bytes();
     let keyword_bytes = keyword.as_bytes();
     let mut i = 0usize;
@@ -734,7 +736,7 @@ pub(super) fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<O
     Ok(None)
 }
 
-pub(super) fn parse_for_in_of_var(raw: &str) -> Result<String> {
+pub(crate) fn parse_for_in_of_var(raw: &str) -> Result<String> {
     let mut cursor = Cursor::new(raw);
     cursor.skip_ws();
     let first = cursor
@@ -765,7 +767,7 @@ pub(super) fn parse_for_in_of_var(raw: &str) -> Result<String> {
     Ok(name)
 }
 
-pub(super) fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
+pub(crate) fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
     let src = src.trim();
     if src.is_empty() {
         return Ok(None);
@@ -788,11 +790,11 @@ pub(super) fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
     Ok(Some(Box::new(Stmt::Expr(expr))))
 }
 
-pub(super) fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
+pub(crate) fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
     parse_update_stmt(src)
 }
 
-pub(super) fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
+pub(crate) fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
     let src = stmt.trim();
 
     if let Some(name) = src.strip_prefix("++") {
@@ -837,4 +839,3 @@ pub(super) fn parse_update_stmt(stmt: &str) -> Option<Stmt> {
 
     None
 }
-

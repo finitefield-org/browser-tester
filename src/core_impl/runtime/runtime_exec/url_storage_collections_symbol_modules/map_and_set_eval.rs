@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn eval_map_construct(
         &mut self,
@@ -630,5 +632,4 @@ impl Harness {
             }
         }
     }
-
 }

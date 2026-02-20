@@ -1,4 +1,6 @@
-pub(super) fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
+use super::*;
+
+pub(crate) fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -61,7 +63,7 @@ pub(super) fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::String("Error".to_string())))
 }
 
-pub(super) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -107,7 +109,7 @@ pub(super) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -218,7 +220,7 @@ pub(super) fn parse_array_buffer_access_expr(src: &str) -> Result<Option<Expr>> 
     }
 }
 
-pub(super) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -304,7 +306,7 @@ pub(super) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -381,7 +383,7 @@ pub(super) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
     }))
 }
 
-pub(super) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -495,7 +497,7 @@ pub(super) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -612,15 +614,15 @@ pub(super) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_is_nan_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "isNaN", "isNaN requires exactly one argument")
 }
 
-pub(super) fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_encode_uri_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "encodeURI", "encodeURI requires exactly one argument")
 }
 
-pub(super) fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "encodeURIComponent",
@@ -628,11 +630,11 @@ pub(super) fn parse_encode_uri_component_expr(src: &str) -> Result<Option<Expr>>
     )
 }
 
-pub(super) fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_decode_uri_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "decodeURI", "decodeURI requires exactly one argument")
 }
 
-pub(super) fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "decodeURIComponent",
@@ -640,27 +642,27 @@ pub(super) fn parse_decode_uri_component_expr(src: &str) -> Result<Option<Expr>>
     )
 }
 
-pub(super) fn parse_escape_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_escape_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "escape", "escape requires exactly one argument")
 }
 
-pub(super) fn parse_unescape_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_unescape_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "unescape", "unescape requires exactly one argument")
 }
 
-pub(super) fn parse_is_finite_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_is_finite_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "isFinite", "isFinite requires exactly one argument")
 }
 
-pub(super) fn parse_atob_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_atob_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "atob", "atob requires exactly one argument")
 }
 
-pub(super) fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_btoa_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "btoa", "btoa requires exactly one argument")
 }
 
-pub(super) fn parse_global_single_arg_expr(
+pub(crate) fn parse_global_single_arg_expr(
     src: &str,
     function_name: &str,
     arg_error: &str,
@@ -699,4 +701,3 @@ pub(super) fn parse_global_single_arg_expr(
     }
     Ok(Some(value))
 }
-

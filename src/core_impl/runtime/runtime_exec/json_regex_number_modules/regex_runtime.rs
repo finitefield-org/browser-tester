@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn analyze_regex_flags(flags: &str) -> std::result::Result<RegexFlags, String> {
         let mut info = RegexFlags {
@@ -156,5 +158,4 @@ impl Harness {
         }
         Ok(Some(out))
     }
-
 }

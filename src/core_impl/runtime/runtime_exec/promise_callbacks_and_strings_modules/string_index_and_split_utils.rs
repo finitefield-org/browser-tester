@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn normalize_slice_index(len: usize, index: i64) -> usize {
         if index < 0 {
@@ -204,5 +206,4 @@ impl Harness {
         let pos = value.get(start_byte..)?.find(search)?;
         Some(value[..start_byte + pos].chars().count())
     }
-
 }

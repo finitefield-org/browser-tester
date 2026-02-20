@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn eval_node_member_call(
         &mut self,
@@ -294,7 +296,7 @@ impl Harness {
         }
     }
 
-    fn normalized_input_type(&self, node: NodeId) -> String {
+    pub(crate) fn normalized_input_type(&self, node: NodeId) -> String {
         if !self
             .dom
             .tag_name(node)
@@ -316,7 +318,7 @@ impl Harness {
         }
     }
 
-    fn node_supports_text_selection(&self, node: NodeId) -> bool {
+    pub(crate) fn node_supports_text_selection(&self, node: NodeId) -> bool {
         if self
             .dom
             .tag_name(node)
@@ -347,7 +349,7 @@ impl Harness {
         }
     }
 
-    fn set_node_selection_range(
+    pub(crate) fn set_node_selection_range(
         &mut self,
         node: NodeId,
         start: i64,
@@ -367,7 +369,7 @@ impl Harness {
         )
     }
 
-    fn shift_selection_index(index: usize, delta: i64) -> usize {
+    pub(crate) fn shift_selection_index(index: usize, delta: i64) -> usize {
         if delta >= 0 {
             index.saturating_add(delta as usize)
         } else {
@@ -375,7 +377,7 @@ impl Harness {
         }
     }
 
-    fn set_node_range_text(&mut self, node: NodeId, args: &[Value]) -> Result<()> {
+    pub(crate) fn set_node_range_text(&mut self, node: NodeId, args: &[Value]) -> Result<()> {
         if !self.node_supports_text_selection(node) {
             return Ok(());
         }
@@ -447,7 +449,7 @@ impl Harness {
             .set_selection_range(node, selection_start, selection_end, "none")
     }
 
-    fn parse_attr_f64(&self, node: NodeId, name: &str) -> Option<f64> {
+    pub(crate) fn parse_attr_f64(&self, node: NodeId, name: &str) -> Option<f64> {
         self.dom.attr(node, name).and_then(|raw| {
             let raw = raw.trim();
             if raw.is_empty() {
@@ -458,7 +460,7 @@ impl Harness {
         })
     }
 
-    fn parse_attr_i64(&self, node: NodeId, name: &str) -> Option<i64> {
+    pub(crate) fn parse_attr_i64(&self, node: NodeId, name: &str) -> Option<i64> {
         self.dom.attr(node, name).and_then(|raw| {
             let raw = raw.trim();
             if raw.is_empty() {
@@ -469,7 +471,7 @@ impl Harness {
         })
     }
 
-    fn parse_number_value(raw: &str) -> Option<f64> {
+    pub(crate) fn parse_number_value(raw: &str) -> Option<f64> {
         let raw = raw.trim();
         if raw.is_empty() {
             return None;
@@ -477,7 +479,7 @@ impl Harness {
         raw.parse::<f64>().ok().filter(|value| value.is_finite())
     }
 
-    fn format_number_for_input(value: f64) -> String {
+    pub(crate) fn format_number_for_input(value: f64) -> String {
         if value.fract().abs() < 1e-9 {
             format!("{:.0}", value)
         } else {
@@ -494,7 +496,12 @@ impl Harness {
         }
     }
 
-    fn step_input_value(&mut self, node: NodeId, direction: i64, count: i64) -> Result<()> {
+    pub(crate) fn step_input_value(
+        &mut self,
+        node: NodeId,
+        direction: i64,
+        count: i64,
+    ) -> Result<()> {
         if count == 0 {
             return Ok(());
         }
@@ -534,7 +541,7 @@ impl Harness {
             .set_value(node, &Self::format_number_for_input(next))
     }
 
-    fn is_radio_group_checked(&self, node: NodeId) -> bool {
+    pub(crate) fn is_radio_group_checked(&self, node: NodeId) -> bool {
         let name = self.dom.attr(node, "name").unwrap_or_default();
         if name.is_empty() {
             return self.dom.checked(node).unwrap_or(false);
@@ -548,7 +555,7 @@ impl Harness {
         })
     }
 
-    fn is_simple_email(value: &str) -> bool {
+    pub(crate) fn is_simple_email(value: &str) -> bool {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return false;
@@ -559,11 +566,11 @@ impl Harness {
         !local.is_empty() && !domain.is_empty() && !domain.contains('@')
     }
 
-    fn is_url_like(value: &str) -> bool {
+    pub(crate) fn is_url_like(value: &str) -> bool {
         LocationParts::parse(value).is_some()
     }
 
-    fn input_participates_in_constraint_validation(kind: &str) -> bool {
+    pub(crate) fn input_participates_in_constraint_validation(kind: &str) -> bool {
         !matches!(kind, "button" | "submit" | "reset" | "hidden")
     }
 
@@ -763,5 +770,4 @@ impl Harness {
             ("valid".to_string(), Value::Bool(validity.valid)),
         ])
     }
-
 }

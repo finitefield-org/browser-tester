@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn is_history_object(entries: &[(String, Value)]) -> bool {
         matches!(
@@ -455,5 +457,4 @@ impl Harness {
             .ok_or_else(|| Error::ScriptRuntime("object assignment key cannot be empty".into()))?;
         self.set_object_assignment_property(&container, final_key, value, target)
     }
-
 }

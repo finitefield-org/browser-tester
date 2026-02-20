@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn current_location_parts(&self) -> LocationParts {
         LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
@@ -348,5 +350,4 @@ impl Harness {
         entries.extend(extras);
         *self.location_history.history_object.borrow_mut() = entries.into();
     }
-
 }

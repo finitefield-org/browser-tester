@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn number_primitive_value(value: &Value) -> Option<f64> {
         match value {

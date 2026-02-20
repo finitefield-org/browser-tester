@@ -1,9 +1,11 @@
-struct ParsedCallbackParams {
-    params: Vec<FunctionParam>,
-    prologue: Vec<String>,
+use super::*;
+
+pub(crate) struct ParsedCallbackParams {
+    pub(crate) params: Vec<FunctionParam>,
+    pub(crate) prologue: Vec<String>,
 }
 
-pub(super) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
+pub(crate) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
     let mut suffix = seed;
     loop {
         let candidate = format!("__bt_callback_arg_{suffix}");
@@ -14,7 +16,7 @@ pub(super) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> 
     }
 }
 
-pub(super) fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
+pub(crate) fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
     let mut out = String::from("[");
     for (idx, item) in pattern.iter().enumerate() {
         if idx > 0 {
@@ -28,7 +30,7 @@ pub(super) fn format_array_destructure_pattern(pattern: &[Option<String>]) -> St
     out
 }
 
-pub(super) fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
+pub(crate) fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
     let mut out = String::from("{");
     for (index, (source, target)) in pattern.iter().enumerate() {
         if index > 0 {
@@ -44,7 +46,7 @@ pub(super) fn format_object_destructure_pattern(pattern: &[(String, String)]) ->
     out
 }
 
-pub(super) fn inject_callback_param_prologue(
+pub(crate) fn inject_callback_param_prologue(
     body: String,
     concise_body: bool,
     prologue: &[String],
@@ -73,7 +75,7 @@ pub(super) fn inject_callback_param_prologue(
     }
 }
 
-pub(super) fn prepend_callback_param_prologue_stmts(
+pub(crate) fn prepend_callback_param_prologue_stmts(
     mut stmts: Vec<Stmt>,
     prologue: &[String],
 ) -> Result<Vec<Stmt>> {
@@ -94,7 +96,7 @@ pub(super) fn prepend_callback_param_prologue_stmts(
     Ok(prefixed)
 }
 
-fn parse_callback_parameter_list(
+pub(crate) fn parse_callback_parameter_list(
     src: &str,
     max_params: usize,
     label: &str,
@@ -254,7 +256,7 @@ fn parse_callback_parameter_list(
     Ok(ParsedCallbackParams { params, prologue })
 }
 
-pub(super) fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
+pub(crate) fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(String, bool)> {
     cursor.skip_ws();
     if cursor.peek() == Some(b'{') {
         return Ok((cursor.read_balanced_block(b'{', b'}')?, false));
@@ -306,7 +308,7 @@ pub(super) fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(Stri
     Err(Error::ScriptParse("expected callback body".into()))
 }
 
-pub(super) fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
+pub(crate) fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<String>> {
     let expr_src = strip_outer_parens(expr_src).trim();
     let Some((eq_pos, op_len)) = find_top_level_assignment(expr_src) else {
         return Ok(None);
@@ -347,13 +349,13 @@ pub(super) fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<Str
     Ok(Some(format!("{assignment_src}; return {lhs};")))
 }
 
-pub(super) fn is_valid_callback_body_suffix(suffix: &str) -> bool {
+pub(crate) fn is_valid_callback_body_suffix(suffix: &str) -> bool {
     suffix
         .chars()
         .all(|ch| ch.is_ascii_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';'))
 }
 
-pub(super) fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
+pub(crate) fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
     while let Some(ch) = cursor.peek() {
         if ch == b' ' || ch == b'\t' || ch == 0x0B || ch == 0x0C {
             cursor.set_pos(cursor.pos() + 1);
@@ -369,7 +371,7 @@ pub(super) fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<
     Ok(())
 }
 
-pub(super) fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
+pub(crate) fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii("async") {
         return false;
@@ -418,7 +420,7 @@ pub(super) fn try_consume_async_function_prefix(cursor: &mut Cursor<'_>) -> bool
     }
 }
 
-pub(super) fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
+pub(crate) fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     if !cursor.consume_ascii("async") {
         return false;
@@ -462,7 +464,7 @@ pub(super) fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
     true
 }
 
-pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     {
         let mut cursor = Cursor::new(src);
@@ -547,7 +549,7 @@ pub(super) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_callback(
+pub(crate) fn parse_callback(
     cursor: &mut Cursor<'_>,
     max_params: usize,
     label: &str,
@@ -608,7 +610,7 @@ pub(super) fn parse_callback(
     Ok((parsed_params.params, body, concise_body))
 }
 
-pub(super) fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
+pub(crate) fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerCallback> {
     let mut cursor = Cursor::new(src);
     if let Ok((params, body, _)) =
         parse_callback(&mut cursor, usize::MAX, "timer callback parameters")
@@ -630,4 +632,3 @@ pub(super) fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerC
         ))),
     }
 }
-

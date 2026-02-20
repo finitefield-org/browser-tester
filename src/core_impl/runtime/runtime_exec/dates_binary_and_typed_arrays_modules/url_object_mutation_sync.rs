@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn sync_url_search_params_owner(&mut self, object: &Rc<RefCell<ObjectValue>>) {
         let (owner_id, pairs) = {

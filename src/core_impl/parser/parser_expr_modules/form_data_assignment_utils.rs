@@ -1,4 +1,6 @@
-pub(super) fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)>> {
+use super::*;
+
+pub(crate) fn parse_event_property_expr(src: &str) -> Result<Option<(String, EventExprProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -57,7 +59,7 @@ pub(super) fn parse_event_property_expr(src: &str) -> Result<Option<(String, Eve
     Ok(Some((event_var, prop)))
 }
 
-pub(super) fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(crate) fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -94,7 +96,7 @@ pub(super) fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQue
     Ok(Some((target, class_name)))
 }
 
-pub(super) fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -126,7 +128,7 @@ pub(super) fn parse_query_selector_all_length_expr(src: &str) -> Result<Option<D
     Ok(Some(target))
 }
 
-pub(super) fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let form = match parse_form_elements_base(&mut cursor) {
@@ -156,7 +158,7 @@ pub(super) fn parse_form_elements_length_expr(src: &str) -> Result<Option<DomQue
     Ok(Some(form))
 }
 
-pub(super) fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(form) = parse_new_form_data_target(&mut cursor)? else {
@@ -169,19 +171,19 @@ pub(super) fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(form))
 }
 
-pub(super) fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(crate) fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "get")
 }
 
-pub(super) fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(crate) fn parse_form_data_has_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "has")
 }
 
-pub(super) fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(crate) fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
     parse_form_data_method_expr(src, "getAll")
 }
 
-pub(super) fn parse_form_data_get_all_length_expr(
+pub(crate) fn parse_form_data_get_all_length_expr(
     src: &str,
 ) -> Result<Option<(FormDataSource, String)>> {
     let mut cursor = Cursor::new(src);
@@ -226,7 +228,7 @@ pub(super) fn parse_form_data_get_all_length_expr(
     Ok(Some((source, name)))
 }
 
-pub(super) fn parse_form_data_method_expr(
+pub(crate) fn parse_form_data_method_expr(
     src: &str,
     method: &str,
 ) -> Result<Option<(FormDataSource, String)>> {
@@ -262,7 +264,7 @@ pub(super) fn parse_form_data_method_expr(
     Ok(Some((source, name)))
 }
 
-pub(super) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
+pub(crate) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
     if let Some(form) = parse_new_form_data_target(cursor)? {
         return Ok(Some(FormDataSource::NewForm(form)));
     }
@@ -274,7 +276,7 @@ pub(super) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<F
     Ok(None)
 }
 
-pub(super) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
     cursor.skip_ws();
     let start = cursor.pos();
 
@@ -316,7 +318,7 @@ pub(super) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Opti
     Ok(Some(form))
 }
 
-pub(super) fn parse_string_literal_exact(src: &str) -> Result<String> {
+pub(crate) fn parse_string_literal_exact(src: &str) -> Result<String> {
     let bytes = src.as_bytes();
     if bytes.len() < 2 {
         return Err(Error::ScriptParse("invalid string literal".into()));
@@ -343,7 +345,7 @@ pub(super) fn parse_string_literal_exact(src: &str) -> Result<String> {
     Ok(unescape_string(&src[1..src.len() - 1]))
 }
 
-pub(super) fn strip_outer_parens(mut src: &str) -> &str {
+pub(crate) fn strip_outer_parens(mut src: &str) -> &str {
     loop {
         let trimmed = src.trim();
         if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
@@ -358,7 +360,7 @@ pub(super) fn strip_outer_parens(mut src: &str) -> &str {
     }
 }
 
-pub(super) fn is_fully_wrapped_in_parens(src: &str) -> bool {
+pub(crate) fn is_fully_wrapped_in_parens(src: &str) -> bool {
     let bytes = src.as_bytes();
     if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
         return false;
@@ -383,7 +385,7 @@ pub(super) fn is_fully_wrapped_in_parens(src: &str) -> bool {
     scanner.in_normal() && scanner.paren == 0 && scanner.bracket == 0 && scanner.brace == 0
 }
 
-pub(super) fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
+pub(crate) fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -427,7 +429,7 @@ pub(super) fn find_top_level_assignment(src: &str) -> Option<(usize, usize)> {
     None
 }
 
-pub(super) fn find_top_level_ternary_question(src: &str) -> Option<usize> {
+pub(crate) fn find_top_level_ternary_question(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -450,7 +452,7 @@ pub(super) fn find_top_level_ternary_question(src: &str) -> Option<usize> {
     None
 }
 
-pub(super) fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
+pub(crate) fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usize> {
     let bytes = src.as_bytes();
     if from >= bytes.len() {
         return None;
@@ -485,4 +487,3 @@ pub(super) fn find_matching_ternary_colon(src: &str, from: usize) -> Option<usiz
 
     None
 }
-

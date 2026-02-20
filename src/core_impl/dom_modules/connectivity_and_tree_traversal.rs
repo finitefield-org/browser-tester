@@ -1,16 +1,18 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn can_have_children(&self, node_id: NodeId) -> bool {
+    pub(crate) fn can_have_children(&self, node_id: NodeId) -> bool {
         matches!(
             self.nodes.get(node_id.0).map(|n| &n.node_type),
             Some(NodeType::Document | NodeType::Element(_))
         )
     }
 
-    pub(super) fn is_valid_node(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_valid_node(&self, node_id: NodeId) -> bool {
         node_id.0 < self.nodes.len()
     }
 
-    pub(super) fn is_connected(&self, node_id: NodeId) -> bool {
+    pub(crate) fn is_connected(&self, node_id: NodeId) -> bool {
         let mut cursor = Some(node_id);
         while let Some(node) = cursor {
             if node == self.root {
@@ -21,7 +23,7 @@ impl Dom {
         false
     }
 
-    pub(super) fn rebuild_id_index(&mut self) {
+    pub(crate) fn rebuild_id_index(&mut self) {
         let mut next = HashMap::new();
         let mut stack = vec![self.root];
         while let Some(node) = stack.pop() {
@@ -40,14 +42,14 @@ impl Dom {
         self.id_index = next;
     }
 
-    pub(super) fn index_id_map(next: &mut HashMap<String, Vec<NodeId>>, id: &str, node_id: NodeId) {
+    pub(crate) fn index_id_map(next: &mut HashMap<String, Vec<NodeId>>, id: &str, node_id: NodeId) {
         if id.is_empty() {
             return;
         }
         next.entry(id.to_string()).or_default().push(node_id);
     }
 
-    pub(super) fn collect_elements_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
+    pub(crate) fn collect_elements_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
         if matches!(self.nodes[node_id.0].node_type, NodeType::Element(_)) {
             out.push(node_id);
         }
@@ -56,19 +58,19 @@ impl Dom {
         }
     }
 
-    pub(super) fn collect_elements_descendants_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
+    pub(crate) fn collect_elements_descendants_dfs(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
         for child in &self.nodes[node_id.0].children {
             self.collect_elements_dfs(*child, out);
         }
     }
 
-    pub(super) fn all_element_nodes(&self) -> Vec<NodeId> {
+    pub(crate) fn all_element_nodes(&self) -> Vec<NodeId> {
         let mut out = Vec::new();
         self.collect_elements_dfs(self.root, &mut out);
         out
     }
 
-    pub(super) fn child_elements(&self, node_id: NodeId) -> Vec<NodeId> {
+    pub(crate) fn child_elements(&self, node_id: NodeId) -> Vec<NodeId> {
         self.nodes[node_id.0]
             .children
             .iter()
@@ -77,11 +79,11 @@ impl Dom {
             .collect()
     }
 
-    pub(super) fn child_element_count(&self, node_id: NodeId) -> usize {
+    pub(crate) fn child_element_count(&self, node_id: NodeId) -> usize {
         self.child_elements(node_id).len()
     }
 
-    pub(super) fn first_element_child(&self, node_id: NodeId) -> Option<NodeId> {
+    pub(crate) fn first_element_child(&self, node_id: NodeId) -> Option<NodeId> {
         self.nodes[node_id.0]
             .children
             .iter()
@@ -89,7 +91,7 @@ impl Dom {
             .find(|child| self.element(*child).is_some())
     }
 
-    pub(super) fn last_element_child(&self, node_id: NodeId) -> Option<NodeId> {
+    pub(crate) fn last_element_child(&self, node_id: NodeId) -> Option<NodeId> {
         self.nodes[node_id.0]
             .children
             .iter()
@@ -98,11 +100,11 @@ impl Dom {
             .find(|child| self.element(*child).is_some())
     }
 
-    pub(super) fn document_element(&self) -> Option<NodeId> {
+    pub(crate) fn document_element(&self) -> Option<NodeId> {
         self.first_element_child(self.root)
     }
 
-    pub(super) fn head(&self) -> Option<NodeId> {
+    pub(crate) fn head(&self) -> Option<NodeId> {
         if let Some(document_element) = self.document_element() {
             if self
                 .tag_name(document_element)
@@ -122,7 +124,7 @@ impl Dom {
         self.query_selector("head").ok().flatten()
     }
 
-    pub(super) fn body(&self) -> Option<NodeId> {
+    pub(crate) fn body(&self) -> Option<NodeId> {
         if let Some(document_element) = self.document_element() {
             if self
                 .tag_name(document_element)
@@ -148,7 +150,7 @@ impl Dom {
             .or_else(|| self.query_selector("frameset").ok().flatten())
     }
 
-    pub(super) fn document_title(&self) -> String {
+    pub(crate) fn document_title(&self) -> String {
         self.query_selector("title")
             .ok()
             .flatten()
@@ -156,7 +158,7 @@ impl Dom {
             .unwrap_or_default()
     }
 
-    pub(super) fn set_document_title(&mut self, title: &str) -> Result<()> {
+    pub(crate) fn set_document_title(&mut self, title: &str) -> Result<()> {
         let title_node = if let Some(existing_title) = self.query_selector("title")? {
             existing_title
         } else {
@@ -166,7 +168,7 @@ impl Dom {
         self.set_text_content(title_node, title)
     }
 
-    pub(super) fn ensure_head_element(&mut self) -> Result<NodeId> {
+    pub(crate) fn ensure_head_element(&mut self) -> Result<NodeId> {
         if let Some(head) = self.head() {
             return Ok(head);
         }
@@ -188,7 +190,7 @@ impl Dom {
         Ok(self.create_element(parent, "head".to_string(), HashMap::new()))
     }
 
-    pub(super) fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorPart]) -> bool {
+    pub(crate) fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorPart]) -> bool {
         if steps.is_empty() {
             return false;
         }
@@ -251,5 +253,4 @@ impl Dom {
 
         true
     }
-
 }

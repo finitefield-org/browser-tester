@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn execute_callback_value(
         &mut self,
@@ -845,5 +847,4 @@ impl Harness {
             }
         }
     }
-
 }

@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn eval_math_method(
         &mut self,
@@ -337,5 +339,4 @@ impl Harness {
             BigIntInstanceMethod::ValueOf => Ok(Value::BigInt(value)),
         }
     }
-
 }

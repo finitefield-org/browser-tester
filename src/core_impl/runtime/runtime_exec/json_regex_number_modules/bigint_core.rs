@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn bigint_as_uint_n(bits: usize, value: &JsBigInt) -> JsBigInt {
         if bits == 0 {
@@ -216,5 +218,4 @@ impl Harness {
             Ok(value >> magnitude)
         }
     }
-
 }

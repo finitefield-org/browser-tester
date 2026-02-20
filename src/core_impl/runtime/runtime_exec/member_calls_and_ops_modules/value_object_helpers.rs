@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(values)))
@@ -346,5 +348,4 @@ impl Harness {
                 other => other,
             })
     }
-
 }

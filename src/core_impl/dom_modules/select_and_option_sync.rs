@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn initialize_form_control_values(&mut self) -> Result<()> {
+    pub(crate) fn initialize_form_control_values(&mut self) -> Result<()> {
         let nodes = self.all_element_nodes();
         for node in nodes {
             let is_textarea = self
@@ -30,7 +32,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn sync_select_value_for_option(&mut self, option_node: NodeId) -> Result<()> {
+    pub(crate) fn sync_select_value_for_option(&mut self, option_node: NodeId) -> Result<()> {
         if !self
             .tag_name(option_node)
             .map(|tag| tag.eq_ignore_ascii_case("option"))
@@ -45,7 +47,7 @@ impl Dom {
         self.sync_select_value(select_node)
     }
 
-    pub(super) fn set_select_value(&mut self, select_node: NodeId, requested: &str) -> Result<()> {
+    pub(crate) fn set_select_value(&mut self, select_node: NodeId, requested: &str) -> Result<()> {
         let tag = self
             .tag_name(select_node)
             .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
@@ -88,7 +90,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn sync_select_value(&mut self, select_node: NodeId) -> Result<()> {
+    pub(crate) fn sync_select_value(&mut self, select_node: NodeId) -> Result<()> {
         let value = self.select_value_from_options(select_node)?;
         let element = self
             .element_mut(select_node)
@@ -97,7 +99,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn select_value_from_options(&self, select_node: NodeId) -> Result<String> {
+    pub(crate) fn select_value_from_options(&self, select_node: NodeId) -> Result<String> {
         let tag = self
             .tag_name(select_node)
             .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
@@ -121,7 +123,7 @@ impl Dom {
         self.option_effective_value(selected)
     }
 
-    pub(super) fn collect_select_options(&self, node: NodeId, out: &mut Vec<NodeId>) {
+    pub(crate) fn collect_select_options(&self, node: NodeId, out: &mut Vec<NodeId>) {
         for child in &self.nodes[node.0].children {
             if self
                 .tag_name(*child)
@@ -134,7 +136,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn option_effective_value(&self, option_node: NodeId) -> Result<String> {
+    pub(crate) fn option_effective_value(&self, option_node: NodeId) -> Result<String> {
         let element = self
             .element(option_node)
             .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
@@ -148,5 +150,4 @@ impl Dom {
         }
         Ok(self.text_content(option_node))
     }
-
 }

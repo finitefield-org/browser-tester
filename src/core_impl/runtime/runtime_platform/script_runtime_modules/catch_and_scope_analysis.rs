@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn error_to_catch_value(err: Error) -> std::result::Result<Value, Error> {
         match err {
@@ -108,7 +110,7 @@ impl Harness {
         Ok(params)
     }
 
-    fn collect_function_decls(stmts: &[Stmt]) -> HashMap<String, (ScriptHandler, bool)> {
+    pub(crate) fn collect_function_decls(stmts: &[Stmt]) -> HashMap<String, (ScriptHandler, bool)> {
         let mut out = HashMap::new();
         for stmt in stmts {
             if let Stmt::FunctionDecl {
@@ -123,7 +125,7 @@ impl Harness {
         out
     }
 
-    fn collect_function_scope_bindings(handler: &ScriptHandler) -> HashSet<String> {
+    pub(crate) fn collect_function_scope_bindings(handler: &ScriptHandler) -> HashSet<String> {
         let mut bindings = HashSet::new();
         for param in &handler.params {
             bindings.insert(param.name.clone());
@@ -132,13 +134,13 @@ impl Harness {
         bindings
     }
 
-    fn collect_scope_bindings_from_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
+    pub(crate) fn collect_scope_bindings_from_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
         for stmt in stmts {
             Self::collect_scope_bindings_from_stmt(stmt, out);
         }
     }
 
-    fn collect_scope_bindings_from_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+    pub(crate) fn collect_scope_bindings_from_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
         match stmt {
             Stmt::VarDecl { name, .. } => {
                 out.insert(name.clone());
@@ -206,7 +208,7 @@ impl Harness {
         }
     }
 
-    fn collect_scope_bindings_from_catch_binding(
+    pub(crate) fn collect_scope_bindings_from_catch_binding(
         binding: &CatchBinding,
         out: &mut HashSet<String>,
     ) {
@@ -244,7 +246,7 @@ impl Harness {
         Some(self.make_function_value(handler, env, false, is_async))
     }
 
-    fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
+    pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
         let Some(frame) = self.script_runtime.listener_capture_env_stack.last() else {
             return;
         };
@@ -255,5 +257,4 @@ impl Harness {
             *shared_env.borrow_mut() = ScriptEnv::from_snapshot(env);
         }
     }
-
 }

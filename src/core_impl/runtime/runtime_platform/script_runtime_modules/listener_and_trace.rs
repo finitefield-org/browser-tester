@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn invoke_listeners(
         &mut self,
@@ -131,5 +133,4 @@ impl Harness {
             self.trace_state.logs.push_back(line);
         }
     }
-
 }

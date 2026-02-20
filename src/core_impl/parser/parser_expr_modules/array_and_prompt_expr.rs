@@ -1,4 +1,6 @@
-pub(super) fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
+use super::*;
+
+pub(crate) fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(
         src,
         "structuredClone",
@@ -6,15 +8,15 @@ pub(super) fn parse_structured_clone_expr(src: &str) -> Result<Option<Expr>> {
     )
 }
 
-pub(super) fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_alert_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "alert", "alert requires exactly one argument")
 }
 
-pub(super) fn parse_confirm_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_confirm_expr(src: &str) -> Result<Option<Expr>> {
     parse_global_single_arg_expr(src, "confirm", "confirm requires exactly one argument")
 }
 
-pub(super) fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
+pub(crate) fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -63,7 +65,7 @@ pub(super) fn parse_prompt_expr(src: &str) -> Result<Option<(Expr, Option<Expr>)
     Ok(Some((message, default)))
 }
 
-pub(super) fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+pub(crate) fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'[') {
@@ -107,7 +109,7 @@ pub(super) fn parse_array_literal_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     Ok(Some(out))
 }
 
-pub(super) fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -152,7 +154,7 @@ pub(super) fn parse_array_is_array_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-pub(super) fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -217,7 +219,7 @@ pub(super) fn parse_array_from_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -612,7 +614,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-pub(super) fn parse_array_callback_arg(
+pub(crate) fn parse_array_callback_arg(
     arg: &str,
     max_params: usize,
     label: &str,
@@ -639,7 +641,7 @@ pub(super) fn parse_array_callback_arg(
     Ok(ScriptHandler { params, stmts })
 }
 
-pub(super) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -751,7 +753,7 @@ pub(super) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod> {
+pub(crate) fn parse_number_instance_method_name(name: &str) -> Option<NumberInstanceMethod> {
     match name {
         "toExponential" => Some(NumberInstanceMethod::ToExponential),
         "toFixed" => Some(NumberInstanceMethod::ToFixed),
@@ -763,7 +765,7 @@ pub(super) fn parse_number_instance_method_name(name: &str) -> Option<NumberInst
     }
 }
 
-pub(super) fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -858,7 +860,7 @@ pub(super) fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod> {
+pub(crate) fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInstanceMethod> {
     match name {
         "toLocaleString" => Some(BigIntInstanceMethod::ToLocaleString),
         "toString" => Some(BigIntInstanceMethod::ToString),
@@ -866,4 +868,3 @@ pub(super) fn parse_bigint_instance_method_name(name: &str) -> Option<BigIntInst
         _ => None,
     }
 }
-

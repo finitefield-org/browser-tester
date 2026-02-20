@@ -1,4 +1,6 @@
-pub(super) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
+use super::*;
+
+pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -46,7 +48,7 @@ pub(super) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -120,7 +122,7 @@ pub(super) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
@@ -178,7 +180,7 @@ pub(super) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomAssign { target, prop, expr }))
 }
 
-pub(super) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
+pub(crate) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
     let mut cursor = Cursor::new(lhs);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -218,7 +220,7 @@ pub(super) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String
     Ok(Some((target, path)))
 }
 
-pub(super) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
     };
@@ -291,4 +293,3 @@ pub(super) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     };
     Ok(Some(Stmt::ObjectAssign { target, path, expr }))
 }
-

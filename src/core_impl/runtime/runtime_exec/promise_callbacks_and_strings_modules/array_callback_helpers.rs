@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn execute_array_callback(
         &mut self,
@@ -171,5 +173,4 @@ impl Harness {
         }
         Ok(())
     }
-
 }

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let root = Node {
             parent: None,
             children: Vec::new(),
@@ -14,7 +16,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn create_node(&mut self, parent: Option<NodeId>, node_type: NodeType) -> NodeId {
+    pub(crate) fn create_node(&mut self, parent: Option<NodeId>, node_type: NodeType) -> NodeId {
         let id = NodeId(self.nodes.len());
         self.nodes.push(Node {
             parent,
@@ -27,7 +29,7 @@ impl Dom {
         id
     }
 
-    pub(super) fn create_element(
+    pub(crate) fn create_element(
         &mut self,
         parent: NodeId,
         tag_name: String,
@@ -63,7 +65,7 @@ impl Dom {
         id
     }
 
-    pub(super) fn create_detached_element(&mut self, tag_name: String) -> NodeId {
+    pub(crate) fn create_detached_element(&mut self, tag_name: String) -> NodeId {
         let element = Element {
             tag_name,
             attrs: HashMap::new(),
@@ -81,37 +83,37 @@ impl Dom {
         self.create_node(None, NodeType::Element(element))
     }
 
-    pub(super) fn create_detached_text(&mut self, text: String) -> NodeId {
+    pub(crate) fn create_detached_text(&mut self, text: String) -> NodeId {
         self.create_node(None, NodeType::Text(text))
     }
 
-    pub(super) fn create_text(&mut self, parent: NodeId, text: String) -> NodeId {
+    pub(crate) fn create_text(&mut self, parent: NodeId, text: String) -> NodeId {
         self.create_node(Some(parent), NodeType::Text(text))
     }
 
-    pub(super) fn element(&self, node_id: NodeId) -> Option<&Element> {
+    pub(crate) fn element(&self, node_id: NodeId) -> Option<&Element> {
         match &self.nodes[node_id.0].node_type {
             NodeType::Element(element) => Some(element),
             _ => None,
         }
     }
 
-    pub(super) fn element_mut(&mut self, node_id: NodeId) -> Option<&mut Element> {
+    pub(crate) fn element_mut(&mut self, node_id: NodeId) -> Option<&mut Element> {
         match &mut self.nodes[node_id.0].node_type {
             NodeType::Element(element) => Some(element),
             _ => None,
         }
     }
 
-    pub(super) fn tag_name(&self, node_id: NodeId) -> Option<&str> {
+    pub(crate) fn tag_name(&self, node_id: NodeId) -> Option<&str> {
         self.element(node_id).map(|e| e.tag_name.as_str())
     }
 
-    pub(super) fn parent(&self, node_id: NodeId) -> Option<NodeId> {
+    pub(crate) fn parent(&self, node_id: NodeId) -> Option<NodeId> {
         self.nodes[node_id.0].parent
     }
 
-    pub(super) fn is_descendant_of(&self, node_id: NodeId, ancestor: NodeId) -> bool {
+    pub(crate) fn is_descendant_of(&self, node_id: NodeId, ancestor: NodeId) -> bool {
         let mut cursor = self.parent(node_id);
         while let Some(current) = cursor {
             if current == ancestor {
@@ -122,31 +124,31 @@ impl Dom {
         false
     }
 
-    pub(super) fn active_element(&self) -> Option<NodeId> {
+    pub(crate) fn active_element(&self) -> Option<NodeId> {
         self.active_element
     }
 
-    pub(super) fn set_active_element(&mut self, node: Option<NodeId>) {
+    pub(crate) fn set_active_element(&mut self, node: Option<NodeId>) {
         self.active_element = node;
     }
 
-    pub(super) fn active_pseudo_element(&self) -> Option<NodeId> {
+    pub(crate) fn active_pseudo_element(&self) -> Option<NodeId> {
         self.active_pseudo_element
     }
 
-    pub(super) fn set_active_pseudo_element(&mut self, node: Option<NodeId>) {
+    pub(crate) fn set_active_pseudo_element(&mut self, node: Option<NodeId>) {
         self.active_pseudo_element = node;
     }
 
-    pub(super) fn by_id(&self, id: &str) -> Option<NodeId> {
+    pub(crate) fn by_id(&self, id: &str) -> Option<NodeId> {
         self.id_index.get(id).and_then(|ids| ids.first().copied())
     }
 
-    pub(super) fn by_id_all(&self, id: &str) -> Vec<NodeId> {
+    pub(crate) fn by_id_all(&self, id: &str) -> Vec<NodeId> {
         self.id_index.get(id).cloned().unwrap_or_default()
     }
 
-    pub(super) fn index_id(&mut self, id: &str, node_id: NodeId) {
+    pub(crate) fn index_id(&mut self, id: &str, node_id: NodeId) {
         if id.is_empty() {
             return;
         }
@@ -156,7 +158,7 @@ impl Dom {
             .push(node_id);
     }
 
-    pub(super) fn unindex_id(&mut self, id: &str, node_id: NodeId) {
+    pub(crate) fn unindex_id(&mut self, id: &str, node_id: NodeId) {
         let Some(nodes) = self.id_index.get_mut(id) else {
             return;
         };
@@ -165,5 +167,4 @@ impl Dom {
             self.id_index.remove(id);
         }
     }
-
 }

@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn is_url_search_params_object(entries: &[(String, Value)]) -> bool {
         matches!(
@@ -145,5 +147,4 @@ impl Harness {
             other => parse_url_search_params_pairs_from_query_string(&other.as_string()),
         }
     }
-
 }

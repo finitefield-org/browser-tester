@@ -1,4 +1,6 @@
-pub(super) fn parse_mul_expr(src: &str) -> Result<Expr> {
+use super::*;
+
+pub(crate) fn parse_mul_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -74,7 +76,7 @@ pub(super) fn parse_mul_expr(src: &str) -> Result<Expr> {
     Ok(expr)
 }
 
-pub(super) fn parse_pow_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_pow_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -101,7 +103,7 @@ pub(super) fn parse_pow_expr(src: &str) -> Result<Expr> {
     parse_unary_expr(src)
 }
 
-pub(super) fn parse_unary_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -166,7 +168,7 @@ pub(super) fn parse_unary_expr(src: &str) -> Result<Expr> {
     parse_primary(src)
 }
 
-pub(super) fn fold_binary<F, G>(
+pub(crate) fn fold_binary<F, G>(
     parts: Vec<&str>,
     ops: Vec<&str>,
     parse_leaf: F,
@@ -191,7 +193,7 @@ where
     Ok(expr)
 }
 
-pub(super) fn parse_primary(src: &str) -> Result<Expr> {
+pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
     let src = src.trim();
 
     if src == "true" {
@@ -634,7 +636,7 @@ pub(super) fn parse_primary(src: &str) -> Result<Expr> {
     Err(Error::ScriptParse(format!("unsupported expression: {src}")))
 }
 
-pub(super) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if src.is_empty() {
         return Ok(None);
     }
@@ -702,7 +704,7 @@ pub(super) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::Float(n)))
 }
 
-pub(super) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
     let Some(raw) = src.strip_suffix('n') else {
         return Ok(None);
     };
@@ -737,7 +739,7 @@ pub(super) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BigInt(value)))
 }
 
-pub(super) fn parse_prefixed_integer_literal(
+pub(crate) fn parse_prefixed_integer_literal(
     src: &str,
     prefix: &str,
     radix: u32,
@@ -759,7 +761,7 @@ pub(super) fn parse_prefixed_integer_literal(
     Ok(Some(Expr::Number(n)))
 }
 
-pub(super) fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
+pub(crate) fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<&'a str> {
     if !src.starts_with(keyword) {
         return None;
     }
@@ -772,7 +774,7 @@ pub(super) fn strip_keyword_operator<'a>(src: &'a str, keyword: &str) -> Option<
     None
 }
 
-pub(super) fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -789,7 +791,7 @@ pub(super) fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
     Ok(Some(target))
 }
 
-pub(super) fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
+pub(crate) fn parse_document_create_element_expr(src: &str) -> Result<Option<String>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("document") {
@@ -816,7 +818,7 @@ pub(super) fn parse_document_create_element_expr(src: &str) -> Result<Option<Str
     Ok(Some(tag_name.to_ascii_lowercase()))
 }
 
-pub(super) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
+pub(crate) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<String>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("document") {
@@ -843,7 +845,7 @@ pub(super) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<S
     Ok(Some(text))
 }
 
-pub(super) fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
+pub(crate) fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -882,7 +884,7 @@ pub(super) fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-pub(super) fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -943,7 +945,7 @@ pub(super) fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::LocationMethodCall { method, url }))
 }
 
-pub(super) fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
+pub(crate) fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("location") {
@@ -1012,7 +1014,7 @@ pub(super) fn parse_location_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-pub(super) fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1101,7 +1103,7 @@ pub(super) fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
+pub(crate) fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("history") {
@@ -1131,7 +1133,7 @@ pub(super) fn parse_history_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-pub(super) fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1198,4 +1200,3 @@ pub(super) fn parse_clipboard_method_expr(src: &str) -> Result<Option<Expr>> {
         args: parsed_args,
     }))
 }
-

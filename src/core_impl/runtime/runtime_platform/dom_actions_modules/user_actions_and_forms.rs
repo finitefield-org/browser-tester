@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
@@ -214,7 +216,7 @@ impl Harness {
         self.request_form_submit_node_with_env(form_id, env)
     }
 
-    fn request_form_submit_node_with_env(
+    pub(crate) fn request_form_submit_node_with_env(
         &mut self,
         form_id: NodeId,
         env: &mut HashMap<String, Value>,
@@ -297,5 +299,4 @@ impl Harness {
             })
         })
     }
-
 }

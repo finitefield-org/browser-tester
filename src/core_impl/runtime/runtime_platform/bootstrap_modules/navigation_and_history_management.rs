@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
@@ -274,5 +276,4 @@ impl Harness {
         })?;
         Ok(())
     }
-
 }

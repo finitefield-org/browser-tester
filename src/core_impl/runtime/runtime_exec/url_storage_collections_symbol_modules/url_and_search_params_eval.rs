@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn eval_url_construct(
         &mut self,
@@ -568,5 +570,4 @@ impl Harness {
             }
         }
     }
-
 }

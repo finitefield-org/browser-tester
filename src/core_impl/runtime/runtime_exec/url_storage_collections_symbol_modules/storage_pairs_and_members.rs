@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn is_storage_method_name(name: &str) -> bool {
         matches!(name, "getItem" | "setItem" | "removeItem" | "clear" | "key")
@@ -133,5 +135,4 @@ impl Harness {
             _ => Ok(None),
         }
     }
-
 }

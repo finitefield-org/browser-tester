@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn parse_json_text(src: &str) -> Result<Value> {
         let bytes = src.as_bytes();
@@ -358,5 +360,4 @@ impl Harness {
             false
         }
     }
-
 }

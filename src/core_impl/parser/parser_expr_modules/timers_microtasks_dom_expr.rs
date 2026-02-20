@@ -1,4 +1,6 @@
-pub(super) fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
+use super::*;
+
+pub(crate) fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
         return Ok(None);
@@ -10,14 +12,14 @@ pub(super) fn parse_set_interval_expr(src: &str) -> Result<Option<(TimerInvocati
     Ok(Some((handler, delay_ms)))
 }
 
-pub(super) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
+pub(crate) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<TimerCallback>> {
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
     cursor.skip_ws();
     if cursor.eof() { Ok(callback) } else { Ok(None) }
 }
 
-pub(super) fn parse_request_animation_frame_call(
+pub(crate) fn parse_request_animation_frame_call(
     cursor: &mut Cursor<'_>,
 ) -> Result<Option<TimerCallback>> {
     cursor.skip_ws();
@@ -52,14 +54,14 @@ pub(super) fn parse_request_animation_frame_call(
     Ok(Some(callback))
 }
 
-pub(super) fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
+pub(crate) fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandler>> {
     let mut cursor = Cursor::new(src);
     let handler = parse_queue_microtask_call(&mut cursor)?;
     cursor.skip_ws();
     if cursor.eof() { Ok(handler) } else { Ok(None) }
 }
 
-pub(super) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some(handler) = parse_queue_microtask_call(&mut cursor)? else {
@@ -78,7 +80,7 @@ pub(super) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::QueueMicrotask { handler }))
 }
 
-pub(super) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
+pub(crate) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
     cursor.skip_ws();
     if !cursor.consume_ascii("queueMicrotask") {
         return Ok(None);
@@ -115,7 +117,7 @@ pub(super) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Opti
     }))
 }
 
-pub(super) fn parse_template_literal(src: &str) -> Result<Expr> {
+pub(crate) fn parse_template_literal(src: &str) -> Result<Expr> {
     let inner = &src[1..src.len() - 1];
     let bytes = inner.as_bytes();
 
@@ -170,7 +172,7 @@ pub(super) fn parse_template_literal(src: &str) -> Result<Expr> {
     Ok(Expr::Add(parts))
 }
 
-pub(super) fn starts_with_window_member_access(src: &str) -> bool {
+pub(crate) fn starts_with_window_member_access(src: &str) -> bool {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("window") {
@@ -180,7 +182,7 @@ pub(super) fn starts_with_window_member_access(src: &str) -> bool {
     cursor.consume_byte(b'.')
 }
 
-pub(super) fn is_non_dom_var_target(target: &DomQuery) -> bool {
+pub(crate) fn is_non_dom_var_target(target: &DomQuery) -> bool {
     match target {
         DomQuery::Var(_) | DomQuery::VarPath { .. } => true,
         DomQuery::Index { target, .. } => is_non_dom_var_target(target),
@@ -188,7 +190,7 @@ pub(super) fn is_non_dom_var_target(target: &DomQuery) -> bool {
     }
 }
 
-pub(super) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
+pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -477,7 +479,7 @@ pub(super) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
     Ok(Some((target, prop)))
 }
 
-pub(super) fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(crate) fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -510,18 +512,18 @@ pub(super) fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, St
     Ok(Some((target, name)))
 }
 
-pub(super) fn is_aria_string_property(prop: &str) -> bool {
+pub(crate) fn is_aria_string_property(prop: &str) -> bool {
     if !prop.starts_with("aria") || prop.len() <= 4 {
         return false;
     }
     !is_aria_element_ref_single_property(prop) && !is_aria_element_ref_list_property(prop)
 }
 
-pub(super) fn is_aria_element_ref_single_property(prop: &str) -> bool {
+pub(crate) fn is_aria_element_ref_single_property(prop: &str) -> bool {
     matches!(prop, "ariaActiveDescendantElement")
 }
 
-pub(super) fn is_aria_element_ref_list_property(prop: &str) -> bool {
+pub(crate) fn is_aria_element_ref_list_property(prop: &str) -> bool {
     matches!(
         prop,
         "ariaControlsElements"
@@ -534,7 +536,7 @@ pub(super) fn is_aria_element_ref_list_property(prop: &str) -> bool {
     )
 }
 
-pub(super) fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(crate) fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -567,7 +569,7 @@ pub(super) fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, St
     Ok(Some((target, name)))
 }
 
-pub(super) fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(crate) fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -599,7 +601,7 @@ pub(super) fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, Stri
     Ok(Some((target, selector)))
 }
 
-pub(super) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(crate) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {
@@ -631,7 +633,7 @@ pub(super) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, Stri
     Ok(Some((target, selector)))
 }
 
-pub(super) fn parse_dom_computed_style_property_expr(
+pub(crate) fn parse_dom_computed_style_property_expr(
     src: &str,
 ) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
@@ -663,4 +665,3 @@ pub(super) fn parse_dom_computed_style_property_expr(
     }
     Ok(Some((target, property)))
 }
-

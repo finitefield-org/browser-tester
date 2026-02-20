@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn eval_array_member_call(
         &mut self,
@@ -566,5 +568,4 @@ impl Harness {
             _ => Ok(None),
         }
     }
-
 }

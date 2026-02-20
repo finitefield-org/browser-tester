@@ -1,4 +1,6 @@
-pub(super) fn parse_expr(src: &str) -> Result<Expr> {
+use super::*;
+
+pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     if src.is_empty() {
         return Err(Error::ScriptParse("empty expression".into()));
@@ -27,7 +29,7 @@ pub(super) fn parse_expr(src: &str) -> Result<Expr> {
     parse_comma_expr(src)
 }
 
-pub(super) fn strip_js_comments(src: &str) -> String {
+pub(crate) fn strip_js_comments(src: &str) -> String {
     enum State {
         Normal,
         Single,
@@ -223,7 +225,7 @@ pub(super) fn strip_js_comments(src: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| src.to_string())
 }
 
-pub(super) fn parse_comma_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_comma_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let parts = split_top_level_by_char(src, b',');
     if parts.len() == 1 {
@@ -243,7 +245,7 @@ pub(super) fn parse_comma_expr(src: &str) -> Result<Expr> {
     Ok(Expr::Comma(parsed))
 }
 
-pub(super) fn parse_ternary_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_ternary_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
 
     if let Some(q_pos) = find_top_level_ternary_question(src) {
@@ -264,7 +266,7 @@ pub(super) fn parse_ternary_expr(src: &str) -> Result<Expr> {
     parse_logical_or_expr(src)
 }
 
-pub(super) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -280,7 +282,7 @@ pub(super) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_nullish_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_nullish_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -296,7 +298,7 @@ pub(super) fn parse_nullish_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_logical_and_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_logical_and_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -312,7 +314,7 @@ pub(super) fn parse_logical_and_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -328,7 +330,7 @@ pub(super) fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -344,7 +346,7 @@ pub(super) fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -360,7 +362,7 @@ pub(super) fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_equality_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_equality_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -379,7 +381,7 @@ pub(super) fn parse_equality_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_relational_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_relational_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -400,7 +402,7 @@ pub(super) fn parse_relational_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_shift_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_shift_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -418,7 +420,7 @@ pub(super) fn parse_shift_expr(src: &str) -> Result<Expr> {
     })
 }
 
-pub(super) fn parse_add_expr(src: &str) -> Result<Expr> {
+pub(crate) fn parse_add_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
@@ -452,7 +454,7 @@ pub(super) fn parse_add_expr(src: &str) -> Result<Expr> {
     Ok(expr)
 }
 
-pub(super) fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
+pub(crate) fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
     match lhs {
         Expr::Add(mut parts) => {
             parts.push(rhs);
@@ -462,7 +464,7 @@ pub(super) fn append_concat_expr(lhs: Expr, rhs: Expr) -> Expr {
     }
 }
 
-pub(super) fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
+pub(crate) fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut ops = Vec::new();
@@ -492,7 +494,7 @@ pub(super) fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     (parts, ops)
 }
 
-pub(super) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
+pub(crate) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
     if idx >= bytes.len() {
         return false;
     }
@@ -528,7 +530,7 @@ pub(super) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
     )
 }
 
-pub(super) fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
+pub(crate) fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> bool {
     if exponent_index >= bytes.len() {
         return false;
     }
@@ -568,4 +570,3 @@ pub(super) fn is_decimal_exponent_sign(bytes: &[u8], exponent_index: usize) -> b
 
     has_digit
 }
-

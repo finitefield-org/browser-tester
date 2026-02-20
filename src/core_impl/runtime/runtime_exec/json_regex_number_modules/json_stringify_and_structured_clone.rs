@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn json_stringify_top_level(value: &Value) -> Result<Option<String>> {
         let mut array_stack = Vec::new();
@@ -270,5 +272,4 @@ impl Harness {
             )),
         }
     }
-
 }

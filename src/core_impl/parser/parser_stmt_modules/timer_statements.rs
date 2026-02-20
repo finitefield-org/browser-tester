@@ -1,4 +1,6 @@
-pub(super) fn parse_set_timer_call(
+use super::*;
+
+pub(crate) fn parse_set_timer_call(
     cursor: &mut Cursor<'_>,
     timer_name: &str,
 ) -> Result<Option<(TimerInvocation, Expr)>> {
@@ -61,19 +63,19 @@ pub(super) fn parse_set_timer_call(
     )))
 }
 
-pub(super) fn parse_set_timeout_call(
+pub(crate) fn parse_set_timeout_call(
     cursor: &mut Cursor<'_>,
 ) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setTimeout")
 }
 
-pub(super) fn parse_set_interval_call(
+pub(crate) fn parse_set_interval_call(
     cursor: &mut Cursor<'_>,
 ) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setInterval")
 }
 
-pub(super) fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
@@ -92,7 +94,7 @@ pub(super) fn parse_set_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::SetTimeout { handler, delay_ms }))
 }
 
-pub(super) fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let Some((handler, delay_ms)) = parse_set_interval_call(&mut cursor)? else {
@@ -111,7 +113,7 @@ pub(super) fn parse_set_interval_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::SetInterval { handler, delay_ms }))
 }
 
-pub(super) fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -153,4 +155,3 @@ pub(super) fn parse_clear_timeout_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     Ok(Some(Stmt::ClearTimeout { timer_id }))
 }
-

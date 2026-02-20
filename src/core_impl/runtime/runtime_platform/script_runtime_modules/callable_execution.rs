@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn make_function_value(
         &mut self,
@@ -424,5 +426,4 @@ impl Harness {
             run(self, caller_env)
         }
     }
-
 }

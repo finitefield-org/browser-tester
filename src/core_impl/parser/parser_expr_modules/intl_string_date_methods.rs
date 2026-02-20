@@ -1,4 +1,6 @@
-pub(super) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
+use super::*;
+
+pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -377,7 +379,7 @@ pub(super) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -993,7 +995,7 @@ pub(super) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(target) = cursor.parse_identifier() else {
@@ -1102,7 +1104,7 @@ pub(super) fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-pub(super) fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
+pub(crate) fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usize> {
     let bytes = src.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -1118,7 +1120,7 @@ pub(super) fn collect_top_level_char_positions(src: &str, target: u8) -> Vec<usi
     out
 }
 
-pub(super) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(crate) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocation, Expr)>> {
     let mut cursor = Cursor::new(src);
     let Some((handler, delay_ms)) = parse_set_timeout_call(&mut cursor)? else {
         return Ok(None);
@@ -1129,4 +1131,3 @@ pub(super) fn parse_set_timeout_expr(src: &str) -> Result<Option<(TimerInvocatio
     }
     Ok(Some((handler, delay_ms)))
 }
-

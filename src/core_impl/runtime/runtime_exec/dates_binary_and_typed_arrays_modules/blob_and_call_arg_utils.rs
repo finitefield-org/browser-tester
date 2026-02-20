@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn normalize_blob_type(raw: &str) -> String {
         let trimmed = raw.trim();
@@ -325,5 +327,4 @@ impl Harness {
             )),
         }
     }
-
 }

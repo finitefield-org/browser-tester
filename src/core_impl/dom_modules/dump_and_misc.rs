@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn dump_node(&self, node_id: NodeId) -> String {
+    pub(crate) fn dump_node(&self, node_id: NodeId) -> String {
         match &self.nodes[node_id.0].node_type {
             NodeType::Document => {
                 let mut out = String::new();

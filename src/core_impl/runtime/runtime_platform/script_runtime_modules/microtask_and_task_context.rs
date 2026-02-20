@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
         self.scheduler
@@ -153,18 +155,18 @@ impl Harness {
         }
     }
 
-    fn is_internal_env_key(name: &str) -> bool {
+    pub(crate) fn is_internal_env_key(name: &str) -> bool {
         name.starts_with("\u{0}\u{0}bt_")
     }
 
-    fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
+    pub(crate) fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
         match env.get(INTERNAL_SCOPE_DEPTH_KEY) {
             Some(Value::Number(depth)) if *depth >= 0 => *depth,
             _ => 0,
         }
     }
 
-    fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
+    pub(crate) fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
         match env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
             Some(Value::Array(names)) => names
                 .borrow()
@@ -174,7 +176,7 @@ impl Harness {
         }
     }
 
-    fn ensure_listener_capture_env(&mut self) -> Rc<RefCell<ScriptEnv>> {
+    pub(crate) fn ensure_listener_capture_env(&mut self) -> Rc<RefCell<ScriptEnv>> {
         if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
             frame
                 .shared_env
@@ -185,7 +187,7 @@ impl Harness {
         }
     }
 
-    fn push_pending_function_decl_scope(
+    pub(crate) fn push_pending_function_decl_scope(
         &mut self,
         scope: HashMap<String, (ScriptHandler, bool)>,
     ) -> usize {
@@ -198,7 +200,7 @@ impl Harness {
         start_len
     }
 
-    fn push_pending_function_decl_scopes(
+    pub(crate) fn push_pending_function_decl_scopes(
         &mut self,
         scopes: &[Arc<HashMap<String, (ScriptHandler, bool)>>],
     ) -> usize {
@@ -209,7 +211,7 @@ impl Harness {
         start_len
     }
 
-    fn restore_pending_function_decl_scopes(&mut self, start_len: usize) {
+    pub(crate) fn restore_pending_function_decl_scopes(&mut self, start_len: usize) {
         self.script_runtime
             .pending_function_decls
             .truncate(start_len);
@@ -227,5 +229,4 @@ impl Harness {
                 .insert(name.to_string(), value.clone());
         }
     }
-
 }

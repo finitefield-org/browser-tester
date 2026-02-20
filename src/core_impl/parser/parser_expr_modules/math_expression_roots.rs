@@ -1,4 +1,6 @@
-pub(super) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
+use super::*;
+
+pub(crate) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
@@ -101,7 +103,7 @@ pub(super) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MathConst(constant)))
 }
 
-pub(super) fn parse_math_const_name(name: &str) -> Option<MathConst> {
+pub(crate) fn parse_math_const_name(name: &str) -> Option<MathConst> {
     match name {
         "E" => Some(MathConst::E),
         "LN10" => Some(MathConst::Ln10),
@@ -115,7 +117,7 @@ pub(super) fn parse_math_const_name(name: &str) -> Option<MathConst> {
     }
 }
 
-pub(super) fn parse_math_method_name(name: &str) -> Option<MathMethod> {
+pub(crate) fn parse_math_method_name(name: &str) -> Option<MathMethod> {
     match name {
         "abs" => Some(MathMethod::Abs),
         "acos" => Some(MathMethod::Acos),
@@ -157,4 +159,3 @@ pub(super) fn parse_math_method_name(name: &str) -> Option<MathMethod> {
         _ => None,
     }
 }
-

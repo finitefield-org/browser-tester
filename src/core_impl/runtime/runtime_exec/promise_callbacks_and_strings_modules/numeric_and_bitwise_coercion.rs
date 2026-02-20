@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn numeric_value(&self, value: &Value) -> f64 {
         match value {
@@ -90,5 +92,4 @@ impl Harness {
         }
         numeric.trunc().rem_euclid(4_294_967_296.0) as u32
     }
-
 }

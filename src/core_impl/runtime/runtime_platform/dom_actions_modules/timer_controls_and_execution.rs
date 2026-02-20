@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub fn now_ms(&self) -> i64 {
         self.scheduler.now_ms
@@ -199,7 +201,7 @@ impl Harness {
         stacker::grow(32 * 1024 * 1024, || self.execute_timer_task_impl(task))
     }
 
-    fn execute_timer_task_impl(&mut self, mut task: ScheduledTask) -> Result<()> {
+    pub(crate) fn execute_timer_task_impl(&mut self, mut task: ScheduledTask) -> Result<()> {
         let interval_desc = task
             .interval_ms
             .map(|value| value.to_string())
@@ -248,5 +250,4 @@ impl Harness {
 
         Ok(())
     }
-
 }

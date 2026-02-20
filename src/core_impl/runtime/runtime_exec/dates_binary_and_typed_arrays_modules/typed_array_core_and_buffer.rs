@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn new_array_buffer_value(
         byte_length: usize,
@@ -600,5 +602,4 @@ impl Harness {
             }
         }
     }
-
 }

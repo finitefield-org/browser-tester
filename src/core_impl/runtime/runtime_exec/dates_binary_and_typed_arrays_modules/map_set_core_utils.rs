@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn same_value_zero(&self, left: &Value, right: &Value) -> bool {
         if let (Some(left_num), Some(right_num)) = (
@@ -98,5 +100,4 @@ impl Harness {
             )),
         }
     }
-
 }

@@ -1,12 +1,14 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn class_contains(&self, node_id: NodeId, class_name: &str) -> Result<bool> {
+    pub(crate) fn class_contains(&self, node_id: NodeId, class_name: &str) -> Result<bool> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("classList target is not an element".into()))?;
         Ok(has_class(element, class_name))
     }
 
-    pub(super) fn class_add(&mut self, node_id: NodeId, class_name: &str) -> Result<()> {
+    pub(crate) fn class_add(&mut self, node_id: NodeId, class_name: &str) -> Result<()> {
         let element = self
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("classList target is not an element".into()))?;
@@ -18,7 +20,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn class_remove(&mut self, node_id: NodeId, class_name: &str) -> Result<()> {
+    pub(crate) fn class_remove(&mut self, node_id: NodeId, class_name: &str) -> Result<()> {
         let element = self
             .element_mut(node_id)
             .ok_or_else(|| Error::ScriptRuntime("classList target is not an element".into()))?;
@@ -28,7 +30,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn class_toggle(&mut self, node_id: NodeId, class_name: &str) -> Result<bool> {
+    pub(crate) fn class_toggle(&mut self, node_id: NodeId, class_name: &str) -> Result<bool> {
         let has = self.class_contains(node_id, class_name)?;
         if has {
             self.class_remove(node_id, class_name)?;
@@ -39,12 +41,12 @@ impl Dom {
         }
     }
 
-    pub(super) fn query_selector(&self, selector: &str) -> Result<Option<NodeId>> {
+    pub(crate) fn query_selector(&self, selector: &str) -> Result<Option<NodeId>> {
         let all = self.query_selector_all(selector)?;
         Ok(all.into_iter().next())
     }
 
-    pub(super) fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>> {
+    pub(crate) fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>> {
         let groups = parse_selector_groups(selector)?;
 
         if groups.len() == 1 && groups[0].len() == 1 {
@@ -70,7 +72,7 @@ impl Dom {
         Ok(matched)
     }
 
-    pub(super) fn query_selector_from(
+    pub(crate) fn query_selector_from(
         &self,
         root: &NodeId,
         selector: &str,
@@ -79,7 +81,7 @@ impl Dom {
         Ok(all.into_iter().next())
     }
 
-    pub(super) fn query_selector_all_from(
+    pub(crate) fn query_selector_all_from(
         &self,
         root: &NodeId,
         selector: &str,
@@ -103,7 +105,7 @@ impl Dom {
         Ok(matched)
     }
 
-    pub(super) fn matches_selector(&self, node_id: NodeId, selector: &str) -> Result<bool> {
+    pub(crate) fn matches_selector(&self, node_id: NodeId, selector: &str) -> Result<bool> {
         if self.element(node_id).is_none() {
             return Ok(false);
         }
@@ -114,7 +116,7 @@ impl Dom {
             .any(|steps| self.matches_selector_chain(node_id, steps)))
     }
 
-    pub(super) fn closest(&self, node_id: NodeId, selector: &str) -> Result<Option<NodeId>> {
+    pub(crate) fn closest(&self, node_id: NodeId, selector: &str) -> Result<Option<NodeId>> {
         if self.element(node_id).is_none() {
             return Ok(None);
         }
@@ -132,5 +134,4 @@ impl Dom {
         }
         Ok(None)
     }
-
 }

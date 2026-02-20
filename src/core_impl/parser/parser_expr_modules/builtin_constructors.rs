@@ -1,4 +1,6 @@
-pub(super) fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
+use super::*;
+
+pub(crate) fn validate_math_arity(method: MathMethod, count: usize) -> Result<()> {
     let method_name = match method {
         MathMethod::Abs => "abs",
         MathMethod::Acos => "acos",
@@ -62,7 +64,7 @@ pub(super) fn validate_math_arity(method: MathMethod, count: usize) -> Result<()
     Err(Error::ScriptParse(message))
 }
 
-pub(super) fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -194,7 +196,7 @@ pub(super) fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::StringConstructor))
 }
 
-pub(super) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -343,7 +345,7 @@ pub(super) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::NumberConst(constant)))
 }
 
-pub(super) fn parse_number_const_name(name: &str) -> Option<NumberConst> {
+pub(crate) fn parse_number_const_name(name: &str) -> Option<NumberConst> {
     match name {
         "EPSILON" => Some(NumberConst::Epsilon),
         "MAX_SAFE_INTEGER" => Some(NumberConst::MaxSafeInteger),
@@ -357,7 +359,7 @@ pub(super) fn parse_number_const_name(name: &str) -> Option<NumberConst> {
     }
 }
 
-pub(super) fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
+pub(crate) fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
     match name {
         "isFinite" => Some(NumberMethod::IsFinite),
         "isInteger" => Some(NumberMethod::IsInteger),
@@ -369,7 +371,7 @@ pub(super) fn parse_number_method_name(name: &str) -> Option<NumberMethod> {
     }
 }
 
-pub(super) fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -477,7 +479,7 @@ pub(super) fn parse_bigint_expr(src: &str) -> Result<Option<Expr>> {
     }))
 }
 
-pub(super) fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
+pub(crate) fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
     match name {
         "asIntN" => Some(BigIntMethod::AsIntN),
         "asUintN" => Some(BigIntMethod::AsUintN),
@@ -485,7 +487,7 @@ pub(super) fn parse_bigint_method_name(name: &str) -> Option<BigIntMethod> {
     }
 }
 
-pub(super) fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
+pub(crate) fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> {
     match name {
         "Int8Array" => Some(TypedArrayKind::Int8),
         "Uint8Array" => Some(TypedArrayKind::Uint8),
@@ -503,7 +505,7 @@ pub(super) fn parse_typed_array_kind_name(name: &str) -> Option<TypedArrayKind> 
     }
 }
 
-pub(super) fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -644,7 +646,7 @@ pub(super) fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
     )))
 }
 
-pub(super) fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -835,7 +837,7 @@ pub(super) fn parse_promise_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::PromiseConstructor))
 }
 
-pub(super) fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
     for dot in dots.into_iter().rev() {
@@ -921,7 +923,7 @@ pub(super) fn parse_promise_method_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1011,7 +1013,7 @@ pub(super) fn parse_blob_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BlobConstructor))
 }
 
-pub(super) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1125,7 +1127,7 @@ pub(super) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MapConstructor))
 }
 
-pub(super) fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1295,7 +1297,7 @@ pub(super) fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::UrlConstructor))
 }
 
-pub(super) fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1376,7 +1378,7 @@ pub(super) fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
     Ok(None)
 }
 
-pub(super) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1458,7 +1460,7 @@ pub(super) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::SetConstructor))
 }
 
-pub(super) fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1614,7 +1616,7 @@ pub(super) fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::SymbolConstructor))
 }
 
-pub(super) fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1741,4 +1743,3 @@ pub(super) fn parse_array_buffer_expr(src: &str) -> Result<Option<Expr>> {
     }
     Ok(Some(Expr::ArrayBufferConstructor))
 }
-

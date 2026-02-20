@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn collect_left_associative_binary_operands<'a>(
         expr: &'a Expr,
@@ -421,7 +423,7 @@ impl Harness {
         }
     }
 
-    fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
+    pub(crate) fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
         self.script_runtime
             .env
             .get(name)
@@ -666,5 +668,4 @@ impl Harness {
             )),
         }
     }
-
 }

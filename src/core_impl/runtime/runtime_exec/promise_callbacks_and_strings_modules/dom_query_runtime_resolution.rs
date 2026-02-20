@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn resolve_dom_query_var_path_value(
         &self,
@@ -484,5 +486,4 @@ impl Harness {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("node-{}", node.0))
     }
-
 }

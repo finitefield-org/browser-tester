@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn promise_error_reason(err: Error) -> Value {
         Value::String(format!("{err}"))
@@ -747,5 +749,4 @@ impl Harness {
         }
         Ok(())
     }
-
 }

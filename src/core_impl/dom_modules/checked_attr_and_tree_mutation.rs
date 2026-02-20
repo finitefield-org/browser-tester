@@ -1,12 +1,14 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn checked(&self, node_id: NodeId) -> Result<bool> {
+    pub(crate) fn checked(&self, node_id: NodeId) -> Result<bool> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("checked target is not an element".into()))?;
         Ok(element.checked)
     }
 
-    pub(super) fn set_checked(&mut self, node_id: NodeId, checked: bool) -> Result<()> {
+    pub(crate) fn set_checked(&mut self, node_id: NodeId, checked: bool) -> Result<()> {
         if checked && is_radio_input(self, node_id) {
             self.uncheck_other_radios_in_group(node_id);
         }
@@ -17,7 +19,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn uncheck_other_radios_in_group(&mut self, target: NodeId) {
+    pub(crate) fn uncheck_other_radios_in_group(&mut self, target: NodeId) {
         let target_name = self.attr(target, "name").unwrap_or_default();
         if target_name.is_empty() {
             return;
@@ -44,7 +46,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn normalize_radio_groups(&mut self) -> Result<()> {
+    pub(crate) fn normalize_radio_groups(&mut self) -> Result<()> {
         let all_nodes = self.all_element_nodes();
         for node in all_nodes {
             if !is_radio_input(self, node) {
@@ -57,31 +59,31 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn disabled(&self, node_id: NodeId) -> bool {
+    pub(crate) fn disabled(&self, node_id: NodeId) -> bool {
         self.element(node_id).map(|e| e.disabled).unwrap_or(false)
     }
 
-    pub(super) fn readonly(&self, node_id: NodeId) -> bool {
+    pub(crate) fn readonly(&self, node_id: NodeId) -> bool {
         self.element(node_id).map(|e| e.readonly).unwrap_or(false)
     }
 
-    pub(super) fn required(&self, node_id: NodeId) -> bool {
+    pub(crate) fn required(&self, node_id: NodeId) -> bool {
         self.element(node_id).map(|e| e.required).unwrap_or(false)
     }
 
-    pub(super) fn attr(&self, node_id: NodeId, name: &str) -> Option<String> {
+    pub(crate) fn attr(&self, node_id: NodeId, name: &str) -> Option<String> {
         self.element(node_id)
             .and_then(|e| e.attrs.get(name).cloned())
     }
 
-    pub(super) fn has_attr(&self, node_id: NodeId, name: &str) -> Result<bool> {
+    pub(crate) fn has_attr(&self, node_id: NodeId, name: &str) -> Result<bool> {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("hasAttribute target is not an element".into()))?;
         Ok(element.attrs.contains_key(&name.to_ascii_lowercase()))
     }
 
-    pub(super) fn set_attr(&mut self, node_id: NodeId, name: &str, value: &str) -> Result<()> {
+    pub(crate) fn set_attr(&mut self, node_id: NodeId, name: &str, value: &str) -> Result<()> {
         let old_id = if name.eq_ignore_ascii_case("id") {
             self.element(node_id)
                 .and_then(|element| element.attrs.get("id").cloned())
@@ -131,7 +133,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn remove_attr(&mut self, node_id: NodeId, name: &str) -> Result<()> {
+    pub(crate) fn remove_attr(&mut self, node_id: NodeId, name: &str) -> Result<()> {
         let lowered = name.to_ascii_lowercase();
         let old_id = if lowered == "id" {
             self.element(node_id)
@@ -177,7 +179,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn append_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+    pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
         if !self.can_have_children(parent) {
             return Err(Error::ScriptRuntime(
                 "appendChild target cannot have children".into(),
@@ -210,7 +212,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn prepend_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+    pub(crate) fn prepend_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
         let reference = self.nodes[parent.0].children.first().copied();
         if let Some(reference) = reference {
             self.insert_before(parent, child, reference)
@@ -219,7 +221,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn insert_before(
+    pub(crate) fn insert_before(
         &mut self,
         parent: NodeId,
         child: NodeId,
@@ -276,7 +278,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn insert_after(&mut self, target: NodeId, child: NodeId) -> Result<()> {
+    pub(crate) fn insert_after(&mut self, target: NodeId, child: NodeId) -> Result<()> {
         let Some(parent) = self.parent(target) else {
             return Ok(());
         };
@@ -293,7 +295,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn replace_with(&mut self, target: NodeId, child: NodeId) -> Result<()> {
+    pub(crate) fn replace_with(&mut self, target: NodeId, child: NodeId) -> Result<()> {
         let Some(parent) = self.parent(target) else {
             return Ok(());
         };
@@ -304,7 +306,7 @@ impl Dom {
         self.remove_child(parent, target)
     }
 
-    pub(super) fn insert_adjacent_node(
+    pub(crate) fn insert_adjacent_node(
         &mut self,
         target: NodeId,
         position: InsertAdjacentPosition,
@@ -323,7 +325,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn remove_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
+    pub(crate) fn remove_child(&mut self, parent: NodeId, child: NodeId) -> Result<()> {
         if self.parent(child) != Some(parent) {
             return Err(Error::ScriptRuntime(
                 "removeChild target is not a direct child".into(),
@@ -335,7 +337,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn remove_node(&mut self, node: NodeId) -> Result<()> {
+    pub(crate) fn remove_node(&mut self, node: NodeId) -> Result<()> {
         if node == self.root {
             return Err(Error::ScriptRuntime("cannot remove document root".into()));
         }
@@ -344,5 +346,4 @@ impl Dom {
         };
         self.remove_child(parent, node)
     }
-
 }

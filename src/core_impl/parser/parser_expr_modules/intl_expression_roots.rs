@@ -1,4 +1,6 @@
-pub(super) fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
+use super::*;
+
+pub(crate) fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -1294,4 +1296,3 @@ pub(super) fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
     }
     Ok(Some(expr))
 }
-

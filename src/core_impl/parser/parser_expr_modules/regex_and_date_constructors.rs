@@ -1,4 +1,6 @@
-pub(super) fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
+use super::*;
+
+pub(crate) fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
 
     if cursor.consume_ascii("navigator") {
@@ -48,7 +50,7 @@ pub(super) fn parse_clipboard_base(cursor: &mut Cursor<'_>) -> bool {
     false
 }
 
-pub(super) fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -116,7 +118,7 @@ pub(super) fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::DateNew { value }))
 }
 
-pub(super) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
+pub(crate) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some((pattern, flags)) = parse_regex_literal_from_cursor(&mut cursor)? else {
@@ -129,7 +131,7 @@ pub(super) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, Stri
     Ok(Some((pattern, flags)))
 }
 
-pub(super) fn parse_regex_literal_from_cursor(
+pub(crate) fn parse_regex_literal_from_cursor(
     cursor: &mut Cursor<'_>,
 ) -> Result<Option<(String, String)>> {
     cursor.skip_ws();
@@ -204,7 +206,7 @@ pub(super) fn parse_regex_literal_from_cursor(
     Ok(Some((pattern, flags)))
 }
 
-pub(super) fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let Some(expr) = parse_new_regexp_expr_from_cursor(&mut cursor)? else {
@@ -217,7 +219,7 @@ pub(super) fn parse_new_regexp_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-pub(super) fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
+pub(crate) fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<Expr>> {
     let start = cursor.i;
     cursor.skip_ws();
     if cursor.consume_ascii("new") {
@@ -292,7 +294,7 @@ pub(super) fn parse_new_regexp_expr_from_cursor(cursor: &mut Cursor<'_>) -> Resu
     Ok(Some(Expr::RegexNew { pattern, flags }))
 }
 
-pub(super) fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -352,7 +354,7 @@ pub(super) fn parse_regexp_static_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::RegExpConstructor))
 }
 
-pub(super) fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("new") {
@@ -416,7 +418,7 @@ pub(super) fn parse_new_function_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::FunctionConstructor { args: parsed }))
 }
 
-pub(super) fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -489,7 +491,7 @@ pub(super) fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     }
 }
 
-pub(super) fn parse_date_now_expr(src: &str) -> Result<bool> {
+pub(crate) fn parse_date_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -525,7 +527,7 @@ pub(super) fn parse_date_now_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-pub(super) fn parse_performance_now_expr(src: &str) -> Result<bool> {
+pub(crate) fn parse_performance_now_expr(src: &str) -> Result<bool> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -566,7 +568,7 @@ pub(super) fn parse_performance_now_expr(src: &str) -> Result<bool> {
     Ok(cursor.eof())
 }
 
-pub(super) fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<String>>> {
+pub(crate) fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Option<Vec<String>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -614,7 +616,7 @@ pub(super) fn parse_date_static_args_expr(src: &str, method: &str) -> Result<Opt
     Ok(Some(args))
 }
 
-pub(super) fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
     let Some(args) = parse_date_static_args_expr(src, "parse")? else {
         return Ok(None);
     };
@@ -626,7 +628,7 @@ pub(super) fn parse_date_parse_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(parse_expr(args[0].trim())?))
 }
 
-pub(super) fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
+pub(crate) fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     let Some(args) = parse_date_static_args_expr(src, "UTC")? else {
         return Ok(None);
     };
@@ -648,4 +650,3 @@ pub(super) fn parse_date_utc_expr(src: &str) -> Result<Option<Vec<Expr>>> {
     }
     Ok(Some(out))
 }
-

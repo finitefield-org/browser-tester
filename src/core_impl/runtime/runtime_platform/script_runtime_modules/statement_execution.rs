@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn execute_stmts(
         &mut self,

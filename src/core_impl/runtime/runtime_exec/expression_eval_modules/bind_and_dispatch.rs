@@ -1,4 +1,4 @@
-const UNHANDLED_EXPR_CHUNK: &str = "__bt_unhandled_eval_expr_chunk__";
+use super::*;
 
 impl Harness {
     pub(crate) fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
@@ -31,7 +31,9 @@ impl Harness {
         if let Some(value) = self.eval_expr_core_date_intl(expr, env, event_param, event)? {
             return Ok(value);
         }
-        if let Some(value) = self.eval_expr_regex_numbers_and_builtins(expr, env, event_param, event)? {
+        if let Some(value) =
+            self.eval_expr_regex_numbers_and_builtins(expr, env, event_param, event)?
+        {
             return Ok(value);
         }
         if let Some(value) = self.eval_expr_json_object_array(expr, env, event_param, event)? {

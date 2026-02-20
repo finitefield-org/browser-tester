@@ -1,4 +1,6 @@
-pub(super) fn split_top_level_statements(body: &str) -> Vec<String> {
+use super::*;
+
+pub(crate) fn split_top_level_statements(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -57,7 +59,7 @@ pub(super) fn split_top_level_statements(body: &str) -> Vec<String> {
     out
 }
 
-pub(super) fn should_split_after_closing_brace(
+pub(crate) fn should_split_after_closing_brace(
     body: &str,
     block_open: Option<usize>,
     tail: &str,
@@ -91,7 +93,7 @@ pub(super) fn should_split_after_closing_brace(
     true
 }
 
-pub(super) fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
+pub(crate) fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
     let bytes = body.as_bytes();
     if block_open == 0 || block_open > bytes.len() {
         return false;
@@ -113,14 +115,14 @@ pub(super) fn is_do_block_prefix(body: &str, block_open: usize) -> bool {
     }
 }
 
-pub(super) fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
+pub(crate) fn is_keyword_prefix(src: &str, keyword: &str) -> bool {
     let Some(rest) = src.strip_prefix(keyword) else {
         return false;
     };
     rest.is_empty() || !is_ident_char(*rest.as_bytes().first().unwrap_or(&b'\0'))
 }
 
-pub(super) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -175,7 +177,7 @@ pub(super) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let mut rest = None;
     for kw in ["const", "let", "var"] {
         if let Some(after) = stmt.strip_prefix(kw) {
@@ -231,7 +233,7 @@ pub(super) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let Some((name, op_len, value_src)) = find_top_level_var_assignment(stmt) else {
         return Ok(None);
@@ -274,7 +276,7 @@ pub(super) fn parse_var_assign(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
+pub(crate) fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize, &str)> {
     let (eq_pos, op_len) = find_top_level_assignment(stmt)?;
     let lhs = stmt[..eq_pos].trim();
     if lhs.is_empty() {
@@ -288,7 +290,7 @@ pub(super) fn find_top_level_var_assignment(stmt: &str) -> Option<(String, usize
     ))
 }
 
-pub(super) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
@@ -317,7 +319,7 @@ pub(super) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     Ok(None)
 }
 
-pub(super) fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {
+pub(crate) fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {
     let mut cursor = Cursor::new(pattern);
     cursor.skip_ws();
     let items_src = cursor.read_balanced_block(b'[', b']')?;
@@ -353,7 +355,7 @@ pub(super) fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Optio
     Ok(targets)
 }
 
-pub(super) fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String)>> {
+pub(crate) fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(String, String)>> {
     let mut cursor = Cursor::new(pattern);
     cursor.skip_ws();
     let items_src = cursor.read_balanced_block(b'{', b'}')?;
@@ -402,4 +404,3 @@ pub(super) fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(Str
 
     Ok(bindings)
 }
-

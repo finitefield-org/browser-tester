@@ -1,4 +1,6 @@
-pub(super) fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
+use super::*;
+
+pub(crate) fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -81,7 +83,7 @@ pub(super) fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option
     }))
 }
 
-pub(super) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let stmt_no_semi = stmt.strip_suffix(';').map(str::trim_end).unwrap_or(stmt);
 
@@ -179,7 +181,7 @@ pub(super) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::ArrayForEachExpr { target, callback }))
 }
 
-pub(super) fn parse_array_for_each_callback_arg(
+pub(crate) fn parse_array_for_each_callback_arg(
     arg: &str,
     max_params: usize,
     label: &str,
@@ -207,7 +209,7 @@ pub(super) fn parse_array_for_each_callback_arg(
     Ok(ScriptHandler { params, stmts })
 }
 
-pub(super) fn find_top_level_for_each_call(src: &str) -> Option<usize> {
+pub(crate) fn find_top_level_for_each_call(src: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -227,7 +229,7 @@ pub(super) fn find_top_level_for_each_call(src: &str) -> Option<usize> {
     None
 }
 
-pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
+pub(crate) fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stmt>)> {
     let mut cursor = Cursor::new(src.trim());
     cursor.skip_ws();
     let mut param_prologue: Vec<String> = Vec::new();
@@ -344,7 +346,7 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
     Ok((item_var, index_var, body_stmts))
 }
 
-pub(super) fn parse_for_each_callback_body_stmts(
+pub(crate) fn parse_for_each_callback_body_stmts(
     body: &str,
     concise_body: bool,
 ) -> Result<Vec<Stmt>> {
@@ -358,7 +360,7 @@ pub(super) fn parse_for_each_callback_body_stmts(
     }
 }
 
-pub(super) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -402,7 +404,7 @@ pub(super) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -436,7 +438,7 @@ pub(super) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::DomRemoveAttribute { target, name }))
 }
 
-pub(super) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -553,7 +555,7 @@ pub(super) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
-pub(super) fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+pub(crate) fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
     let lowered = src.to_ascii_lowercase();
     match lowered.as_str() {
         "beforebegin" => Ok(InsertAdjacentPosition::BeforeBegin),
@@ -566,7 +568,7 @@ pub(super) fn parse_insert_adjacent_position(src: &str) -> Result<InsertAdjacent
     }
 }
 
-pub(super) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
+pub(crate) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjacentPosition> {
     let lowered = src.to_ascii_lowercase();
     match lowered.as_str() {
         "beforebegin" => Ok(InsertAdjacentPosition::BeforeBegin),
@@ -579,7 +581,7 @@ pub(super) fn resolve_insert_adjacent_position(src: &str) -> Result<InsertAdjace
     }
 }
 
-pub(super) fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -624,7 +626,7 @@ pub(super) fn parse_insert_adjacent_element_stmt(stmt: &str) -> Result<Option<St
     }))
 }
 
-pub(super) fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -669,7 +671,7 @@ pub(super) fn parse_insert_adjacent_text_stmt(stmt: &str) -> Result<Option<Stmt>
     }))
 }
 
-pub(super) fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
+pub(crate) fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
     let target = match parse_element_target(&mut cursor) {
@@ -713,4 +715,3 @@ pub(super) fn parse_insert_adjacent_html_stmt(stmt: &str) -> Result<Option<Stmt>
         html,
     }))
 }
-

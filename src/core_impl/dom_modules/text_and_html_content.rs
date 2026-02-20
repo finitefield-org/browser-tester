@@ -1,5 +1,7 @@
+use super::*;
+
 impl Dom {
-    pub(super) fn text_content(&self, node_id: NodeId) -> String {
+    pub(crate) fn text_content(&self, node_id: NodeId) -> String {
         match &self.nodes[node_id.0].node_type {
             NodeType::Document | NodeType::Element(_) => {
                 let mut out = String::new();
@@ -12,7 +14,7 @@ impl Dom {
         }
     }
 
-    pub(super) fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<()> {
+    pub(crate) fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<()> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "textContent target is not an element".into(),
@@ -25,7 +27,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn inner_html(&self, node_id: NodeId) -> Result<String> {
+    pub(crate) fn inner_html(&self, node_id: NodeId) -> Result<String> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "innerHTML target is not an element".into(),
@@ -38,7 +40,7 @@ impl Dom {
         Ok(out)
     }
 
-    pub(super) fn outer_html(&self, node_id: NodeId) -> Result<String> {
+    pub(crate) fn outer_html(&self, node_id: NodeId) -> Result<String> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "outerHTML target is not an element".into(),
@@ -47,7 +49,7 @@ impl Dom {
         Ok(self.dump_node(node_id))
     }
 
-    pub(super) fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+    pub(crate) fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "innerHTML target is not an element".into(),
@@ -70,7 +72,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn set_outer_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+    pub(crate) fn set_outer_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "outerHTML target is not an element".into(),
@@ -106,7 +108,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn insert_adjacent_html(
+    pub(crate) fn insert_adjacent_html(
         &mut self,
         target: NodeId,
         position: InsertAdjacentPosition,
@@ -127,7 +129,7 @@ impl Dom {
         Ok(())
     }
 
-    pub(super) fn clone_subtree_from_dom(
+    pub(crate) fn clone_subtree_from_dom(
         &mut self,
         source: &Dom,
         source_node: NodeId,
@@ -159,5 +161,4 @@ impl Dom {
         }
         Ok(Some(node))
     }
-
 }

@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn new_symbol_value(
         &mut self,

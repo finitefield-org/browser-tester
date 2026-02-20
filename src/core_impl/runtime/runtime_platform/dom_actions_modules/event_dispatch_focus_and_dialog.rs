@@ -1,3 +1,5 @@
+use super::*;
+
 impl Harness {
     pub(crate) fn dispatch_event(
         &mut self,
