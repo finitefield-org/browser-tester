@@ -4732,12 +4732,11 @@ impl MockWindow {
     }
 
     pub fn open_page(&mut self, url: &str, html: &str) -> Result<usize> {
-        let mut harness = Harness::from_html(html)?;
-        harness.document_url = url.to_string();
+        let harness = Harness::from_html_with_url(url, html)?;
         if let Some(index) = self
             .pages
             .iter()
-            .position(|page| page.url.eq_ignore_ascii_case(url))
+            .position(|page| page.url == url)
         {
             self.pages[index] = MockPage {
                 url: url.to_string(),

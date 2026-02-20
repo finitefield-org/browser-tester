@@ -1,9 +1,13 @@
 impl Harness {
     pub fn from_html(html: &str) -> Result<Self> {
-        stacker::grow(32 * 1024 * 1024, || Self::from_html_impl(html))
+        Self::from_html_with_url("about:blank", html)
     }
 
-    fn from_html_impl(html: &str) -> Result<Self> {
+    pub fn from_html_with_url(url: &str, html: &str) -> Result<Self> {
+        stacker::grow(32 * 1024 * 1024, || Self::from_html_impl(url, html))
+    }
+
+    fn from_html_impl(url: &str, html: &str) -> Result<Self> {
         let ParseOutput { dom, scripts } = parse_html(html)?;
         let mut harness = Self {
             dom,
@@ -11,13 +15,13 @@ impl Harness {
             node_event_handler_props: HashMap::new(),
             node_expando_props: HashMap::new(),
             script_env: HashMap::new(),
-            document_url: "about:blank".to_string(),
+            document_url: url.to_string(),
             window_object: Rc::new(RefCell::new(Vec::new())),
             document_object: Rc::new(RefCell::new(Vec::new())),
             location_object: Rc::new(RefCell::new(Vec::new())),
             history_object: Rc::new(RefCell::new(Vec::new())),
             history_entries: vec![HistoryEntry {
-                url: "about:blank".to_string(),
+                url: url.to_string(),
                 state: Value::Null,
             }],
             history_index: 0,
@@ -1871,38 +1875,39 @@ impl Harness {
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        self.focus_node(target)
+        stacker::grow(32 * 1024 * 1024, || self.focus_node(target))
     }
 
     pub fn blur(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        self.blur_node(target)
+        stacker::grow(32 * 1024 * 1024, || self.blur_node(target))
     }
 
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
+        stacker::grow(32 * 1024 * 1024, || {
+            let form = if self
+                .dom
+                .tag_name(target)
+                .map(|t| t.eq_ignore_ascii_case("form"))
+                .unwrap_or(false)
+            {
+                Some(target)
+            } else {
+                self.resolve_form_for_submit(target)
+            };
 
-        let form = if self
-            .dom
-            .tag_name(target)
-            .map(|t| t.eq_ignore_ascii_case("form"))
-            .unwrap_or(false)
-        {
-            Some(target)
-        } else {
-            self.resolve_form_for_submit(target)
-        };
-
-        if let Some(form_id) = form {
-            let submit_outcome = self.dispatch_event(form_id, "submit")?;
-            if !submit_outcome.default_prevented {
-                let mut env = self.script_env.clone();
-                self.maybe_close_dialog_for_form_submit_with_env(form_id, &mut env)?;
-                self.script_env = env;
+            if let Some(form_id) = form {
+                let submit_outcome = self.dispatch_event(form_id, "submit")?;
+                if !submit_outcome.default_prevented {
+                    let mut env = self.script_env.clone();
+                    self.maybe_close_dialog_for_form_submit_with_env(form_id, &mut env)?;
+                    self.script_env = env;
+                }
             }
-        }
 
-        Ok(())
+            Ok(())
+        })
     }
 
     pub(super) fn submit_form_with_env(
@@ -1991,10 +1996,12 @@ impl Harness {
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        let mut env = self.script_env.clone();
-        let _ = self.dispatch_event_with_env(target, event, &mut env, false)?;
-        self.script_env = env;
-        Ok(())
+        stacker::grow(32 * 1024 * 1024, || {
+            let mut env = self.script_env.clone();
+            let _ = self.dispatch_event_with_env(target, event, &mut env, false)?;
+            self.script_env = env;
+            Ok(())
+        })
     }
 
     pub fn now_ms(&self) -> i64 {
@@ -2183,7 +2190,11 @@ impl Harness {
             .map(|(idx, _)| idx)
     }
 
-    pub(super) fn execute_timer_task(&mut self, mut task: ScheduledTask) -> Result<()> {
+    pub(super) fn execute_timer_task(&mut self, task: ScheduledTask) -> Result<()> {
+        stacker::grow(32 * 1024 * 1024, || self.execute_timer_task_impl(task))
+    }
+
+    fn execute_timer_task_impl(&mut self, mut task: ScheduledTask) -> Result<()> {
         let interval_desc = task
             .interval_ms
             .map(|value| value.to_string())

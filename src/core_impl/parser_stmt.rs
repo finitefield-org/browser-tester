@@ -3669,6 +3669,49 @@ fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler
     })
 }
 
+fn parse_listener_option_key(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2 {
+        let bytes = trimmed.as_bytes();
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
+            return trimmed.get(1..trimmed.len() - 1);
+        }
+    }
+    Some(trimmed)
+}
+
+fn parse_listener_capture_from_options_object(src: &str) -> Result<Option<bool>> {
+    let mut capture = None;
+    for raw_entry in split_top_level_by_char(src, b',') {
+        let entry = raw_entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = entry.split_once(':') else {
+            continue;
+        };
+        let Some(key) = parse_listener_option_key(raw_key) else {
+            continue;
+        };
+        if key != "capture" {
+            continue;
+        }
+        let value = raw_value.trim();
+        if value == "true" {
+            capture = Some(true);
+        } else if value == "false" {
+            capture = Some(false);
+        } else {
+            return Err(Error::ScriptParse(
+                "add/removeEventListener options.capture must be true/false".into(),
+            ));
+        }
+    }
+    Ok(capture)
+}
+
 fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -3706,9 +3749,13 @@ fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
             true
         } else if cursor.consume_ascii("false") {
             false
+        } else if cursor.peek() == Some(b'{') {
+            let options_src = cursor.read_balanced_block(b'{', b'}')?;
+            parse_listener_capture_from_options_object(&options_src)?.unwrap_or(false)
         } else {
             return Err(Error::ScriptParse(
-                "add/removeEventListener third argument must be true/false".into(),
+                "add/removeEventListener third argument must be true/false or options object"
+                    .into(),
             ));
         }
     } else {

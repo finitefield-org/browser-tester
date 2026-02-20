@@ -6182,12 +6182,7 @@ impl Harness {
         entries: &[(String, Value)],
         key: &str,
     ) -> Option<Value> {
-        if let Some(value) = Self::object_get_entry(entries, key) {
-            return Some(value);
-        }
-        entries
-            .iter()
-            .find_map(|(name, value)| name.eq_ignore_ascii_case(key).then(|| value.clone()))
+        Self::object_get_entry(entries, key)
     }
 
     pub(super) fn callable_kind_from_value(value: &Value) -> Option<&str> {

@@ -69,6 +69,38 @@ fn mock_window_supports_multiple_pages() -> Result<()> {
 }
 
 #[test]
+fn mock_window_open_page_uses_url_for_initial_location() -> Result<()> {
+    let mut win = MockWindow::new();
+    win.open_page(
+        "https://app.local/a",
+        r#"
+            <p id='result'></p>
+            <script>
+              document.getElementById('result').textContent =
+                location.href + '|' + history.length;
+            </script>
+        "#,
+    )?;
+
+    win.assert_text("#result", "https://app.local/a|1")?;
+    Ok(())
+}
+
+#[test]
+fn mock_window_treats_page_urls_as_case_sensitive() -> Result<()> {
+    let mut win = MockWindow::new();
+    win.open_page("https://app.local/Path", "<p id='result'>upper</p>")?;
+    win.open_page("https://app.local/path", "<p id='result'>lower</p>")?;
+
+    assert_eq!(win.page_count(), 2);
+    win.switch_to("https://app.local/Path")?;
+    win.assert_text("#result", "upper")?;
+    win.switch_to("https://app.local/path")?;
+    win.assert_text("#result", "lower")?;
+    Ok(())
+}
+
+#[test]
 fn window_aliases_document_in_script_parser() -> Result<()> {
     let html = r#"
         <p id='result'>before</p>
@@ -5289,6 +5321,93 @@ fn add_event_listener_does_not_deduplicate_distinct_inline_callbacks() -> Result
     h.click("#btn")?;
     h.assert_text("#result", "2")?;
     Ok(())
+}
+
+#[test]
+fn add_event_listener_supports_options_object_capture_and_defaults() -> Result<()> {
+    let html = r#"
+        <div id='root'>
+          <button id='btn'>run</button>
+        </div>
+        <p id='result'></p>
+        <script>
+          const order = [];
+          const root = document.getElementById('root');
+          const btn = document.getElementById('btn');
+
+          root.addEventListener('click', () => {
+            order.push('capture');
+          }, { "capture": true, once: false });
+
+          root.addEventListener('click', () => {
+            order.push('bubble-opt');
+          }, { passive: true });
+
+          btn.addEventListener('click', () => {
+            order.push('target');
+          });
+
+          root.addEventListener('click', () => {
+            order.push('bubble');
+            document.getElementById('result').textContent = order.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "capture,target,bubble-opt,bubble")?;
+    Ok(())
+}
+
+#[test]
+fn remove_event_listener_supports_options_object_capture_true() -> Result<()> {
+    let html = r#"
+        <div id='root'>
+          <button id='btn'>run</button>
+        </div>
+        <p id='result'></p>
+        <script>
+          let count = 0;
+          const root = document.getElementById('root');
+          const btn = document.getElementById('btn');
+
+          const onCapture = () => {
+            count = count + 1;
+          };
+          root.addEventListener('click', onCapture, { 'capture': true });
+          root.removeEventListener('click', onCapture, { 'capture': true });
+
+          btn.addEventListener('click', () => {
+            document.getElementById('result').textContent = String(count);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0")?;
+    Ok(())
+}
+
+#[test]
+fn listener_options_object_capture_rejects_non_boolean_literal() {
+    let err = Harness::from_html(
+        r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {}, { capture: 1 });
+        </script>
+        "#,
+    )
+    .expect_err("non-boolean options.capture should fail");
+
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("options.capture must be true/false"), "{msg}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -11450,7 +11569,7 @@ fn array_find_index_uses_array_runtime_not_typed_array_runtime() -> Result<()> {
 }
 
 #[test]
-fn object_property_access_supports_ascii_case_fallback() -> Result<()> {
+fn object_property_access_is_case_sensitive() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
         <p id='result'></p>
@@ -11459,21 +11578,18 @@ fn object_property_access_supports_ascii_case_fallback() -> Result<()> {
             const page = {
               plans: {
                 minexcess: { title: 'Min' },
-                roundup: { title: 'Up' },
-                rounddown: { title: 'Down' },
               },
             };
             document.getElementById('result').textContent =
-              page.plans.minExcess.title + ':' +
-              page.plans.roundUp.title + ':' +
-              page.plans.roundDown.title;
+              String(page.plans.minExcess === undefined) + ':' +
+              page.plans.minexcess.title;
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "Min:Up:Down")?;
+    h.assert_text("#result", "true:Min")?;
     Ok(())
 }
 
