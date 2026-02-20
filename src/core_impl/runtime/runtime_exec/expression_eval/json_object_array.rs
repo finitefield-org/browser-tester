@@ -327,10 +327,7 @@ impl Harness {
                         if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
                             Ok(Value::Number(value.chars().count() as i64))
                         } else {
-                            Err(Error::ScriptRuntime(format!(
-                                "variable '{}' is not an array",
-                                target
-                            )))
+                            Ok(Self::object_get_entry(&entries, "length").unwrap_or(Value::Undefined))
                         }
                     }
                     Some(_) => Err(Error::ScriptRuntime(format!(

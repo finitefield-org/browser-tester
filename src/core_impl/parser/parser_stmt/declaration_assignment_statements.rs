@@ -55,12 +55,14 @@ pub(crate) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
 }
 
 pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
+    let mut decl_kind = None;
     let mut rest = None;
     for kw in ["const", "let", "var"] {
         if let Some(after) = stmt.strip_prefix(kw) {
             if after.as_bytes().first().is_some_and(|b| is_ident_char(*b)) {
                 continue;
             }
+            decl_kind = Some(kw);
             rest = Some(after.trim_start());
             break;
         }
@@ -69,11 +71,29 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let Some(rest) = rest else {
         return Ok(None);
     };
+    let decl_kind = decl_kind.unwrap_or("let");
 
     let Some((eq_pos, op_len)) = find_top_level_assignment(rest) else {
-        return Err(Error::ScriptParse(format!(
-            "invalid variable declaration: {stmt}"
-        )));
+        if decl_kind == "const" {
+            return Err(Error::ScriptParse(format!(
+                "const declaration requires initializer: {stmt}"
+            )));
+        }
+        let name = rest.trim();
+        if name.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "invalid variable declaration: {stmt}"
+            )));
+        }
+        if !is_ident(name) {
+            return Err(Error::ScriptParse(format!(
+                "invalid variable name '{name}' in: {stmt}"
+            )));
+        }
+        return Ok(Some(Stmt::VarDecl {
+            name: name.to_string(),
+            expr: Expr::Undefined,
+        }));
     };
     if op_len != 1 {
         return Err(Error::ScriptParse(format!(

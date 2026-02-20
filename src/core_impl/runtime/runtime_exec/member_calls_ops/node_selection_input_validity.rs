@@ -1,6 +1,25 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn parse_listener_capture_arg(&self, value: Option<&Value>) -> Result<bool> {
+        let Some(value) = value else {
+            return Ok(false);
+        };
+        match value {
+            Value::Bool(capture) => Ok(*capture),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Ok(Self::object_get_entry(&entries, "capture")
+                    .map(|capture| capture.truthy())
+                    .unwrap_or(false))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "add/removeEventListener third argument must be true/false or options object"
+                    .into(),
+            )),
+        }
+    }
+
     pub(crate) fn eval_node_member_call(
         &mut self,
         node: NodeId,
@@ -9,6 +28,57 @@ impl Harness {
         _event: &EventState,
     ) -> Result<Option<Value>> {
         match member {
+            "addEventListener" => {
+                if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                    return Err(Error::ScriptRuntime(
+                        "addEventListener requires two or three arguments".into(),
+                    ));
+                }
+                let event_type = evaluated_args[0].as_string();
+                let capture = self.parse_listener_capture_arg(evaluated_args.get(2))?;
+                match &evaluated_args[1] {
+                    Value::Function(function) => {
+                        self.listeners.add(
+                            node,
+                            event_type,
+                            Listener {
+                                capture,
+                                handler: function.handler.clone(),
+                                captured_env: function.captured_env.clone(),
+                                captured_pending_function_decls: function
+                                    .captured_pending_function_decls
+                                    .clone(),
+                            },
+                        );
+                        Ok(Some(Value::Undefined))
+                    }
+                    Value::Null | Value::Undefined => Ok(Some(Value::Undefined)),
+                    _ => Err(Error::ScriptRuntime(
+                        "addEventListener callback must be a function".into(),
+                    )),
+                }
+            }
+            "removeEventListener" => {
+                if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                    return Err(Error::ScriptRuntime(
+                        "removeEventListener requires two or three arguments".into(),
+                    ));
+                }
+                let event_type = evaluated_args[0].as_string();
+                let capture = self.parse_listener_capture_arg(evaluated_args.get(2))?;
+                match &evaluated_args[1] {
+                    Value::Function(function) => {
+                        let _ = self
+                            .listeners
+                            .remove(node, &event_type, capture, &function.handler);
+                        Ok(Some(Value::Undefined))
+                    }
+                    Value::Null | Value::Undefined => Ok(Some(Value::Undefined)),
+                    _ => Err(Error::ScriptRuntime(
+                        "removeEventListener callback must be a function".into(),
+                    )),
+                }
+            }
             "getAttribute" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(

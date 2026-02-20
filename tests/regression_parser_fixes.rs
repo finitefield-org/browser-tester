@@ -1193,3 +1193,67 @@ fn for_in_loop_supports_plain_object_keys() -> browser_tester::Result<()> {
     harness.assert_text("#result", "abc")?;
     Ok(())
 }
+
+#[test]
+fn let_declaration_without_initializer_defaults_to_undefined() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let rows;
+      document.getElementById("result").textContent = String(rows === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn const_declaration_without_initializer_is_rejected() {
+    let err = Harness::from_html("<script>const rows;</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => {
+            assert!(msg.contains("const declaration requires initializer"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn object_length_property_is_not_treated_as_array_length() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const seed = {};
+      const withLength = { length: 7 };
+      document.getElementById("result").textContent =
+        String(seed.length === undefined) + "|" + String(withLength.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|7")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chained_add_event_listener_on_node_member_call_is_supported()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="root"></div>
+    <div id="result"></div>
+    <script>
+      const root = document.getElementById("root");
+      root.innerHTML = `<button data-act="x">X</button>`;
+      root.querySelector("[data-act='x']")?.addEventListener("click", () => {
+        document.getElementById("result").textContent = "ok";
+      });
+      root.querySelector("[data-act='x']").click();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
