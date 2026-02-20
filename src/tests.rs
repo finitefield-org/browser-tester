@@ -6527,8 +6527,8 @@ fn number_method_arity_errors_have_stable_messages() {
             "toFixed supports at most one argument",
         ),
         (
-            "<script>(1).toLocaleString(1);</script>",
-            "toLocaleString does not take arguments",
+            "<script>(1).toLocaleString(1, 2, 3);</script>",
+            "toLocaleString supports at most two arguments",
         ),
         (
             "<script>(1).valueOf(1);</script>",
@@ -14760,5 +14760,80 @@ fn listeners_registered_in_same_scope_share_captured_bindings() -> Result<()> {
     h.click("#load")?;
     h.click("#copy")?;
     h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn const_arrow_assignment_with_template_literal_body_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          (() => {
+            const safeNumber = (raw, fallback) => {
+              const parsed = Number(String(raw || "").replace(/,/g, "").replace(/[^0-9.-]/g, ""));
+              return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+            };
+            const yen = (v) => `¥${Math.max(0, Math.round(v)).toLocaleString("ja-JP")}`;
+            const riskBand = (score) => {
+              if (score >= 60) return "veryHigh";
+              if (score >= 40) return "high";
+              if (score >= 20) return "medium";
+              return "low";
+            };
+            document.getElementById('result').textContent =
+              safeNumber("1,234", 0) + ":" + yen(1250) + ":" + riskBand(45);
+          })();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1234:¥1250:high")?;
+    Ok(())
+}
+
+#[test]
+fn template_literal_with_math_call_and_member_call_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const formatted = `¥${Math.max(0, Math.round(1250)).toLocaleString("ja-JP")}`;
+          document.getElementById('result').textContent = formatted;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "¥1250")?;
+    Ok(())
+}
+
+#[test]
+fn nested_object_member_logical_expression_parses() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = { a: { b: {}, c: {} } };
+          const value = (obj.a && (obj.a.b || obj.a.c));
+          document.getElementById('result').textContent = value ? 'ok' : 'ng';
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn nested_object_literal_parses_without_recursion_overflow() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = { a: { b: {}, c: {} } };
+          document.getElementById('result').textContent =
+            obj && obj.a && obj.a.b && obj.a.c ? 'ok' : 'ng';
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok")?;
     Ok(())
 }

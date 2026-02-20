@@ -189,7 +189,11 @@ fn parse_ternary_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_logical_or_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["||"]);
     if ops.is_empty() {
         return parse_nullish_expr(src);
@@ -201,7 +205,11 @@ fn parse_logical_or_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_nullish_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["??"]);
     if ops.is_empty() {
         return parse_logical_and_expr(src);
@@ -213,7 +221,11 @@ fn parse_nullish_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_logical_and_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["&&"]);
     if ops.is_empty() {
         return parse_bitwise_or_expr(src);
@@ -225,7 +237,11 @@ fn parse_logical_and_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["|"]);
     if ops.is_empty() {
         return parse_bitwise_xor_expr(src);
@@ -237,7 +253,11 @@ fn parse_bitwise_or_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["^"]);
     if ops.is_empty() {
         return parse_bitwise_and_expr(src);
@@ -249,7 +269,11 @@ fn parse_bitwise_xor_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["&"]);
     if ops.is_empty() {
         return parse_equality_expr(src);
@@ -261,7 +285,11 @@ fn parse_bitwise_and_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_equality_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["!==", "===", "!=", "=="]);
     if ops.is_empty() {
         return parse_relational_expr(src);
@@ -276,7 +304,11 @@ fn parse_equality_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_relational_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["<=", ">=", "<", ">", "instanceof", "in"]);
     if ops.is_empty() {
         return parse_shift_expr(src);
@@ -293,7 +325,11 @@ fn parse_relational_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_shift_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &[">>>", "<<", ">>"]);
     if ops.is_empty() {
         return parse_add_expr(src);
@@ -307,7 +343,11 @@ fn parse_shift_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_add_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let (parts, ops) = split_top_level_add_sub(src);
     if ops.is_empty() {
         return parse_mul_expr(src);
@@ -483,7 +523,11 @@ fn parse_mul_expr(src: &str) -> Result<Expr> {
 }
 
 fn parse_pow_expr(src: &str) -> Result<Expr> {
-    let src = strip_outer_parens(src.trim());
+    let trimmed = src.trim();
+    let src = strip_outer_parens(trimmed);
+    if src.len() != trimmed.len() {
+        return parse_expr(src);
+    }
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
@@ -7794,16 +7838,27 @@ fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
         };
 
         let parsed = match method {
-            NumberInstanceMethod::ToLocaleString | NumberInstanceMethod::ValueOf => {
+            NumberInstanceMethod::ToLocaleString => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "toLocaleString supports at most two arguments".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                for arg in &args {
+                    let arg = arg.trim();
+                    if arg.is_empty() {
+                        return Err(Error::ScriptParse(
+                            "toLocaleString arguments cannot be empty".into(),
+                        ));
+                    }
+                    parsed.push(parse_expr(arg)?);
+                }
+                parsed
+            }
+            NumberInstanceMethod::ValueOf => {
                 if !args.is_empty() {
-                    let method_name = match method {
-                        NumberInstanceMethod::ToLocaleString => "toLocaleString",
-                        NumberInstanceMethod::ValueOf => "valueOf",
-                        _ => unreachable!(),
-                    };
-                    return Err(Error::ScriptParse(format!(
-                        "{method_name} does not take arguments"
-                    )));
+                    return Err(Error::ScriptParse("valueOf does not take arguments".into()));
                 }
                 Vec::new()
             }
@@ -7907,16 +7962,27 @@ fn parse_bigint_method_expr(src: &str) -> Result<Option<Expr>> {
         };
 
         let parsed = match method {
-            BigIntInstanceMethod::ToLocaleString | BigIntInstanceMethod::ValueOf => {
+            BigIntInstanceMethod::ToLocaleString => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "toLocaleString supports at most two arguments".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                for arg in &args {
+                    let arg = arg.trim();
+                    if arg.is_empty() {
+                        return Err(Error::ScriptParse(
+                            "toLocaleString arguments cannot be empty".into(),
+                        ));
+                    }
+                    parsed.push(parse_expr(arg)?);
+                }
+                parsed
+            }
+            BigIntInstanceMethod::ValueOf => {
                 if !args.is_empty() {
-                    let method_name = match method {
-                        BigIntInstanceMethod::ToLocaleString => "toLocaleString",
-                        BigIntInstanceMethod::ValueOf => "valueOf",
-                        _ => unreachable!(),
-                    };
-                    return Err(Error::ScriptParse(format!(
-                        "{method_name} does not take arguments"
-                    )));
+                    return Err(Error::ScriptParse("valueOf does not take arguments".into()));
                 }
                 Vec::new()
             }
