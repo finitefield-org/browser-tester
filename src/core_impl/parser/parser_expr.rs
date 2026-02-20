@@ -6,49 +6,27 @@ use super::parser_stmt::{
 };
 use super::*;
 
-#[path = "parser_expr_modules/arithmetic_expressions.rs"]
 pub(super) mod arithmetic_expressions;
-#[path = "parser_expr_modules/array_expressions.rs"]
 pub(super) mod array_expressions;
-#[path = "parser_expr_modules/binary_operators.rs"]
 pub(super) mod binary_operators;
-#[path = "parser_expr_modules/builtin_constructors.rs"]
 pub(super) mod builtin_constructors;
-#[path = "parser_expr_modules/dialog_expressions.rs"]
 pub(super) mod dialog_expressions;
-#[path = "parser_expr_modules/document_navigation_expressions.rs"]
 pub(super) mod document_navigation_expressions;
-#[path = "parser_expr_modules/dom_event_query_expressions.rs"]
 pub(super) mod dom_event_query_expressions;
-#[path = "parser_expr_modules/dom_form_data_expressions.rs"]
 pub(super) mod dom_form_data_expressions;
-#[path = "parser_expr_modules/expression_syntax_utils.rs"]
 pub(super) mod expression_syntax_utils;
-#[path = "parser_expr_modules/global_numeric_json_expressions.rs"]
 pub(super) mod global_numeric_json_expressions;
-#[path = "parser_expr_modules/global_value_accessors.rs"]
 pub(super) mod global_value_accessors;
-#[path = "parser_expr_modules/intl_expression_roots.rs"]
 pub(super) mod intl_expression_roots;
-#[path = "parser_expr_modules/intl_string_date_methods.rs"]
 pub(super) mod intl_string_date_methods;
-#[path = "parser_expr_modules/math_expression_roots.rs"]
 pub(super) mod math_expression_roots;
-#[path = "parser_expr_modules/member_call_expressions.rs"]
 pub(super) mod member_call_expressions;
-#[path = "parser_expr_modules/numeric_method_expressions.rs"]
 pub(super) mod numeric_method_expressions;
-#[path = "parser_expr_modules/object_expressions.rs"]
 pub(super) mod object_expressions;
-#[path = "parser_expr_modules/primary_literal_expressions.rs"]
 pub(super) mod primary_literal_expressions;
-#[path = "parser_expr_modules/regex_date_constructors.rs"]
 pub(super) mod regex_date_constructors;
-#[path = "parser_expr_modules/timers_microtasks_dom_expr.rs"]
 pub(super) mod timers_microtasks_dom_expr;
-#[path = "parser_expr_modules/top_level_split_utils.rs"]
 pub(super) mod top_level_split_utils;
-#[path = "parser_expr_modules/webapi_call_expressions.rs"]
 pub(super) mod webapi_call_expressions;
 
 pub(super) use arithmetic_expressions::*;

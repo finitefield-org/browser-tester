@@ -5,31 +5,18 @@ use super::api::{
 };
 use super::*;
 
-#[path = "parser_stmt_modules/attribute_mutation_statements.rs"]
 pub(super) mod attribute_mutation_statements;
-#[path = "parser_stmt_modules/callback_expression_parsing.rs"]
 pub(super) mod callback_expression_parsing;
-#[path = "parser_stmt_modules/callback_parameter_parsing.rs"]
 pub(super) mod callback_parameter_parsing;
-#[path = "parser_stmt_modules/control_flow_statements.rs"]
 pub(super) mod control_flow_statements;
-#[path = "parser_stmt_modules/declaration_assignment_statements.rs"]
 pub(super) mod declaration_assignment_statements;
-#[path = "parser_stmt_modules/dom_object_assignment_statements.rs"]
 pub(super) mod dom_object_assignment_statements;
-#[path = "parser_stmt_modules/dom_query_targets.rs"]
 pub(super) mod dom_query_targets;
-#[path = "parser_stmt_modules/event_listener_statements.rs"]
 pub(super) mod event_listener_statements;
-#[path = "parser_stmt_modules/foreach_statements.rs"]
 pub(super) mod foreach_statements;
-#[path = "parser_stmt_modules/insert_adjacent_statements.rs"]
 pub(super) mod insert_adjacent_statements;
-#[path = "parser_stmt_modules/node_tree_statements.rs"]
 pub(super) mod node_tree_statements;
-#[path = "parser_stmt_modules/statement_splitting.rs"]
 pub(super) mod statement_splitting;
-#[path = "parser_stmt_modules/timer_statements.rs"]
 pub(super) mod timer_statements;
 
 pub(super) use attribute_mutation_statements::*;
