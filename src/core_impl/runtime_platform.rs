@@ -1564,6 +1564,37 @@ impl Harness {
             .find(|candidate| self.is_labelable_control(*candidate))
     }
 
+    fn resolve_details_for_summary_click(&self, target: NodeId) -> Option<NodeId> {
+        let summary = if self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("summary"))
+        {
+            Some(target)
+        } else {
+            self.dom.find_ancestor_by_tag(target, "summary")
+        }?;
+
+        let details = self.dom.parent(summary)?;
+        if !self
+            .dom
+            .tag_name(details)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+        {
+            return None;
+        }
+
+        let first_summary_child = self.dom.nodes[details.0].children.iter().copied().find(|node| {
+            self.dom
+                .tag_name(*node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("summary"))
+        });
+        if first_summary_child != Some(summary) {
+            return None;
+        }
+        Some(details)
+    }
+
     pub(super) fn is_effectively_disabled(&self, node: NodeId) -> bool {
         if self.dom.disabled(node) {
             return true;
@@ -1653,14 +1684,16 @@ impl Harness {
             });
         }
 
-        let current = self.dom.checked(target)?;
-        if current != checked {
-            self.dom.set_checked(target, checked)?;
-            self.dispatch_event(target, "input")?;
-            self.dispatch_event(target, "change")?;
-        }
+        stacker::grow(32 * 1024 * 1024, || {
+            let current = self.dom.checked(target)?;
+            if current != checked {
+                self.dom.set_checked(target, checked)?;
+                self.dispatch_event(target, "input")?;
+                self.dispatch_event(target, "change")?;
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 
     pub fn click(&mut self, selector: &str) -> Result<()> {
@@ -1689,6 +1722,25 @@ impl Harness {
                     self.click_node_with_env(control, env)?;
                     return Ok(());
                 }
+            }
+
+            if let Some(details) = self.resolve_details_for_summary_click(target) {
+                if self.dom.has_attr(details, "open")? {
+                    self.dom.remove_attr(details, "open")?;
+                } else {
+                    self.dom.set_attr(details, "open", "true")?;
+                }
+                let _ = self.dispatch_event_with_options(
+                    details,
+                    "toggle",
+                    env,
+                    true,
+                    false,
+                    false,
+                    None,
+                    None,
+                    None,
+                )?;
             }
 
             if is_checkbox_input(&self.dom, target) {

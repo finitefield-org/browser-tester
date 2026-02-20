@@ -14504,3 +14504,87 @@ fn array_buffer_is_view_arity_and_transfer_arity_errors_work() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn object_prototype_has_own_property_call_expression_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const payload = { sku: 'A-1', qty: 12 };
+            const hasQty = Object.prototype.hasOwnProperty.call(payload, 'qty');
+            const hasNote = Object.prototype.hasOwnProperty.call(payload, 'note');
+            document.getElementById('result').textContent = hasQty + ':' + hasNote;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false")?;
+    Ok(())
+}
+
+#[test]
+fn set_checked_handles_input_handler_that_rerenders_same_subtree() -> Result<()> {
+    let html = r#"
+        <div id='root'></div>
+        <script>
+          const state = { checked: false };
+          const root = document.getElementById('root');
+
+          function render() {
+            root.innerHTML =
+              '<label><input id="agree" type="checkbox" ' +
+              (state.checked ? 'checked' : '') +
+              '></label>';
+          }
+
+          root.addEventListener('input', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            state.checked = target.checked;
+            render();
+          });
+
+          render();
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_checked("#agree", true)?;
+    h.assert_checked("#agree", true)?;
+    h.set_checked("#agree", false)?;
+    h.assert_checked("#agree", false)?;
+    Ok(())
+}
+
+#[test]
+fn click_summary_toggles_details_open_state() -> Result<()> {
+    let html = r#"
+        <details id='panel' open>
+          <summary id='toggle'>Panel</summary>
+          <p>body</p>
+        </details>
+        <button id='read'>read</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('read').addEventListener('click', () => {
+            const open = document.getElementById('panel').open;
+            document.getElementById('result').textContent = open ? 'open' : 'closed';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#read")?;
+    h.assert_text("#result", "open")?;
+    h.click("#toggle")?;
+    h.click("#read")?;
+    h.assert_text("#result", "closed")?;
+    h.click("#toggle")?;
+    h.click("#read")?;
+    h.assert_text("#result", "open")?;
+    Ok(())
+}

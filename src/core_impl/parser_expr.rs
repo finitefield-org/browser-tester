@@ -789,6 +789,10 @@ fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::ObjectLiteral(entries));
     }
 
+    if let Some(expr) = parse_object_prototype_has_own_property_call_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_object_static_expr(src)? {
         return Ok(expr);
     }
@@ -6539,6 +6543,13 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     let Some(method) = cursor.parse_identifier() else {
         return Ok(None);
     };
+    if !matches!(
+        method.as_str(),
+        "getOwnPropertySymbols" | "keys" | "values" | "entries" | "hasOwn" | "getPrototypeOf"
+            | "freeze"
+    ) {
+        return Ok(None);
+    }
     cursor.skip_ws();
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
@@ -6617,6 +6628,85 @@ fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(expr))
+}
+
+fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Object") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("prototype") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("hasOwnProperty") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if !cursor.consume_ascii("call") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "Object.prototype.hasOwnProperty.call requires exactly two arguments".into(),
+        ));
+    }
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::ObjectHasOwn {
+        object: Box::new(parse_expr(args[0].trim())?),
+        key: Box::new(parse_expr(args[1].trim())?),
+    }))
 }
 
 fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Expr>> {
