@@ -5,13 +5,16 @@ use super::parser_stmt::{
 };
 use super::*;
 
-include!("parser_expr_parts/part_01.rs");
-include!("parser_expr_parts/part_02.rs");
-include!("parser_expr_parts/part_03.rs");
-include!("parser_expr_parts/part_04.rs");
-include!("parser_expr_parts/part_05.rs");
-include!("parser_expr_parts/part_06.rs");
-include!("parser_expr_parts/part_07.rs");
-include!("parser_expr_parts/part_08.rs");
-include!("parser_expr_parts/part_09.rs");
-include!("parser_expr_parts/part_10.rs");
+include!("parser_expr_modules/binary_operators.rs");
+include!("parser_expr_modules/primary_literals_and_document.rs");
+include!("parser_expr_modules/regex_and_date_constructors.rs");
+include!("parser_expr_modules/intl_expression_roots.rs");
+include!("parser_expr_modules/math_expression_roots.rs");
+include!("parser_expr_modules/builtin_constructors.rs");
+include!("parser_expr_modules/global_value_accessors.rs");
+include!("parser_expr_modules/object_member_and_calls.rs");
+include!("parser_expr_modules/array_and_prompt_expr.rs");
+include!("parser_expr_modules/intl_string_date_methods.rs");
+include!("parser_expr_modules/timers_microtasks_dom_expr.rs");
+include!("parser_expr_modules/form_data_assignment_utils.rs");
+include!("parser_expr_modules/top_level_split_utils.rs");

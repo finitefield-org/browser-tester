@@ -1,0 +1,350 @@
+impl Harness {
+    pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
+        Value::Array(Rc::new(RefCell::new(values)))
+    }
+
+    pub(crate) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
+        Value::Object(Rc::new(RefCell::new(ObjectValue::new(entries))))
+    }
+
+    pub(crate) fn new_boolean_constructor_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("boolean_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_string_wrapper_value(value: String) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
+            Value::String(value),
+        )])
+    }
+
+    pub(crate) fn object_set_entry(entries: &mut impl ObjectEntryMut, key: String, value: Value) {
+        entries.set_entry(key, value);
+    }
+
+    pub(crate) fn object_get_entry(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> Option<Value> {
+        entries.get_entry(key)
+    }
+
+    pub(crate) fn callable_kind_from_value(value: &Value) -> Option<&str> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        match Self::object_get_entry(&entries, INTERNAL_CALLABLE_KIND_KEY) {
+            Some(Value::String(kind)) => Some(match kind.as_str() {
+                "intl_collator_compare" => "intl_collator_compare",
+                "intl_date_time_format" => "intl_date_time_format",
+                "intl_duration_format" => "intl_duration_format",
+                "intl_list_format" => "intl_list_format",
+                "intl_number_format" => "intl_number_format",
+                "intl_segmenter_segments_iterator" => "intl_segmenter_segments_iterator",
+                "intl_segmenter_iterator_next" => "intl_segmenter_iterator_next",
+                "boolean_constructor" => "boolean_constructor",
+                _ => return None,
+            }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
+        match value {
+            Value::Node(node) => {
+                let is_select = self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("select"))
+                    .unwrap_or(false);
+                let select_options = || {
+                    let mut options = Vec::new();
+                    self.dom.collect_select_options(*node, &mut options);
+                    options
+                };
+
+                match key {
+                    "textContent" | "innerText" => Ok(Value::String(self.dom.text_content(*node))),
+                    "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
+                    "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
+                    "value" => Ok(Value::String(self.dom.value(*node)?)),
+                    "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
+                    "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
+                    "required" => Ok(Value::Bool(self.dom.required(*node))),
+                    "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
+                    "id" => Ok(Value::String(
+                        self.dom.attr(*node, "id").unwrap_or_default(),
+                    )),
+                    "name" => Ok(Value::String(
+                        self.dom.attr(*node, "name").unwrap_or_default(),
+                    )),
+                    "type" => Ok(Value::String(
+                        self.dom.attr(*node, "type").unwrap_or_default(),
+                    )),
+                    "tagName" => Ok(Value::String(
+                        self.dom
+                            .tag_name(*node)
+                            .unwrap_or_default()
+                            .to_ascii_uppercase(),
+                    )),
+                    "className" => Ok(Value::String(
+                        self.dom.attr(*node, "class").unwrap_or_default(),
+                    )),
+                    "options" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        Ok(Value::NodeList(select_options()))
+                    }
+                    "selectedIndex" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        let options = select_options();
+                        if options.is_empty() {
+                            return Ok(Value::Number(-1));
+                        }
+                        let selected = options
+                            .iter()
+                            .position(|option| self.dom.attr(*option, "selected").is_some())
+                            .unwrap_or(0);
+                        Ok(Value::Number(selected as i64))
+                    }
+                    "length" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        Ok(Value::Number(select_options().len() as i64))
+                    }
+                    _ => Ok(self
+                        .dom_runtime
+                        .node_expando_props
+                        .get(&(*node, key.to_string()))
+                        .cloned()
+                        .unwrap_or(Value::Undefined)),
+                }
+            }
+            Value::String(text) => {
+                if key == "length" {
+                    Ok(Value::Number(text.chars().count() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::StringConstructor)
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(text
+                        .chars()
+                        .nth(index)
+                        .map(|ch| Value::String(ch.to_string()))
+                        .unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Array(values) => {
+                let values = values.borrow();
+                if key == "length" {
+                    Ok(Value::Number(values.len() as i64))
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(values.get(index).cloned().unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::NodeList(nodes) => {
+                if key == "length" {
+                    Ok(Value::Number(nodes.len() as i64))
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(nodes
+                        .get(index)
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::TypedArray(values) => {
+                let snapshot = self.typed_array_snapshot(values)?;
+                if key == "length" {
+                    Ok(Value::Number(snapshot.len() as i64))
+                } else if let Ok(index) = key.parse::<usize>() {
+                    Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
+                    if key == "length" {
+                        return Ok(Value::Number(text.chars().count() as i64));
+                    }
+                    if key == "constructor" {
+                        return Ok(Value::StringConstructor);
+                    }
+                    if let Ok(index) = key.parse::<usize>() {
+                        return Ok(text
+                            .chars()
+                            .nth(index)
+                            .map(|ch| Value::String(ch.to_string()))
+                            .unwrap_or(Value::Undefined));
+                    }
+                }
+                if Self::is_url_search_params_object(&entries) {
+                    if key == "size" {
+                        let size =
+                            Self::url_search_params_pairs_from_object_entries(&entries).len();
+                        return Ok(Value::Number(size as i64));
+                    }
+                }
+                if Self::is_storage_object(&entries) {
+                    if key == "length" {
+                        let len = Self::storage_pairs_from_object_entries(&entries).len();
+                        return Ok(Value::Number(len as i64));
+                    }
+                    if let Some(value) = Self::object_get_entry(&entries, key) {
+                        return Ok(value);
+                    }
+                    if Self::is_storage_method_name(key) {
+                        return Ok(Self::new_builtin_placeholder_function());
+                    }
+                    if let Some((_, value)) = Self::storage_pairs_from_object_entries(&entries)
+                        .into_iter()
+                        .find(|(name, _)| name == key)
+                    {
+                        return Ok(Value::String(value));
+                    }
+                    return Ok(Value::Undefined);
+                }
+                if Self::is_url_object(&entries) && key == "constructor" {
+                    return Ok(Value::UrlConstructor);
+                }
+                Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
+            }
+            Value::Promise(promise) => {
+                if key == "constructor" {
+                    Ok(Value::PromiseConstructor)
+                } else {
+                    let promise = promise.borrow();
+                    if key == "status" {
+                        let status = match &promise.state {
+                            PromiseState::Pending => "pending",
+                            PromiseState::Fulfilled(_) => "fulfilled",
+                            PromiseState::Rejected(_) => "rejected",
+                        };
+                        Ok(Value::String(status.to_string()))
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                }
+            }
+            Value::Map(map) => {
+                let map = map.borrow();
+                if key == "size" {
+                    Ok(Value::Number(map.entries.len() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::MapConstructor)
+                } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
+                    Ok(value)
+                } else if Self::is_map_method_name(key) {
+                    Ok(Self::new_builtin_placeholder_function())
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Set(set) => {
+                let set = set.borrow();
+                if key == "size" {
+                    Ok(Value::Number(set.values.len() as i64))
+                } else if key == "constructor" {
+                    Ok(Value::SetConstructor)
+                } else {
+                    Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
+                }
+            }
+            Value::Blob(blob) => {
+                let blob = blob.borrow();
+                match key {
+                    "size" => Ok(Value::Number(blob.bytes.len() as i64)),
+                    "type" => Ok(Value::String(blob.mime_type.clone())),
+                    "constructor" => Ok(Value::BlobConstructor),
+                    _ => Ok(Value::Undefined),
+                }
+            }
+            Value::ArrayBuffer(_) => {
+                if key == "constructor" {
+                    Ok(Value::ArrayBufferConstructor)
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Symbol(symbol) => {
+                let value = match key {
+                    "description" => symbol
+                        .description
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Undefined),
+                    "constructor" => Value::SymbolConstructor,
+                    _ => Value::Undefined,
+                };
+                Ok(value)
+            }
+            Value::RegExp(regex) => {
+                let regex = regex.borrow();
+                let value = match key {
+                    "source" => Value::String(regex.source.clone()),
+                    "flags" => Value::String(regex.flags.clone()),
+                    "global" => Value::Bool(regex.global),
+                    "ignoreCase" => Value::Bool(regex.ignore_case),
+                    "multiline" => Value::Bool(regex.multiline),
+                    "dotAll" => Value::Bool(regex.dot_all),
+                    "sticky" => Value::Bool(regex.sticky),
+                    "hasIndices" => Value::Bool(regex.has_indices),
+                    "unicode" => Value::Bool(regex.unicode),
+                    "unicodeSets" => Value::Bool(false),
+                    "lastIndex" => Value::Number(regex.last_index as i64),
+                    "constructor" => Value::RegExpConstructor,
+                    _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
+                };
+                Ok(value)
+            }
+            Value::UrlConstructor => {
+                if let Some(value) = Self::object_get_entry(
+                    &self.browser_apis.url_constructor_properties.borrow(),
+                    key,
+                ) {
+                    return Ok(value);
+                }
+                if Self::is_url_static_method_name(key) {
+                    return Ok(Self::new_builtin_placeholder_function());
+                }
+                Ok(Value::Undefined)
+            }
+            Value::StringConstructor => Ok(Value::Undefined),
+            _ => Err(Error::ScriptRuntime("value is not an object".into())),
+        }
+    }
+
+    pub(crate) fn object_property_from_named_value(
+        &self,
+        variable_name: &str,
+        value: &Value,
+        key: &str,
+    ) -> Result<Value> {
+        self.object_property_from_value(value, key)
+            .map_err(|err| match err {
+                Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                    Error::ScriptRuntime(format!(
+                        "variable '{}' is not an object (key '{}')",
+                        variable_name, key
+                    ))
+                }
+                other => other,
+            })
+    }
+
+}

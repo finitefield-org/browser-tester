@@ -1,0 +1,428 @@
+impl Harness {
+    pub(crate) fn make_function_value(
+        &mut self,
+        handler: ScriptHandler,
+        env: &HashMap<String, Value>,
+        global_scope: bool,
+        is_async: bool,
+    ) -> Value {
+        let local_bindings = Self::collect_function_scope_bindings(&handler);
+        let scope_depth = Self::env_scope_depth(env);
+        let captured_pending_function_decls = self.script_runtime.pending_function_decls.clone();
+        let captured_env = if global_scope {
+            Rc::new(RefCell::new(self.script_runtime.env.share()))
+        } else {
+            let captured_env = self.ensure_listener_capture_env();
+            *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+            captured_env
+        };
+        let captured_env_snapshot = captured_env.borrow();
+        let mut captured_global_names = HashSet::new();
+        for (name, value) in captured_env_snapshot.iter() {
+            if Self::is_internal_env_key(name) || name == INTERNAL_RETURN_SLOT {
+                continue;
+            }
+            if scope_depth == 0 {
+                captured_global_names.insert(name.clone());
+                continue;
+            }
+            let Some(global_value) = self.script_runtime.env.get(name) else {
+                continue;
+            };
+            if global_scope || self.strict_equal(global_value, value) {
+                captured_global_names.insert(name.clone());
+            }
+        }
+        drop(captured_env_snapshot);
+        Value::Function(Rc::new(FunctionValue {
+            handler,
+            captured_env,
+            captured_pending_function_decls,
+            captured_global_names,
+            local_bindings,
+            global_scope,
+            is_async,
+        }))
+    }
+
+    pub(crate) fn is_callable_value(&self, value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Function(_) | Value::PromiseCapability(_) | Value::StringConstructor
+        ) || Self::callable_kind_from_value(value).is_some()
+    }
+
+    pub(crate) fn execute_callable_value(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
+        self.execute_callable_value_with_env(callable, args, event, None)
+    }
+
+    pub(crate) fn execute_callable_value_with_env(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
+    ) -> Result<Value> {
+        match callable {
+            Value::Function(function) => {
+                self.execute_function_call(function.as_ref(), args, event, caller_env)
+            }
+            Value::PromiseCapability(capability) => {
+                self.invoke_promise_capability(capability, args)
+            }
+            Value::StringConstructor => {
+                let value = args.first().cloned().unwrap_or(Value::Undefined);
+                Ok(Value::String(value.as_string()))
+            }
+            Value::Object(_) => {
+                let Some(kind) = Self::callable_kind_from_value(callable) else {
+                    return Err(Error::ScriptRuntime("callback is not a function".into()));
+                };
+                match kind {
+                    "intl_collator_compare" => {
+                        let (locale, case_first, sensitivity) =
+                            self.resolve_intl_collator_options(callable)?;
+                        let left = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        let right = args.get(1).cloned().unwrap_or(Value::Undefined).as_string();
+                        Ok(Value::Number(Self::intl_collator_compare_strings(
+                            &left,
+                            &right,
+                            &locale,
+                            &case_first,
+                            &sensitivity,
+                        )))
+                    }
+                    "intl_date_time_format" => {
+                        let (locale, options) = self.resolve_intl_date_time_options(callable)?;
+                        let timestamp_ms = args
+                            .first()
+                            .map(|value| self.coerce_date_timestamp_ms(value))
+                            .unwrap_or(self.scheduler.now_ms);
+                        Ok(Value::String(self.intl_format_date_time(
+                            timestamp_ms,
+                            &locale,
+                            &options,
+                        )))
+                    }
+                    "intl_duration_format" => {
+                        let (locale, options) = self.resolve_intl_duration_options(callable)?;
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(
+                            self.intl_format_duration(&locale, &options, &value)?,
+                        ))
+                    }
+                    "intl_list_format" => {
+                        let (locale, options) = self.resolve_intl_list_options(callable)?;
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(
+                            self.intl_format_list(&locale, &options, &value)?,
+                        ))
+                    }
+                    "intl_number_format" => {
+                        let (_, locale) = self.resolve_intl_formatter(callable)?;
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(Self::intl_format_number_for_locale(
+                            Self::coerce_number_for_global(&value),
+                            &locale,
+                        )))
+                    }
+                    "intl_segmenter_segments_iterator" => {
+                        let Value::Object(entries) = callable else {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        };
+                        let entries = entries.borrow();
+                        let segments = Self::object_get_entry(&entries, INTERNAL_INTL_SEGMENTS_KEY)
+                            .ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "Intl.Segmenter iterator has invalid internal state".into(),
+                                )
+                            })?;
+                        Ok(self.new_intl_segmenter_iterator_value(segments))
+                    }
+                    "intl_segmenter_iterator_next" => {
+                        let Value::Object(entries) = callable else {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        };
+                        let mut entries = entries.borrow_mut();
+                        let segments = Self::object_get_entry(&entries, INTERNAL_INTL_SEGMENTS_KEY)
+                            .ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "Intl.Segmenter iterator has invalid internal state".into(),
+                                )
+                            })?;
+                        let Value::Array(values) = segments else {
+                            return Err(Error::ScriptRuntime(
+                                "Intl.Segmenter iterator has invalid internal state".into(),
+                            ));
+                        };
+                        let len = values.borrow().len();
+                        let index =
+                            match Self::object_get_entry(&entries, INTERNAL_INTL_SEGMENT_INDEX_KEY)
+                            {
+                                Some(Value::Number(value)) if value >= 0 => value as usize,
+                                _ => 0,
+                            };
+                        if index >= len {
+                            return Ok(Self::new_object_value(vec![
+                                ("value".to_string(), Value::Undefined),
+                                ("done".to_string(), Value::Bool(true)),
+                            ]));
+                        }
+                        let value = values
+                            .borrow()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or(Value::Undefined);
+                        Self::object_set_entry(
+                            &mut entries,
+                            INTERNAL_INTL_SEGMENT_INDEX_KEY.to_string(),
+                            Value::Number((index + 1) as i64),
+                        );
+                        Ok(Self::new_object_value(vec![
+                            ("value".to_string(), value),
+                            ("done".to_string(), Value::Bool(false)),
+                        ]))
+                    }
+                    "boolean_constructor" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::Bool(value.truthy()))
+                    }
+                    _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+                }
+            }
+            _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+        }
+    }
+
+    pub(crate) fn invoke_promise_capability(
+        &mut self,
+        capability: &PromiseCapabilityFunction,
+        args: &[Value],
+    ) -> Result<Value> {
+        let mut already_called = capability.already_called.borrow_mut();
+        if *already_called {
+            return Ok(Value::Undefined);
+        }
+        *already_called = true;
+        drop(already_called);
+
+        let value = args.first().cloned().unwrap_or(Value::Undefined);
+        if capability.reject {
+            self.promise_reject(&capability.promise, value);
+            Ok(Value::Undefined)
+        } else {
+            self.promise_resolve(&capability.promise, value)?;
+            Ok(Value::Undefined)
+        }
+    }
+
+    pub(crate) fn bind_handler_params(
+        &mut self,
+        handler: &ScriptHandler,
+        args: &[Value],
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        for (index, param) in handler.params.iter().enumerate() {
+            if param.is_rest {
+                let rest = if index < args.len() {
+                    args[index..].to_vec()
+                } else {
+                    Vec::new()
+                };
+                env.insert(param.name.clone(), Self::new_array_value(rest));
+                continue;
+            }
+
+            let provided = args.get(index).cloned().unwrap_or(Value::Undefined);
+            let value = if matches!(provided, Value::Undefined) {
+                if let Some(default_expr) = &param.default {
+                    self.eval_expr(default_expr, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                }
+            } else {
+                provided
+            };
+            env.insert(param.name.clone(), value);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execute_function_call(
+        &mut self,
+        function: &FunctionValue,
+        args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
+    ) -> Result<Value> {
+        let run = |this: &mut Self, caller_env: Option<&HashMap<String, Value>>| -> Result<Value> {
+            let pending_scope_start =
+                this.push_pending_function_decl_scopes(&function.captured_pending_function_decls);
+
+            let result = (|| -> Result<Value> {
+                let captured_env_before_call = if function.global_scope {
+                    HashMap::new()
+                } else {
+                    function.captured_env.borrow().to_map()
+                };
+                let mut call_env = if function.global_scope {
+                    this.script_runtime.env.to_map()
+                } else {
+                    captured_env_before_call.clone()
+                };
+                call_env.remove(INTERNAL_RETURN_SLOT);
+                let scope_depth = Self::env_scope_depth(&call_env);
+                call_env.insert(
+                    INTERNAL_SCOPE_DEPTH_KEY.to_string(),
+                    Value::Number(scope_depth.saturating_add(1)),
+                );
+                let mut global_sync_keys = HashSet::new();
+                let caller_view = caller_env;
+                for name in &function.captured_global_names {
+                    if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                        continue;
+                    }
+                    global_sync_keys.insert(name.clone());
+                    if let Some(global_value) = this.script_runtime.env.get(name).cloned() {
+                        call_env.insert(name.clone(), global_value);
+                    } else if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
+                        call_env.insert(name.clone(), value);
+                    }
+                }
+                for (name, global_value) in this.script_runtime.env.iter() {
+                    if Self::is_internal_env_key(name)
+                        || function.local_bindings.contains(name)
+                        || call_env.contains_key(name)
+                    {
+                        continue;
+                    }
+                    call_env.insert(name.clone(), global_value.clone());
+                    global_sync_keys.insert(name.clone());
+                }
+                if !global_sync_keys.is_empty() {
+                    let mut sync_names = global_sync_keys.iter().cloned().collect::<Vec<_>>();
+                    sync_names.sort();
+                    call_env.insert(
+                        INTERNAL_GLOBAL_SYNC_NAMES_KEY.to_string(),
+                        Self::new_array_value(sync_names.into_iter().map(Value::String).collect()),
+                    );
+                }
+                let mut global_values_before_call = HashMap::new();
+                for name in &global_sync_keys {
+                    if let Some(value) = this.script_runtime.env.get(name).cloned() {
+                        global_values_before_call.insert(name.clone(), value);
+                    }
+                }
+                let mut call_event = event.clone();
+                let event_param = None;
+                this.bind_handler_params(
+                    &function.handler,
+                    args,
+                    &mut call_env,
+                    &event_param,
+                    &call_event,
+                )?;
+                let flow = this.execute_stmts(
+                    &function.handler.stmts,
+                    &event_param,
+                    &mut call_event,
+                    &mut call_env,
+                )?;
+                for name in &global_sync_keys {
+                    if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
+                        continue;
+                    }
+                    let before = global_values_before_call.get(name);
+                    let global_after = this.script_runtime.env.get(name).cloned();
+                    let call_after = call_env.get(name).cloned();
+                    let global_changed = match (before, global_after.as_ref()) {
+                        (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    let call_changed = match (before, call_after.as_ref()) {
+                        (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    if global_changed && !call_changed {
+                        continue;
+                    }
+                    if let Some(next) = call_after {
+                        this.script_runtime.env.insert(name.clone(), next);
+                    }
+                }
+                if !function.global_scope {
+                    let mut captured_env = function.captured_env.borrow_mut();
+                    for name in captured_env_before_call.keys() {
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name.as_str())
+                        {
+                            continue;
+                        }
+                        let before = captured_env_before_call.get(name);
+                        let after = call_env.get(name);
+                        let changed = match (before, after) {
+                            (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                            (None, Some(_)) => true,
+                            (Some(_), None) => true,
+                            (None, None) => false,
+                        };
+                        if !changed {
+                            continue;
+                        }
+                        if let Some(next) = after.cloned() {
+                            captured_env.insert(name.clone(), next);
+                        } else {
+                            captured_env.remove(name);
+                        }
+                    }
+                }
+                match flow {
+                    ExecFlow::Continue => Ok(Value::Undefined),
+                    ExecFlow::Break => Err(Error::ScriptRuntime(
+                        "break statement outside of loop".into(),
+                    )),
+                    ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                        "continue statement outside of loop".into(),
+                    )),
+                    ExecFlow::Return => Ok(call_env
+                        .remove(INTERNAL_RETURN_SLOT)
+                        .unwrap_or(Value::Undefined)),
+                }
+            })();
+
+            this.restore_pending_function_decl_scopes(pending_scope_start);
+            result
+        };
+
+        if function.is_async {
+            let promise = self.new_pending_promise();
+            match run(self, caller_env) {
+                Ok(value) => {
+                    if let Err(err) = self.promise_resolve(&promise, value) {
+                        self.promise_reject(&promise, Self::promise_error_reason(err));
+                    }
+                }
+                Err(err) => self.promise_reject(&promise, Self::promise_error_reason(err)),
+            }
+            Ok(Value::Promise(promise))
+        } else {
+            run(self, caller_env)
+        }
+    }
+
+}

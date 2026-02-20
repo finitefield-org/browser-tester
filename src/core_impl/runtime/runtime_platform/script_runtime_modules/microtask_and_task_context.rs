@@ -1,0 +1,231 @@
+impl Harness {
+    pub(crate) fn queue_microtask(&mut self, handler: ScriptHandler, env: &HashMap<String, Value>) {
+        self.scheduler
+            .microtask_queue
+            .push_back(ScheduledMicrotask::Script {
+                handler,
+                env: ScriptEnv::from_snapshot(env),
+            });
+    }
+
+    pub(crate) fn queue_promise_reaction_microtask(
+        &mut self,
+        reaction: PromiseReactionKind,
+        settled: PromiseSettledValue,
+    ) {
+        self.scheduler
+            .microtask_queue
+            .push_back(ScheduledMicrotask::Promise { reaction, settled });
+    }
+
+    pub(crate) fn run_microtask_queue(&mut self) -> Result<usize> {
+        self.with_task_depth(|this| {
+            let mut steps = 0usize;
+            loop {
+                let Some(task) = this.scheduler.microtask_queue.pop_front() else {
+                    return Ok(steps);
+                };
+                steps += 1;
+                if steps > this.scheduler.timer_step_limit {
+                    return Err(this.timer_step_limit_error(
+                        this.scheduler.timer_step_limit,
+                        steps,
+                        Some(this.scheduler.now_ms),
+                    ));
+                }
+
+                match task {
+                    ScheduledMicrotask::Script { handler, mut env } => {
+                        let mut event =
+                            EventState::new("microtask", this.dom.root, this.scheduler.now_ms);
+                        let event_param = handler
+                            .first_event_param()
+                            .map(|event_param| event_param.to_string());
+                        this.bind_handler_params(&handler, &[], &mut env, &event_param, &event)?;
+                        let run =
+                            this.execute_stmts(&handler.stmts, &event_param, &mut event, &mut env);
+                        let run = run.map(|_| ());
+                        if let Err(err) = run {
+                            return Err(err);
+                        }
+                    }
+                    ScheduledMicrotask::Promise { reaction, settled } => {
+                        this.run_promise_reaction_task(reaction, settled)?;
+                    }
+                }
+            }
+        })
+    }
+
+    fn with_task_depth<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.scheduler.task_depth += 1;
+        let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        self.scheduler.task_depth = self.scheduler.task_depth.saturating_sub(1);
+        match run_result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    pub(crate) fn run_in_task_context<T>(
+        &mut self,
+        mut run: impl FnMut(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let result = self.with_task_depth(|this| run(this));
+        let should_flush_microtasks = self.scheduler.task_depth == 0;
+        match result {
+            Ok(value) => {
+                if should_flush_microtasks {
+                    self.run_microtask_queue()?;
+                }
+                Ok(value)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(crate) fn execute_handler(
+        &mut self,
+        handler: &ScriptHandler,
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let event_param = handler
+            .first_event_param()
+            .map(|event_param| event_param.to_string());
+        let event_args = if event_param.is_some() {
+            vec![Self::new_object_value(Vec::new())]
+        } else {
+            Vec::new()
+        };
+        self.bind_handler_params(handler, &event_args, env, &event_param, event)?;
+        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
+        env.remove(INTERNAL_RETURN_SLOT);
+        match flow {
+            ExecFlow::Continue => Ok(()),
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
+            ExecFlow::Return => Ok(()),
+        }
+    }
+
+    pub(crate) fn execute_timer_task_callback(
+        &mut self,
+        callback: &TimerCallback,
+        callback_args: &[Value],
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let handler = match callback {
+            TimerCallback::Inline(handler) => handler.clone(),
+            TimerCallback::Reference(name) => {
+                let value = env
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
+                let Value::Function(function) = value else {
+                    return Err(Error::ScriptRuntime(format!(
+                        "timer callback '{name}' is not a function"
+                    )));
+                };
+                function.handler.clone()
+            }
+        };
+        let event_param = handler
+            .first_event_param()
+            .map(|event_param| event_param.to_string());
+        self.bind_handler_params(&handler, callback_args, env, &event_param, event)?;
+        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
+        env.remove(INTERNAL_RETURN_SLOT);
+        match flow {
+            ExecFlow::Continue => Ok(()),
+            ExecFlow::Break => Err(Error::ScriptRuntime(
+                "break statement outside of loop".into(),
+            )),
+            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                "continue statement outside of loop".into(),
+            )),
+            ExecFlow::Return => Ok(()),
+        }
+    }
+
+    fn is_internal_env_key(name: &str) -> bool {
+        name.starts_with("\u{0}\u{0}bt_")
+    }
+
+    fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
+        match env.get(INTERNAL_SCOPE_DEPTH_KEY) {
+            Some(Value::Number(depth)) if *depth >= 0 => *depth,
+            _ => 0,
+        }
+    }
+
+    fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
+        match env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
+            Some(Value::Array(names)) => names
+                .borrow()
+                .iter()
+                .any(|entry| matches!(entry, Value::String(value) if value == name)),
+            _ => false,
+        }
+    }
+
+    fn ensure_listener_capture_env(&mut self) -> Rc<RefCell<ScriptEnv>> {
+        if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
+            frame
+                .shared_env
+                .get_or_insert_with(|| Rc::new(RefCell::new(ScriptEnv::default())))
+                .clone()
+        } else {
+            Rc::new(RefCell::new(ScriptEnv::default()))
+        }
+    }
+
+    fn push_pending_function_decl_scope(
+        &mut self,
+        scope: HashMap<String, (ScriptHandler, bool)>,
+    ) -> usize {
+        let start_len = self.script_runtime.pending_function_decls.len();
+        if !scope.is_empty() {
+            self.script_runtime
+                .pending_function_decls
+                .push(Arc::new(scope));
+        }
+        start_len
+    }
+
+    fn push_pending_function_decl_scopes(
+        &mut self,
+        scopes: &[Arc<HashMap<String, (ScriptHandler, bool)>>],
+    ) -> usize {
+        let start_len = self.script_runtime.pending_function_decls.len();
+        self.script_runtime
+            .pending_function_decls
+            .extend(scopes.iter().cloned());
+        start_len
+    }
+
+    fn restore_pending_function_decl_scopes(&mut self, start_len: usize) {
+        self.script_runtime
+            .pending_function_decls
+            .truncate(start_len);
+    }
+
+    pub(crate) fn sync_global_binding_if_needed(
+        &mut self,
+        env: &HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        if Self::env_should_sync_global_name(env, name) {
+            self.script_runtime
+                .env
+                .insert(name.to_string(), value.clone());
+        }
+    }
+
+}
