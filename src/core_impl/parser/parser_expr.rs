@@ -1,8 +1,8 @@
-use super::*;
 use super::parser_stmt::{
     is_ident_char, parse_callback, parse_element_target, parse_form_elements_base,
     parse_set_interval_call, parse_set_timeout_call, parse_timer_callback,
 };
+use super::*;
 
 pub(super) fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
@@ -77,7 +77,8 @@ pub(super) fn strip_js_comments(src: &str) -> String {
                     continue;
                 }
                 if b == b'/' {
-                    if can_start_regex_literal(previous_significant) || previous_identifier_allows_regex
+                    if can_start_regex_literal(previous_significant)
+                        || previous_identifier_allows_regex
                     {
                         state = State::Regex { in_class: false };
                         out.push(b);
@@ -477,7 +478,10 @@ pub(super) fn split_top_level_add_sub(src: &str) -> (Vec<&str>, Vec<char>) {
     let mut i = 0usize;
     while i < bytes.len() {
         let b = bytes[i];
-        if scanner.is_top_level() && matches!(b, b'+' | b'-') && is_add_sub_binary_operator(bytes, i) {
+        if scanner.is_top_level()
+            && matches!(b, b'+' | b'-')
+            && is_add_sub_binary_operator(bytes, i)
+        {
             if let Some(part) = src.get(start..i) {
                 parts.push(part);
             }
@@ -739,7 +743,12 @@ pub(super) fn parse_unary_expr(src: &str) -> Result<Expr> {
     parse_primary(src)
 }
 
-pub(super) fn fold_binary<F, G>(parts: Vec<&str>, ops: Vec<&str>, parse_leaf: F, map_op: G) -> Result<Expr>
+pub(super) fn fold_binary<F, G>(
+    parts: Vec<&str>,
+    ops: Vec<&str>,
+    parse_leaf: F,
+    map_op: G,
+) -> Result<Expr>
 where
     F: Fn(&str) -> Result<Expr>,
     G: Fn(&str) -> BinaryOp,
@@ -1305,7 +1314,11 @@ pub(super) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::BigInt(value)))
 }
 
-pub(super) fn parse_prefixed_integer_literal(src: &str, prefix: &str, radix: u32) -> Result<Option<Expr>> {
+pub(super) fn parse_prefixed_integer_literal(
+    src: &str,
+    prefix: &str,
+    radix: u32,
+) -> Result<Option<Expr>> {
     let src = src.to_ascii_lowercase();
     if !src.starts_with(prefix) {
         return Ok(None);
@@ -1894,7 +1907,9 @@ pub(super) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, Stri
     Ok(Some((pattern, flags)))
 }
 
-pub(super) fn parse_regex_literal_from_cursor(cursor: &mut Cursor<'_>) -> Result<Option<(String, String)>> {
+pub(super) fn parse_regex_literal_from_cursor(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<(String, String)>> {
     cursor.skip_ws();
     if cursor.peek() != Some(b'/') {
         return Ok(None);
@@ -6668,7 +6683,12 @@ pub(super) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     };
     if !matches!(
         method.as_str(),
-        "getOwnPropertySymbols" | "keys" | "values" | "entries" | "hasOwn" | "getPrototypeOf"
+        "getOwnPropertySymbols"
+            | "keys"
+            | "values"
+            | "entries"
+            | "hasOwn"
+            | "getPrototypeOf"
             | "freeze"
     ) {
         return Ok(None);
@@ -6908,7 +6928,10 @@ pub(super) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::ObjectPathGet { target, path }))
 }
 
-pub(super) fn parse_call_args<'a>(args_src: &'a str, empty_err: &'static str) -> Result<Vec<&'a str>> {
+pub(super) fn parse_call_args<'a>(
+    args_src: &'a str,
+    empty_err: &'static str,
+) -> Result<Vec<&'a str>> {
     if args_src.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -7535,8 +7558,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "map requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7559,8 +7581,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "filter requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7583,8 +7604,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "reduce requires callback and optional initial value".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 4, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 4, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7621,8 +7641,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "forEach requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7645,8 +7664,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "find requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7669,8 +7687,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "findIndex requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7693,8 +7710,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "some requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7717,8 +7733,7 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "every requires exactly one callback argument".into(),
                 ));
             }
-            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
+            let callback = match parse_array_callback_arg(args[0], 3, "array callback parameters") {
                 Ok(callback) => callback,
                 Err(_) => {
                     let mut parsed_args = Vec::with_capacity(args.len());
@@ -7852,7 +7867,11 @@ pub(super) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(expr))
 }
 
-pub(super) fn parse_array_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+pub(super) fn parse_array_callback_arg(
+    arg: &str,
+    max_params: usize,
+    label: &str,
+) -> Result<ScriptHandler> {
     let callback_arg = strip_js_comments(arg);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
     let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
@@ -9254,7 +9273,9 @@ pub(super) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<Tim
     if cursor.eof() { Ok(callback) } else { Ok(None) }
 }
 
-pub(super) fn parse_request_animation_frame_call(cursor: &mut Cursor<'_>) -> Result<Option<TimerCallback>> {
+pub(super) fn parse_request_animation_frame_call(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<TimerCallback>> {
     cursor.skip_ws();
     if cursor.consume_ascii("window") {
         cursor.skip_ws();
@@ -9647,9 +9668,7 @@ pub(super) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         {
             DomProp::ScriptsLength
         }
-        ("children", Some(length)) if length == "length" => {
-            DomProp::ChildrenLength
-        }
+        ("children", Some(length)) if length == "length" => DomProp::ChildrenLength,
         ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
             DomProp::AnchorAttributionSrc
         }
@@ -9868,7 +9887,9 @@ pub(super) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, Stri
     Ok(Some((target, selector)))
 }
 
-pub(super) fn parse_dom_computed_style_property_expr(src: &str) -> Result<Option<(DomQuery, String)>> {
+pub(super) fn parse_dom_computed_style_property_expr(
+    src: &str,
+) -> Result<Option<(DomQuery, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if !cursor.consume_ascii("getComputedStyle") {
@@ -10082,7 +10103,9 @@ pub(super) fn parse_form_data_get_all_expr(src: &str) -> Result<Option<(FormData
     parse_form_data_method_expr(src, "getAll")
 }
 
-pub(super) fn parse_form_data_get_all_length_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
+pub(super) fn parse_form_data_get_all_length_expr(
+    src: &str,
+) -> Result<Option<(FormDataSource, String)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -10410,7 +10433,10 @@ pub(super) fn split_top_level_by_char(src: &str, target: u8) -> Vec<&str> {
     parts
 }
 
-pub(super) fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+pub(super) fn split_top_level_by_ops<'a>(
+    src: &'a str,
+    ops: &[&'a str],
+) -> (Vec<&'a str>, Vec<&'a str>) {
     let bytes = src.as_bytes();
     let mut parts = Vec::new();
     let mut found_ops = Vec::new();
@@ -10428,7 +10454,9 @@ pub(super) fn split_top_level_by_ops<'a>(src: &'a str, ops: &[&'a str]) -> (Vec<
                         if i > 0 && is_ident_char(bytes[i - 1]) {
                             continue;
                         }
-                        if i + op_bytes.len() < bytes.len() && is_ident_char(bytes[i + op_bytes.len()]) {
+                        if i + op_bytes.len() < bytes.len()
+                            && is_ident_char(bytes[i + op_bytes.len()])
+                        {
                             continue;
                         }
                     } else if op.len() == 1 && (op == &"<" || op == &">") {

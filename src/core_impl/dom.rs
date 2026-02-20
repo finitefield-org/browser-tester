@@ -1,5 +1,5 @@
+use super::form_controls::is_radio_input;
 use super::html::{is_void_tag, parse_html};
-use super::parser::is_radio_input;
 use super::*;
 
 fn is_checkbox_or_radio_input_element(element: &Element) -> bool {

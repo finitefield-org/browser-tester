@@ -338,7 +338,10 @@ pub(crate) fn parse_selector_step(part: &str) -> Result<SelectorStep> {
     Ok(step)
 }
 
-pub(crate) fn parse_selector_pseudo(part: &str, start: usize) -> Option<(SelectorPseudoClass, usize)> {
+pub(crate) fn parse_selector_pseudo(
+    part: &str,
+    start: usize,
+) -> Option<(SelectorPseudoClass, usize)> {
     if part.as_bytes().get(start)? != &b':' {
         return None;
     }

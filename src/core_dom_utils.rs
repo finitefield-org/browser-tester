@@ -29,9 +29,12 @@ pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_reada
 pub(crate) const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";
 pub(crate) const INTERNAL_URL_OBJECT_ID_KEY: &str = "\u{0}\u{0}bt_url:id";
 pub(crate) const INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX: &str = "\u{0}\u{0}bt_url_search_params:";
-pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str = "\u{0}\u{0}bt_url_search_params:object";
-pub(crate) const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_url_search_params:entries";
-pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str = "\u{0}\u{0}bt_url_search_params:owner_id";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_url_search_params:object";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_ENTRIES_KEY: &str =
+    "\u{0}\u{0}bt_url_search_params:entries";
+pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str =
+    "\u{0}\u{0}bt_url_search_params:owner_id";
 pub(crate) const INTERNAL_STORAGE_KEY_PREFIX: &str = "\u{0}\u{0}bt_storage:";
 pub(crate) const INTERNAL_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_storage:object";
 pub(crate) const INTERNAL_STORAGE_ENTRIES_KEY: &str = "\u{0}\u{0}bt_storage:entries";
@@ -736,7 +739,9 @@ pub(crate) fn decode_uri_like(src: &str, component: bool) -> Result<String> {
     Ok(out)
 }
 
-pub(crate) fn parse_url_search_params_pairs_from_query_string(query: &str) -> Result<Vec<(String, String)>> {
+pub(crate) fn parse_url_search_params_pairs_from_query_string(
+    query: &str,
+) -> Result<Vec<(String, String)>> {
     let query = query.strip_prefix('?').unwrap_or(query);
     if query.is_empty() {
         return Ok(Vec::new());

@@ -1,6 +1,7 @@
 use super::*;
 
 mod dom;
+mod form_controls;
 mod html;
 mod intl;
 mod parser;

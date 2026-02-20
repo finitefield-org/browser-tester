@@ -1,9 +1,9 @@
-use super::*;
 use super::parser_expr::{
     append_concat_expr, find_first_top_level_colon, find_top_level_assignment, parse_dom_access,
     parse_queue_microtask_stmt, parse_string_literal_exact, split_top_level_by_char,
     strip_js_comments, strip_outer_parens,
 };
+use super::*;
 
 pub(super) fn append_dom_query_member_path(target: &DomQuery, member: &str) -> Option<DomQuery> {
     match target {
@@ -813,9 +813,9 @@ pub(super) fn rewrite_assignment_arrow_body(expr_src: &str) -> Result<Option<Str
 }
 
 pub(super) fn is_valid_callback_body_suffix(suffix: &str) -> bool {
-    suffix.chars().all(|ch| {
-        ch.is_ascii_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';')
-    })
+    suffix
+        .chars()
+        .all(|ch| ch.is_ascii_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';'))
 }
 
 pub(super) fn skip_arrow_whitespace_without_line_terminator(cursor: &mut Cursor<'_>) -> Result<()> {
@@ -1995,7 +1995,11 @@ pub(super) fn split_top_level_statements(body: &str) -> Vec<String> {
     out
 }
 
-pub(super) fn should_split_after_closing_brace(body: &str, block_open: Option<usize>, tail: &str) -> bool {
+pub(super) fn should_split_after_closing_brace(
+    body: &str,
+    block_open: Option<usize>,
+    tail: &str,
+) -> bool {
     let tail = tail.trim_start();
     if tail.is_empty() {
         return false;
@@ -2094,8 +2098,10 @@ pub(super) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
-    let body_stmts =
-        prepend_callback_param_prologue_stmts(parse_block_statements(&body)?, &parsed_params.prologue)?;
+    let body_stmts = prepend_callback_param_prologue_stmts(
+        parse_block_statements(&body)?,
+        &parsed_params.prologue,
+    )?;
 
     Ok(Some(Stmt::FunctionDecl {
         name,
@@ -2121,16 +2127,22 @@ pub(super) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     };
 
     let Some((eq_pos, op_len)) = find_top_level_assignment(rest) else {
-        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "invalid variable declaration: {stmt}"
+        )));
     };
     if op_len != 1 {
-        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "invalid variable declaration: {stmt}"
+        )));
     }
 
     let name = rest[..eq_pos].trim();
     let expr_src = rest[eq_pos + op_len..].trim();
     if name.is_empty() || expr_src.is_empty() {
-        return Err(Error::ScriptParse(format!("invalid variable declaration: {stmt}")));
+        return Err(Error::ScriptParse(format!(
+            "invalid variable declaration: {stmt}"
+        )));
     }
 
     if name.starts_with('[') && name.ends_with(']') {
@@ -2801,13 +2813,14 @@ pub(super) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
         let _ = parse_expr(args[1].trim())?;
     }
 
-    Ok(Some(Stmt::ArrayForEachExpr {
-        target,
-        callback,
-    }))
+    Ok(Some(Stmt::ArrayForEachExpr { target, callback }))
 }
 
-pub(super) fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, label: &str) -> Result<ScriptHandler> {
+pub(super) fn parse_array_for_each_callback_arg(
+    arg: &str,
+    max_params: usize,
+    label: &str,
+) -> Result<ScriptHandler> {
     let callback_arg = strip_js_comments(arg);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
     let (params, body, concise_body) = parse_callback(&mut callback_cursor, max_params, label)?;
@@ -2821,9 +2834,7 @@ pub(super) fn parse_array_for_each_callback_arg(arg: &str, max_params: usize, la
 
     let stmts = if concise_body {
         match parse_expr(body.trim()) {
-            Ok(expr) => vec![Stmt::Return {
-                value: Some(expr),
-            }],
+            Ok(expr) => vec![Stmt::Return { value: Some(expr) }],
             Err(_) => parse_block_statements(&format!("{};", body.trim()))?,
         }
     } else {
@@ -2840,7 +2851,10 @@ pub(super) fn find_top_level_for_each_call(src: &str) -> Option<usize> {
 
     while i < bytes.len() {
         if scanner.is_top_level() && bytes[i] == b'.' {
-            if src.get(i + 1..).is_some_and(|tail| tail.starts_with("forEach(")) {
+            if src
+                .get(i + 1..)
+                .is_some_and(|tail| tail.starts_with("forEach("))
+            {
                 return Some(i);
             }
         }
@@ -2967,7 +2981,10 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
     Ok((item_var, index_var, body_stmts))
 }
 
-pub(super) fn parse_for_each_callback_body_stmts(body: &str, concise_body: bool) -> Result<Vec<Stmt>> {
+pub(super) fn parse_for_each_callback_body_stmts(
+    body: &str,
+    concise_body: bool,
+) -> Result<Vec<Stmt>> {
     if !concise_body {
         return parse_block_statements(body);
     }
@@ -3397,11 +3414,15 @@ pub(super) fn parse_set_timer_call(
     )))
 }
 
-pub(super) fn parse_set_timeout_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_timeout_call(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setTimeout")
 }
 
-pub(super) fn parse_set_interval_call(cursor: &mut Cursor<'_>) -> Result<Option<(TimerInvocation, Expr)>> {
+pub(super) fn parse_set_interval_call(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<(TimerInvocation, Expr)>> {
     parse_set_timer_call(cursor, "setInterval")
 }
 

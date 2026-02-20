@@ -675,7 +675,9 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Value::Bool(self.dom.matches_selector(node, &selector)?)))
+                Ok(Some(Value::Bool(
+                    self.dom.matches_selector(node, &selector)?,
+                )))
             }
             "closest" => {
                 if evaluated_args.len() != 1 {
@@ -765,9 +767,7 @@ impl Harness {
             }
             "checkValidity" | "reportValidity" => {
                 if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(format!(
-                        "{member} takes no arguments"
-                    )));
+                    return Err(Error::ScriptRuntime(format!("{member} takes no arguments")));
                 }
                 let validity = self.compute_input_validity(node)?;
                 if !validity.valid {
@@ -826,10 +826,7 @@ impl Harness {
                         "{member} supports at most one argument"
                     )));
                 }
-                let count = evaluated_args
-                    .first()
-                    .map(Self::value_to_i64)
-                    .unwrap_or(1);
+                let count = evaluated_args.first().map(Self::value_to_i64).unwrap_or(1);
                 let direction = if member == "stepDown" { -1 } else { 1 };
                 self.step_input_value(node, direction, count)?;
                 Ok(Some(Value::Undefined))
@@ -876,7 +873,11 @@ impl Harness {
         {
             return String::new();
         }
-        let raw = self.dom.attr(node, "type").unwrap_or_default().to_ascii_lowercase();
+        let raw = self
+            .dom
+            .attr(node, "type")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         match raw.as_str() {
             "button" | "checkbox" | "color" | "date" | "datetime-local" | "email" | "file"
             | "hidden" | "image" | "month" | "number" | "password" | "radio" | "range"
@@ -970,7 +971,7 @@ impl Harness {
             _ => {
                 return Err(Error::ScriptRuntime(
                     "setRangeText supports one, three, or four arguments".into(),
-                ))
+                ));
             }
         };
         start = start.min(old_len);
@@ -1099,7 +1100,8 @@ impl Harness {
                 next = max;
             }
         }
-        self.dom.set_value(node, &Self::format_number_for_input(next))
+        self.dom
+            .set_value(node, &Self::format_number_for_input(next))
     }
 
     fn is_radio_group_checked(&self, node: NodeId) -> bool {
@@ -1297,8 +1299,14 @@ impl Harness {
 
     pub(crate) fn input_validity_to_value(validity: &InputValidity) -> Value {
         Self::new_object_value(vec![
-            ("valueMissing".to_string(), Value::Bool(validity.value_missing)),
-            ("typeMismatch".to_string(), Value::Bool(validity.type_mismatch)),
+            (
+                "valueMissing".to_string(),
+                Value::Bool(validity.value_missing),
+            ),
+            (
+                "typeMismatch".to_string(),
+                Value::Bool(validity.type_mismatch),
+            ),
             (
                 "patternMismatch".to_string(),
                 Value::Bool(validity.pattern_mismatch),
@@ -1313,9 +1321,15 @@ impl Harness {
                 "rangeOverflow".to_string(),
                 Value::Bool(validity.range_overflow),
             ),
-            ("stepMismatch".to_string(), Value::Bool(validity.step_mismatch)),
+            (
+                "stepMismatch".to_string(),
+                Value::Bool(validity.step_mismatch),
+            ),
             ("badInput".to_string(), Value::Bool(validity.bad_input)),
-            ("customError".to_string(), Value::Bool(validity.custom_error)),
+            (
+                "customError".to_string(),
+                Value::Bool(validity.custom_error),
+            ),
             ("valid".to_string(), Value::Bool(validity.valid)),
         ])
     }
@@ -1743,7 +1757,8 @@ impl Harness {
     }
 
     fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
-        self.script_runtime.env
+        self.script_runtime
+            .env
             .get(name)
             .is_some_and(|expected| self.strict_equal(value, expected))
     }
@@ -2009,11 +2024,7 @@ impl Harness {
         )])
     }
 
-    pub(crate) fn object_set_entry(
-        entries: &mut impl ObjectEntryMut,
-        key: String,
-        value: Value,
-    ) {
+    pub(crate) fn object_set_entry(entries: &mut impl ObjectEntryMut, key: String, value: Value) {
         entries.set_entry(key, value);
     }
 
@@ -2068,9 +2079,15 @@ impl Harness {
                     "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
                     "required" => Ok(Value::Bool(self.dom.required(*node))),
                     "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
-                    "id" => Ok(Value::String(self.dom.attr(*node, "id").unwrap_or_default())),
-                    "name" => Ok(Value::String(self.dom.attr(*node, "name").unwrap_or_default())),
-                    "type" => Ok(Value::String(self.dom.attr(*node, "type").unwrap_or_default())),
+                    "id" => Ok(Value::String(
+                        self.dom.attr(*node, "id").unwrap_or_default(),
+                    )),
+                    "name" => Ok(Value::String(
+                        self.dom.attr(*node, "name").unwrap_or_default(),
+                    )),
+                    "type" => Ok(Value::String(
+                        self.dom.attr(*node, "type").unwrap_or_default(),
+                    )),
                     "tagName" => Ok(Value::String(
                         self.dom
                             .tag_name(*node)
@@ -2208,8 +2225,7 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                Ok(Self::object_get_entry(&entries, key)
-                    .unwrap_or(Value::Undefined))
+                Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
             }
             Value::Promise(promise) => {
                 if key == "constructor" {
@@ -2300,9 +2316,10 @@ impl Harness {
                 Ok(value)
             }
             Value::UrlConstructor => {
-                if let Some(value) =
-                    Self::object_get_entry(&self.browser_apis.url_constructor_properties.borrow(), key)
-                {
+                if let Some(value) = Self::object_get_entry(
+                    &self.browser_apis.url_constructor_properties.borrow(),
+                    key,
+                ) {
                     return Ok(value);
                 }
                 if Self::is_url_static_method_name(key) {
@@ -2563,5 +2580,4 @@ impl Harness {
             | DomProp::AnchorRelListLength => None,
         }
     }
-
 }

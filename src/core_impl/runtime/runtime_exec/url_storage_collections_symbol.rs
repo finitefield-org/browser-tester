@@ -22,7 +22,8 @@ impl Harness {
     pub(crate) fn storage_pairs_from_object_entries(
         entries: &[(String, Value)],
     ) -> Vec<(String, String)> {
-        let Some(Value::Array(list)) = Self::object_get_entry(entries, INTERNAL_STORAGE_ENTRIES_KEY)
+        let Some(Value::Array(list)) =
+            Self::object_get_entry(entries, INTERNAL_STORAGE_ENTRIES_KEY)
         else {
             return Vec::new();
         };
@@ -43,10 +44,7 @@ impl Harness {
         pairs
     }
 
-    pub(crate) fn set_storage_pairs(
-        entries: &mut impl ObjectEntryMut,
-        pairs: &[(String, String)],
-    ) {
+    pub(crate) fn set_storage_pairs(entries: &mut impl ObjectEntryMut, pairs: &[(String, String)]) {
         Self::object_set_entry(
             entries,
             INTERNAL_STORAGE_ENTRIES_KEY.to_string(),
@@ -397,7 +395,9 @@ impl Harness {
                     ));
                 };
                 let object_url = self.browser_apis.allocate_blob_url();
-                self.browser_apis.blob_url_objects.insert(object_url.clone(), blob);
+                self.browser_apis
+                    .blob_url_objects
+                    .insert(object_url.clone(), blob);
                 Ok(Some(Value::String(object_url)))
             }
             "revokeObjectURL" => {
@@ -406,7 +406,9 @@ impl Harness {
                         "URL.revokeObjectURL requires exactly one argument".into(),
                     ));
                 }
-                self.browser_apis.blob_url_objects.remove(&args[0].as_string());
+                self.browser_apis
+                    .blob_url_objects
+                    .remove(&args[0].as_string());
                 Ok(Some(Value::Undefined))
             }
             _ => Ok(None),
@@ -1604,7 +1606,9 @@ impl Harness {
                     Value::Symbol(symbol) => symbol,
                     _ => unreachable!("new_symbol_value must create Symbol"),
                 };
-                self.symbol_runtime.symbol_registry.insert(key, symbol.clone());
+                self.symbol_runtime
+                    .symbol_registry
+                    .insert(key, symbol.clone());
                 Ok(Value::Symbol(symbol))
             }
             SymbolStaticMethod::KeyFor => {
@@ -1657,7 +1661,9 @@ impl Harness {
             Value::Symbol(symbol) => symbol,
             _ => unreachable!("new_symbol_value must create Symbol"),
         };
-        self.symbol_runtime.well_known_symbols.insert(name, symbol.clone());
+        self.symbol_runtime
+            .well_known_symbols
+            .insert(name, symbol.clone());
         Value::Symbol(symbol)
     }
 
@@ -1794,5 +1800,4 @@ impl Harness {
             ))
         }
     }
-
 }

@@ -1791,5 +1791,4 @@ impl Harness {
 
         f32::from_bits(out_bits)
     }
-
 }

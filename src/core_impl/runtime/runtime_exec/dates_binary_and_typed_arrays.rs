@@ -1429,10 +1429,7 @@ impl Harness {
         Ok(())
     }
 
-    pub(crate) fn sync_url_search_params_owner(
-        &mut self,
-        object: &Rc<RefCell<ObjectValue>>,
-    ) {
+    pub(crate) fn sync_url_search_params_owner(&mut self, object: &Rc<RefCell<ObjectValue>>) {
         let (owner_id, pairs) = {
             let entries = object.borrow();
             let owner_id =
@@ -1469,5 +1466,4 @@ impl Harness {
         Self::normalize_url_parts_for_serialization(&mut parts);
         self.sync_url_object_entries_from_parts(&mut url_object.borrow_mut(), &parts);
     }
-
 }

@@ -65,7 +65,10 @@ impl Harness {
         self.sync_history_object();
         self.dom_runtime.window_object = Rc::new(RefCell::new(ObjectValue::default()));
         self.dom_runtime.document_object = Rc::new(RefCell::new(ObjectValue::default()));
-        self.browser_apis.url_constructor_properties.borrow_mut().clear();
+        self.browser_apis
+            .url_constructor_properties
+            .borrow_mut()
+            .clear();
         let local_storage_items = {
             let entries = self.browser_apis.local_storage_object.borrow();
             if Self::is_storage_object(&entries) {
@@ -170,33 +173,56 @@ impl Harness {
         let window = Value::Object(self.dom_runtime.window_object.clone());
         let document = Value::Object(self.dom_runtime.document_object.clone());
 
-        self.script_runtime.env.insert("document".to_string(), document);
-        self.script_runtime.env
+        self.script_runtime
+            .env
+            .insert("document".to_string(), document);
+        self.script_runtime
+            .env
             .insert("navigator".to_string(), navigator.clone());
-        self.script_runtime.env
+        self.script_runtime
+            .env
             .insert("clientInformation".to_string(), navigator.clone());
         self.script_runtime.env.insert("Intl".to_string(), intl);
-        self.script_runtime.env
+        self.script_runtime
+            .env
             .insert("String".to_string(), string_constructor);
-        self.script_runtime.env
+        self.script_runtime
+            .env
             .insert("Boolean".to_string(), boolean_constructor);
-        self.script_runtime.env.insert("URL".to_string(), url_constructor);
-        self.script_runtime.env
+        self.script_runtime
+            .env
+            .insert("URL".to_string(), url_constructor);
+        self.script_runtime
+            .env
             .insert("HTMLElement".to_string(), html_element_constructor);
         self.script_runtime.env.insert(
             "HTMLInputElement".to_string(),
             html_input_element_constructor,
         );
-        self.script_runtime.env.insert("location".to_string(), location);
-        self.script_runtime.env.insert("history".to_string(), history);
-        self.script_runtime.env
+        self.script_runtime
+            .env
+            .insert("location".to_string(), location);
+        self.script_runtime
+            .env
+            .insert("history".to_string(), history);
+        self.script_runtime
+            .env
             .insert("localStorage".to_string(), local_storage);
-        self.script_runtime.env.insert("window".to_string(), window.clone());
-        self.script_runtime.env.insert("self".to_string(), window.clone());
-        self.script_runtime.env.insert("top".to_string(), window.clone());
-        self.script_runtime.env.insert("parent".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert("window".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert("self".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert("top".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert("parent".to_string(), window.clone());
         self.script_runtime.env.insert("frames".to_string(), window);
-        self.script_runtime.env
+        self.script_runtime
+            .env
             .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
     }
 
@@ -361,10 +387,7 @@ impl Harness {
             ("String".to_string(), string_constructor.clone()),
             ("Boolean".to_string(), boolean_constructor.clone()),
             ("URL".to_string(), url_constructor.clone()),
-            (
-                "HTMLElement".to_string(),
-                html_element_constructor.clone(),
-            ),
+            ("HTMLElement".to_string(), html_element_constructor.clone()),
             (
                 "HTMLInputElement".to_string(),
                 html_input_element_constructor.clone(),
@@ -498,7 +521,8 @@ impl Harness {
     }
 
     pub(crate) fn current_history_state(&self) -> Value {
-        self.location_history.history_entries
+        self.location_history
+            .history_entries
             .get(self.location_history.history_index)
             .map(|entry| entry.state.clone())
             .unwrap_or(Value::Null)
@@ -723,7 +747,8 @@ impl Harness {
                         .clone(),
                 },
             );
-            self.dom_runtime.node_event_handler_props
+            self.dom_runtime
+                .node_event_handler_props
                 .insert((node, event_type), handler);
         }
         Ok(true)
@@ -794,12 +819,15 @@ impl Harness {
             "id" => self.dom.set_attr(node, "id", &value.as_string())?,
             "slot" => self.dom.set_attr(node, "slot", &value.as_string())?,
             "role" => self.dom.set_attr(node, "role", &value.as_string())?,
-            "elementTiming" => self.dom.set_attr(node, "elementtiming", &value.as_string())?,
+            "elementTiming" => self
+                .dom
+                .set_attr(node, "elementtiming", &value.as_string())?,
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
             "title" => self.dom.set_document_title(&value.as_string())?,
             "attributionSrc" | "attributionsrc" => {
-                self.dom.set_attr(node, "attributionsrc", &value.as_string())?
+                self.dom
+                    .set_attr(node, "attributionsrc", &value.as_string())?
             }
             "download" => self.dom.set_attr(node, "download", &value.as_string())?,
             "hash" => self.set_anchor_url_property(node, "hash", value.clone())?,
@@ -813,7 +841,9 @@ impl Harness {
             "ping" => self.dom.set_attr(node, "ping", &value.as_string())?,
             "port" => self.set_anchor_url_property(node, "port", value.clone())?,
             "protocol" => self.set_anchor_url_property(node, "protocol", value.clone())?,
-            "referrerPolicy" => self.dom.set_attr(node, "referrerpolicy", &value.as_string())?,
+            "referrerPolicy" => self
+                .dom
+                .set_attr(node, "referrerpolicy", &value.as_string())?,
             "rel" => self.dom.set_attr(node, "rel", &value.as_string())?,
             "search" => self.set_anchor_url_property(node, "search", value.clone())?,
             "target" => self.dom.set_attr(node, "target", &value.as_string())?,
@@ -824,7 +854,9 @@ impl Harness {
             "rev" => self.dom.set_attr(node, "rev", &value.as_string())?,
             "shape" => self.dom.set_attr(node, "shape", &value.as_string())?,
             _ => {
-                self.dom_runtime.node_expando_props.insert((node, key.to_string()), value);
+                self.dom_runtime
+                    .node_expando_props
+                    .insert((node, key.to_string()), value);
             }
         }
         Ok(())
@@ -995,9 +1027,9 @@ impl Harness {
             container = self.read_object_assignment_property(&container, key, target)?;
         }
 
-        let final_key = keys.last().ok_or_else(|| {
-            Error::ScriptRuntime("object assignment key cannot be empty".into())
-        })?;
+        let final_key = keys
+            .last()
+            .ok_or_else(|| Error::ScriptRuntime("object assignment key cannot be empty".into()))?;
         self.set_object_assignment_property(&container, final_key, value, target)
     }
 
@@ -1112,11 +1144,13 @@ impl Harness {
         self.sync_history_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
-        self.location_history.location_navigations.push(LocationNavigation {
-            kind,
-            from,
-            to: to.clone(),
-        });
+        self.location_history
+            .location_navigations
+            .push(LocationNavigation {
+                kind,
+                from,
+                to: to.clone(),
+            });
 
         if !Self::is_hash_only_navigation(
             &self
@@ -1135,11 +1169,13 @@ impl Harness {
     pub(crate) fn reload_location(&mut self) -> Result<()> {
         self.location_history.location_reload_count += 1;
         let current = self.document_url.clone();
-        self.location_history.location_navigations.push(LocationNavigation {
-            kind: LocationNavigationKind::Reload,
-            from: current.clone(),
-            to: current.clone(),
-        });
+        self.location_history
+            .location_navigations
+            .push(LocationNavigation {
+                kind: LocationNavigationKind::Reload,
+                from: current.clone(),
+                to: current.clone(),
+            });
         self.sync_location_object();
         self.sync_history_object();
         self.sync_document_object();
@@ -1167,7 +1203,11 @@ impl Harness {
             url: url.to_string(),
             state,
         });
-        self.location_history.history_index = self.location_history.history_entries.len().saturating_sub(1);
+        self.location_history.history_index = self
+            .location_history
+            .history_entries
+            .len()
+            .saturating_sub(1);
     }
 
     pub(crate) fn history_replace_current_entry(&mut self, url: &str, state: Value) {
@@ -1179,10 +1219,12 @@ impl Harness {
             self.location_history.history_index = 0;
             return;
         }
-        let index = self
-            .location_history
-            .history_index
-            .min(self.location_history.history_entries.len().saturating_sub(1));
+        let index = self.location_history.history_index.min(
+            self.location_history
+                .history_entries
+                .len()
+                .saturating_sub(1),
+        );
         self.location_history.history_entries[index] = HistoryEntry {
             url: url.to_string(),
             state,
@@ -1465,5 +1507,4 @@ impl Harness {
     pub fn take_trace_logs(&mut self) -> Vec<String> {
         self.trace_state.logs.drain(..).collect()
     }
-
 }

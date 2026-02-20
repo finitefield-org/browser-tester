@@ -35,7 +35,9 @@ impl Harness {
     }
 
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
-        self.platform_mocks.fetch_mocks.insert(url.to_string(), body.to_string());
+        self.platform_mocks
+            .fetch_mocks
+            .insert(url.to_string(), body.to_string());
     }
 
     pub fn set_clipboard_text(&mut self, text: &str) {
@@ -48,7 +50,8 @@ impl Harness {
 
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
         let normalized = self.resolve_location_target_url(url);
-        self.location_history.location_mock_pages
+        self.location_history
+            .location_mock_pages
             .insert(normalized, html.to_string());
     }
 
@@ -73,7 +76,9 @@ impl Harness {
     }
 
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool) {
-        self.platform_mocks.match_media_mocks.insert(query.to_string(), matches);
+        self.platform_mocks
+            .match_media_mocks
+            .insert(query.to_string(), matches);
     }
 
     pub fn clear_match_media_mocks(&mut self) {
@@ -97,7 +102,8 @@ impl Harness {
     }
 
     pub fn enqueue_prompt_response(&mut self, value: Option<&str>) {
-        self.platform_mocks.prompt_responses
+        self.platform_mocks
+            .prompt_responses
             .push_back(value.map(std::string::ToString::to_string));
     }
 
@@ -163,7 +169,8 @@ impl Harness {
         }
 
         let mut descendants = Vec::new();
-        self.dom.collect_elements_descendants_dfs(label, &mut descendants);
+        self.dom
+            .collect_elements_descendants_dfs(label, &mut descendants);
         descendants
             .into_iter()
             .find(|candidate| self.is_labelable_control(*candidate))
@@ -189,11 +196,15 @@ impl Harness {
             return None;
         }
 
-        let first_summary_child = self.dom.nodes[details.0].children.iter().copied().find(|node| {
-            self.dom
-                .tag_name(*node)
-                .is_some_and(|tag| tag.eq_ignore_ascii_case("summary"))
-        });
+        let first_summary_child = self.dom.nodes[details.0]
+            .children
+            .iter()
+            .copied()
+            .find(|node| {
+                self.dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("summary"))
+            });
         if first_summary_child != Some(summary) {
             return None;
         }
@@ -336,15 +347,7 @@ impl Harness {
                     self.dom.set_attr(details, "open", "true")?;
                 }
                 let _ = self.dispatch_event_with_options(
-                    details,
-                    "toggle",
-                    env,
-                    true,
-                    false,
-                    false,
-                    None,
-                    None,
-                    None,
+                    details, "toggle", env, true, false, false, None, None, None,
                 )?;
             }
 
@@ -537,7 +540,11 @@ impl Harness {
 
     pub fn clear_timer(&mut self, timer_id: i64) -> bool {
         let existed = self.scheduler.running_timer_id == Some(timer_id)
-            || self.scheduler.task_queue.iter().any(|task| task.id == timer_id);
+            || self
+                .scheduler
+                .task_queue
+                .iter()
+                .any(|task| task.id == timer_id);
         self.clear_timeout(timer_id);
         existed
     }
@@ -708,7 +715,8 @@ impl Harness {
     }
 
     pub(crate) fn next_task_index(&self, due_limit: Option<i64>) -> Option<usize> {
-        self.scheduler.task_queue
+        self.scheduler
+            .task_queue
             .iter()
             .enumerate()
             .filter(|(_, task)| {
@@ -1047,7 +1055,9 @@ impl Harness {
         target: NodeId,
         event_type: &str,
     ) -> Result<EventState> {
-        self.with_script_env(|this, env| this.dispatch_event_with_env(target, event_type, env, true))
+        self.with_script_env(|this, env| {
+            this.dispatch_event_with_env(target, event_type, env, true)
+        })
     }
 
     pub(crate) fn dispatch_event_with_env(
@@ -1348,5 +1358,4 @@ impl Harness {
 
         Ok(true)
     }
-
 }

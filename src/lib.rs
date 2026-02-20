@@ -13,18 +13,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[path = "lib_parts/core_dom_utils.rs"]
 mod core_dom_utils;
-#[path = "lib_parts/selector.rs"]
-mod selector;
-#[path = "lib_parts/runtime_values.rs"]
-mod runtime_values;
-#[path = "lib_parts/script_ast.rs"]
-mod script_ast;
-#[path = "lib_parts/runtime_state.rs"]
-mod runtime_state;
-#[path = "lib_parts/harness_api.rs"]
 mod harness_api;
+mod runtime_state;
+mod runtime_values;
+mod script_ast;
+mod selector;
 
 pub use core_dom_utils::{Error, Result, ThrownValue};
 pub use harness_api::{Harness, MockPage, MockWindow};
