@@ -43,7 +43,6 @@ impl Harness {
                 self.push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
             let call_result = self.execute_handler(&listener.handler, event, &mut listener_env);
             self.restore_pending_function_decl_scopes(pending_scope_start);
-            call_result?;
             {
                 let mut captured_env = listener.captured_env.borrow_mut();
                 for key in &captured_keys {
@@ -83,6 +82,9 @@ impl Harness {
                 } else if let Some(value) = listener_value {
                     env.insert(key, value);
                 }
+            }
+            if let Err(err) = call_result {
+                return Err(err);
             }
             if event.immediate_propagation_stopped {
                 break;
@@ -2194,6 +2196,9 @@ impl Harness {
                         DomMethod::Blur => self.blur_node_with_env(node, env)?,
                         DomMethod::Click => self.click_node_with_env(node, env)?,
                         DomMethod::Submit => self.submit_form_with_env(node, env)?,
+                        DomMethod::RequestSubmit => {
+                            self.request_submit_form_with_env(node, arg_value, env)?
+                        }
                         DomMethod::Reset => self.reset_form_with_env(node, env)?,
                         DomMethod::ScrollIntoView => {
                             self.scroll_into_view_node_with_env(node, env)?

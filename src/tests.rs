@@ -2213,28 +2213,184 @@ fn add_event_listener_accepts_async_arrow_callback() -> Result<()> {
 }
 
 #[test]
-fn form_submit_method_dispatches_submit_event() -> Result<()> {
+fn form_submit_method_bypasses_submit_event_and_validation() -> Result<()> {
     let html = r#"
-        <form id='f'>
-          <input id='name' value='default'>
-        </form>
+        <dialog id='dialog'>
+          <form id='f' method='dialog'>
+            <input id='name' required>
+          </form>
+        </dialog>
         <button id='trigger'>run</button>
         <p id='result'></p>
         <script>
+          const dialog = document.getElementById('dialog');
+          const form = document.getElementById('f');
+          let marker = 'none';
           document.getElementById('f').addEventListener('submit', (event) => {
-            event.preventDefault();
-            document.getElementById('result').textContent =
-              event.type + ':' + event.isTrusted + ':' + event.currentTarget.id;
+            marker = 'submitted';
           });
           document.getElementById('trigger').addEventListener('click', () => {
-            document.getElementById('f').submit();
+            dialog.showModal();
+            form.submit();
+            document.getElementById('result').textContent = marker + ':' + dialog.open;
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#trigger")?;
-    h.assert_text("#result", "submit:true:f")?;
+    h.assert_text("#result", "none:false")?;
+    Ok(())
+}
+
+#[test]
+fn harness_submit_runs_validation_and_submit_event() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required>
+        </form>
+        <p id='result'>none</p>
+        <script>
+          document.getElementById('f').addEventListener('submit', () => {
+            document.getElementById('result').textContent = 'submitted';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.submit("#f")?;
+    h.assert_text("#result", "none")?;
+    h.type_text("#name", "ok")?;
+    h.submit("#f")?;
+    h.assert_text("#result", "submitted")?;
+    Ok(())
+}
+
+#[test]
+fn form_request_submit_runs_validation_and_submit_event() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required>
+        </form>
+        <button id='empty'>empty</button>
+        <button id='filled'>filled</button>
+        <p id='result'>none</p>
+        <script>
+          const form = document.getElementById('f');
+          const name = document.getElementById('name');
+          let marker = 'none';
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            marker = 'submitted';
+          });
+          document.getElementById('empty').addEventListener('click', () => {
+            form.requestSubmit();
+            document.getElementById('result').textContent = marker;
+          });
+          document.getElementById('filled').addEventListener('click', () => {
+            name.value = 'ok';
+            form.requestSubmit();
+            document.getElementById('result').textContent = marker;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#empty")?;
+    h.assert_text("#result", "none")?;
+    h.click("#filled")?;
+    h.assert_text("#result", "submitted")?;
+    Ok(())
+}
+
+#[test]
+fn form_request_submit_accepts_submitter_argument() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required value='ok'>
+          <button id='submitter' type='submit'>send</button>
+        </form>
+        <button id='trigger'>run</button>
+        <p id='result'>none</p>
+        <script>
+          const form = document.getElementById('f');
+          const submitter = document.getElementById('submitter');
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent = 'submitted';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            form.requestSubmit(submitter);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "submitted")?;
+    Ok(())
+}
+
+#[test]
+fn form_request_submit_rejects_non_submitter_argument() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required value='ok'>
+          <input id='plain' type='text' value='x'>
+        </form>
+        <button id='trigger'>run</button>
+        <script>
+          const form = document.getElementById('f');
+          const plain = document.getElementById('plain');
+          document.getElementById('trigger').addEventListener('click', () => {
+            form.requestSubmit(plain);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("requestSubmit submitter must be a submit control"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn form_request_submit_rejects_submitter_from_another_form() -> Result<()> {
+    let html = r#"
+        <form id='a'>
+          <input id='name' required value='ok'>
+          <button id='a-submit' type='submit'>a</button>
+        </form>
+        <form id='b'>
+          <button id='b-submit' type='submit'>b</button>
+        </form>
+        <button id='trigger'>run</button>
+        <script>
+          const a = document.getElementById('a');
+          const bSubmit = document.getElementById('b-submit');
+          document.getElementById('trigger').addEventListener('click', () => {
+            a.requestSubmit(bSubmit);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("requestSubmit submitter must belong to the target form"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
     Ok(())
 }
 

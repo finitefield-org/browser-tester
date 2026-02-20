@@ -2879,7 +2879,7 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> i64 {
         let delay_ms = delay_ms.max(0);
-        let due_at = self.scheduler.now_ms + delay_ms;
+        let due_at = self.scheduler.now_ms.saturating_add(delay_ms);
         let id = self.scheduler.allocate_timer_id();
         let order = self.scheduler.allocate_task_order();
         self.scheduler.task_queue.push(ScheduledTask {
@@ -2906,7 +2906,7 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> i64 {
         let interval_ms = interval_ms.max(0);
-        let due_at = self.scheduler.now_ms + interval_ms;
+        let due_at = self.scheduler.now_ms.saturating_add(interval_ms);
         let id = self.scheduler.allocate_timer_id();
         let order = self.scheduler.allocate_task_order();
         self.scheduler.task_queue.push(ScheduledTask {

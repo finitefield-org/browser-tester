@@ -74,6 +74,10 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 
 - `eval` is intentionally not implemented to preserve security and determinism.
 - Time APIs are based on a fake clock and provide `Date.now()` and `performance.now()`.
+- Form submission behavior:
+  - `Harness::submit(selector)` simulates a user-like submission path (runs required-field validation, dispatches `submit`, then applies default behavior when not prevented).
+  - Script-side `form.requestSubmit([submitter])` also follows the user-like submission path and supports an optional submit button from the same form.
+  - Script-side `form.submit()` follows browser-like direct submission semantics (bypasses validation and does not dispatch `submit`).
 
 ## Test Mocks
 

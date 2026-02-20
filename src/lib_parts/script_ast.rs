@@ -1180,6 +1180,7 @@ enum DomMethod {
     Click,
     ScrollIntoView,
     Submit,
+    RequestSubmit,
     Reset,
     Show,
     ShowModal,
@@ -1209,4 +1210,3 @@ enum ClipboardMethod {
     ReadText,
     WriteText,
 }
-

@@ -364,16 +364,7 @@ impl Harness {
             }
 
             if is_submit_control(&self.dom, target) {
-                if let Some(form_id) = self.resolve_form_for_submit(target) {
-                    if !self.form_is_valid_for_submit(form_id)? {
-                        return Ok(());
-                    }
-                    let submit_outcome =
-                        self.dispatch_event_with_env(form_id, "submit", env, true)?;
-                    if !submit_outcome.default_prevented {
-                        self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
-                    }
-                }
+                self.request_form_submit_with_env(target, env)?;
             }
 
             Ok(())
@@ -401,29 +392,7 @@ impl Harness {
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
-            let form = if self
-                .dom
-                .tag_name(target)
-                .map(|t| t.eq_ignore_ascii_case("form"))
-                .unwrap_or(false)
-            {
-                Some(target)
-            } else {
-                self.resolve_form_for_submit(target)
-            };
-
-            if let Some(form_id) = form {
-                self.with_script_env(|this, env| {
-                    let submit_outcome =
-                        this.dispatch_event_with_env(form_id, "submit", env, true)?;
-                    if !submit_outcome.default_prevented {
-                        this.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
-                    }
-                    Ok(())
-                })?;
-            }
-
-            Ok(())
+            self.with_script_env(|this, env| this.request_form_submit_with_env(target, env))
         })
     }
 
@@ -432,24 +401,63 @@ impl Harness {
         target: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        let form = if self
-            .dom
-            .tag_name(target)
-            .map(|t| t.eq_ignore_ascii_case("form"))
-            .unwrap_or(false)
-        {
-            Some(target)
-        } else {
-            self.resolve_form_for_submit(target)
-        };
-
-        if let Some(form_id) = form {
-            let submit_outcome = self.dispatch_event_with_env(form_id, "submit", env, true)?;
-            if !submit_outcome.default_prevented {
-                self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
-            }
+        // form.submit() bypasses validation and submit event dispatch.
+        if let Some(form_id) = self.resolve_submit_form_target(target) {
+            self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
         }
 
+        Ok(())
+    }
+
+    pub(super) fn request_form_submit_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let Some(form_id) = self.resolve_submit_form_target(target) else {
+            return Ok(());
+        };
+        self.request_form_submit_node_with_env(form_id, env)
+    }
+
+    pub(super) fn request_submit_form_with_env(
+        &mut self,
+        target: NodeId,
+        submitter: Option<Value>,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let Some(form_id) = self.resolve_submit_form_target(target) else {
+            return Ok(());
+        };
+        let submitter = self.resolve_request_submitter_node(submitter)?;
+        if let Some(submitter_node) = submitter {
+            if !is_submit_control(&self.dom, submitter_node) {
+                return Err(Error::ScriptRuntime(
+                    "requestSubmit submitter must be a submit control".into(),
+                ));
+            }
+            if self.resolve_form_for_submit(submitter_node) != Some(form_id) {
+                return Err(Error::ScriptRuntime(
+                    "requestSubmit submitter must belong to the target form".into(),
+                ));
+            }
+        }
+        self.request_form_submit_node_with_env(form_id, env)
+    }
+
+    fn request_form_submit_node_with_env(
+        &mut self,
+        form_id: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if !self.form_is_valid_for_submit(form_id)? {
+            return Ok(());
+        }
+
+        let submit_outcome = self.dispatch_event_with_env(form_id, "submit", env, true)?;
+        if !submit_outcome.default_prevented {
+            self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+        }
         Ok(())
     }
 
@@ -838,6 +846,23 @@ impl Harness {
             return Some(target);
         }
         self.dom.find_ancestor_by_tag(target, "form")
+    }
+
+    pub(super) fn resolve_submit_form_target(&self, target: NodeId) -> Option<NodeId> {
+        self.resolve_form_for_submit(target)
+    }
+
+    pub(super) fn resolve_request_submitter_node(
+        &self,
+        submitter: Option<Value>,
+    ) -> Result<Option<NodeId>> {
+        match submitter {
+            None | Some(Value::Undefined) | Some(Value::Null) => Ok(None),
+            Some(Value::Node(node)) => Ok(Some(node)),
+            Some(_) => Err(Error::ScriptRuntime(
+                "requestSubmit submitter must be an element".into(),
+            )),
+        }
     }
 
     pub(super) fn form_elements(&self, form: NodeId) -> Result<Vec<NodeId>> {

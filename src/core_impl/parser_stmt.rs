@@ -114,6 +114,7 @@ fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "removeChild"
             | "removeEventListener"
             | "requestClose"
+            | "requestSubmit"
             | "role"
             | "returnValue"
             | "replaceWith"
@@ -2392,6 +2393,7 @@ fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "click" => (DomMethod::Click, false),
         "scrollIntoView" => (DomMethod::ScrollIntoView, true),
         "submit" => (DomMethod::Submit, false),
+        "requestSubmit" => (DomMethod::RequestSubmit, true),
         "reset" => (DomMethod::Reset, false),
         "show" => (DomMethod::Show, false),
         "showModal" => (DomMethod::ShowModal, false),
