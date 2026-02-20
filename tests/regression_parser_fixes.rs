@@ -914,3 +914,20 @@ fn return_regex_containing_script_end_marker_does_not_break_html_extractor()
     harness.assert_text("#result", "ok")?;
     Ok(())
 }
+
+#[test]
+fn member_named_return_followed_by_division_is_not_treated_as_regex_start()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { return: 8 };
+      const out = obj.return / 2;
+      document.getElementById("result").textContent = String(out);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "4")?;
+    Ok(())
+}

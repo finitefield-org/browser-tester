@@ -17,7 +17,13 @@ pub(super) fn is_ident(value: &str) -> bool {
     chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
 }
 
-pub(super) fn identifier_allows_regex_start(ident: &[u8]) -> bool {
+pub(super) fn identifier_allows_regex_start(
+    ident: &[u8],
+    previous_significant: Option<u8>,
+) -> bool {
+    if matches!(previous_significant, Some(b'.')) {
+        return false;
+    }
     matches!(
         ident,
         b"return"
@@ -197,9 +203,10 @@ impl JsLexScanner {
                     while end < bytes.len() && is_ident_char(bytes[end]) {
                         end += 1;
                     }
+                    let prev = self.previous_significant;
                     self.previous_significant = Some(bytes[end - 1]);
                     self.previous_identifier_allows_regex =
-                        identifier_allows_regex_start(&bytes[start..end]);
+                        identifier_allows_regex_start(&bytes[start..end], prev);
                     return end;
                 }
                 match b {
@@ -291,9 +298,10 @@ impl JsLexScanner {
                     while end < bytes.len() && is_ident_char(bytes[end]) {
                         end += 1;
                     }
+                    let prev = self.previous_significant;
                     self.previous_significant = Some(bytes[end - 1]);
                     self.previous_identifier_allows_regex =
-                        identifier_allows_regex_start(&bytes[start..end]);
+                        identifier_allows_regex_start(&bytes[start..end], prev);
                     return end;
                 }
                 match b {

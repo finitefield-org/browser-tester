@@ -686,9 +686,10 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     while i < bytes.len() && is_ident_char(bytes[i]) {
                         i += 1;
                     }
+                    let prev = previous_significant;
                     previous_significant = Some(bytes[i - 1]);
                     previous_identifier_allows_regex =
-                        super::parser::identifier_allows_regex_start(&bytes[start..i]);
+                        super::parser::identifier_allows_regex_start(&bytes[start..i], prev);
                     continue;
                 }
                 if b == b'\'' {
@@ -817,9 +818,10 @@ fn find_case_insensitive_end_tag(bytes: &[u8], from: usize, tag: &[u8]) -> Optio
                     while i < bytes.len() && is_ident_char(bytes[i]) {
                         i += 1;
                     }
+                    let prev = previous_significant;
                     previous_significant = Some(bytes[i - 1]);
                     previous_identifier_allows_regex =
-                        super::parser::identifier_allows_regex_start(&bytes[start..i]);
+                        super::parser::identifier_allows_regex_start(&bytes[start..i], prev);
                     continue;
                 }
                 if b == b'{' {

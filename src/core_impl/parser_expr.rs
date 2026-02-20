@@ -89,9 +89,10 @@ fn strip_js_comments(src: &str) -> String {
                         i += 1;
                     }
                     out.extend_from_slice(&bytes[start..i]);
+                    let prev = previous_significant;
                     previous_significant = bytes.get(i - 1).copied();
                     previous_identifier_allows_regex =
-                        identifier_allows_regex_start(&bytes[start..i]);
+                        identifier_allows_regex_start(&bytes[start..i], prev);
                     continue;
                 }
 
