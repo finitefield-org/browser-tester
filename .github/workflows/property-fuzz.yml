@@ -1,0 +1,39 @@
+name: property-fuzz
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  quick:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BROWSER_TESTER_PROPTEST_CASES: "64"
+      BROWSER_TESTER_RUNTIME_PROPTEST_CASES: "64"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run quick property tests
+        run: cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
+
+  nightly-heavy:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BROWSER_TESTER_PROPTEST_CASES: "1024"
+      BROWSER_TESTER_RUNTIME_PROPTEST_CASES: "512"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run heavy property tests
+        run: cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test

@@ -46,6 +46,30 @@ Run tests:
 cargo test
 ```
 
+Property/fuzz tests for parser/runtime:
+
+```bash
+# default: parser=256 cases, runtime=128 cases
+cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test -- --nocapture
+
+# quick profile (for PR/local edit loop)
+BROWSER_TESTER_PROPTEST_CASES=64 \
+BROWSER_TESTER_RUNTIME_PROPTEST_CASES=64 \
+cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
+
+# deep profile (for nightly/manual soak)
+BROWSER_TESTER_PROPTEST_CASES=1024 \
+BROWSER_TESTER_RUNTIME_PROPTEST_CASES=512 \
+cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
+```
+
+- `BROWSER_TESTER_PROPTEST_CASES`: default case count for parser-oriented property tests.
+- `BROWSER_TESTER_RUNTIME_PROPTEST_CASES`: runtime action property test case count. If omitted,
+  `BROWSER_TESTER_PROPTEST_CASES` is used as fallback.
+- Shrunk failing seeds are persisted in:
+  - `tests/proptest-regressions/parser_property_fuzz_test.txt`
+  - `tests/proptest-regressions/runtime_property_fuzz_test.txt`
+
 ## Runtime Policy
 
 - `eval` is intentionally not implemented to preserve security and determinism.

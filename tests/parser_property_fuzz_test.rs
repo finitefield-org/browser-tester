@@ -1,7 +1,26 @@
-use browser_tester::Harness;
+use browser_tester::{Error, Harness};
 use proptest::collection::vec;
 use proptest::prelude::*;
-use proptest::test_runner::TestCaseResult;
+use proptest::test_runner::{FileFailurePersistence, TestCaseResult};
+
+const PARSER_PROPTEST_REGRESSION_FILE: &str =
+    "tests/proptest-regressions/parser_property_fuzz_test.txt";
+const DEFAULT_PARSER_PROPTEST_CASES: u32 = 256;
+
+fn env_proptest_cases(var_name: &str, default_cases: u32) -> u32 {
+    std::env::var(var_name)
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_cases)
+}
+
+fn parser_proptest_cases() -> u32 {
+    env_proptest_cases(
+        "BROWSER_TESTER_PROPTEST_CASES",
+        DEFAULT_PARSER_PROPTEST_CASES,
+    )
+}
 
 fn identifier_strategy() -> BoxedStrategy<String> {
     prop_oneof![
@@ -174,6 +193,47 @@ fn callback_body_strategy() -> BoxedStrategy<String> {
         .boxed()
 }
 
+fn escaped_script_end_tag_strategy() -> BoxedStrategy<String> {
+    prop_oneof![
+        Just("<\\/script>".to_string()),
+        Just("<\\/SCRIPT>".to_string()),
+        Just("<\\/ScRiPt>".to_string()),
+        Just("<\\x2Fscript>".to_string()),
+    ]
+    .boxed()
+}
+
+fn script_boundary_fragment_strategy() -> BoxedStrategy<String> {
+    let marker = escaped_script_end_tag_strategy();
+    prop_oneof![
+        marker
+            .clone()
+            .prop_map(|value| format!("const marker = '{value}';")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const marker = \"{value}\";")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const marker = `{value}`;")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const marker = `x${{String('{value}')}}y`;")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const rx = /{value}/i;")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const rxHit = /{value}/i.test('{value}');")),
+        marker
+            .clone()
+            .prop_map(|value| format!("const n = 1; // marker: {value}")),
+        marker
+            .clone()
+            .prop_map(|value| format!("/* marker: {value} */ const block = 2;")),
+    ]
+    .boxed()
+}
+
 fn html_with_callback_body(callback_body: &str) -> String {
     format!(
         r#"
@@ -197,10 +257,52 @@ fn assert_parser_path_never_panics(callback_body: &str) -> TestCaseResult {
     Ok(())
 }
 
+fn assert_script_boundary_path_never_reports_unclosed_script(
+    fragments: &[String],
+) -> TestCaseResult {
+    let body = format!(
+        "{}\ndocument.getElementById(\"run\").textContent = \"ok\";",
+        fragments.join("\n")
+    );
+    let html = format!(
+        r#"
+<div id="run">seed</div>
+<script>
+{body}
+</script>
+"#
+    );
+    let outcome = std::panic::catch_unwind(|| Harness::from_html(&html));
+    match outcome {
+        Err(_) => {
+            prop_assert!(
+                false,
+                "Harness::from_html panicked for script boundary body:\n{body}"
+            );
+        }
+        Ok(Ok(harness)) => {
+            prop_assert!(
+                harness.assert_text("#run", "ok").is_ok(),
+                "generated script did not execute as expected:\n{body}"
+            );
+        }
+        Ok(Err(Error::HtmlParse(message))) => {
+            prop_assert!(
+                !message.contains("unclosed <script>"),
+                "unexpected unclosed <script> for generated script boundary body:\n{body}\nerror: {message}"
+            );
+        }
+        Ok(Err(_)) => {}
+    }
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
-        failure_persistence: None,
+        cases: parser_proptest_cases(),
+        failure_persistence: Some(Box::new(
+            FileFailurePersistence::Direct(PARSER_PROPTEST_REGRESSION_FILE),
+        )),
         .. ProptestConfig::default()
     })]
 
@@ -222,5 +324,12 @@ return;
 "#
         );
         assert_parser_path_never_panics(body.as_str())?;
+    }
+
+    #[test]
+    fn parser_script_boundary_combinations_do_not_report_unclosed_script(
+        fragments in vec(script_boundary_fragment_strategy(), 1..=8)
+    ) {
+        assert_script_boundary_path_never_reports_unclosed_script(&fragments)?;
     }
 }
