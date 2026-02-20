@@ -1,6 +1,24 @@
 use super::*;
 
 impl Harness {
+    fn node_list_from_value(value: &Value) -> Option<Vec<NodeId>> {
+        match value {
+            Value::NodeList(nodes) => Some(nodes.clone()),
+            Value::Array(values) => {
+                let values = values.borrow();
+                let mut nodes = Vec::with_capacity(values.len());
+                for value in values.iter() {
+                    let Value::Node(node) = value else {
+                        return None;
+                    };
+                    nodes.push(*node);
+                }
+                Some(nodes)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn resolve_dom_query_var_path_value(
         &self,
         base: &str,
@@ -90,15 +108,16 @@ impl Harness {
     ) -> Result<Option<Vec<NodeId>>> {
         match target {
             DomQuery::Var(name) => match env.get(name) {
-                Some(Value::NodeList(nodes)) => Ok(Some(nodes.clone())),
-                Some(Value::Node(_)) => Err(Error::ScriptRuntime(format!(
-                    "variable '{}' is not a node list",
-                    name
-                ))),
-                Some(_) => Err(Error::ScriptRuntime(format!(
-                    "variable '{}' is not a node list",
-                    name
-                ))),
+                Some(value) => {
+                    if let Some(nodes) = Self::node_list_from_value(value) {
+                        Ok(Some(nodes))
+                    } else {
+                        Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a node list",
+                            name
+                        )))
+                    }
+                }
                 None => Err(Error::ScriptRuntime(format!(
                     "unknown element variable: {}",
                     name
@@ -108,12 +127,13 @@ impl Harness {
                 let Some(value) = self.resolve_dom_query_var_path_value(base, path, env)? else {
                     return Ok(None);
                 };
-                match value {
-                    Value::NodeList(nodes) => Ok(Some(nodes)),
-                    _ => Err(Error::ScriptRuntime(format!(
+                if let Some(nodes) = Self::node_list_from_value(&value) {
+                    Ok(Some(nodes))
+                } else {
+                    Err(Error::ScriptRuntime(format!(
                         "variable '{}' is not a node list",
                         target.describe_call()
-                    ))),
+                    )))
                 }
             }
             DomQuery::QuerySelectorAll {

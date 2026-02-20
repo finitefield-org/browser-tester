@@ -370,42 +370,78 @@ impl Harness {
                 }
                 Expr::StringReplace { value, from, to } => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let to = self.eval_expr(to, env, event_param, event)?.as_string();
+                    let to = self.eval_expr(to, env, event_param, event)?;
                     let from = self.eval_expr(from, env, event_param, event)?;
-                    let replaced = match from {
-                        Value::RegExp(regex) => {
-                            Self::replace_string_with_regex(&value, &regex, &to)?
+                    let replaced = if self.is_callable_value(&to) {
+                        match from {
+                            Value::RegExp(regex) => {
+                                self.replace_string_with_regex_callback(&value, &regex, &to, event)?
+                            }
+                            other => {
+                                let from = other.as_string();
+                                self.replace_string_with_string_callback(
+                                    &value, &from, &to, false, event,
+                                )?
+                            }
                         }
-                        other => value.replacen(&other.as_string(), &to, 1),
+                    } else {
+                        let replacement = to.as_string();
+                        match from {
+                            Value::RegExp(regex) => {
+                                Self::replace_string_with_regex(&value, &regex, &replacement)?
+                            }
+                            other => value.replacen(&other.as_string(), &replacement, 1),
+                        }
                     };
                     Ok(Value::String(replaced))
                 }
                 Expr::StringReplaceAll { value, from, to } => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let to = self.eval_expr(to, env, event_param, event)?.as_string();
+                    let to = self.eval_expr(to, env, event_param, event)?;
                     let from = self.eval_expr(from, env, event_param, event)?;
-                    let replaced = match from {
-                        Value::RegExp(regex) => {
-                            if !regex.borrow().global {
-                                return Err(Error::ScriptRuntime(
-                                "String.prototype.replaceAll called with a non-global RegExp argument"
-                                    .into(),
-                            ));
-                            }
-                            Self::replace_string_with_regex(&value, &regex, &to)?
-                        }
-                        other => {
-                            let from = other.as_string();
-                            if from.is_empty() {
-                                let mut out = String::new();
-                                for ch in value.chars() {
-                                    out.push_str(&to);
-                                    out.push(ch);
+                    let replaced = if self.is_callable_value(&to) {
+                        match from {
+                            Value::RegExp(regex) => {
+                                if !regex.borrow().global {
+                                    return Err(Error::ScriptRuntime(
+                                    "String.prototype.replaceAll called with a non-global RegExp argument"
+                                        .into(),
+                                ));
                                 }
-                                out.push_str(&to);
-                                out
-                            } else {
-                                value.replace(&from, &to)
+                                self.replace_string_with_regex_callback(&value, &regex, &to, event)?
+                            }
+                            other => {
+                                let from = other.as_string();
+                                self.replace_string_with_string_callback(
+                                    &value, &from, &to, true, event,
+                                )?
+                            }
+                        }
+                    } else {
+                        let replacement = to.as_string();
+                        match from {
+                            Value::RegExp(regex) => {
+                                if !regex.borrow().global {
+                                    return Err(Error::ScriptRuntime(
+                                    "String.prototype.replaceAll called with a non-global RegExp argument"
+                                        .into(),
+                                ));
+                                }
+                                Self::replace_string_with_regex(&value, &regex, &replacement)?
+                            }
+                            other => {
+                                let from = other.as_string();
+                                if from.is_empty() {
+                                    let mut out = String::new();
+                                    for ch in value.chars() {
+                                        out.push_str(&replacement);
+                                        out.push(ch);
+                                    }
+                                    out.push_str(&replacement);
+                                    out
+                                } else {
+                                    value.replace(&from, &replacement)
+                                }
                             }
                         }
                     };

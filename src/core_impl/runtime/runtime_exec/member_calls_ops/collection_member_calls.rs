@@ -1,4 +1,5 @@
 use super::*;
+use unicode_normalization::UnicodeNormalization;
 
 impl Harness {
     pub(crate) fn eval_string_member_call(
@@ -14,6 +15,34 @@ impl Harness {
                     out.push_str(&arg.as_string());
                 }
                 Value::String(out)
+            }
+            "normalize" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "normalize supports at most one form argument".into(),
+                    ));
+                }
+                let coerced_form;
+                let form = match evaluated_args.first() {
+                    None | Some(Value::Undefined) => "NFC",
+                    Some(Value::String(value)) => value.as_str(),
+                    Some(other) => {
+                        coerced_form = other.as_string();
+                        coerced_form.as_str()
+                    }
+                };
+                let normalized = match form {
+                    "NFC" => text.nfc().collect(),
+                    "NFD" => text.nfd().collect(),
+                    "NFKC" => text.nfkc().collect(),
+                    "NFKD" => text.nfkd().collect(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(format!(
+                            "invalid normalization form: {form}"
+                        )))
+                    }
+                };
+                Value::String(normalized)
             }
             _ => return Ok(None),
         };

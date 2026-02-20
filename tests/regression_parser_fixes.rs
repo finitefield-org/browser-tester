@@ -1105,3 +1105,92 @@ fn concat_chain_with_nested_map_keeps_array_runtime_type()
     harness.assert_text("#result", "array")?;
     Ok(())
 }
+
+#[test]
+fn identifier_starting_with_var_is_not_treated_as_var_declaration()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const variantList = [];
+      const original = "ok";
+      variantList.push(original);
+      document.getElementById("result").textContent = String(variantList.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn dom_index_target_accepts_element_arrays_from_array_from_query_selector_all()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <button class="tab" id="t1">A</button>
+    <button class="tab" id="t2">B</button>
+    <div id="result"></div>
+    <script>
+      const el = { tabs: Array.from(document.querySelectorAll(".tab")) };
+      for (let i = 0; i < el.tabs.length; i += 1) {
+        el.tabs[i].setAttribute("data-idx", String(i));
+      }
+      document.getElementById("result").textContent = el.tabs[1].getAttribute("data-idx");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn string_normalize_nfkc_is_supported_in_member_calls() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "ＡＢＣ１２３".normalize("NFKC");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ABC123")?;
+    Ok(())
+}
+
+#[test]
+fn string_replace_with_function_callback_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const normalized = "ＡＢＣ１２３".replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) =>
+        String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
+      );
+      document.getElementById("result").textContent = normalized;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ABC123")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_supports_plain_object_keys() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { a: 1, b: 2, c: 3 };
+      let out = "";
+      for (const key in obj) {
+        out += key;
+      }
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "abc")?;
+    Ok(())
+}

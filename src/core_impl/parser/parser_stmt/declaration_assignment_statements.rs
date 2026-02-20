@@ -58,6 +58,13 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let mut rest = None;
     for kw in ["const", "let", "var"] {
         if let Some(after) = stmt.strip_prefix(kw) {
+            if after
+                .as_bytes()
+                .first()
+                .is_some_and(|b| is_ident_char(*b))
+            {
+                continue;
+            }
             rest = Some(after.trim_start());
             break;
         }

@@ -932,22 +932,32 @@ impl Harness {
                     } => {
                         let iterable = self.eval_expr(iterable, env, event_param, event)?;
                         let items = match iterable {
-                            Value::NodeList(nodes) => (0..nodes.len()).collect::<Vec<_>>(),
+                            Value::NodeList(nodes) => (0..nodes.len())
+                                .map(|idx| Value::Number(idx as i64))
+                                .collect::<Vec<_>>(),
                             Value::Array(values) => {
                                 let values = values.borrow();
-                                (0..values.len()).collect::<Vec<_>>()
+                                (0..values.len())
+                                    .map(|idx| Value::Number(idx as i64))
+                                    .collect::<Vec<_>>()
                             }
+                            Value::Object(entries) => entries
+                                .borrow()
+                                .iter()
+                                .filter(|(key, _)| !Self::is_internal_object_key(key))
+                                .map(|(key, _)| Value::String(key.clone()))
+                                .collect::<Vec<_>>(),
                             Value::Null | Value::Undefined => Vec::new(),
                             _ => {
                                 return Err(Error::ScriptRuntime(
-                                    "for...in iterable must be a NodeList or Array".into(),
+                                    "for...in iterable must be a NodeList, Array, or Object"
+                                        .into(),
                                 ));
                             }
                         };
 
                         let prev_item = env.get(item_var).cloned();
-                        for idx in items {
-                            let item_value = Value::Number(idx as i64);
+                        for item_value in items {
                             env.insert(item_var.clone(), item_value.clone());
                             self.sync_global_binding_if_needed(env, item_var, &item_value);
                             match self.execute_stmts(body, event_param, event, env)? {
