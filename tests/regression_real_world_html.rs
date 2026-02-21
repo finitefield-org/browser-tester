@@ -42,6 +42,29 @@ fn script_end_extractor_handles_regex_literals_with_quotes() -> browser_tester::
 }
 
 #[test]
+fn unicode_literal_in_regex_match_works_in_input_handler() -> browser_tester::Result<()> {
+    let html = r#"
+    <body>
+      <input id='n'>
+      <div id='o'></div>
+      <script>
+        const pattern = /(\d+(?:\.\d+)?)\s*%?\s*\/\s*(\d+(?:\.\d+)?)\s*(?:日)?\s*net\s*(\d+(?:\.\d+)?)/i;
+        document.getElementById('n').addEventListener('input', (e) => {
+          const normalized = String(e.target.value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+          const m = normalized.match(pattern);
+          document.getElementById('o').textContent = m ? `${m[1]}:${m[2]}:${m[3]}` : 'no-match';
+        });
+      </script>
+    </body>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.type_text("#n", "2%/10日 Net30")?;
+    harness.assert_text("#o", "2:10:30")?;
+    Ok(())
+}
+
+#[test]
 fn fragment_input_still_exposes_document_body() -> browser_tester::Result<()> {
     let html = r##"
     <div id="x">ok</div>
