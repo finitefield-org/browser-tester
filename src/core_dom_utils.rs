@@ -228,6 +228,18 @@ pub(crate) fn is_datetime_local_input_element(element: &Element) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn is_time_input_element(element: &Element) -> bool {
+    if !element.tag_name.eq_ignore_ascii_case("input") {
+        return false;
+    }
+
+    element
+        .attrs
+        .get("type")
+        .map(|kind| kind.eq_ignore_ascii_case("time"))
+        .unwrap_or(false)
+}
+
 pub(crate) fn is_file_input_element(element: &Element) -> bool {
     if !element.tag_name.eq_ignore_ascii_case("input") {
         return false;
@@ -528,6 +540,48 @@ pub(crate) fn normalize_datetime_local_input_value(value: &str) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}")
 }
 
+pub(crate) fn parse_time_input_components(value: &str) -> Option<(u32, u32, u32, bool)> {
+    let value = value.trim();
+    let has_seconds = match value.len() {
+        5 => false,
+        8 => true,
+        _ => return None,
+    };
+
+    let bytes = value.as_bytes();
+    if bytes[2] != b':' {
+        return None;
+    }
+    if has_seconds && bytes[5] != b':' {
+        return None;
+    }
+
+    let hour = parse_fixed_digits_u32(value, 0, 2)?;
+    let minute = parse_fixed_digits_u32(value, 3, 2)?;
+    let second = if has_seconds {
+        parse_fixed_digits_u32(value, 6, 2)?
+    } else {
+        0
+    };
+
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+
+    Some((hour, minute, second, has_seconds))
+}
+
+pub(crate) fn normalize_time_input_value(value: &str) -> String {
+    let Some((hour, minute, second, has_seconds)) = parse_time_input_components(value) else {
+        return String::new();
+    };
+    if has_seconds {
+        format!("{hour:02}:{minute:02}:{second:02}")
+    } else {
+        format!("{hour:02}:{minute:02}")
+    }
+}
+
 pub(crate) fn normalize_file_input_value(_value: &str) -> String {
     String::new()
 }
@@ -676,6 +730,8 @@ pub(crate) fn sanitize_inner_html_element_attrs(element: &mut Element) {
         normalize_datetime_local_input_value(
             element.attrs.get("value").map(String::as_str).unwrap_or(""),
         )
+    } else if is_time_input_element(element) {
+        normalize_time_input_value(element.attrs.get("value").map(String::as_str).unwrap_or(""))
     } else if is_number_input_element(element) {
         normalize_number_input_value(element.attrs.get("value").map(String::as_str).unwrap_or(""))
     } else if is_range_input_element(element) {

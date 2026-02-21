@@ -75,6 +75,24 @@ impl Dom {
                 continue;
             }
 
+            let is_time_input = self
+                .element(node)
+                .map(is_time_input_element)
+                .unwrap_or(false);
+            if is_time_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_time_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
             let is_number_input = self
                 .element(node)
                 .map(is_number_input_element)

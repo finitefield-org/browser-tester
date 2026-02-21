@@ -57,6 +57,8 @@ impl Dom {
                     normalize_date_input_value(value)
                 } else if is_datetime_local_input_element(element) {
                     normalize_datetime_local_input_value(value)
+                } else if is_time_input_element(element) {
+                    normalize_time_input_value(value)
                 } else if is_number_input_element(element) {
                     normalize_number_input_value(value)
                 } else if is_range_input_element(element) {

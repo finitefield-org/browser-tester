@@ -123,6 +123,8 @@ impl Dom {
                         normalize_date_input_value(value)
                     } else if is_datetime_local_input_element(element) {
                         normalize_datetime_local_input_value(value)
+                    } else if is_time_input_element(element) {
+                        normalize_time_input_value(value)
                     } else if is_number_input_element(element) {
                         normalize_number_input_value(value)
                     } else if is_range_input_element(element) {
@@ -173,6 +175,17 @@ impl Dom {
                         .cloned()
                         .unwrap_or_else(|| element.value.clone());
                     element.value = normalize_datetime_local_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_time_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_time_input_value(&raw_value);
                     let len = element.value.chars().count();
                     element.selection_start = len;
                     element.selection_end = len;
@@ -319,6 +332,8 @@ impl Dom {
                     normalize_date_input_value("")
                 } else if is_datetime_local_input_element(element) {
                     normalize_datetime_local_input_value("")
+                } else if is_time_input_element(element) {
+                    normalize_time_input_value("")
                 } else if is_range_input_element(element) {
                     normalize_range_input_value(
                         "",

@@ -695,6 +695,26 @@ impl Harness {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}")
     }
 
+    pub(crate) fn parse_time_input_value_ms(raw: &str) -> Option<i64> {
+        let (hour, minute, second, _) = parse_time_input_components(raw)?;
+        let total_seconds = i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second);
+        Some(total_seconds * 1_000)
+    }
+
+    pub(crate) fn format_time_input_from_timestamp_ms(timestamp_ms: i64) -> String {
+        let day_ms = 86_400_000i64;
+        let wrapped = timestamp_ms.rem_euclid(day_ms);
+        let total_seconds = wrapped / 1_000;
+        let hour = total_seconds / 3_600;
+        let minute = (total_seconds % 3_600) / 60;
+        let second = total_seconds % 60;
+        if second == 0 {
+            format!("{hour:02}:{minute:02}")
+        } else {
+            format!("{hour:02}:{minute:02}:{second:02}")
+        }
+    }
+
     pub(crate) fn format_number_for_input(value: f64) -> String {
         if value.fract().abs() < 1e-9 {
             format!("{:.0}", value)
@@ -724,9 +744,78 @@ impl Harness {
         let input_type = self.normalized_input_type(node);
         if !matches!(
             input_type.as_str(),
-            "number" | "range" | "date" | "datetime-local"
+            "number" | "range" | "date" | "datetime-local" | "time"
         ) {
             return Ok(());
+        }
+
+        if input_type == "time" {
+            let step_attr = self.dom.attr(node, "step").unwrap_or_default();
+            let step_seconds = if step_attr.eq_ignore_ascii_case("any") {
+                60.0
+            } else {
+                step_attr
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                    .unwrap_or(60.0)
+            };
+            let step_ms = ((step_seconds * 1_000.0).round() as i64).max(1);
+            let min = self
+                .dom
+                .attr(node, "min")
+                .and_then(|raw| Self::parse_time_input_value_ms(&raw));
+            let max = self
+                .dom
+                .attr(node, "max")
+                .and_then(|raw| Self::parse_time_input_value_ms(&raw));
+            let base = min
+                .or_else(|| {
+                    self.dom
+                        .attr(node, "value")
+                        .and_then(|raw| Self::parse_time_input_value_ms(&raw))
+                })
+                .unwrap_or(0);
+            let current = Self::parse_time_input_value_ms(&self.dom.value(node)?).unwrap_or(base);
+            let delta = (direction as i128)
+                .saturating_mul(count as i128)
+                .saturating_mul(step_ms as i128);
+            let day_ms = 86_400_000i64;
+            let mut next = (((current as i128) + delta)
+                .clamp(i128::from(i64::MIN), i128::from(i64::MAX))
+                as i64)
+                .rem_euclid(day_ms);
+
+            if let (Some(min), Some(max)) = (min, max) {
+                if min <= max {
+                    if next < min {
+                        next = min;
+                    }
+                    if next > max {
+                        next = max;
+                    }
+                } else {
+                    let in_wrapped_range = next >= min || next <= max;
+                    if !in_wrapped_range {
+                        next = if direction >= 0 { min } else { max };
+                    }
+                }
+            } else {
+                if let Some(min) = min {
+                    if next < min {
+                        next = min;
+                    }
+                }
+                if let Some(max) = max {
+                    if next > max {
+                        next = max;
+                    }
+                }
+            }
+
+            let next_value = Self::format_time_input_from_timestamp_ms(next);
+            return self.dom.set_value(node, &next_value);
         }
 
         if input_type == "date" {
@@ -876,6 +965,9 @@ impl Harness {
             "datetime-local" => Self::parse_datetime_local_input_value_ms(&value)
                 .map(|timestamp| timestamp as f64)
                 .unwrap_or(f64::NAN),
+            "time" => Self::parse_time_input_value_ms(&value)
+                .map(|timestamp| timestamp as f64)
+                .unwrap_or(f64::NAN),
             _ => f64::NAN,
         };
         Ok(number)
@@ -899,6 +991,14 @@ impl Harness {
             let formatted = Self::format_datetime_local_input_from_timestamp_ms(timestamp_ms);
             return self.dom.set_value(node, &formatted);
         }
+        if input_type == "time" {
+            if !number.is_finite() {
+                return self.dom.set_value(node, "");
+            }
+            let timestamp_ms = number as i64;
+            let formatted = Self::format_time_input_from_timestamp_ms(timestamp_ms);
+            return self.dom.set_value(node, &formatted);
+        }
         if matches!(input_type.as_str(), "number" | "range") {
             if !number.is_finite() {
                 return self.dom.set_value(node, "");
@@ -920,7 +1020,10 @@ impl Harness {
                 &self.dom.value(node)?,
             ));
         }
-        if !matches!(input_type.as_str(), "date" | "datetime-local") {
+        if input_type == "time" {
+            return Ok(Self::parse_time_input_value_ms(&self.dom.value(node)?));
+        }
+        if !matches!(input_type.as_str(), "date" | "datetime-local" | "time") {
             return Ok(None);
         }
         Ok(None)
@@ -932,7 +1035,7 @@ impl Harness {
         timestamp_ms: Option<i64>,
     ) -> Result<()> {
         let input_type = self.normalized_input_type(node);
-        if !matches!(input_type.as_str(), "date" | "datetime-local") {
+        if !matches!(input_type.as_str(), "date" | "datetime-local" | "time") {
             return self.dom.set_value(node, "");
         }
 
@@ -941,6 +1044,8 @@ impl Harness {
         };
         let formatted = if input_type == "date" {
             Self::format_date_input_from_timestamp_ms(timestamp_ms)
+        } else if input_type == "time" {
+            Self::format_time_input_from_timestamp_ms(timestamp_ms)
         } else {
             Self::format_datetime_local_input_from_timestamp_ms(timestamp_ms)
         };
@@ -1256,6 +1361,75 @@ impl Harness {
                         let nearest = ratio.round();
                         if (ratio - nearest).abs() > 1e-7 {
                             validity.step_mismatch = true;
+                        }
+                    }
+                    None => {
+                        validity.bad_input = true;
+                    }
+                }
+            } else if input_type == "time" {
+                match Self::parse_time_input_value_ms(&value) {
+                    Some(time_value_ms) => {
+                        let min = self
+                            .dom
+                            .attr(node, "min")
+                            .and_then(|raw| Self::parse_time_input_value_ms(&raw));
+                        let max = self
+                            .dom
+                            .attr(node, "max")
+                            .and_then(|raw| Self::parse_time_input_value_ms(&raw));
+                        if let (Some(min), Some(max)) = (min, max) {
+                            if min <= max {
+                                if time_value_ms < min {
+                                    validity.range_underflow = true;
+                                }
+                                if time_value_ms > max {
+                                    validity.range_overflow = true;
+                                }
+                            } else {
+                                let in_wrapped_range = time_value_ms >= min || time_value_ms <= max;
+                                if !in_wrapped_range {
+                                    validity.range_underflow = true;
+                                    validity.range_overflow = true;
+                                }
+                            }
+                        } else {
+                            if let Some(min) = min {
+                                if time_value_ms < min {
+                                    validity.range_underflow = true;
+                                }
+                            }
+                            if let Some(max) = max {
+                                if time_value_ms > max {
+                                    validity.range_overflow = true;
+                                }
+                            }
+                        }
+
+                        let step_attr = self.dom.attr(node, "step").unwrap_or_default();
+                        if !step_attr.eq_ignore_ascii_case("any") {
+                            let step_seconds = step_attr
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|value| value.is_finite() && *value > 0.0)
+                                .unwrap_or(60.0);
+                            let step_ms = step_seconds * 1_000.0;
+                            let base = self
+                                .dom
+                                .attr(node, "min")
+                                .and_then(|raw| Self::parse_time_input_value_ms(&raw))
+                                .or_else(|| {
+                                    self.dom
+                                        .attr(node, "value")
+                                        .and_then(|raw| Self::parse_time_input_value_ms(&raw))
+                                })
+                                .unwrap_or(0) as f64;
+                            let ratio = ((time_value_ms as f64) - base) / step_ms;
+                            let nearest = ratio.round();
+                            if (ratio - nearest).abs() > 1e-7 {
+                                validity.step_mismatch = true;
+                            }
                         }
                     }
                     None => {

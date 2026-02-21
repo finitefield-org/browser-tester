@@ -919,6 +919,167 @@ fn html_input_datetime_local_step_methods_and_value_as_date_work() -> Result<()>
 }
 
 #[test]
+fn html_input_time_value_normalization_and_value_as_number_work() -> Result<()> {
+    let html = r#"
+        <input id='t' type='time' value='13:30'>
+        <input id='invalid' type='time' value='25:61'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const t = document.getElementById('t');
+          const invalid = document.getElementById('invalid');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = t.value + ':[' + invalid.value + ']';
+
+            t.value = '15:30';
+            const a = t.value + ':' + t.valueAsNumber;
+
+            t.value = '09:00:05';
+            const b = t.value + ':' + t.valueAsNumber;
+
+            t.value = 'invalid';
+            const c = '[' + t.value + ']:' + String(isNaN(t.valueAsNumber));
+
+            t.valueAsNumber = 55800000;
+            const d = t.value + ':' + t.valueAsNumber;
+
+            t.valueAsNumber = 32405000;
+            const e = t.value + ':' + t.valueAsNumber;
+
+            t.valueAsNumber = NaN;
+            const f = '[' + t.value + ']:' + String(isNaN(t.valueAsNumber));
+
+            document.getElementById('result').textContent =
+              first + '|' + a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "13:30:[]|15:30:55800000|09:00:05:32405000|[]:true|15:30:55800000|09:00:05:32405000|[]:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_time_min_max_step_and_required_validity_work() -> Result<()> {
+    let html = r#"
+        <input id='office' type='time' min='12:00' max='18:00' step='120' required>
+        <input id='wrap' type='time' min='23:00' max='01:00'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const office = document.getElementById('office');
+          const wrap = document.getElementById('wrap');
+          document.getElementById('run').addEventListener('click', () => {
+            office.value = '';
+            const a = office.checkValidity() + ':' + office.validity.valueMissing;
+
+            office.value = '11:59';
+            const b = office.validity.rangeUnderflow + ':' + office.checkValidity();
+
+            office.value = '18:01';
+            const c = office.validity.rangeOverflow + ':' + office.reportValidity();
+
+            office.value = '12:01';
+            const d = office.validity.stepMismatch + ':' + office.checkValidity();
+
+            office.value = '12:02';
+            const e = office.validity.valid + ':' + office.reportValidity();
+
+            wrap.value = '23:59';
+            const f = wrap.validity.valid + ':' + wrap.checkValidity();
+
+            wrap.value = '00:30';
+            const g = wrap.validity.valid + ':' + wrap.checkValidity();
+
+            wrap.value = '12:00';
+            const h = wrap.validity.valid + ':' + wrap.checkValidity() + ':' + wrap.validity.rangeUnderflow + ':' + wrap.validity.rangeOverflow;
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' + h;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true|true:false|true:false|true:false|true:true|true:true|true:true|false:false:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_time_step_methods_and_value_as_date_work() -> Result<()> {
+    let html = r#"
+        <input id='when' type='time' min='09:00' max='09:10' step='2' value='09:00'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const when = document.getElementById('when');
+          document.getElementById('run').addEventListener('click', () => {
+            when.stepUp();
+            const a = when.value;
+
+            when.stepDown(2);
+            const b = when.value;
+
+            when.value = '';
+            when.stepUp();
+            const c = when.value;
+
+            const dateObj = when.valueAsDate;
+            const d = dateObj === null ? 'null' : dateObj.toISOString();
+
+            when.valueAsDate = new Date('1970-01-01T09:00:05Z');
+            const e = when.value + ':' + when.valueAsNumber;
+
+            when.valueAsDate = null;
+            const f = '[' + when.value + ']:' + (when.valueAsDate === null);
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "09:00:02|09:00|09:00:02|1970-01-01T09:00:02.000Z|09:00:05:32405000|[]:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_time_readonly_ignores_required() -> Result<()> {
+    let html = r#"
+        <input id='time' type='time' required readonly>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const time = document.getElementById('time');
+          document.getElementById('run').addEventListener('click', () => {
+            const a = time.checkValidity() + ':' + time.validity.valueMissing + ':' + time.validity.valid;
+            time.value = '12:34';
+            const b = time.checkValidity() + ':' + time.validity.valid;
+            document.getElementById('result').textContent = a + '|' + b;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false:true|true:true")?;
+    Ok(())
+}
+
+#[test]
 fn html_input_number_value_normalization_and_value_as_number_work() -> Result<()> {
     let html = r#"
         <input id='num' type='number' value='oops'>
@@ -1148,6 +1309,533 @@ fn html_input_range_attr_mutation_resanitizes_value() -> Result<()> {
 }
 
 #[test]
+fn html_input_search_value_and_form_data_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <label for='q'>Search:</label>
+          <input id='q' type='search' name='q'>
+          <input id='other' type='search' value='preset'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const q = document.getElementById('q');
+          const other = document.getElementById('other');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = new FormData(form).get('q');
+            q.value = 'cats dogs';
+            other.value = 'ignored';
+            const second = new FormData(form).get('q');
+            document.getElementById('result').textContent =
+              '[' + first + ']|[' + second + ']|' + q.value + ':' + other.value;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]|[cats dogs]|cats dogs:ignored")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_search_required_length_and_pattern_validation_work() -> Result<()> {
+    let html = r#"
+        <input id='len' type='search' required minlength='4' maxlength='8'>
+        <input id='pat' type='search' required pattern='[A-z]{2}[0-9]{4}'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const len = document.getElementById('len');
+          const pat = document.getElementById('pat');
+          document.getElementById('run').addEventListener('click', () => {
+            len.value = '';
+            const a = len.checkValidity() + ':' + len.validity.valueMissing;
+
+            len.value = 'abc';
+            const b = len.validity.tooShort + ':' + len.checkValidity();
+
+            len.value = 'abcdefghi';
+            const c = len.validity.tooLong + ':' + len.checkValidity();
+
+            len.value = 'abcd';
+            const d = len.validity.valid + ':' + len.checkValidity();
+
+            pat.value = 'AB1234';
+            const e = pat.validity.valid + ':' + pat.checkValidity();
+
+            pat.value = 'AB12X4';
+            const f = pat.validity.patternMismatch + ':' + pat.checkValidity();
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true|true:false|true:false|true:true|true:true|true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_search_readonly_ignores_required_but_keeps_pattern_check() -> Result<()> {
+    let html = r#"
+        <input id='s' type='search' required readonly pattern='[a-z]+'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const s = document.getElementById('s');
+          document.getElementById('run').addEventListener('click', () => {
+            const a = s.checkValidity() + ':' + s.validity.valueMissing + ':' + s.validity.valid;
+
+            s.value = 'BAD123';
+            const b = s.checkValidity() + ':' + s.validity.patternMismatch + ':' + s.validity.valueMissing;
+
+            s.value = 'okay';
+            const c = s.checkValidity() + ':' + s.validity.valid;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false:true|false:true:false|true:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_search_selection_methods_work_like_text_inputs() -> Result<()> {
+    let html = r#"
+        <input id='s' type='search' value='abcdef'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const s = document.getElementById('s');
+          document.getElementById('run').addEventListener('click', () => {
+            s.setSelectionRange(1, 4, 'forward');
+            const a = s.selectionStart + ':' + s.selectionEnd + ':' + s.selectionDirection;
+
+            s.setRangeText('ZZ');
+            const b = s.value + ':' + s.selectionStart + ':' + s.selectionEnd;
+
+            s.setSelectionRange(2, 2);
+            s.setRangeText('Q', 1, 3, 'select');
+            const c = s.value + ':' + s.selectionStart + ':' + s.selectionEnd;
+
+            s.select();
+            const d = s.selectionStart + ':' + s.selectionEnd;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:4:forward|aZZef:3:3|aQef:1:2|0:4")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_tel_value_and_form_data_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <label for='tel'>Phone:</label>
+          <input id='tel' type='tel' name='phone'>
+          <input id='other' type='tel' value='preset'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const tel = document.getElementById('tel');
+          const other = document.getElementById('other');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = new FormData(form).get('phone');
+            tel.value = '+1-212-555-3151';
+            other.value = 'ignored';
+            const second = new FormData(form).get('phone');
+            document.getElementById('result').textContent =
+              '[' + first + ']|[' + second + ']|' + tel.value + ':' + other.value;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]|[+1-212-555-3151]|+1-212-555-3151:ignored")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_tel_required_length_and_pattern_validation_work() -> Result<()> {
+    let html = r#"
+        <input id='len' type='tel' required minlength='4' maxlength='8'>
+        <input id='pat' type='tel' required pattern='[0-9]{3}-[0-9]{3}-[0-9]{4}'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const len = document.getElementById('len');
+          const pat = document.getElementById('pat');
+          document.getElementById('run').addEventListener('click', () => {
+            len.value = '';
+            const a = len.checkValidity() + ':' + len.validity.valueMissing;
+
+            len.value = 'abc';
+            const b = len.validity.tooShort + ':' + len.checkValidity();
+
+            len.value = 'abcdefghi';
+            const c = len.validity.tooLong + ':' + len.checkValidity();
+
+            len.value = 'abcd';
+            const d = len.validity.valid + ':' + len.checkValidity();
+
+            pat.value = '800-MDN-ROCKS';
+            const e = pat.validity.patternMismatch + ':' + pat.checkValidity();
+
+            pat.value = '865-555-6502';
+            const f = pat.validity.valid + ':' + pat.checkValidity();
+
+            const free = document.createElement('input');
+            free.type = 'tel';
+            free.required = true;
+            free.value = 'not-a-number';
+            const g = free.validity.typeMismatch + ':' + free.checkValidity();
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true|true:false|true:false|true:true|true:false|true:true|false:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_tel_readonly_ignores_required_but_keeps_pattern_check() -> Result<()> {
+    let html = r#"
+        <input id='tel' type='tel' required readonly pattern='[0-9]+'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const tel = document.getElementById('tel');
+          document.getElementById('run').addEventListener('click', () => {
+            const a = tel.checkValidity() + ':' + tel.validity.valueMissing + ':' + tel.validity.valid;
+
+            tel.value = 'BAD123';
+            const b = tel.checkValidity() + ':' + tel.validity.patternMismatch + ':' + tel.validity.valueMissing;
+
+            tel.value = '123456';
+            const c = tel.checkValidity() + ':' + tel.validity.valid;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false:true|false:true:false|true:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_tel_selection_methods_work_like_text_inputs() -> Result<()> {
+    let html = r#"
+        <input id='tel' type='tel' value='1234567890'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const tel = document.getElementById('tel');
+          document.getElementById('run').addEventListener('click', () => {
+            tel.setSelectionRange(1, 4, 'forward');
+            const a = tel.selectionStart + ':' + tel.selectionEnd + ':' + tel.selectionDirection;
+
+            tel.setRangeText('ZZ');
+            const b = tel.value + ':' + tel.selectionStart + ':' + tel.selectionEnd;
+
+            tel.setSelectionRange(2, 2);
+            tel.setRangeText('Q', 1, 3, 'select');
+            const c = tel.value + ':' + tel.selectionStart + ':' + tel.selectionEnd;
+
+            tel.select();
+            const d = tel.selectionStart + ':' + tel.selectionEnd;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:4:forward|1ZZ567890:3:3|1Q567890:1:2|0:8")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_text_value_and_form_data_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <label for='name'>Name:</label>
+          <input id='name' type='text' name='name'>
+          <input id='other' type='text' value='preset'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const name = document.getElementById('name');
+          const other = document.getElementById('other');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = new FormData(form).get('name');
+            name.value = 'Chris';
+            other.value = 'ignored';
+            const second = new FormData(form).get('name');
+            document.getElementById('result').textContent =
+              '[' + first + ']|[' + second + ']|' + name.value + ':' + other.value;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]|[Chris]|Chris:ignored")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_text_required_length_and_pattern_validation_work() -> Result<()> {
+    let html = r#"
+        <input id='len' type='text' required minlength='4' maxlength='8'>
+        <input id='pat' type='text' required pattern='[a-z]{4,8}'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const len = document.getElementById('len');
+          const pat = document.getElementById('pat');
+          document.getElementById('run').addEventListener('click', () => {
+            len.value = '';
+            const a = len.checkValidity() + ':' + len.validity.valueMissing;
+
+            len.value = 'abc';
+            const b = len.validity.tooShort + ':' + len.checkValidity();
+
+            len.value = 'abcdefghi';
+            const c = len.validity.tooLong + ':' + len.checkValidity();
+
+            len.value = 'abcd';
+            const d = len.validity.valid + ':' + len.checkValidity();
+
+            pat.value = 'AB12';
+            const e = pat.validity.patternMismatch + ':' + pat.checkValidity();
+
+            pat.value = 'abcd';
+            const f = pat.validity.valid + ':' + pat.checkValidity();
+
+            const free = document.createElement('input');
+            free.type = 'text';
+            free.required = true;
+            free.value = 'anything';
+            const g = free.validity.typeMismatch + ':' + free.checkValidity();
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true|true:false|true:false|true:true|true:false|true:true|false:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_text_readonly_ignores_required_but_keeps_pattern_check() -> Result<()> {
+    let html = r#"
+        <input id='name' type='text' required readonly pattern='[a-z]+'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const name = document.getElementById('name');
+          document.getElementById('run').addEventListener('click', () => {
+            const a = name.checkValidity() + ':' + name.validity.valueMissing + ':' + name.validity.valid;
+
+            name.value = 'BAD123';
+            const b = name.checkValidity() + ':' + name.validity.patternMismatch + ':' + name.validity.valueMissing;
+
+            name.value = 'okay';
+            const c = name.checkValidity() + ':' + name.validity.valid;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false:true|false:true:false|true:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_url_value_and_form_data_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <label for='u'>URL:</label>
+          <input id='u' type='url' name='url'>
+          <input id='other' type='url' value='https://preset.example'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const u = document.getElementById('u');
+          const other = document.getElementById('other');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = new FormData(form).get('url');
+            u.value = 'https://example.com';
+            other.value = 'https://ignored.example';
+            const second = new FormData(form).get('url');
+            document.getElementById('result').textContent =
+              '[' + first + ']|[' + second + ']|' + u.value + ':' + other.value;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[]|[https://example.com]|https://example.com:https://ignored.example",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_url_required_type_length_and_pattern_validation_work() -> Result<()> {
+    let html = r#"
+        <input id='url' type='url' required minlength='10' maxlength='30' pattern='https://.*'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const url = document.getElementById('url');
+          document.getElementById('run').addEventListener('click', () => {
+            url.value = '';
+            const a = url.checkValidity() + ':' + url.validity.valueMissing + ':' + url.validity.typeMismatch;
+
+            url.value = 'example.com/not-absolute';
+            const b = url.validity.typeMismatch + ':' + url.checkValidity();
+
+            url.value = 'https://x.co';
+            const c = url.validity.valid + ':' + url.checkValidity();
+
+            url.value = 'http://example.com';
+            const d = url.validity.patternMismatch + ':' + url.checkValidity();
+
+            url.value = 'https://a.co/this/path/is/very/long';
+            const e = url.validity.tooLong + ':' + url.checkValidity();
+
+            url.value = 'https://x';
+            const f = url.validity.tooShort + ':' + url.checkValidity();
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true:false|true:false|true:true|true:false|true:false|true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_url_readonly_ignores_required_but_still_checks_type_mismatch() -> Result<()> {
+    let html = r#"
+        <input id='url' type='url' required readonly>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const url = document.getElementById('url');
+          document.getElementById('run').addEventListener('click', () => {
+            const a = url.checkValidity() + ':' + url.validity.valueMissing + ':' + url.validity.valid;
+
+            url.value = 'bad';
+            const b = url.checkValidity() + ':' + url.validity.typeMismatch + ':' + url.validity.valueMissing;
+
+            url.value = 'https://example.com';
+            const c = url.checkValidity() + ':' + url.validity.valid;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:false:true|false:true:false|true:true")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_url_selection_methods_work_like_text_inputs() -> Result<()> {
+    let html = r#"
+        <input id='url' type='url' value='https://abc.def'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const url = document.getElementById('url');
+          document.getElementById('run').addEventListener('click', () => {
+            url.setSelectionRange(1, 4, 'forward');
+            const a = url.selectionStart + ':' + url.selectionEnd + ':' + url.selectionDirection;
+
+            url.setRangeText('ZZ');
+            const b = url.value + ':' + url.selectionStart + ':' + url.selectionEnd;
+
+            url.setSelectionRange(2, 2);
+            url.setRangeText('Q', 1, 3, 'select');
+            const c = url.value + ':' + url.selectionStart + ':' + url.selectionEnd;
+
+            url.select();
+            const d = url.selectionStart + ':' + url.selectionEnd;
+
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1:4:forward|hZZs://abc.def:3:3|hQs://abc.def:1:2|0:13",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_password_strips_newlines_and_supports_selection_work() -> Result<()> {
     let html = r#"
         <input id='pwd' type='password' value='ab&#10;cd&#13;ef'>
@@ -1367,6 +2055,156 @@ fn html_input_button_does_not_participate_in_constraint_validation() -> Result<(
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#result", "true:true|true:false:false|[]")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_submit_click_submits_form_only_when_valid() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' name='name' required>
+          <input id='send' type='submit' value='Send'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          let submits = 0;
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            submits += 1;
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = String(submits);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#send")?;
+    h.click("#run")?;
+    h.assert_text("#result", "0")?;
+    h.type_text("#name", "Alice")?;
+    h.click("#send")?;
+    h.click("#run")?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_submit_disabled_ignores_click() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' name='name' value='ok'>
+          <input id='send' type='submit' value='Send' disabled>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          let clicks = 0;
+          let submits = 0;
+          document.getElementById('send').addEventListener('click', () => {
+            clicks += 1;
+          });
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            submits += 1;
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = clicks + ':' + submits;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#send")?;
+    h.click("#run")?;
+    h.assert_text("#result", "0:0")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_submit_does_not_participate_in_constraint_validation() -> Result<()> {
+    let html = r#"
+        <input id='send' type='submit' value='Send' required>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const send = document.getElementById('send');
+          document.getElementById('run').addEventListener('click', () => {
+            send.setCustomValidity('custom');
+            const a = send.checkValidity() + ':' + send.reportValidity();
+            const b = send.validity.valid + ':' + send.validity.valueMissing + ':' + send.validity.customError;
+            const c = '[' + send.validationMessage + ']';
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true|true:false:false|[]")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_submit_formnovalidate_bypasses_validation() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required>
+          <input id='normal' type='submit' value='Send'>
+          <input id='skip' type='submit' value='Skip' formnovalidate>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          let submits = 0;
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            submits += 1;
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = String(submits);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#normal")?;
+    h.click("#run")?;
+    h.assert_text("#result", "0")?;
+    h.click("#skip")?;
+    h.click("#run")?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_submit_novalidate_form_bypasses_validation() -> Result<()> {
+    let html = r#"
+        <form id='f' novalidate>
+          <input id='name' required>
+          <input id='send' type='submit'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          let submits = 0;
+          const send = document.getElementById('send');
+          document.getElementById('f').addEventListener('submit', (event) => {
+            event.preventDefault();
+            submits += 1;
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              '[' + send.value + ']:' + submits;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#send")?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]:1")?;
     Ok(())
 }
 

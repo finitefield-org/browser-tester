@@ -212,7 +212,7 @@ impl Harness {
             }
 
             if is_submit_control(&self.dom, target) {
-                self.request_form_submit_with_env(target, env)?;
+                self.request_form_submit_with_env(target, Some(target), env)?;
             }
             if is_reset_control(&self.dom, target) {
                 self.reset_form_with_env(target, env)?;
@@ -245,7 +245,7 @@ impl Harness {
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
-            self.with_script_env(|this, env| this.request_form_submit_with_env(target, env))
+            self.with_script_env(|this, env| this.request_form_submit_with_env(target, None, env))
         })
     }
 
@@ -265,12 +265,13 @@ impl Harness {
     pub(crate) fn request_form_submit_with_env(
         &mut self,
         target: NodeId,
+        submitter: Option<NodeId>,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
         let Some(form_id) = self.resolve_submit_form_target(target) else {
             return Ok(());
         };
-        self.request_form_submit_node_with_env(form_id, env)
+        self.request_form_submit_node_with_env(form_id, submitter, env)
     }
 
     pub(crate) fn request_submit_form_with_env(
@@ -295,15 +296,19 @@ impl Harness {
                 ));
             }
         }
-        self.request_form_submit_node_with_env(form_id, env)
+        self.request_form_submit_node_with_env(form_id, submitter, env)
     }
 
     pub(crate) fn request_form_submit_node_with_env(
         &mut self,
         form_id: NodeId,
+        submitter: Option<NodeId>,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        if !self.form_is_valid_for_submit(form_id)? {
+        let skip_validation = self.dom.attr(form_id, "novalidate").is_some()
+            || submitter.is_some_and(|node| self.dom.attr(node, "formnovalidate").is_some());
+
+        if !skip_validation && !self.form_is_valid_for_submit(form_id)? {
             return Ok(());
         }
 
