@@ -269,7 +269,8 @@ impl Harness {
                     }
                 }
                 Expr::ArrayConstruct { args, .. } => {
-                    let evaluated = self.eval_call_args_with_spread(args, env, event_param, event)?;
+                    let evaluated =
+                        self.eval_call_args_with_spread(args, env, event_param, event)?;
                     if evaluated.is_empty() {
                         return Ok(Self::new_array_value(Vec::new()));
                     }
@@ -343,7 +344,8 @@ impl Harness {
                         if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
                             Ok(Value::Number(value.chars().count() as i64))
                         } else {
-                            Ok(Self::object_get_entry(&entries, "length").unwrap_or(Value::Undefined))
+                            Ok(Self::object_get_entry(&entries, "length")
+                                .unwrap_or(Value::Undefined))
                         }
                     }
                     Some(_) => Err(Error::ScriptRuntime(format!(
@@ -1158,7 +1160,7 @@ impl Harness {
                             }
                         }
                     }
-                    *values.borrow_mut() = snapshot;
+                    values.borrow_mut().elements = snapshot;
                     Ok(Value::Array(values))
                 }
                 _ => Err(Error::ScriptRuntime(UNHANDLED_EXPR_CHUNK.into())),
@@ -1176,10 +1178,9 @@ impl Harness {
                 if *value < 0 {
                     return Err(Error::ScriptRuntime("invalid array length".into()));
                 }
-                Ok(Some(
-                    usize::try_from(*value)
-                        .map_err(|_| Error::ScriptRuntime("invalid array length".into()))?,
-                ))
+                Ok(Some(usize::try_from(*value).map_err(|_| {
+                    Error::ScriptRuntime("invalid array length".into())
+                })?))
             }
             Value::Float(value) => {
                 if !value.is_finite() || *value < 0.0 || value.fract() != 0.0 {

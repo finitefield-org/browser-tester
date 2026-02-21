@@ -16,10 +16,7 @@ impl Harness {
                 }
                 let id = evaluated_args[0].as_string();
                 Ok(Some(
-                    self.dom
-                        .by_id(&id)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null),
+                    self.dom.by_id(&id).map(Value::Node).unwrap_or(Value::Null),
                 ))
             }
             "querySelector" => {
@@ -43,7 +40,9 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Value::NodeList(self.dom.query_selector_all(&selector)?)))
+                Ok(Some(Value::NodeList(
+                    self.dom.query_selector_all(&selector)?,
+                )))
             }
             "addEventListener" => {
                 if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
@@ -85,9 +84,12 @@ impl Harness {
                 let capture = self.parse_listener_capture_arg(evaluated_args.get(2))?;
                 match &evaluated_args[1] {
                     Value::Function(function) => {
-                        let _ =
-                            self.listeners
-                                .remove(self.dom.root, &event_type, capture, &function.handler);
+                        let _ = self.listeners.remove(
+                            self.dom.root,
+                            &event_type,
+                            capture,
+                            &function.handler,
+                        );
                         Ok(Some(Value::Undefined))
                     }
                     Value::Null | Value::Undefined => Ok(Some(Value::Undefined)),
@@ -167,9 +169,9 @@ impl Harness {
                 let capture = self.parse_listener_capture_arg(evaluated_args.get(2))?;
                 match &evaluated_args[1] {
                     Value::Function(function) => {
-                        let _ = self
-                            .listeners
-                            .remove(node, &event_type, capture, &function.handler);
+                        let _ =
+                            self.listeners
+                                .remove(node, &event_type, capture, &function.handler);
                         Ok(Some(Value::Undefined))
                     }
                     Value::Null | Value::Undefined => Ok(Some(Value::Undefined)),

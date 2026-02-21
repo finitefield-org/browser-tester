@@ -29,11 +29,11 @@ impl Harness {
         html: &str,
         initial_local_storage: &[(&str, &str)],
     ) -> Result<Self> {
-        let ParseOutput {
-            mut dom,
-            scripts,
-        } = parse_html(html)?;
-        if scripts.iter().any(|script| script.contains("document.body")) {
+        let ParseOutput { mut dom, scripts } = parse_html(html)?;
+        if scripts
+            .iter()
+            .any(|script| script.contains("document.body"))
+        {
             let _ = dom.ensure_document_body_element()?;
         }
         let mut harness = Self {

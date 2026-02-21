@@ -5,7 +5,7 @@
 //! Use [`Harness`] as the main entry point to load HTML, simulate user actions,
 //! control fake time, and assert DOM state.
 
-use js_regex::{Captures, Regex, RegexBuilder, RegexError, escape as regex_escape};
+use js_regex::{Regex, RegexBuilder, RegexError, escape as regex_escape};
 use num_bigint::{BigInt as JsBigInt, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use std::cell::RefCell;
@@ -22,7 +22,9 @@ mod selector;
 
 pub use core_dom_utils::{Error, Result, ThrownValue};
 pub use harness_api::{Harness, MockPage, MockWindow};
-pub use runtime_state::{DownloadArtifact, LocationNavigation, LocationNavigationKind, PendingTimer};
+pub use runtime_state::{
+    DownloadArtifact, LocationNavigation, LocationNavigationKind, PendingTimer,
+};
 
 pub(crate) use core_dom_utils::*;
 pub(crate) use runtime_state::*;

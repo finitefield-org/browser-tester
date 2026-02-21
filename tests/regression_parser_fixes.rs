@@ -1259,8 +1259,7 @@ fn optional_chained_add_event_listener_on_node_member_call_is_supported()
 }
 
 #[test]
-fn single_line_else_if_chain_parses_without_duplicate_else_error()
--> browser_tester::Result<()> {
+fn single_line_else_if_chain_parses_without_duplicate_else_error() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
     <script>

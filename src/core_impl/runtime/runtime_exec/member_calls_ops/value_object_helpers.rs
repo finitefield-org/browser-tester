@@ -2,7 +2,11 @@ use super::*;
 
 impl Harness {
     pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
-        Value::Array(Rc::new(RefCell::new(values)))
+        Value::Array(Rc::new(RefCell::new(ArrayValue::new(values))))
+    }
+
+    pub(crate) fn set_array_property(array: &Rc<RefCell<ArrayValue>>, key: String, value: Value) {
+        Self::object_set_entry(&mut array.borrow_mut().properties, key, value);
     }
 
     pub(crate) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
@@ -74,11 +78,7 @@ impl Harness {
                 out.push(ch);
             }
         }
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
@@ -194,6 +194,8 @@ impl Harness {
                     Ok(Value::Number(values.len() as i64))
                 } else if let Ok(index) = key.parse::<usize>() {
                     Ok(values.get(index).cloned().unwrap_or(Value::Undefined))
+                } else if let Some(value) = Self::object_get_entry(&values.properties, key) {
+                    Ok(value)
                 } else {
                     Ok(Value::Undefined)
                 }

@@ -499,20 +499,20 @@ impl Harness {
                 Expr::StringSearch { value, pattern } => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
                     let pattern = self.eval_expr(pattern, env, event_param, event)?;
-                    let idx = match pattern {
-                        Value::RegExp(regex) => {
-                            let matched = regex
-                                .borrow()
-                                .compiled
-                                .find(&value)
-                                .map_err(Self::map_regex_runtime_error)?;
-                            matched.map(|m| value[..m.start()].chars().count() as i64)
-                        }
-                        other => {
-                            let search = other.as_string();
-                            Self::string_index_of(&value, &search, 0).map(|idx| idx as i64)
-                        }
+                    let regex = if let Value::RegExp(regex) = pattern {
+                        regex
+                    } else {
+                        let built = Self::new_regex_from_values(&pattern, None)?;
+                        let Value::RegExp(regex) = built else {
+                            unreachable!("RegExp constructor must return a RegExp");
+                        };
+                        regex
                     };
+                    let previous_last_index = regex.borrow().last_index;
+                    regex.borrow_mut().last_index = 0;
+                    let result = Self::regex_exec(&regex, &value)?;
+                    regex.borrow_mut().last_index = previous_last_index;
+                    let idx = result.map(|match_result| match_result.index as i64);
                     Ok(Value::Number(idx.unwrap_or(-1)))
                 }
                 Expr::StringRepeat { value, count } => {

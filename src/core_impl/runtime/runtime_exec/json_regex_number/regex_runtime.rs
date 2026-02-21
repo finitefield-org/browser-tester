@@ -1,5 +1,17 @@
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegexExecResult {
+    pub(crate) captures: Vec<Option<String>>,
+    pub(crate) index: usize,
+    pub(crate) input: String,
+    pub(crate) groups: Option<Vec<(String, Option<String>)>>,
+    pub(crate) indices: Option<Vec<Option<(usize, usize)>>>,
+    pub(crate) indices_groups: Option<Vec<(String, Option<(usize, usize)>)>>,
+    pub(crate) full_match_start_byte: usize,
+    pub(crate) full_match_end_byte: usize,
+}
+
 impl Harness {
     pub(crate) fn analyze_regex_flags(flags: &str) -> std::result::Result<RegexFlags, String> {
         let mut info = RegexFlags {
@@ -41,6 +53,7 @@ impl Harness {
         builder.case_insensitive(info.ignore_case);
         builder.multi_line(info.multiline);
         builder.dot_matches_new_line(info.dot_all);
+        builder.unicode_mode(info.unicode);
         builder.build()
     }
 
@@ -100,24 +113,110 @@ impl Harness {
     pub(crate) fn regex_exec(
         regex: &Rc<RefCell<RegexValue>>,
         input: &str,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<RegexExecResult>> {
         Self::regex_exec_internal(regex, input)
+    }
+
+    pub(crate) fn regex_exec_result_to_value(result: RegexExecResult) -> Value {
+        let RegexExecResult {
+            captures,
+            index,
+            input,
+            groups,
+            indices,
+            indices_groups,
+            ..
+        } = result;
+
+        let values = captures
+            .into_iter()
+            .map(|capture| capture.map(Value::String).unwrap_or(Value::Undefined))
+            .collect::<Vec<_>>();
+        let array = Self::new_array_value(values);
+        let Value::Array(array_ref) = &array else {
+            unreachable!("new_array_value must create Value::Array");
+        };
+
+        let groups_value = if let Some(groups) = groups {
+            let entries = groups
+                .into_iter()
+                .map(|(name, value)| (name, value.map(Value::String).unwrap_or(Value::Undefined)))
+                .collect::<Vec<_>>();
+            Self::new_object_value(entries)
+        } else {
+            Value::Undefined
+        };
+
+        Self::set_array_property(array_ref, "index".to_string(), Value::Number(index as i64));
+        Self::set_array_property(array_ref, "input".to_string(), Value::String(input));
+        Self::set_array_property(array_ref, "groups".to_string(), groups_value);
+
+        if let Some(indices) = indices {
+            let entries = indices
+                .into_iter()
+                .map(|span| match span {
+                    Some((start, end)) => Self::new_array_value(vec![
+                        Value::Number(start as i64),
+                        Value::Number(end as i64),
+                    ]),
+                    None => Value::Undefined,
+                })
+                .collect::<Vec<_>>();
+            let indices_value = Self::new_array_value(entries);
+            let Value::Array(indices_ref) = &indices_value else {
+                unreachable!("new_array_value must create Value::Array");
+            };
+            let groups_value = if let Some(groups) = indices_groups {
+                let entries = groups
+                    .into_iter()
+                    .map(|(name, span)| {
+                        let value = if let Some((start, end)) = span {
+                            Self::new_array_value(vec![
+                                Value::Number(start as i64),
+                                Value::Number(end as i64),
+                            ])
+                        } else {
+                            Value::Undefined
+                        };
+                        (name, value)
+                    })
+                    .collect::<Vec<_>>();
+                Self::new_object_value(entries)
+            } else {
+                Value::Undefined
+            };
+            Self::set_array_property(indices_ref, "groups".to_string(), groups_value);
+            Self::set_array_property(array_ref, "indices".to_string(), indices_value);
+        }
+        array
     }
 
     pub(crate) fn regex_exec_internal(
         regex: &Rc<RefCell<RegexValue>>,
         input: &str,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<RegexExecResult>> {
         let mut regex = regex.borrow_mut();
-        let start = if regex.global || regex.sticky {
+        let has_indices = regex.has_indices;
+        let start_utf16 = if regex.global || regex.sticky {
             regex.last_index
         } else {
             0
         };
-        if start > input.len() {
+        if start_utf16 > Self::utf16_length(input) {
             regex.last_index = 0;
             return Ok(None);
         }
+        let start = if let Some(start) = Self::utf16_index_to_byte(input, start_utf16) {
+            start
+        } else if regex.sticky {
+            regex.last_index = 0;
+            return Ok(None);
+        } else if let Some(start) = Self::utf16_index_to_byte_ceil(input, start_utf16) {
+            start
+        } else {
+            regex.last_index = 0;
+            return Ok(None);
+        };
 
         let captures = regex
             .compiled
@@ -144,18 +243,68 @@ impl Harness {
         }
 
         if regex.global || regex.sticky {
-            regex.last_index = full_match.end();
+            regex.last_index = Self::byte_index_to_utf16_index(input, full_match.end());
         }
 
         let mut out = Vec::with_capacity(captures.len());
+        let mut indices = has_indices.then(|| Vec::with_capacity(captures.len()));
         for idx in 0..captures.len() {
-            out.push(
-                captures
-                    .get(idx)
-                    .map(|capture| capture.as_str().to_string())
-                    .unwrap_or_default(),
-            );
+            if let Some(capture) = captures.get(idx) {
+                out.push(Some(capture.as_str().to_string()));
+                if let Some(indices) = indices.as_mut() {
+                    indices.push(Some((
+                        Self::byte_index_to_utf16_index(input, capture.start()),
+                        Self::byte_index_to_utf16_index(input, capture.end()),
+                    )));
+                }
+            } else {
+                out.push(None);
+                if let Some(indices) = indices.as_mut() {
+                    indices.push(None);
+                }
+            }
         }
-        Ok(Some(out))
+        let index = Self::byte_index_to_utf16_index(input, full_match.start());
+        let groups = if captures.has_named_groups() {
+            let mut named = Vec::new();
+            for name in captures.named_group_names() {
+                named.push((
+                    name.clone(),
+                    captures
+                        .get_named(&name)
+                        .map(|capture| capture.as_str().to_string()),
+                ));
+            }
+            Some(named)
+        } else {
+            None
+        };
+        let indices_groups = if has_indices && captures.has_named_groups() {
+            let mut named = Vec::new();
+            for name in captures.named_group_names() {
+                named.push((
+                    name.clone(),
+                    captures.get_named(&name).map(|capture| {
+                        (
+                            Self::byte_index_to_utf16_index(input, capture.start()),
+                            Self::byte_index_to_utf16_index(input, capture.end()),
+                        )
+                    }),
+                ));
+            }
+            Some(named)
+        } else {
+            None
+        };
+        Ok(Some(RegexExecResult {
+            captures: out,
+            index,
+            input: input.to_string(),
+            groups,
+            indices,
+            indices_groups,
+            full_match_start_byte: full_match.start(),
+            full_match_end_byte: full_match.end(),
+        }))
     }
 }

@@ -35,12 +35,10 @@ impl Harness {
                     let regex = self.eval_expr(regex, env, event_param, event)?;
                     let input = self.eval_expr(input, env, event_param, event)?.as_string();
                     let regex = Self::resolve_regex_from_value(&regex)?;
-                    let Some(captures) = Self::regex_exec(&regex, &input)? else {
+                    let Some(result) = Self::regex_exec(&regex, &input)? else {
                         return Ok(Value::Null);
                     };
-                    Ok(Self::new_array_value(
-                        captures.into_iter().map(Value::String).collect::<Vec<_>>(),
-                    ))
+                    Ok(Self::regex_exec_result_to_value(result))
                 }
                 Expr::RegexToString { regex } => {
                     let value = self.eval_expr(regex, env, event_param, event)?;

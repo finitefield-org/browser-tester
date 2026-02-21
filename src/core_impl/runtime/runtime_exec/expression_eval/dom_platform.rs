@@ -584,7 +584,11 @@ impl Harness {
                 }
                 Expr::DomGetAttribute { target, name } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    Ok(self.dom.attr(node, name).map(Value::String).unwrap_or(Value::Null))
+                    Ok(self
+                        .dom
+                        .attr(node, name)
+                        .map(Value::String)
+                        .unwrap_or(Value::Null))
                 }
                 Expr::DomHasAttribute { target, name } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;

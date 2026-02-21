@@ -35,7 +35,7 @@ impl Harness {
         &self,
         env: &HashMap<String, Value>,
         target: &str,
-    ) -> Result<Rc<RefCell<Vec<Value>>>> {
+    ) -> Result<Rc<RefCell<ArrayValue>>> {
         match env.get(target) {
             Some(Value::Array(values)) => Ok(values.clone()),
             Some(_) => Err(Error::ScriptRuntime(format!(

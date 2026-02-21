@@ -110,7 +110,10 @@ impl Harness {
         Self::new_object_value(vec![
             ("type".to_string(), Value::String(event.event_type.clone())),
             ("target".to_string(), Value::Node(event.target)),
-            ("currentTarget".to_string(), Value::Node(event.current_target)),
+            (
+                "currentTarget".to_string(),
+                Value::Node(event.current_target),
+            ),
             (
                 "defaultPrevented".to_string(),
                 Value::Bool(event.default_prevented),
@@ -118,7 +121,10 @@ impl Harness {
             ("isTrusted".to_string(), Value::Bool(event.is_trusted)),
             ("bubbles".to_string(), Value::Bool(event.bubbles)),
             ("cancelable".to_string(), Value::Bool(event.cancelable)),
-            ("eventPhase".to_string(), Value::Number(event.event_phase as i64)),
+            (
+                "eventPhase".to_string(),
+                Value::Number(event.event_phase as i64),
+            ),
             ("timeStamp".to_string(), Value::Number(event.time_stamp_ms)),
             (
                 "state".to_string(),
@@ -126,14 +132,16 @@ impl Harness {
             ),
             (
                 "oldState".to_string(),
-                event.old_state
+                event
+                    .old_state
                     .as_ref()
                     .map(|value| Value::String(value.clone()))
                     .unwrap_or(Value::Undefined),
             ),
             (
                 "newState".to_string(),
-                event.new_state
+                event
+                    .new_state
                     .as_ref()
                     .map(|value| Value::String(value.clone()))
                     .unwrap_or(Value::Undefined),

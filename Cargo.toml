@@ -23,7 +23,6 @@ include = [
 ]
 
 [dependencies]
-fancy-regex = "0.17"
 num-bigint = "0.4"
 num-traits = "0.2"
 stacker = "0.1"

@@ -143,7 +143,7 @@ impl Harness {
 
     pub(crate) fn eval_array_member_call(
         &mut self,
-        values: &Rc<RefCell<Vec<Value>>>,
+        values: &Rc<RefCell<ArrayValue>>,
         member: &str,
         evaluated_args: &[Value],
         event: &EventState,
@@ -542,7 +542,7 @@ impl Harness {
                         }
                     }
                 }
-                *values.borrow_mut() = snapshot;
+                values.borrow_mut().elements = snapshot;
                 Value::Array(values.clone())
             }
             _ => return Ok(None),

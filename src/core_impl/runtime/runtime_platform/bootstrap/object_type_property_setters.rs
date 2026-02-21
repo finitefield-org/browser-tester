@@ -385,14 +385,27 @@ impl Harness {
                 Ok(())
             }
             Value::Array(values) => {
-                let Some(index) = self.value_as_index(key_value) else {
+                if let Some(index) = self.value_as_index(key_value) {
+                    let mut values = values.borrow_mut();
+                    if index >= values.len() {
+                        values.resize(index + 1, Value::Undefined);
+                    }
+                    values[index] = value;
                     return Ok(());
-                };
-                let mut values = values.borrow_mut();
-                if index >= values.len() {
-                    values.resize(index + 1, Value::Undefined);
                 }
-                values[index] = value;
+                let key = self.property_key_to_storage_key(key_value);
+                if key == "length" {
+                    let mut values = values.borrow_mut();
+                    let next = Self::value_to_i64(&value);
+                    let next = if next <= 0 { 0usize } else { next as usize };
+                    if next < values.len() {
+                        values.truncate(next);
+                    } else if next > values.len() {
+                        values.resize(next, Value::Undefined);
+                    }
+                    return Ok(());
+                }
+                Self::set_array_property(values, key, value);
                 Ok(())
             }
             Value::TypedArray(values) => {

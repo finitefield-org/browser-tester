@@ -263,7 +263,7 @@ pub(crate) enum Value {
     Number(i64),
     Float(f64),
     BigInt(JsBigInt),
-    Array(Rc<RefCell<Vec<Value>>>),
+    Array(Rc<RefCell<ArrayValue>>),
     Object(Rc<RefCell<ObjectValue>>),
     Promise(Rc<RefCell<PromiseValue>>),
     Map(Rc<RefCell<MapValue>>),
@@ -329,6 +329,35 @@ impl ObjectValue {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.index_by_key.clear();
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ArrayValue {
+    pub(crate) elements: Vec<Value>,
+    pub(crate) properties: ObjectValue,
+}
+
+impl ArrayValue {
+    pub(crate) fn new(elements: Vec<Value>) -> Self {
+        Self {
+            elements,
+            properties: ObjectValue::default(),
+        }
+    }
+}
+
+impl std::ops::Deref for ArrayValue {
+    type Target = Vec<Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.elements
+    }
+}
+
+impl std::ops::DerefMut for ArrayValue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.elements
     }
 }
 

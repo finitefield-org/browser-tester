@@ -293,27 +293,31 @@ impl Harness {
 
         let global = regex.borrow().global;
         if global {
-            let compiled = regex.borrow().compiled.clone();
-            let mut matches = Vec::new();
-            for matched in compiled
-                .find_all(value)
-                .map_err(Self::map_regex_runtime_error)?
-            {
-                matches.push(Value::String(matched.as_str().to_string()));
-            }
             regex.borrow_mut().last_index = 0;
+            let mut matches = Vec::new();
+            loop {
+                let Some(result) = Self::regex_exec(&regex, value)? else {
+                    break;
+                };
+                if let Some(Some(matched)) = result.captures.first() {
+                    matches.push(Value::String(matched.clone()));
+                }
+                if result.full_match_start_byte == result.full_match_end_byte {
+                    let mut regex = regex.borrow_mut();
+                    regex.last_index =
+                        Self::advance_string_index_utf16(value, regex.last_index, regex.unicode);
+                }
+            }
             if matches.is_empty() {
                 Ok(Value::Null)
             } else {
                 Ok(Self::new_array_value(matches))
             }
         } else {
-            let Some(captures) = Self::regex_exec(&regex, value)? else {
+            let Some(result) = Self::regex_exec(&regex, value)? else {
                 return Ok(Value::Null);
             };
-            Ok(Self::new_array_value(
-                captures.into_iter().map(Value::String).collect::<Vec<_>>(),
-            ))
+            Ok(Self::regex_exec_result_to_value(result))
         }
     }
 }

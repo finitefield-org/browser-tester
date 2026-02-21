@@ -62,6 +62,13 @@ fn regex_parse_and_runtime_errors_are_reported() -> Result<()> {
         other => panic!("unexpected regex parse error: {other:?}"),
     }
 
+    let unicode_quantifier_parse_err = Harness::from_html("<script>const re = /(?=a)+/u;</script>")
+        .expect_err("quantified lookahead in unicode mode should fail during parse");
+    match unicode_quantifier_parse_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode quantifier parse error: {other:?}"),
+    }
+
     let html = r#"
         <button id='btn'>run</button>
         <script>
@@ -77,6 +84,30 @@ fn regex_parse_and_runtime_errors_are_reported() -> Result<()> {
     match runtime_err {
         Error::ScriptRuntime(msg) => assert!(msg.contains("invalid regular expression")),
         other => panic!("unexpected regex runtime error: {other:?}"),
+    }
+
+    let html_unicode = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            new RegExp('(?=a)+', 'u');
+          });
+        </script>
+        "#;
+    let mut h_unicode = Harness::from_html(html_unicode)?;
+    let runtime_unicode_err = h_unicode
+        .click("#btn")
+        .expect_err("quantified lookahead in unicode mode should fail at runtime");
+    match runtime_unicode_err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode quantifier runtime error: {other:?}"),
+    }
+
+    let quantifier_parse_err = Harness::from_html("<script>const re = /\\b+/;</script>")
+        .expect_err("word boundary quantified regex should fail during parse");
+    match quantifier_parse_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected quantifier parse error: {other:?}"),
     }
 
     Ok(())
@@ -111,6 +142,99 @@ fn regexp_constructor_properties_and_escape_work() -> Result<()> {
         "#result",
         "a.:gimsydu:true:true:true:true:true:true:true:false:3:true:function|a\\+b\\*c\\?|x\\.y",
     )?;
+    Ok(())
+}
+
+#[test]
+fn regexp_last_index_inside_surrogate_pair_behaves_like_js_search_and_sticky() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const s = '🙂a';
+
+            const gSearch = /a/g;
+            gSearch.lastIndex = 1;
+            const mSearch = gSearch.exec(s);
+
+            const gEmoji = /🙂/g;
+            gEmoji.lastIndex = 1;
+            const mEmoji = gEmoji.exec(s);
+
+            const sticky = /a/y;
+            sticky.lastIndex = 1;
+            const mSticky = sticky.exec(s);
+
+            document.getElementById('result').textContent =
+              mSearch[0] + ':' + mSearch.index + ':' + gSearch.lastIndex + '|' +
+              String(mEmoji === null) + ':' + gEmoji.lastIndex + '|' +
+              String(mSticky === null) + ':' + sticky.lastIndex;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a:2:3|true:0|true:0")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_global_sticky_string_match_respects_sticky_and_resets_last_index() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const m1 = 'ba'.match(/a/gy);
+            const m2 = 'ba'.match(/a/g);
+            const re = /a/gy;
+            re.lastIndex = 1;
+            const m3 = 'aa'.match(re);
+            document.getElementById('result').textContent =
+              String(m1 === null) + ':' + m2[0] + ':' + m3.length + ':' + re.lastIndex;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:a:2:0")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_replace_respects_sticky_and_global_last_index_semantics() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const s = 'za';
+            const sticky = /a/y;
+            sticky.lastIndex = 1;
+            const out1 = s.replace(sticky, 'X');
+            const li1 = sticky.lastIndex;
+
+            sticky.lastIndex = 0;
+            const out2 = s.replace(sticky, 'X');
+            const li2 = sticky.lastIndex;
+
+            const globalSticky = /a/gy;
+            globalSticky.lastIndex = 1;
+            const out3 = s.replace(globalSticky, 'X');
+            const li3 = globalSticky.lastIndex;
+
+            document.getElementById('result').textContent =
+              out1 + ':' + li1 + '|' + out2 + ':' + li2 + '|' + out3 + ':' + li3;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "zX:2|za:0|za:0")?;
     Ok(())
 }
 
@@ -169,6 +293,459 @@ fn regexp_constructor_call_without_new_and_to_string_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "/ab+c/i:true:ABBC")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_backreference_and_named_groups_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const numericOk = /([a-z]+)-\1/.test('abc-abc');
+            const numericNg = /([a-z]+)-\1/.test('abc-abd');
+            const named = /(?<word>[a-z]+):\k<word>/.exec('go:go');
+            document.getElementById('result').textContent =
+              numericOk + ':' + numericNg + ':' + named[0] + ':' + named[1];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:go:go:go")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_named_backreference_forward_reference_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hit = /\k<a>(?<a>x)/.exec('xx');
+            const hit2 = /(?<a>x)\k<a>/.exec('xx');
+            document.getElementById('result').textContent =
+              hit[0] + ':' + hit.groups.a + '|' + hit2[0] + ':' + hit2.groups.a;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "x:x|xx:x")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_named_backreference_to_unknown_name_is_parse_error() -> Result<()> {
+    let err = Harness::from_html("<script>const re = /\\k<a>(?<b>x)/;</script>")
+        .expect_err("unknown named backreference should fail during parse");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unknown named backreference parse error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn regexp_control_escape_sequences_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const ctrl = String.fromCharCode(1);
+            const ok1 = /\cA/.test(ctrl);
+            const ok2 = /[\cA]/.test(ctrl);
+            const ok3 = /\c1/.test('c1');
+            const ok4 = /[\c1]/.test('1') && /[\c1]/.test('c');
+            document.getElementById('result').textContent =
+              ok1 + ':' + ok2 + ':' + ok3 + ':' + ok4;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_lookbehind_positive_and_negative_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const positiveOk = /(?<=foo)bar/.test('foobar');
+            const positiveNg = /(?<=foo)bar/.test('xxbar');
+            const negativeOk = /(?<!foo)bar/.test('xxbar');
+            const negativeNg = /(?<!foo)bar/.test('foobar');
+            const hit = /(?<=foo)bar/.exec('foobar');
+            document.getElementById('result').textContent =
+              positiveOk + ':' + positiveNg + ':' + negativeOk + ':' + negativeNg + ':' + hit[0];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true:false:bar")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_quantified_lookahead_works_but_lookbehind_quantifier_is_invalid() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hit = /(?=a)+/.exec('a');
+            const hit2 = /(?:)+/.exec('a');
+            const hit3 = /(?:){2}/.exec('a');
+            document.getElementById('result').textContent =
+              hit[0].length + ':' + hit2[0].length + ':' + hit3[0].length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:0:0")?;
+
+    let parse_err = Harness::from_html("<script>const re = /(?<=a)+/;</script>")
+        .expect_err("quantified lookbehind should fail during parse");
+    match parse_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected lookbehind quantifier parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_exec_unmatched_capture_is_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hit = /(a)?b/.exec('b');
+            document.getElementById('result').textContent =
+              hit[0] + ':' + String(hit[1] === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "b:true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_exec_and_match_expose_index_input_and_groups() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const input = 'xx abc-42 yy';
+            const hit = /(?<word>[a-z]+)-(\d+)/.exec(input);
+            const matched = input.match(/(?<word>[a-z]+)-(\d+)/);
+            const noNamed = /(ab)(\d)/.exec('zzab3');
+            document.getElementById('result').textContent =
+              hit[0] + ':' + hit.index + ':' + (hit.input === input) + ':' + hit.groups.word + '|' +
+              matched[0] + ':' + matched.index + ':' + (matched.input === input) + ':' + matched.groups.word + '|' +
+              String(noNamed.groups === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "abc-42:3:true:abc|abc-42:3:true:abc|true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_d_flag_exposes_indices_and_named_groups() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const input = 'xx abc-42 yy';
+            const hit = /(?<word>[a-z]+)-(\d+)/d.exec(input);
+            const matched = input.match(/(?<word>[a-z]+)-(\d+)/d);
+            const optional = /(?<opt>a)?b/d.exec('b');
+            const plain = /ab/.exec('zab');
+            document.getElementById('result').textContent =
+              hit.indices[0][0] + ':' + hit.indices[0][1] + ':' + hit.indices[1][0] + ':' + hit.indices[2][1] + ':' + hit.indices.groups.word[0] + '|' +
+              matched.indices[0][0] + ':' + matched.indices.groups.word[0] + '|' +
+              String(optional.indices[1] === undefined) + ':' + String(optional.indices.groups.opt === undefined) + '|' +
+              String(plain.indices === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3:9:3:9:3|3:3|true:true|true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_named_group_property_order_follows_source_order() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hit = /(?<second>foo)(?<first>bar)/d.exec('xxfoobar');
+            const keys = Object.keys(hit.groups).join(',');
+            const idxKeys = Object.keys(hit.indices.groups).join(',');
+            document.getElementById('result').textContent =
+              keys + '|' + idxKeys + '|' +
+              hit.groups.second + ':' + hit.groups.first + '|' +
+              hit.indices.groups.second[0] + ':' + hit.indices.groups.first[0];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "second,first|second,first|foo:bar|2:5")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_utf16_index_last_index_and_indices_use_code_units() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const s = '🙂a🙂a';
+            const re = /a/dg;
+            const first = re.exec(s);
+            const li1 = re.lastIndex;
+            const second = re.exec(s);
+            const li2 = re.lastIndex;
+            const third = re.exec(s);
+            const li3 = re.lastIndex;
+            const plain = /a/.exec('🙂a');
+            const search = '🙂a'.search(/a/);
+            document.getElementById('result').textContent =
+              first.index + ':' + first.indices[0][0] + ':' + li1 + '|' +
+              second.index + ':' + second.indices[0][0] + ':' + li2 + '|' +
+              String(third === null) + ':' + li3 + '|' +
+              plain.index + ':' + search;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:2:3|5:5:6|true:0|2:2")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_replace_callback_offset_uses_utf16_code_units() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const s = '🙂a🙂a';
+            const single = s.replace(/a/, (m, offset) => String(offset));
+            const all = s.replace(/a/g, (m, offset) => String(offset));
+            document.getElementById('result').textContent = single + '|' + all;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "🙂2🙂a|🙂2🙂5")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_search_respects_sticky_and_restores_last_index() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sticky = /a/y;
+            sticky.lastIndex = 2;
+            const s1 = 'ba'.search(sticky);
+            const li1 = sticky.lastIndex;
+
+            const global = /a/g;
+            global.lastIndex = 2;
+            const s2 = 'ba'.search(global);
+            const li2 = global.lastIndex;
+
+            document.getElementById('result').textContent =
+              s1 + ':' + li1 + '|' + s2 + ':' + li2;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-1:2|1:2")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_search_non_regex_argument_uses_regexp_semantics() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const s1 = 'a.b'.search('.');
+            const s2 = '🙂a'.search('a');
+            const re = /a/g;
+            re.lastIndex = 1;
+            const s3 = 'ba'.search(re);
+            const li = re.lastIndex;
+            document.getElementById('result').textContent =
+              s1 + ':' + s2 + ':' + s3 + ':' + li;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:2:1:1")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_replace_supports_prefix_suffix_and_named_tokens() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = 'xxfoobarzz'.replace(
+              /(?<left>foo)(bar)/,
+              '$`|$&|$\'|$1|$2|$<left>'
+            );
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "xxxx|foobar|zz|foo|bar|foozz")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_replace_out_of_range_tokens_are_literal_without_named_groups() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 'foo'.replace(/foo/, '$1');
+            const b = 'foo'.replace(/foo/, '$2');
+            const c = 'foo'.replace(/foo/, '$<x>');
+            const d = 'foo'.replace(/(?<x>foo)/, '$<x>:$<y>');
+            const e = 'bar'.replace(/(f)?bar/, '$1');
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "$1|$2|$<x>|foo:|0")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_replace_callback_receives_named_groups_object() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = 'foo:foo'.replace(
+              /(?<word>[a-z]+):\k<word>/,
+              (all, cap1, offset, input, groups) =>
+                groups.word + ':' + (typeof groups) + ':' + offset + ':' + input
+            );
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "foo:object:0:foo:foo")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_split_includes_captured_groups() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parts = 'ab12cd'.split(/(\d+)/);
+            document.getElementById('result').textContent =
+              parts.length + ':' + parts[0] + ':' + parts[1] + ':' + parts[2];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3:ab:12:cd")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_split_zero_width_matches_follow_js_iteration_rules() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 'ab'.split(/(?:)/);
+            const b = 'ab'.split(/()/);
+            const c = ''.split(/(?:)/);
+            const re = /()/g;
+            re.lastIndex = 1;
+            const d = 'ab'.split(re);
+            const li = re.lastIndex;
+            document.getElementById('result').textContent =
+              a.join(',') + '|' +
+              b.join(',') + '|' +
+              c.length + '|' +
+              d.join(',') + ':' + li;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a,b|a,,b|0|a,,b:1")?;
     Ok(())
 }
 

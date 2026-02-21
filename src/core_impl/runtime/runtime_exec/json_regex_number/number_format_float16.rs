@@ -332,8 +332,7 @@ impl Harness {
                 )?;
                 if minimum.zip(maximum).is_some_and(|(min, max)| min > max) {
                     return Err(Error::ScriptRuntime(
-                        "minimumFractionDigits cannot be greater than maximumFractionDigits"
-                            .into(),
+                        "minimumFractionDigits cannot be greater than maximumFractionDigits".into(),
                     ));
                 }
                 Ok((minimum, maximum))

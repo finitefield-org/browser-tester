@@ -2,11 +2,11 @@ use super::*;
 
 impl Harness {
     pub(crate) fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
-        let ParseOutput {
-            mut dom,
-            scripts,
-        } = parse_html(html)?;
-        if scripts.iter().any(|script| script.contains("document.body")) {
+        let ParseOutput { mut dom, scripts } = parse_html(html)?;
+        if scripts
+            .iter()
+            .any(|script| script.contains("document.body"))
+        {
             let _ = dom.ensure_document_body_element()?;
         }
         self.dom = dom;
