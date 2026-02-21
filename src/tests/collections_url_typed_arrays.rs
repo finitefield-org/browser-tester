@@ -140,6 +140,92 @@ fn string_constructor_and_static_methods_work() -> Result<()> {
 }
 
 #[test]
+fn string_from_char_code_surrogate_code_unit_semantics_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const high = String.fromCharCode(0xD800);
+            const pair = String.fromCharCode(0xD83D, 0xDE00);
+            const fromCp = String.fromCodePoint(0x1F600);
+            const a = high.length === 1;
+            const b = high.charCodeAt(0) === 0xD800;
+            const c = high.codePointAt(0) === 0xD800;
+            const d = pair.length === 2;
+            const e = pair.charCodeAt(0) === 0xD83D && pair.charCodeAt(1) === 0xDE00;
+            const f = pair.codePointAt(0) === 0x1F600 && pair.codePointAt(1) === 0xDE00;
+            const g = /\uD800/.test(high) && /\uD800/u.test(high);
+            const h = /\u{D800}/u.test(high);
+            const i = fromCp.length === 2;
+            const j = fromCp.charCodeAt(0) === 0xD83D && fromCp.charCodeAt(1) === 0xDE00;
+            const k = /\uD83D\uDE00/.test(fromCp);
+            const l = /^\u{1F600}$/u.test(fromCp);
+            const m = fromCp === pair;
+            const n = /^.$/u.test(fromCp);
+            const o = !/^.$/.test(fromCp) && /^..$/.test(fromCp);
+            const p = /^[\u{1F600}]$/u.test(fromCp);
+            const q = /[\uD83D]/.test(fromCp) && !/[\uD83D]/u.test(fromCp);
+            const r = /\p{RGI_Emoji}/v.test(fromCp) && /[\p{RGI_Emoji}]/v.test(fromCp);
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g + ':' + h + ':' +
+              i + ':' + j + ':' + k + ':' + l + ':' + m + ':' + n + ':' + o + ':' + p + ':' + q + ':' + r;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_well_formed_methods_handle_lone_surrogates() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const high = String.fromCharCode(0xD800);
+            const low = String.fromCharCode(0xDC00);
+            const pair = String.fromCharCode(0xD83D, 0xDE00);
+            const mixed = 'A' + high + 'B' + low + 'C';
+            const fixed = mixed.toWellFormed();
+
+            const a = !high.isWellFormed();
+            const b = !low.isWellFormed();
+            const c = pair.isWellFormed();
+            const d = !mixed.isWellFormed();
+            const e = fixed.charCodeAt(1) === 0xFFFD;
+            const f = fixed.charCodeAt(3) === 0xFFFD;
+            const g = fixed.charAt(0) === 'A' && fixed.charAt(2) === 'B' && fixed.charAt(4) === 'C';
+            const h = pair.toWellFormed().isWellFormed();
+            const i = String.fromCharCode(0xD800, 0xDC00).isWellFormed();
+            const j = String.fromCharCode(0xDC00, 0xD800).toWellFormed().charCodeAt(0) === 0xFFFD &&
+                      String.fromCharCode(0xDC00, 0xD800).toWellFormed().charCodeAt(1) === 0xFFFD;
+            const k = /\uD83D\uDE00/.test(pair.toWellFormed());
+
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' +
+              f + ':' + g + ':' + h + ':' + i + ':' + j + ':' + k;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn string_extended_instance_methods_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

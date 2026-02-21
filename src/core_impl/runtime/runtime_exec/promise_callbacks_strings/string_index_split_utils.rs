@@ -96,7 +96,7 @@ impl Harness {
         if !unicode {
             return index + 1;
         }
-        let units = value.encode_utf16().collect::<Vec<_>>();
+        let units = Self::conceptual_utf16_units(value);
         let len = units.len();
         if index + 1 >= len {
             return index + 1;
@@ -108,6 +108,37 @@ impl Harness {
         } else {
             index + 1
         }
+    }
+
+    pub(crate) fn utf16_floor_to_code_point_boundary(
+        value: &str,
+        utf16_index: usize,
+    ) -> Option<usize> {
+        let units = Self::conceptual_utf16_units(value);
+        if utf16_index > units.len() {
+            return None;
+        }
+        if utf16_index > 0 && utf16_index < units.len() {
+            let prev = units[utf16_index - 1];
+            let next = units[utf16_index];
+            if (0xD800..=0xDBFF).contains(&prev) && (0xDC00..=0xDFFF).contains(&next) {
+                return Some(utf16_index - 1);
+            }
+        }
+        Some(utf16_index)
+    }
+
+    fn conceptual_utf16_units(value: &str) -> Vec<u16> {
+        let mut out = Vec::new();
+        for ch in value.chars() {
+            if let Some(unit) = crate::js_regex::deinternalize_surrogate_marker(ch) {
+                out.push(unit);
+            } else {
+                let mut buf = [0u16; 2];
+                out.extend_from_slice(ch.encode_utf16(&mut buf));
+            }
+        }
+        out
     }
 
     pub(crate) fn substring_chars(value: &str, start: usize, end: usize) -> String {

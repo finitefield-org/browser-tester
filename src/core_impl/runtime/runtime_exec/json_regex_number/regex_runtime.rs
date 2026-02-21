@@ -208,6 +208,7 @@ impl Harness {
     ) -> Result<Option<RegexExecResult>> {
         let mut regex = regex.borrow_mut();
         let has_indices = regex.has_indices;
+        let full_unicode = regex.unicode || regex.unicode_sets;
         let start_utf16 = if regex.global || regex.sticky {
             regex.last_index
         } else {
@@ -217,7 +218,21 @@ impl Harness {
             regex.last_index = 0;
             return Ok(None);
         }
-        let start = if let Some(start) = Self::utf16_index_to_byte(input, start_utf16) {
+        let start = if full_unicode {
+            let Some(aligned_utf16) = Self::utf16_floor_to_code_point_boundary(input, start_utf16)
+            else {
+                regex.last_index = 0;
+                return Ok(None);
+            };
+            if let Some(start) = Self::utf16_index_to_byte(input, aligned_utf16) {
+                start
+            } else if let Some(start) = Self::utf16_index_to_byte_ceil(input, aligned_utf16) {
+                start
+            } else {
+                regex.last_index = 0;
+                return Ok(None);
+            }
+        } else if let Some(start) = Self::utf16_index_to_byte(input, start_utf16) {
             start
         } else if regex.sticky {
             regex.last_index = 0;

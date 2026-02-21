@@ -193,13 +193,13 @@ impl Harness {
     ) -> Result<Value> {
         match method {
             StringStaticMethod::FromCharCode => {
-                let mut units = Vec::with_capacity(args.len());
+                let mut out = String::with_capacity(args.len());
                 for arg in args {
                     let value = self.eval_expr(arg, env, event_param, event)?;
                     let unit = (Self::value_to_i64(&value) as i128).rem_euclid(1 << 16) as u16;
-                    units.push(unit);
+                    out.push(crate::js_regex::internalize_utf16_code_unit(unit));
                 }
-                Ok(Value::String(String::from_utf16_lossy(&units)))
+                Ok(Value::String(out))
             }
             StringStaticMethod::FromCodePoint => {
                 let mut out = String::new();
@@ -221,7 +221,11 @@ impl Harness {
                     let ch = char::from_u32(cp).ok_or_else(|| {
                         Error::ScriptRuntime("Invalid code point for String.fromCodePoint".into())
                     })?;
-                    out.push(ch);
+                    let mut units = [0u16; 2];
+                    let encoded = ch.encode_utf16(&mut units);
+                    for unit in encoded {
+                        out.push(crate::js_regex::internalize_utf16_code_unit(*unit));
+                    }
                 }
                 Ok(Value::String(out))
             }

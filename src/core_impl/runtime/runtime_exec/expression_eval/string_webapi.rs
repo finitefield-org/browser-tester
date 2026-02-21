@@ -31,7 +31,8 @@ impl Harness {
                 }
                 Expr::StringCharCodeAt { value, index } => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let len = value.chars().count();
+                    let chars = value.chars().collect::<Vec<_>>();
+                    let len = chars.len();
                     let index = index
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -41,16 +42,17 @@ impl Harness {
                     if index < 0 || (index as usize) >= len {
                         Ok(Value::Float(f64::NAN))
                     } else {
-                        Ok(value
-                            .chars()
-                            .nth(index as usize)
-                            .map(|ch| Value::Number(ch as i64))
-                            .unwrap_or(Value::Float(f64::NAN)))
+                        let ch = chars[index as usize];
+                        let code_unit = crate::js_regex::deinternalize_surrogate_marker(ch)
+                            .map(|value| value as i64)
+                            .unwrap_or(ch as i64);
+                        Ok(Value::Number(code_unit))
                     }
                 }
                 Expr::StringCodePointAt { value, index } => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let len = value.chars().count();
+                    let chars = value.chars().collect::<Vec<_>>();
+                    let len = chars.len();
                     let index = index
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -60,11 +62,29 @@ impl Harness {
                     if index < 0 || (index as usize) >= len {
                         Ok(Value::Undefined)
                     } else {
-                        Ok(value
-                            .chars()
-                            .nth(index as usize)
-                            .map(|ch| Value::Number(ch as i64))
-                            .unwrap_or(Value::Undefined))
+                        let i = index as usize;
+                        let ch = chars[i];
+                        if let Some(first_unit) =
+                            crate::js_regex::deinternalize_surrogate_marker(ch)
+                        {
+                            if (0xD800..=0xDBFF).contains(&first_unit) {
+                                if let Some(next_ch) = chars.get(i + 1).copied() {
+                                    if let Some(second_unit) =
+                                        crate::js_regex::deinternalize_surrogate_marker(next_ch)
+                                    {
+                                        if (0xDC00..=0xDFFF).contains(&second_unit) {
+                                            let cp = 0x10000
+                                                + (((first_unit - 0xD800) as u32) << 10)
+                                                + ((second_unit - 0xDC00) as u32);
+                                            return Ok(Value::Number(cp as i64));
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(Value::Number(first_unit as i64))
+                        } else {
+                            Ok(Value::Number(ch as i64))
+                        }
                     }
                 }
                 Expr::StringAt { value, index } => {
@@ -634,12 +654,12 @@ impl Harness {
                     )))
                 }
                 Expr::StringIsWellFormed(value) => {
-                    let _ = self.eval_expr(value, env, event_param, event)?.as_string();
-                    Ok(Value::Bool(true))
+                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    Ok(Value::Bool(string_is_well_formed_utf16(&value)))
                 }
                 Expr::StringToWellFormed(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    Ok(Value::String(value))
+                    Ok(Value::String(string_to_well_formed_utf16(&value)))
                 }
                 Expr::StringValueOf(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?;
@@ -804,4 +824,76 @@ impl Harness {
             other => other.map(Some),
         }
     }
+}
+
+fn string_is_well_formed_utf16(value: &str) -> bool {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let Some(unit) = crate::js_regex::deinternalize_surrogate_marker(chars[i]) else {
+            i += 1;
+            continue;
+        };
+
+        if (0xD800..=0xDBFF).contains(&unit) {
+            let Some(next) = chars.get(i + 1).copied() else {
+                return false;
+            };
+            let Some(next_unit) = crate::js_regex::deinternalize_surrogate_marker(next) else {
+                return false;
+            };
+            if !(0xDC00..=0xDFFF).contains(&next_unit) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+
+        if (0xDC00..=0xDFFF).contains(&unit) {
+            return false;
+        }
+
+        i += 1;
+    }
+    true
+}
+
+fn string_to_well_formed_utf16(value: &str) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        let Some(unit) = crate::js_regex::deinternalize_surrogate_marker(ch) else {
+            out.push(ch);
+            i += 1;
+            continue;
+        };
+
+        if (0xD800..=0xDBFF).contains(&unit) {
+            if let Some(next) = chars.get(i + 1).copied() {
+                if let Some(next_unit) = crate::js_regex::deinternalize_surrogate_marker(next) {
+                    if (0xDC00..=0xDFFF).contains(&next_unit) {
+                        out.push(ch);
+                        out.push(next);
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+            out.push('\u{FFFD}');
+            i += 1;
+            continue;
+        }
+
+        if (0xDC00..=0xDFFF).contains(&unit) {
+            out.push('\u{FFFD}');
+            i += 1;
+            continue;
+        }
+
+        out.push(ch);
+        i += 1;
+    }
+    out
 }

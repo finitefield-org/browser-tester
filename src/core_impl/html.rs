@@ -46,12 +46,10 @@ pub(super) fn unescape_string(src: &str) -> String {
                         parsed.push(ch);
                     }
                     if parsed.chars().all(|ch| ch.is_ascii_hexdigit()) {
-                        if let Ok(codepoint) = u32::from_str_radix(&parsed, 16) {
-                            if let Some(ch) = char::from_u32(codepoint) {
-                                out.push(ch);
-                                i += 6;
-                                continue;
-                            }
+                        if let Ok(codepoint) = u16::from_str_radix(&parsed, 16) {
+                            out.push(crate::js_regex::internalize_utf16_code_unit(codepoint));
+                            i += 6;
+                            continue;
                         }
                     }
                     out.push('u');
