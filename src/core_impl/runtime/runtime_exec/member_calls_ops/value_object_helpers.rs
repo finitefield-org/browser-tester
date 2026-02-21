@@ -55,6 +55,48 @@ impl Harness {
         }
     }
 
+    pub(crate) fn data_attr_name_to_dataset_key(attr_name: &str) -> Option<String> {
+        let raw = attr_name.strip_prefix("data-")?;
+        if raw.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        let mut uppercase_next = false;
+        for ch in raw.chars() {
+            if ch == '-' {
+                uppercase_next = true;
+                continue;
+            }
+            if uppercase_next {
+                out.push(ch.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
+        let Some(element) = self.dom.element(node) else {
+            return Vec::new();
+        };
+        let mut entries = element
+            .attrs
+            .iter()
+            .filter_map(|(attr_name, attr_value)| {
+                Self::data_attr_name_to_dataset_key(attr_name)
+                    .map(|key| (key, Value::String(attr_value.clone())))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries
+    }
+
     pub(crate) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
         match value {
             Value::Node(node) => {
@@ -96,6 +138,7 @@ impl Harness {
                     "className" => Ok(Value::String(
                         self.dom.attr(*node, "class").unwrap_or_default(),
                     )),
+                    "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
                     "options" => {
                         if !is_select {
                             return Ok(Value::Undefined);

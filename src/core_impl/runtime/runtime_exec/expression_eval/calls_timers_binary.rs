@@ -69,6 +69,14 @@ impl Harness {
                         }
                     }
 
+                    if let Value::Date(value) = &receiver {
+                        if let Some(value) =
+                            self.eval_date_member_call(value, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                    }
+
                     if let Value::NodeList(nodes) = &receiver {
                         if let Some(value) =
                             self.eval_nodelist_member_call(nodes, member, &evaluated_args, event)?

@@ -16,6 +16,8 @@ impl Harness {
 
         let result = (|| -> Result<ExecFlow> {
             for stmt in stmts {
+                self.apply_pending_listener_capture_env_updates(env);
+                self.sync_top_level_env_from_runtime(env);
                 self.sync_listener_capture_env_if_shared(env);
                 match stmt {
                     Stmt::VarDecl { name, expr } => {
@@ -1228,11 +1230,32 @@ impl Harness {
                 }
             }
 
+            self.apply_pending_listener_capture_env_updates(env);
             Ok(ExecFlow::Continue)
         })();
 
         self.script_runtime.listener_capture_env_stack.pop();
         self.restore_pending_function_decl_scopes(pending_scope_start);
         result
+    }
+
+    pub(crate) fn sync_top_level_env_from_runtime(&mut self, env: &mut HashMap<String, Value>) {
+        if Self::env_scope_depth(env) != 0 {
+            return;
+        }
+
+        let runtime_snapshot = self.script_runtime.env.to_map();
+        for (name, runtime_value) in runtime_snapshot {
+            if Self::is_internal_env_key(&name) {
+                continue;
+            }
+            let should_update = match env.get(&name) {
+                Some(current) => !self.strict_equal(current, &runtime_value),
+                None => true,
+            };
+            if should_update {
+                env.insert(name, runtime_value);
+            }
+        }
     }
 }

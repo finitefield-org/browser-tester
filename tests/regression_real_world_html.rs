@@ -493,6 +493,29 @@ fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler()
 }
 
 #[test]
+fn async_click_handler_observes_updated_let_capture_for_clipboard() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="b">copy</button>
+    <script>
+      let last = null;
+      function render() {
+        last = { ok: true, text: "hello" };
+      }
+      render();
+      document.getElementById("b").addEventListener("click", async () => {
+        if (!last || !last.ok) return;
+        await navigator.clipboard.writeText(last.text);
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#b")?;
+    assert_eq!(harness.clipboard_text(), "hello");
+    Ok(())
+}
+
+#[test]
 fn dom_expando_properties_round_trip_on_nodes() -> browser_tester::Result<()> {
     let html = r#"
     <div id="root"></div>

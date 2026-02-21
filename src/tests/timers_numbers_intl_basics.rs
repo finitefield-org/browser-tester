@@ -664,6 +664,25 @@ fn date_instance_methods_and_set_time_work() -> Result<()> {
 }
 
 #[test]
+fn date_instance_method_member_call_supports_constructor_expression_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const iso = new Date('2024-03-05T01:02:03Z').toISOString();
+            document.getElementById('result').textContent = iso;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2024-03-05T01:02:03.000Z")?;
+    Ok(())
+}
+
+#[test]
 fn date_parse_invalid_input_returns_nan_and_utc_normalizes_overflow() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

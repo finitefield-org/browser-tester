@@ -187,6 +187,42 @@ impl Harness {
         }
     }
 
+    pub(crate) fn queue_listener_capture_env_update(
+        &mut self,
+        name: String,
+        value: Option<Value>,
+    ) {
+        if Self::is_internal_env_key(&name) {
+            return;
+        }
+        if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
+            frame.pending_env_updates.insert(name, value);
+        }
+    }
+
+    pub(crate) fn apply_pending_listener_capture_env_updates(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) {
+        let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() else {
+            return;
+        };
+        if frame.pending_env_updates.is_empty() {
+            return;
+        }
+        let updates = std::mem::take(&mut frame.pending_env_updates);
+        for (name, value) in updates {
+            if Self::is_internal_env_key(&name) {
+                continue;
+            }
+            if let Some(value) = value {
+                env.insert(name, value);
+            } else {
+                env.remove(&name);
+            }
+        }
+    }
+
     pub(crate) fn push_pending_function_decl_scope(
         &mut self,
         scope: HashMap<String, (ScriptHandler, bool)>,

@@ -973,6 +973,30 @@ fn event_trusted_and_target_subproperties_are_accessible() -> Result<()> {
 }
 
 #[test]
+fn type_text_input_handler_supports_current_target_closest_dataset_chain() -> Result<()> {
+    let html = r#"
+        <div id='root'>
+          <div data-plan-id='0'>
+            <input data-field='notation' />
+          </div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.querySelector("[data-field='notation']").addEventListener('input', (event) => {
+            const target = event.currentTarget;
+            const planId = Number(target.closest("[data-plan-id]").dataset.planId);
+            document.getElementById('result').textContent = String(planId);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("[data-field='notation']", "2/10 net 30")?;
+    h.assert_text("#result", "0")?;
+    Ok(())
+}
+
+#[test]
 fn event_bubbles_and_cancelable_properties_are_available() -> Result<()> {
     let html = r#"
         <div id='root'>

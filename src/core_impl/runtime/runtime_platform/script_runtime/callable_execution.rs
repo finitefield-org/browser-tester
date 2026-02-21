@@ -387,9 +387,11 @@ impl Harness {
                             continue;
                         }
                         if let Some(next) = after.cloned() {
-                            captured_env.insert(name.clone(), next);
+                            captured_env.insert(name.clone(), next.clone());
+                            this.queue_listener_capture_env_update(name.clone(), Some(next));
                         } else {
                             captured_env.remove(name);
+                            this.queue_listener_capture_env_update(name.clone(), None);
                         }
                     }
                 }
