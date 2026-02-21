@@ -20,6 +20,7 @@ mod runtime_values;
 mod script_ast;
 mod selector;
 
+pub use core_dom_utils::MockFile;
 pub use core_dom_utils::{Error, Result, ThrownValue};
 pub use harness_api::{Harness, MockPage, MockWindow};
 pub use runtime_state::{

@@ -120,6 +120,10 @@ impl MockWindow {
         self.with_current_harness_mut(|page| page.type_text(selector, text))
     }
 
+    pub fn set_input_files(&mut self, selector: &str, files: &[MockFile]) -> Result<()> {
+        self.with_current_harness_mut(|page| page.set_input_files(selector, files))
+    }
+
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
         self.with_current_harness_mut(|page| page.set_checked(selector, checked))
     }

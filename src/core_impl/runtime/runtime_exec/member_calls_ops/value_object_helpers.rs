@@ -13,6 +13,36 @@ impl Harness {
         Value::Object(Rc::new(RefCell::new(ObjectValue::new(entries))))
     }
 
+    pub(crate) fn mock_file_to_value(file: &MockFile) -> Value {
+        Self::new_object_value(vec![
+            ("name".to_string(), Value::String(file.name.clone())),
+            (
+                "lastModified".to_string(),
+                Value::Number(file.last_modified),
+            ),
+            ("size".to_string(), Value::Number(file.size.max(0))),
+            ("type".to_string(), Value::String(file.mime_type.clone())),
+            (
+                "webkitRelativePath".to_string(),
+                Value::String(file.webkit_relative_path.clone()),
+            ),
+        ])
+    }
+
+    pub(crate) fn input_files_value(&self, node: NodeId) -> Result<Value> {
+        let element = self
+            .dom
+            .element(node)
+            .ok_or_else(|| Error::ScriptRuntime("files target is not an element".into()))?;
+        if !is_file_input_element(element) {
+            return Ok(Value::Null);
+        }
+        let files = self.dom.files(node)?;
+        Ok(Self::new_array_value(
+            files.iter().map(Self::mock_file_to_value).collect(),
+        ))
+    }
+
     pub(crate) fn new_boolean_constructor_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -116,6 +146,12 @@ impl Harness {
                     "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
                     "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
                     "value" => Ok(Value::String(self.dom.value(*node)?)),
+                    "files" => self.input_files_value(*node),
+                    "valueAsNumber" => Ok(Self::number_value(self.input_value_as_number(*node)?)),
+                    "valueAsDate" => Ok(self
+                        .input_value_as_date_ms(*node)?
+                        .map(Self::new_date_value)
+                        .unwrap_or(Value::Null)),
                     "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
                     "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
                     "required" => Ok(Value::Bool(self.dom.required(*node))),

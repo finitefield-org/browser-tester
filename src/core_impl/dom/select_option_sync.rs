@@ -21,6 +21,153 @@ impl Dom {
                 continue;
             }
 
+            let is_color_input = self
+                .element(node)
+                .map(is_color_input_element)
+                .unwrap_or(false);
+            if is_color_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_color_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_date_input = self
+                .element(node)
+                .map(is_date_input_element)
+                .unwrap_or(false);
+            if is_date_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_date_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_datetime_local_input = self
+                .element(node)
+                .map(is_datetime_local_input_element)
+                .unwrap_or(false);
+            if is_datetime_local_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_datetime_local_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_number_input = self
+                .element(node)
+                .map(is_number_input_element)
+                .unwrap_or(false);
+            if is_number_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_number_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_range_input = self
+                .element(node)
+                .map(is_range_input_element)
+                .unwrap_or(false);
+            if is_range_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                let normalized = normalize_range_input_value(
+                    &current,
+                    element.attrs.get("min").map(String::as_str),
+                    element.attrs.get("max").map(String::as_str),
+                    element.attrs.get("step").map(String::as_str),
+                    element.attrs.get("value").map(String::as_str),
+                );
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_password_input = self
+                .element(node)
+                .map(is_password_input_element)
+                .unwrap_or(false);
+            if is_password_input {
+                let current = self.attr(node, "value").unwrap_or_default();
+                let normalized = normalize_password_input_value(&current);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalized;
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_file_input = self
+                .element(node)
+                .map(is_file_input_element)
+                .unwrap_or(false);
+            if is_file_input {
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.files.clear();
+                element.value = normalize_file_input_value("");
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
+            let is_image_input = self
+                .element(node)
+                .map(is_image_input_element)
+                .unwrap_or(false);
+            if is_image_input {
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.value = normalize_image_input_value("");
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
+                element.selection_direction = "none".to_string();
+                continue;
+            }
+
             let is_select = self
                 .tag_name(node)
                 .map(|tag| tag.eq_ignore_ascii_case("select"))

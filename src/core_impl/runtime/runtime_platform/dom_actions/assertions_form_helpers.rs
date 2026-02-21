@@ -116,7 +116,21 @@ impl Harness {
                 continue;
             }
             let name = self.dom.attr(control, "name").unwrap_or_default();
-            let value = self.form_data_control_value(control)?;
+            let value = if self
+                .dom
+                .tag_name(control)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                && self
+                    .dom
+                    .attr(control, "type")
+                    .unwrap_or_else(|| "text".to_string())
+                    .eq_ignore_ascii_case("hidden")
+                && name == "_charset_"
+            {
+                "UTF-8".to_string()
+            } else {
+                self.form_data_control_value(control)?
+            };
             out.push((name, value));
         }
         Ok(out)

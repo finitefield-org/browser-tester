@@ -94,6 +94,9 @@ impl Harness {
             DomProp::Attributes => Some("attributes"),
             DomProp::AssignedSlot => Some("assignedSlot"),
             DomProp::Value => Some("value"),
+            DomProp::Files => Some("files"),
+            DomProp::ValueAsNumber => Some("valueAsNumber"),
+            DomProp::ValueAsDate => Some("valueAsDate"),
             DomProp::ValidationMessage => Some("validationMessage"),
             DomProp::Validity => Some("validity"),
             DomProp::SelectionStart => Some("selectionStart"),
@@ -177,6 +180,7 @@ impl Harness {
             | DomProp::Style(_)
             | DomProp::ClassListLength
             | DomProp::PartLength
+            | DomProp::FilesLength
             | DomProp::AriaString(_)
             | DomProp::AriaElementRefSingle(_)
             | DomProp::AriaElementRefList(_)

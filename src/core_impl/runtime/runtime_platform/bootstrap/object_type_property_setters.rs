@@ -207,6 +207,7 @@ impl Harness {
             "innerHTML" => self.dom.set_inner_html(node, &value.as_string())?,
             "outerHTML" => self.dom.set_outer_html(node, &value.as_string())?,
             "value" => self.dom.set_value(node, &value.as_string())?,
+            "files" => {}
             "checked" => self.dom.set_checked(node, value.truthy())?,
             "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
             "open" => {

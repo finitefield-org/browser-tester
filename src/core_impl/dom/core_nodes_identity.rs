@@ -35,7 +35,15 @@ impl Dom {
         tag_name: String,
         attrs: HashMap<String, String>,
     ) -> NodeId {
-        let value = attrs.get("value").cloned().unwrap_or_default();
+        let is_file_or_image_input = tag_name.eq_ignore_ascii_case("input")
+            && attrs.get("type").is_some_and(|kind| {
+                kind.eq_ignore_ascii_case("file") || kind.eq_ignore_ascii_case("image")
+            });
+        let value = if is_file_or_image_input {
+            String::new()
+        } else {
+            attrs.get("value").cloned().unwrap_or_default()
+        };
         let value_len = value.chars().count();
         let checked = attrs.contains_key("checked");
         let disabled = attrs.contains_key("disabled");
@@ -45,6 +53,7 @@ impl Dom {
             tag_name,
             attrs,
             value,
+            files: Vec::new(),
             checked,
             indeterminate: false,
             disabled,
@@ -70,6 +79,7 @@ impl Dom {
             tag_name,
             attrs: HashMap::new(),
             value: String::new(),
+            files: Vec::new(),
             checked: false,
             indeterminate: false,
             disabled: false,

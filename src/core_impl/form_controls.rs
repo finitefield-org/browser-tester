@@ -60,7 +60,31 @@ pub(super) fn is_submit_control(dom: &Dom, node_id: NodeId) -> bool {
         return element
             .attrs
             .get("type")
-            .map(|kind| kind.eq_ignore_ascii_case("submit"))
+            .map(|kind| kind.eq_ignore_ascii_case("submit") || kind.eq_ignore_ascii_case("image"))
+            .unwrap_or(false);
+    }
+
+    false
+}
+
+pub(super) fn is_reset_control(dom: &Dom, node_id: NodeId) -> bool {
+    let Some(element) = dom.element(node_id) else {
+        return false;
+    };
+
+    if element.tag_name.eq_ignore_ascii_case("button") {
+        return element
+            .attrs
+            .get("type")
+            .map(|kind| kind.eq_ignore_ascii_case("reset"))
+            .unwrap_or(false);
+    }
+
+    if element.tag_name.eq_ignore_ascii_case("input") {
+        return element
+            .attrs
+            .get("type")
+            .map(|kind| kind.eq_ignore_ascii_case("reset"))
             .unwrap_or(false);
     }
 

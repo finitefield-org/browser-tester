@@ -1072,6 +1072,34 @@ fn form_request_submit_accepts_submitter_argument() -> Result<()> {
 }
 
 #[test]
+fn form_request_submit_accepts_image_submitter_argument() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required value='ok'>
+          <input id='submitter' type='image' alt='send' src='/send.png'>
+        </form>
+        <button id='trigger'>run</button>
+        <p id='result'>none</p>
+        <script>
+          const form = document.getElementById('f');
+          const submitter = document.getElementById('submitter');
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            document.getElementById('result').textContent = 'submitted';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            form.requestSubmit(submitter);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "submitted")?;
+    Ok(())
+}
+
+#[test]
 fn form_request_submit_rejects_non_submitter_argument() -> Result<()> {
     let html = r#"
         <form id='f'>

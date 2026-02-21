@@ -250,6 +250,18 @@ impl Harness {
                                 self.dom.set_outer_html(node, &value.as_string())?
                             }
                             DomProp::Value => self.dom.set_value(node, &value.as_string())?,
+                            DomProp::ValueAsNumber => self.set_input_value_as_number(
+                                node,
+                                Self::coerce_number_for_number_constructor(&value),
+                            )?,
+                            DomProp::ValueAsDate => {
+                                let timestamp_ms = match value {
+                                    Value::Date(timestamp) => Some(*timestamp.borrow()),
+                                    Value::Null | Value::Undefined => None,
+                                    _ => None,
+                                };
+                                self.set_input_value_as_date_ms(node, timestamp_ms)?;
+                            }
                             DomProp::SelectionStart => {
                                 let next_start = Self::value_to_i64(&value).max(0) as usize;
                                 let end = self.dom.selection_end(node).unwrap_or_default();
@@ -442,6 +454,8 @@ impl Harness {
                             }
                             DomProp::Attributes
                             | DomProp::AssignedSlot
+                            | DomProp::Files
+                            | DomProp::FilesLength
                             | DomProp::ValidationMessage
                             | DomProp::Validity
                             | DomProp::ValidityValueMissing

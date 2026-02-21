@@ -50,6 +50,19 @@ impl Harness {
                         }
                         DomProp::AssignedSlot => Ok(Value::Null),
                         DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
+                        DomProp::Files => self.input_files_value(node),
+                        DomProp::FilesLength => match self.input_files_value(node)? {
+                            Value::Array(values) => Ok(Value::Number(values.borrow().len() as i64)),
+                            Value::Null => Ok(Value::Number(0)),
+                            _ => Ok(Value::Number(0)),
+                        },
+                        DomProp::ValueAsNumber => {
+                            Ok(Self::number_value(self.input_value_as_number(node)?))
+                        }
+                        DomProp::ValueAsDate => Ok(self
+                            .input_value_as_date_ms(node)?
+                            .map(Self::new_date_value)
+                            .unwrap_or(Value::Null)),
                         DomProp::ValueLength => {
                             Ok(Value::Number(self.dom.value(node)?.chars().count() as i64))
                         }

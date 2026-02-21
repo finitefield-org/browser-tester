@@ -88,6 +88,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
+- `input[type="file"]` selection can be mocked with deterministic file metadata.
 - Main APIs:
   - `Harness::from_html_with_local_storage(html, &[("key", "value"), ...])`
   - `Harness::from_html_with_url_and_local_storage(url, html, &[("key", "value"), ...])`
@@ -101,8 +102,53 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::take_location_navigations()`
   - `Harness::take_downloads()`
   - `Harness::location_reload_count()`
+  - `Harness::set_input_files(selector, &[MockFile { ... }, ...])`
 - For `History API` tests (`history.go(0)` / `history.back()` / `history.forward()`), you can reuse
   `set_location_mock_page()` to provide deterministic page contents for URLs in the history stack.
+ - `set_input_files()` behavior:
+   - selection changed: dispatches `input` then `change`.
+   - selection unchanged: dispatches `cancel`.
+   - for non-`multiple` file inputs, only the first mocked file is selected.
+
+File input mock example:
+
+```rust
+use browser_tester::{Harness, MockFile};
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <input id='upload' type='file' multiple required>
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        const input = document.getElementById('upload');
+        document.getElementById('run').addEventListener('click', () => {
+          const files = input.files;
+          document.getElementById('out').textContent =
+            input.value + ':' + files.length + ':' + files.map((f) => f.name).join(',');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_input_files(
+        "#upload",
+        &[
+            MockFile::new("first.txt"),
+            MockFile {
+                name: "nested/second.txt".to_string(),
+                size: 7,
+                mime_type: "text/plain".to_string(),
+                last_modified: 99,
+                webkit_relative_path: "nested/second.txt".to_string(),
+            },
+        ],
+    )?;
+    h.click("#run")?;
+    h.assert_text("#out", "C:\\fakepath\\first.txt:2:first.txt,second.txt")?;
+    Ok(())
+}
+```
 
 Location mock example:
 

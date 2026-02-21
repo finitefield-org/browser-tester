@@ -96,15 +96,142 @@ impl Dom {
                 Error::ScriptRuntime("setAttribute target is not an element".into())
             })?;
             let is_option = element.tag_name.eq_ignore_ascii_case("option");
+            let was_file_input = is_file_input_element(element);
             let lowered = name.to_ascii_lowercase();
             element.attrs.insert(lowered.clone(), value.to_string());
 
             if lowered == "value" {
-                element.value = value.to_string();
-                let len = element.value.chars().count();
-                element.selection_start = len;
-                element.selection_end = len;
-                element.selection_direction = "none".to_string();
+                if is_file_input_element(element) {
+                    if value.is_empty() {
+                        element.files.clear();
+                        element.value = normalize_file_input_value(value);
+                        let len = element.value.chars().count();
+                        element.selection_start = len;
+                        element.selection_end = len;
+                        element.selection_direction = "none".to_string();
+                    }
+                } else if is_image_input_element(element) {
+                    element.value = normalize_image_input_value(value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else {
+                    element.value = if is_color_input_element(element) {
+                        normalize_color_input_value(value)
+                    } else if is_date_input_element(element) {
+                        normalize_date_input_value(value)
+                    } else if is_datetime_local_input_element(element) {
+                        normalize_datetime_local_input_value(value)
+                    } else if is_number_input_element(element) {
+                        normalize_number_input_value(value)
+                    } else if is_range_input_element(element) {
+                        normalize_range_input_value(
+                            value,
+                            element.attrs.get("min").map(String::as_str),
+                            element.attrs.get("max").map(String::as_str),
+                            element.attrs.get("step").map(String::as_str),
+                            element.attrs.get("value").map(String::as_str),
+                        )
+                    } else if is_password_input_element(element) {
+                        normalize_password_input_value(value)
+                    } else {
+                        value.to_string()
+                    };
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                }
+            } else if lowered == "type" {
+                if is_color_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_color_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_date_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_date_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_datetime_local_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_datetime_local_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_number_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_number_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_range_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_range_input_value(
+                        &raw_value,
+                        element.attrs.get("min").map(String::as_str),
+                        element.attrs.get("max").map(String::as_str),
+                        element.attrs.get("step").map(String::as_str),
+                        element.attrs.get("value").map(String::as_str),
+                    );
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_password_input_element(element) {
+                    let raw_value = element
+                        .attrs
+                        .get("value")
+                        .cloned()
+                        .unwrap_or_else(|| element.value.clone());
+                    element.value = normalize_password_input_value(&raw_value);
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_image_input_element(element) {
+                    element.value = normalize_image_input_value("");
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if is_file_input_element(element) {
+                    element.files.clear();
+                    element.value = normalize_file_input_value("");
+                    let len = element.value.chars().count();
+                    element.selection_start = len;
+                    element.selection_end = len;
+                    element.selection_direction = "none".to_string();
+                } else if was_file_input {
+                    element.files.clear();
+                }
             } else if lowered == "checked" {
                 element.checked = true;
             } else if lowered == "disabled" {
@@ -116,6 +243,42 @@ impl Dom {
             }
             (is_option, lowered)
         };
+
+        if lowered == "checked" {
+            self.set_checked(node_id, true)?;
+        } else if lowered == "type"
+            && self.attr(node_id, "checked").is_some()
+            && is_radio_input(self, node_id)
+        {
+            self.set_checked(node_id, true)?;
+        }
+        if matches!(lowered.as_str(), "min" | "max" | "step")
+            && self
+                .element(node_id)
+                .map(is_range_input_element)
+                .unwrap_or(false)
+        {
+            let next_value = {
+                let element = self.element(node_id).ok_or_else(|| {
+                    Error::ScriptRuntime("setAttribute target is not an element".into())
+                })?;
+                normalize_range_input_value(
+                    &element.value,
+                    element.attrs.get("min").map(String::as_str),
+                    element.attrs.get("max").map(String::as_str),
+                    element.attrs.get("step").map(String::as_str),
+                    element.attrs.get("value").map(String::as_str),
+                )
+            };
+            let element = self.element_mut(node_id).ok_or_else(|| {
+                Error::ScriptRuntime("setAttribute target is not an element".into())
+            })?;
+            element.value = next_value;
+            let len = element.value.chars().count();
+            element.selection_start = len;
+            element.selection_end = len;
+            element.selection_direction = "none".to_string();
+        }
 
         if lowered == "id" && connected {
             if let Some(old) = old_id {
@@ -150,9 +313,31 @@ impl Dom {
             element.attrs.remove(&lowered);
 
             if lowered == "value" {
-                element.value.clear();
-                element.selection_start = 0;
-                element.selection_end = 0;
+                element.value = if is_color_input_element(element) {
+                    normalize_color_input_value("")
+                } else if is_date_input_element(element) {
+                    normalize_date_input_value("")
+                } else if is_datetime_local_input_element(element) {
+                    normalize_datetime_local_input_value("")
+                } else if is_range_input_element(element) {
+                    normalize_range_input_value(
+                        "",
+                        element.attrs.get("min").map(String::as_str),
+                        element.attrs.get("max").map(String::as_str),
+                        element.attrs.get("step").map(String::as_str),
+                        element.attrs.get("value").map(String::as_str),
+                    )
+                } else if is_image_input_element(element) {
+                    normalize_image_input_value("")
+                } else if is_file_input_element(element) {
+                    element.files.clear();
+                    normalize_file_input_value("")
+                } else {
+                    String::new()
+                };
+                let len = element.value.chars().count();
+                element.selection_start = len;
+                element.selection_end = len;
                 element.selection_direction = "none".to_string();
             } else if lowered == "checked" {
                 element.checked = false;
@@ -170,6 +355,33 @@ impl Dom {
             if let Some(old) = old_id {
                 self.unindex_id(&old, node_id);
             }
+        }
+        if matches!(lowered.as_str(), "min" | "max" | "step")
+            && self
+                .element(node_id)
+                .map(is_range_input_element)
+                .unwrap_or(false)
+        {
+            let next_value = {
+                let element = self.element(node_id).ok_or_else(|| {
+                    Error::ScriptRuntime("removeAttribute target is not an element".into())
+                })?;
+                normalize_range_input_value(
+                    &element.value,
+                    element.attrs.get("min").map(String::as_str),
+                    element.attrs.get("max").map(String::as_str),
+                    element.attrs.get("step").map(String::as_str),
+                    element.attrs.get("value").map(String::as_str),
+                )
+            };
+            let element = self.element_mut(node_id).ok_or_else(|| {
+                Error::ScriptRuntime("removeAttribute target is not an element".into())
+            })?;
+            element.value = next_value;
+            let len = element.value.chars().count();
+            element.selection_start = len;
+            element.selection_end = len;
+            element.selection_direction = "none".to_string();
         }
 
         if is_option && (lowered == "selected" || lowered == "value") {

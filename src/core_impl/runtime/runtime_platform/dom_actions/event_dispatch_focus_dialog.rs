@@ -129,6 +129,19 @@ impl Harness {
         node: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
+        let is_hidden_input = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+            && self
+                .dom
+                .attr(node, "type")
+                .unwrap_or_else(|| "text".to_string())
+                .eq_ignore_ascii_case("hidden");
+        if is_hidden_input {
+            return Ok(());
+        }
+
         if self.is_effectively_disabled(node) {
             return Ok(());
         }

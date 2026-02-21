@@ -6,6 +6,21 @@ impl Harness {
         if self.is_effectively_disabled(target) {
             return Ok(());
         }
+        let input_type = if self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+        {
+            self.dom
+                .attr(target, "type")
+                .unwrap_or_else(|| "text".to_string())
+                .to_ascii_lowercase()
+        } else {
+            String::new()
+        };
+        if input_type == "hidden" || input_type == "image" {
+            return Ok(());
+        }
         if self.dom.readonly(target) {
             return Ok(());
         }
@@ -33,6 +48,68 @@ impl Harness {
             self.dispatch_event(target, "input")?;
             Ok(())
         })
+    }
+
+    pub fn set_input_files(&mut self, selector: &str, files: &[MockFile]) -> Result<()> {
+        let target = self.select_one(selector)?;
+        let files = files.to_vec();
+        let selector = selector.to_string();
+        stacker::grow(32 * 1024 * 1024, || {
+            self.with_script_env_always(|this, env| {
+                this.set_input_files_with_env(target, &selector, &files, env)
+            })
+        })
+    }
+
+    pub(crate) fn set_input_files_with_env(
+        &mut self,
+        target: NodeId,
+        selector: &str,
+        files: &[MockFile],
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+
+        let tag = self
+            .dom
+            .tag_name(target)
+            .ok_or_else(|| Error::TypeMismatch {
+                selector: selector.to_string(),
+                expected: "input[type=file]".into(),
+                actual: "non-element".into(),
+            })?
+            .to_ascii_lowercase();
+        if tag != "input" {
+            return Err(Error::TypeMismatch {
+                selector: selector.to_string(),
+                expected: "input[type=file]".into(),
+                actual: tag,
+            });
+        }
+
+        let kind = self
+            .dom
+            .attr(target, "type")
+            .unwrap_or_else(|| "text".into())
+            .to_ascii_lowercase();
+        if kind != "file" {
+            return Err(Error::TypeMismatch {
+                selector: selector.to_string(),
+                expected: "input[type=file]".into(),
+                actual: format!("input[type={kind}]"),
+            });
+        }
+
+        let changed = self.dom.set_file_input_files(target, files)?;
+        if changed {
+            self.dispatch_event_with_env(target, "input", env, true)?;
+            self.dispatch_event_with_env(target, "change", env, true)?;
+        } else {
+            self.dispatch_event_with_env(target, "cancel", env, true)?;
+        }
+        Ok(())
     }
 
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
@@ -136,6 +213,9 @@ impl Harness {
 
             if is_submit_control(&self.dom, target) {
                 self.request_form_submit_with_env(target, env)?;
+            }
+            if is_reset_control(&self.dom, target) {
+                self.reset_form_with_env(target, env)?;
             }
 
             self.maybe_capture_anchor_download(target)?;
@@ -282,6 +362,16 @@ impl Harness {
                 .unwrap_or(false)
             {
                 self.dom.sync_select_value(control)?;
+                continue;
+            }
+
+            let is_file_input = self
+                .dom
+                .element(control)
+                .map(is_file_input_element)
+                .unwrap_or(false);
+            if is_file_input {
+                self.dom.set_value(control, "")?;
                 continue;
             }
 
