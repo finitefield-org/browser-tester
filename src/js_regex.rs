@@ -6,11 +6,12 @@ use std::fmt;
 pub(crate) struct Regex {
     ast: Expr,
     capture_count: usize,
-    named_captures: HashMap<String, usize>,
+    named_captures: HashMap<String, Vec<usize>>,
     named_capture_order: Vec<String>,
     ignore_case: bool,
     multi_line: bool,
     dot_matches_new_line: bool,
+    unicode_mode: bool,
 }
 
 impl Regex {
@@ -59,6 +60,7 @@ impl Regex {
             ignore_case: self.ignore_case,
             multi_line: self.multi_line,
             dot_matches_new_line: self.dot_matches_new_line,
+            unicode_mode: self.unicode_mode,
         };
 
         let max_start = prepared.text_len_chars();
@@ -161,6 +163,7 @@ impl RegexBuilder {
             ignore_case: self.case_insensitive,
             multi_line: self.multi_line,
             dot_matches_new_line: self.dot_matches_new_line,
+            unicode_mode: self.unicode_mode,
         })
     }
 }
@@ -168,7 +171,7 @@ impl RegexBuilder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Captures {
     groups: Vec<Option<Match>>,
-    named_captures: HashMap<String, usize>,
+    named_captures: HashMap<String, Vec<usize>>,
     named_capture_order: Vec<String>,
 }
 
@@ -182,8 +185,13 @@ impl Captures {
     }
 
     pub(crate) fn get_named(&self, name: &str) -> Option<&Match> {
-        let index = self.named_captures.get(name).copied()?;
-        self.get(index)
+        let indices = self.named_captures.get(name)?;
+        for index in indices {
+            if let Some(found) = self.get(*index) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub(crate) fn has_named_groups(&self) -> bool {
@@ -306,12 +314,14 @@ impl<'a> PreparedInput<'a> {
         self.src.get(start..end).unwrap_or_default().to_string()
     }
 
-    fn is_word_boundary(&self, pos: usize) -> bool {
+    fn is_word_boundary(&self, pos: usize, ignore_case: bool, unicode_mode: bool) -> bool {
         let prev = pos
             .checked_sub(1)
             .and_then(|idx| self.char_at(idx))
-            .is_some_and(is_word_char);
-        let next = self.char_at(pos).is_some_and(is_word_char);
+            .is_some_and(|ch| is_word_char_regex(ch, ignore_case, unicode_mode));
+        let next = self
+            .char_at(pos)
+            .is_some_and(|ch| is_word_char_regex(ch, ignore_case, unicode_mode));
         prev != next
     }
 }
@@ -327,6 +337,7 @@ struct MatchOptions {
     ignore_case: bool,
     multi_line: bool,
     dot_matches_new_line: bool,
+    unicode_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +378,7 @@ enum Expr {
     NamedBackReference(String),
     DecimalEscape(String),
     BackReference(usize),
+    BackReferenceAny(Vec<usize>),
     Quantifier {
         expr: Box<Expr>,
         min: usize,
@@ -409,7 +421,7 @@ impl Expr {
                 let Some(actual) = prepared.char_at(state.pos) else {
                     return Vec::new();
                 };
-                if chars_equal(actual, *expected, opts.ignore_case) {
+                if chars_equal(actual, *expected, opts.ignore_case, opts.unicode_mode) {
                     let mut next = state.clone();
                     next.pos += 1;
                     vec![next]
@@ -454,22 +466,27 @@ impl Expr {
                 }
             }
             Self::WordBoundary(expected) => {
-                if prepared.is_word_boundary(state.pos) == *expected {
+                if prepared.is_word_boundary(state.pos, opts.ignore_case, opts.unicode_mode)
+                    == *expected
+                {
                     vec![state.clone()]
                 } else {
                     Vec::new()
                 }
             }
             Self::CharClass(class) => {
-                let Some(actual) = prepared.char_at(state.pos) else {
-                    return Vec::new();
-                };
-                if class.matches(actual, opts.ignore_case) {
-                    let mut next = state.clone();
-                    next.pos += 1;
-                    vec![next]
-                } else {
+                let ends =
+                    class.match_ends(prepared, state.pos, opts.ignore_case, opts.unicode_mode);
+                if ends.is_empty() {
                     Vec::new()
+                } else {
+                    let mut out = Vec::with_capacity(ends.len());
+                    for end in ends {
+                        let mut next = state.clone();
+                        next.pos = end;
+                        out.push(next);
+                    }
+                    out
                 }
             }
             Self::UnicodeStringProperty(property) => {
@@ -492,6 +509,7 @@ impl Expr {
                     operators,
                     *negated,
                     opts.ignore_case,
+                    opts.unicode_mode,
                 );
                 if ends.is_empty() {
                     return Vec::new();
@@ -538,24 +556,27 @@ impl Expr {
             }
             Self::LookAhead { positive, expr } => {
                 let inner = expr.match_states(prepared, state, opts);
-                if (*positive && !inner.is_empty()) || (!*positive && inner.is_empty()) {
+                if *positive {
+                    let Some(mut matched) = inner.into_iter().next() else {
+                        return Vec::new();
+                    };
+                    matched.pos = state.pos;
+                    vec![matched]
+                } else if inner.is_empty() {
                     vec![state.clone()]
                 } else {
                     Vec::new()
                 }
             }
             Self::LookBehind { positive, expr } => {
-                let mut matched = false;
-                for candidate_start in 0..=state.pos {
-                    let mut candidate = state.clone();
-                    candidate.pos = candidate_start;
-                    let inner = expr.match_states(prepared, &candidate, opts);
-                    if inner.iter().any(|next| next.pos == state.pos) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (*positive && matched) || (!*positive && !matched) {
+                let inner = expr.match_states_backward(prepared, state, opts);
+                if *positive {
+                    let Some(mut matched) = inner.into_iter().next() else {
+                        return Vec::new();
+                    };
+                    matched.pos = state.pos;
+                    vec![matched]
+                } else if inner.is_empty() {
                     vec![state.clone()]
                 } else {
                     Vec::new()
@@ -576,7 +597,34 @@ impl Expr {
                     let Some(right) = prepared.char_at(state.pos + offset) else {
                         return Vec::new();
                     };
-                    if !chars_equal(left, right, opts.ignore_case) {
+                    if !chars_equal(left, right, opts.ignore_case, opts.unicode_mode) {
+                        return Vec::new();
+                    }
+                }
+                let mut next = state.clone();
+                next.pos += len;
+                vec![next]
+            }
+            Self::BackReferenceAny(indices) => {
+                let Some(group) = indices
+                    .iter()
+                    .filter_map(|idx| state.captures.get(*idx).copied().flatten())
+                    .next()
+                else {
+                    return vec![state.clone()];
+                };
+                let len = group.1.saturating_sub(group.0);
+                if state.pos.saturating_add(len) > prepared.text_len_chars() {
+                    return Vec::new();
+                }
+                for offset in 0..len {
+                    let Some(left) = prepared.char_at(group.0 + offset) else {
+                        return Vec::new();
+                    };
+                    let Some(right) = prepared.char_at(state.pos + offset) else {
+                        return Vec::new();
+                    };
+                    if !chars_equal(left, right, opts.ignore_case, opts.unicode_mode) {
                         return Vec::new();
                     }
                 }
@@ -647,6 +695,329 @@ impl Expr {
             }
         }
     }
+
+    fn match_states_backward(
+        &self,
+        prepared: &PreparedInput<'_>,
+        state: &MatchState,
+        opts: &MatchOptions,
+    ) -> Vec<MatchState> {
+        match self {
+            Self::Empty => vec![state.clone()],
+            Self::Sequence(parts) => {
+                let mut states = vec![state.clone()];
+                for part in parts.iter().rev() {
+                    let mut next = Vec::new();
+                    for candidate in &states {
+                        next.extend(part.match_states_backward(prepared, candidate, opts));
+                    }
+                    if next.is_empty() {
+                        return Vec::new();
+                    }
+                    states = next;
+                }
+                states
+            }
+            Self::Alternation(branches) => {
+                let mut out = Vec::new();
+                for branch in branches {
+                    out.extend(branch.match_states_backward(prepared, state, opts));
+                }
+                out
+            }
+            Self::Literal(expected) => {
+                let Some(prev_pos) = state.pos.checked_sub(1) else {
+                    return Vec::new();
+                };
+                let Some(actual) = prepared.char_at(prev_pos) else {
+                    return Vec::new();
+                };
+                if chars_equal(actual, *expected, opts.ignore_case, opts.unicode_mode) {
+                    let mut next = state.clone();
+                    next.pos = prev_pos;
+                    vec![next]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::Dot => {
+                let Some(prev_pos) = state.pos.checked_sub(1) else {
+                    return Vec::new();
+                };
+                let Some(actual) = prepared.char_at(prev_pos) else {
+                    return Vec::new();
+                };
+                if opts.dot_matches_new_line || !is_line_terminator(actual) {
+                    let mut next = state.clone();
+                    next.pos = prev_pos;
+                    vec![next]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::StartAnchor => {
+                let at_start = state.pos == 0;
+                let at_line_start = opts.multi_line
+                    && state
+                        .pos
+                        .checked_sub(1)
+                        .and_then(|idx| prepared.char_at(idx))
+                        .is_some_and(is_line_terminator);
+                if at_start || at_line_start {
+                    vec![state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::EndAnchor => {
+                let at_end = state.pos == prepared.text_len_chars();
+                let at_line_end =
+                    opts.multi_line && prepared.char_at(state.pos).is_some_and(is_line_terminator);
+                if at_end || at_line_end {
+                    vec![state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::WordBoundary(expected) => {
+                if prepared.is_word_boundary(state.pos, opts.ignore_case, opts.unicode_mode)
+                    == *expected
+                {
+                    vec![state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::CharClass(class) => {
+                let starts =
+                    class.match_starts(prepared, state.pos, opts.ignore_case, opts.unicode_mode);
+                if starts.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut out = Vec::with_capacity(starts.len());
+                    for start in starts {
+                        let mut next = state.clone();
+                        next.pos = start;
+                        out.push(next);
+                    }
+                    out
+                }
+            }
+            Self::UnicodeStringProperty(property) => {
+                let starts = unicode_string_property_match_starts(property, prepared, state.pos);
+                if starts.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut out = Vec::with_capacity(starts.len());
+                    for start in starts {
+                        let mut next = state.clone();
+                        next.pos = start;
+                        out.push(next);
+                    }
+                    out
+                }
+            }
+            Self::ClassSetOperation {
+                operands,
+                operators,
+                negated,
+            } => {
+                let starts = class_set_operation_match_starts(
+                    prepared,
+                    state.pos,
+                    operands,
+                    operators,
+                    *negated,
+                    opts.ignore_case,
+                    opts.unicode_mode,
+                );
+                if starts.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut out = Vec::with_capacity(starts.len());
+                    for start in starts {
+                        let mut next = state.clone();
+                        next.pos = start;
+                        out.push(next);
+                    }
+                    out
+                }
+            }
+            Self::Group { index, expr } => {
+                let end = state.pos;
+                let states = expr.match_states_backward(prepared, state, opts);
+                let mut out = Vec::with_capacity(states.len());
+                for mut candidate in states {
+                    if let Some(idx) = index {
+                        if let Some(slot) = candidate.captures.get_mut(*idx) {
+                            *slot = Some((candidate.pos, end));
+                        }
+                    }
+                    out.push(candidate);
+                }
+                out
+            }
+            Self::FlagModifierGroup {
+                expr,
+                ignore_case,
+                multi_line,
+                dot_matches_new_line,
+            } => {
+                let mut local_opts = *opts;
+                if let Some(value) = ignore_case {
+                    local_opts.ignore_case = *value;
+                }
+                if let Some(value) = multi_line {
+                    local_opts.multi_line = *value;
+                }
+                if let Some(value) = dot_matches_new_line {
+                    local_opts.dot_matches_new_line = *value;
+                }
+                expr.match_states_backward(prepared, state, &local_opts)
+            }
+            Self::LookAhead { positive, expr } => {
+                let inner = expr.match_states(prepared, state, opts);
+                if *positive {
+                    let Some(mut matched) = inner.into_iter().next() else {
+                        return Vec::new();
+                    };
+                    matched.pos = state.pos;
+                    vec![matched]
+                } else if inner.is_empty() {
+                    vec![state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::LookBehind { positive, expr } => {
+                let inner = expr.match_states_backward(prepared, state, opts);
+                if *positive {
+                    let Some(mut matched) = inner.into_iter().next() else {
+                        return Vec::new();
+                    };
+                    matched.pos = state.pos;
+                    vec![matched]
+                } else if inner.is_empty() {
+                    vec![state.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::BackReference(index) => {
+                let Some(group) = state.captures.get(*index).copied().flatten() else {
+                    return vec![state.clone()];
+                };
+                let len = group.1.saturating_sub(group.0);
+                if state.pos < len {
+                    return Vec::new();
+                }
+                let start = state.pos - len;
+                for offset in 0..len {
+                    let Some(left) = prepared.char_at(group.0 + offset) else {
+                        return Vec::new();
+                    };
+                    let Some(right) = prepared.char_at(start + offset) else {
+                        return Vec::new();
+                    };
+                    if !chars_equal(left, right, opts.ignore_case, opts.unicode_mode) {
+                        return Vec::new();
+                    }
+                }
+                let mut next = state.clone();
+                next.pos = start;
+                vec![next]
+            }
+            Self::BackReferenceAny(indices) => {
+                let Some(group) = indices
+                    .iter()
+                    .filter_map(|idx| state.captures.get(*idx).copied().flatten())
+                    .next()
+                else {
+                    return vec![state.clone()];
+                };
+                let len = group.1.saturating_sub(group.0);
+                if state.pos < len {
+                    return Vec::new();
+                }
+                let start = state.pos - len;
+                for offset in 0..len {
+                    let Some(left) = prepared.char_at(group.0 + offset) else {
+                        return Vec::new();
+                    };
+                    let Some(right) = prepared.char_at(start + offset) else {
+                        return Vec::new();
+                    };
+                    if !chars_equal(left, right, opts.ignore_case, opts.unicode_mode) {
+                        return Vec::new();
+                    }
+                }
+                let mut next = state.clone();
+                next.pos = start;
+                vec![next]
+            }
+            Self::NamedBackReference(_) => Vec::new(),
+            Self::DecimalEscape(_) => Vec::new(),
+            Self::Quantifier {
+                expr,
+                min,
+                max,
+                greedy,
+            } => {
+                let mut levels = vec![vec![state.clone()]];
+                let limit = max.unwrap_or(usize::MAX);
+
+                while levels.len() - 1 < limit {
+                    let prev = levels.last().expect("levels always has one element");
+                    let mut next = Vec::new();
+                    let mut saw_progress = false;
+                    for candidate in prev {
+                        for matched in expr.match_states_backward(prepared, candidate, opts) {
+                            if matched.pos != candidate.pos {
+                                saw_progress = true;
+                            }
+                            next.push(matched);
+                        }
+                    }
+                    if next.is_empty() {
+                        break;
+                    }
+
+                    if !saw_progress {
+                        let repeated = next.clone();
+                        levels.push(next);
+                        let target = match max {
+                            Some(max) if *max == *min => *min,
+                            Some(max) => min.saturating_add(1).min(*max),
+                            None => min.saturating_add(1),
+                        };
+                        while levels.len() - 1 < target {
+                            levels.push(repeated.clone());
+                        }
+                        break;
+                    }
+
+                    levels.push(next);
+                }
+
+                let available_max = levels.len().saturating_sub(1);
+                if *min > available_max {
+                    return Vec::new();
+                }
+
+                let mut out = Vec::new();
+                if *greedy {
+                    for count in (*min..=available_max).rev() {
+                        out.extend(levels[count].iter().cloned());
+                    }
+                } else {
+                    for count in *min..=available_max {
+                        out.extend(levels[count].iter().cloned());
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -656,8 +1027,11 @@ struct CharClass {
 }
 
 impl CharClass {
-    fn matches(&self, ch: char, ignore_case: bool) -> bool {
-        let matched = self.items.iter().any(|item| item.matches(ch, ignore_case));
+    fn matches(&self, ch: char, ignore_case: bool, unicode_mode: bool) -> bool {
+        let matched = self
+            .items
+            .iter()
+            .any(|item| item.matches(ch, ignore_case, unicode_mode));
         if self.negated { !matched } else { matched }
     }
 
@@ -666,22 +1040,51 @@ impl CharClass {
         prepared: &PreparedInput<'_>,
         pos: usize,
         ignore_case: bool,
+        unicode_mode: bool,
     ) -> Vec<usize> {
         if self.negated {
             let Some(actual) = prepared.char_at(pos) else {
                 return Vec::new();
             };
-            if self.matches(actual, ignore_case) {
-                Vec::new()
-            } else {
-                vec![pos + 1]
-            }
+            let matched = self
+                .items
+                .iter()
+                .any(|item| item.matches(actual, ignore_case, unicode_mode));
+            if matched { Vec::new() } else { vec![pos + 1] }
         } else {
             let mut out = Vec::new();
             for item in &self.items {
-                out.extend(item.match_ends(prepared, pos, ignore_case));
+                out.extend(item.match_ends(prepared, pos, ignore_case, unicode_mode));
             }
             dedupe_sorted_desc(out)
+        }
+    }
+
+    fn match_starts(
+        &self,
+        prepared: &PreparedInput<'_>,
+        end: usize,
+        ignore_case: bool,
+        unicode_mode: bool,
+    ) -> Vec<usize> {
+        if self.negated {
+            let Some(start) = end.checked_sub(1) else {
+                return Vec::new();
+            };
+            let Some(actual) = prepared.char_at(start) else {
+                return Vec::new();
+            };
+            let matched = self
+                .items
+                .iter()
+                .any(|item| item.matches(actual, ignore_case, unicode_mode));
+            if matched { Vec::new() } else { vec![start] }
+        } else {
+            let mut out = Vec::new();
+            for item in &self.items {
+                out.extend(item.match_starts(prepared, end, ignore_case, unicode_mode));
+            }
+            dedupe_sorted_asc(out)
         }
     }
 }
@@ -712,19 +1115,21 @@ enum ClassItem {
 }
 
 impl ClassItem {
-    fn matches(&self, ch: char, ignore_case: bool) -> bool {
+    fn matches(&self, ch: char, ignore_case: bool, unicode_mode: bool) -> bool {
         match self {
-            Self::Char(expected) => chars_equal(ch, *expected, ignore_case),
+            Self::Char(expected) => chars_equal(ch, *expected, ignore_case, unicode_mode),
             Self::Range(start, end) => char_in_range(ch, *start, *end, ignore_case),
-            Self::NestedExpression(expr) => expr_matches_single_char(expr, ch, ignore_case),
+            Self::NestedExpression(expr) => {
+                expr_matches_single_char(expr, ch, ignore_case, unicode_mode)
+            }
             Self::StringDisjunction(alternatives) => alternatives.iter().any(|value| {
                 single_char_string(value)
-                    .is_some_and(|expected| chars_equal(ch, expected, ignore_case))
+                    .is_some_and(|expected| chars_equal(ch, expected, ignore_case, unicode_mode))
             }),
             Self::Digit => ch.is_ascii_digit(),
             Self::NotDigit => !ch.is_ascii_digit(),
-            Self::Word => is_word_char(ch),
-            Self::NotWord => !is_word_char(ch),
+            Self::Word => is_word_char_regex(ch, ignore_case, unicode_mode),
+            Self::NotWord => !is_word_char_regex(ch, ignore_case, unicode_mode),
             Self::Space => is_space_char(ch),
             Self::NotSpace => !is_space_char(ch),
             Self::UnicodeProperty { property, negated } => {
@@ -740,11 +1145,12 @@ impl ClassItem {
         prepared: &PreparedInput<'_>,
         pos: usize,
         ignore_case: bool,
+        unicode_mode: bool,
     ) -> Vec<usize> {
         match self {
             Self::Char(expected) => prepared
                 .char_at(pos)
-                .filter(|actual| chars_equal(*actual, *expected, ignore_case))
+                .filter(|actual| chars_equal(*actual, *expected, ignore_case, unicode_mode))
                 .map(|_| pos + 1)
                 .into_iter()
                 .collect::<Vec<_>>(),
@@ -754,10 +1160,14 @@ impl ClassItem {
                 .map(|_| pos + 1)
                 .into_iter()
                 .collect::<Vec<_>>(),
-            Self::NestedExpression(expr) => expr_match_ends(expr, prepared, pos, ignore_case),
+            Self::NestedExpression(expr) => {
+                expr_match_ends(expr, prepared, pos, ignore_case, unicode_mode)
+            }
             Self::StringDisjunction(alternatives) => alternatives
                 .iter()
-                .filter_map(|candidate| match_literal_string_at(prepared, pos, candidate, ignore_case))
+                .filter_map(|candidate| {
+                    match_literal_string_at(prepared, pos, candidate, ignore_case, unicode_mode)
+                })
                 .collect::<Vec<_>>(),
             Self::Digit => prepared
                 .char_at(pos)
@@ -773,13 +1183,13 @@ impl ClassItem {
                 .collect::<Vec<_>>(),
             Self::Word => prepared
                 .char_at(pos)
-                .filter(|actual| is_word_char(*actual))
+                .filter(|actual| is_word_char_regex(*actual, ignore_case, unicode_mode))
                 .map(|_| pos + 1)
                 .into_iter()
                 .collect::<Vec<_>>(),
             Self::NotWord => prepared
                 .char_at(pos)
-                .filter(|actual| !is_word_char(*actual))
+                .filter(|actual| !is_word_char_regex(*actual, ignore_case, unicode_mode))
                 .map(|_| pos + 1)
                 .into_iter()
                 .collect::<Vec<_>>(),
@@ -810,6 +1220,26 @@ impl ClassItem {
                 .collect::<Vec<_>>(),
         }
     }
+
+    fn match_starts(
+        &self,
+        prepared: &PreparedInput<'_>,
+        end: usize,
+        ignore_case: bool,
+        unicode_mode: bool,
+    ) -> Vec<usize> {
+        let mut out = Vec::new();
+        for start in 0..=end {
+            if self
+                .match_ends(prepared, start, ignore_case, unicode_mode)
+                .iter()
+                .any(|candidate_end| *candidate_end == end)
+            {
+                out.push(start);
+            }
+        }
+        dedupe_sorted_asc(out)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -817,6 +1247,8 @@ enum UnicodeProperty {
     Letter,
     Number,
     DecimalNumber,
+    UppercaseLetter,
+    LowercaseLetter,
     Ascii,
     Any,
     ScriptLatin,
@@ -829,6 +1261,8 @@ impl UnicodeProperty {
             Self::Letter => ch.is_alphabetic(),
             Self::Number => ch.is_numeric(),
             Self::DecimalNumber => char_in_ranges(ch, UNICODE_DECIMAL_NUMBER_RANGES),
+            Self::UppercaseLetter => ch.is_uppercase(),
+            Self::LowercaseLetter => ch.is_lowercase(),
             Self::Ascii => ch.is_ascii(),
             Self::Any => true,
             Self::ScriptLatin => char_in_ranges(ch, UNICODE_SCRIPT_LATIN_RANGES),
@@ -862,8 +1296,9 @@ struct Parser {
     unicode_mode: bool,
     unicode_sets_mode: bool,
     capture_count: usize,
-    named_captures: HashMap<String, usize>,
+    named_captures: HashMap<String, Vec<usize>>,
     named_capture_order: Vec<String>,
+    capture_names: HashMap<usize, String>,
 }
 
 impl Parser {
@@ -876,6 +1311,7 @@ impl Parser {
             capture_count: 0,
             named_captures: HashMap::new(),
             named_capture_order: Vec::new(),
+            capture_names: HashMap::new(),
         }
     }
 
@@ -884,6 +1320,7 @@ impl Parser {
         if self.i < self.chars.len() {
             return Err(RegexError::new("invalid regular expression syntax"));
         }
+        self.validate_named_capture_duplicates(&expr)?;
         self.resolve_post_parse_escapes(&mut expr)?;
         Ok(expr)
     }
@@ -1006,12 +1443,14 @@ impl Parser {
                         let name = self.parse_group_name()?;
                         self.capture_count += 1;
                         let index = self.capture_count;
-                        if self.named_captures.insert(name.clone(), index).is_some() {
-                            return Err(RegexError::new(format!(
-                                "duplicate capture group name: {name}"
-                            )));
+                        if !self.named_captures.contains_key(&name) {
+                            self.named_capture_order.push(name.clone());
                         }
-                        self.named_capture_order.push(name);
+                        self.named_captures
+                            .entry(name.clone())
+                            .or_default()
+                            .push(index);
+                        self.capture_names.insert(index, name);
                         let expr = self.parse_alternation()?;
                         self.expect(')')?;
                         Ok(Expr::Group {
@@ -1105,9 +1544,7 @@ impl Parser {
                 let checkpoint = self.i;
                 match self.parse_braced_quantifier() {
                     Ok(quant) => Some(quant),
-                    Err(err)
-                        if !self.unicode_mode && err.message != "invalid quantifier range" =>
-                    {
+                    Err(err) if !self.unicode_mode && err.message != "invalid quantifier range" => {
                         self.i = checkpoint;
                         None
                     }
@@ -1193,33 +1630,23 @@ impl Parser {
                 if operands.len() != operators.len() + 1 || operands.iter().any(Vec::is_empty) {
                     return Err(RegexError::new("invalid set operation"));
                 }
-                if operands
+                let has_unicode_string = operands
                     .iter()
                     .flatten()
-                    .any(class_item_contains_unicode_string_property)
-                {
+                    .any(class_item_contains_unicode_string_property);
+                let has_non_scalar_string = operands
+                    .iter()
+                    .flatten()
+                    .any(class_item_contains_non_scalar_string);
+                if negated && (has_unicode_string || has_non_scalar_string) {
                     return Err(RegexError::new("unsupported unicode set syntax"));
                 }
-                if negated
-                    && operands
-                        .iter()
-                        .flatten()
-                        .any(class_item_contains_non_scalar_string)
-                {
-                    return Err(RegexError::new("unsupported unicode set syntax"));
-                }
-                if operators
-                    .windows(2)
-                    .any(|pair| pair[0] != pair[1])
-                {
+                if operators.windows(2).any(|pair| pair[0] != pair[1]) {
                     return Err(RegexError::new("invalid set operation"));
                 }
                 if operands.iter().any(|operand| {
                     operand.len() != 1
-                        || matches!(
-                            operand.first(),
-                            Some(ClassItem::Range(_, _)) | None
-                        )
+                        || matches!(operand.first(), Some(ClassItem::Range(_, _)) | None)
                 }) {
                     return Err(RegexError::new("invalid set operation"));
                 }
@@ -1361,7 +1788,9 @@ impl Parser {
                 if escaped == '8' || escaped == '9' {
                     Ok(ClassItem::Char(escaped))
                 } else {
-                    Ok(ClassItem::Char(self.parse_legacy_octal_escape_char(escaped)))
+                    Ok(ClassItem::Char(
+                        self.parse_legacy_octal_escape_char(escaped),
+                    ))
                 }
             }
             'x' => {
@@ -1387,10 +1816,12 @@ impl Parser {
                     Ok(ClassItem::Char(escaped))
                 } else {
                     match self.parse_unicode_property_escape()? {
-                        UnicodePropertySpec::CodePoint(property) => Ok(ClassItem::UnicodeProperty {
-                            property,
-                            negated: escaped == 'P',
-                        }),
+                        UnicodePropertySpec::CodePoint(property) => {
+                            Ok(ClassItem::UnicodeProperty {
+                                property,
+                                negated: escaped == 'P',
+                            })
+                        }
                         UnicodePropertySpec::String(property) => {
                             if escaped == 'P' {
                                 return Err(RegexError::new("invalid unicode property escape"));
@@ -1768,68 +2199,16 @@ impl Parser {
         negated: bool,
         items: Vec<ClassItem>,
     ) -> Result<Expr, RegexError> {
-        let mut branches = Vec::new();
-        let mut string_branches = Vec::new();
-        let mut scalar_items = Vec::new();
-
-        for item in items {
-            match item {
-                ClassItem::UnicodeStringProperty(property) => {
-                    if negated {
-                        return Err(RegexError::new("unsupported unicode set syntax"));
-                    }
-                    branches.push(Expr::UnicodeStringProperty(property));
-                }
-                ClassItem::StringDisjunction(alternatives) => {
-                    for alternative in alternatives {
-                        if let Some(ch) = single_char_string(&alternative) {
-                            scalar_items.push(ClassItem::Char(ch));
-                        } else {
-                            if negated {
-                                return Err(RegexError::new("unsupported unicode set syntax"));
-                            }
-                            string_branches.push(alternative);
-                        }
-                    }
-                }
-                ClassItem::NestedExpression(expr) => {
-                    if expr_contains_non_scalar_string(&expr)
-                        || expr_contains_unicode_string_property(&expr)
-                    {
-                        if negated {
-                            return Err(RegexError::new("unsupported unicode set syntax"));
-                        }
-                        branches.push(*expr);
-                    } else {
-                        scalar_items.push(ClassItem::NestedExpression(expr));
-                    }
-                }
-                other => scalar_items.push(other),
-            }
+        if negated
+            && (items
+                .iter()
+                .any(class_item_contains_unicode_string_property)
+                || items.iter().any(class_item_contains_non_scalar_string))
+        {
+            return Err(RegexError::new("unsupported unicode set syntax"));
         }
 
-        string_branches.sort_by(|left, right| right.chars().count().cmp(&left.chars().count()));
-        for literal in string_branches {
-            branches.push(expr_from_literal_string(&literal));
-        }
-
-        if branches.is_empty() {
-            return Ok(Expr::CharClass(CharClass {
-                negated,
-                items: scalar_items,
-            }));
-        }
-        if !scalar_items.is_empty() {
-            branches.push(Expr::CharClass(CharClass {
-                negated: false,
-                items: scalar_items,
-            }));
-        }
-        if branches.len() == 1 {
-            Ok(branches.pop().expect("branches has one element"))
-        } else {
-            Ok(Expr::Alternation(branches))
-        }
+        Ok(Expr::CharClass(CharClass { negated, items }))
     }
 
     fn expect(&mut self, ch: char) -> Result<(), RegexError> {
@@ -1837,6 +2216,76 @@ impl Parser {
             Ok(())
         } else {
             Err(RegexError::new("unterminated group or invalid syntax"))
+        }
+    }
+
+    fn validate_named_capture_duplicates(&self, expr: &Expr) -> Result<(), RegexError> {
+        self.named_capture_paths(expr).map(|_| ())
+    }
+
+    fn named_capture_paths(&self, expr: &Expr) -> Result<Vec<HashSet<String>>, RegexError> {
+        match expr {
+            Expr::Empty
+            | Expr::Literal(_)
+            | Expr::Dot
+            | Expr::StartAnchor
+            | Expr::EndAnchor
+            | Expr::WordBoundary(_)
+            | Expr::CharClass(_)
+            | Expr::UnicodeStringProperty(_)
+            | Expr::ClassSetOperation { .. }
+            | Expr::NamedBackReference(_)
+            | Expr::DecimalEscape(_)
+            | Expr::BackReference(_)
+            | Expr::BackReferenceAny(_) => Ok(vec![HashSet::new()]),
+            Expr::Sequence(parts) => {
+                let mut paths = vec![HashSet::new()];
+                for part in parts {
+                    let part_paths = self.named_capture_paths(part)?;
+                    let mut next = Vec::new();
+                    for base in &paths {
+                        for extension in &part_paths {
+                            if let Some(duplicate) =
+                                base.iter().find(|name| extension.contains(*name)).cloned()
+                            {
+                                return Err(RegexError::new(format!(
+                                    "duplicate capture group name: {duplicate}"
+                                )));
+                            }
+                            let mut merged = base.clone();
+                            merged.extend(extension.iter().cloned());
+                            next.push(merged);
+                        }
+                    }
+                    paths = dedupe_name_sets(next);
+                }
+                Ok(paths)
+            }
+            Expr::Alternation(branches) => {
+                let mut out = Vec::new();
+                for branch in branches {
+                    out.extend(self.named_capture_paths(branch)?);
+                }
+                Ok(dedupe_name_sets(out))
+            }
+            Expr::Group { index, expr } => {
+                let mut paths = self.named_capture_paths(expr)?;
+                if let Some(name) = index.and_then(|idx| self.capture_names.get(&idx)) {
+                    for path in &mut paths {
+                        if path.contains(name) {
+                            return Err(RegexError::new(format!(
+                                "duplicate capture group name: {name}"
+                            )));
+                        }
+                        path.insert(name.clone());
+                    }
+                }
+                Ok(paths)
+            }
+            Expr::FlagModifierGroup { expr, .. }
+            | Expr::LookAhead { expr, .. }
+            | Expr::LookBehind { expr, .. }
+            | Expr::Quantifier { expr, .. } => self.named_capture_paths(expr),
         }
     }
 
@@ -1853,12 +2302,16 @@ impl Parser {
                     return Err(RegexError::new("invalid capture group name"));
                 }
 
-                let Some(index) = self.named_captures.get(name).copied() else {
+                let Some(indices) = self.named_captures.get(name).cloned() else {
                     return Err(RegexError::new(format!(
                         "unknown named backreference: {name}"
                     )));
                 };
-                *expr = Expr::BackReference(index);
+                if indices.len() == 1 {
+                    *expr = Expr::BackReference(indices[0]);
+                } else {
+                    *expr = Expr::BackReferenceAny(indices);
+                }
                 Ok(())
             }
             Expr::DecimalEscape(raw) => {
@@ -1963,7 +2416,10 @@ impl Parser {
     }
 
     fn is_valid_group_name(name: &str) -> bool {
-        !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }
 
     fn looks_like_braced_quantifier(&self, brace_index: usize) -> bool {
@@ -2009,14 +2465,50 @@ impl Parser {
     }
 }
 
-fn chars_equal(left: char, right: char, ignore_case: bool) -> bool {
+fn chars_equal(left: char, right: char, ignore_case: bool, unicode_mode: bool) -> bool {
     if !ignore_case {
         return left == right;
     }
-    if left.is_ascii() && right.is_ascii() {
-        left.eq_ignore_ascii_case(&right)
+
+    let left = canonicalize_case_insensitive(left, unicode_mode);
+    let right = canonicalize_case_insensitive(right, unicode_mode);
+    left == right
+}
+
+fn canonicalize_case_insensitive(ch: char, unicode_mode: bool) -> char {
+    if unicode_mode {
+        canonicalize_unicode_char(ch)
     } else {
-        left.to_lowercase().eq(right.to_lowercase())
+        canonicalize_non_unicode_char(ch)
+    }
+}
+
+fn canonicalize_non_unicode_char(ch: char) -> char {
+    let mut upper = ch.to_uppercase();
+    let Some(first) = upper.next() else {
+        return ch;
+    };
+    if upper.next().is_some() {
+        return ch;
+    }
+    if (ch as u32) >= 0x80 && (first as u32) < 0x80 {
+        return ch;
+    }
+    first
+}
+
+fn canonicalize_unicode_char(ch: char) -> char {
+    match ch {
+        '\u{017F}' => 's',        // LATIN SMALL LETTER LONG S
+        '\u{212A}' => 'k',        // KELVIN SIGN
+        '\u{03C2}' => '\u{03C3}', // GREEK SMALL LETTER FINAL SIGMA
+        _ => {
+            let mut lower = ch.to_lowercase();
+            let Some(first) = lower.next() else {
+                return ch;
+            };
+            if lower.next().is_some() { ch } else { first }
+        }
     }
 }
 
@@ -2026,13 +2518,14 @@ fn class_set_operation_matches_char(
     negated: bool,
     ch: char,
     ignore_case: bool,
+    unicode_mode: bool,
 ) -> bool {
     let Some(first) = operands.first() else {
         return false;
     };
-    let mut matched = first.matches(ch, ignore_case);
+    let mut matched = first.matches(ch, ignore_case, unicode_mode);
     for (op, operand) in operators.iter().zip(operands.iter().skip(1)) {
-        let right = operand.matches(ch, ignore_case);
+        let right = operand.matches(ch, ignore_case, unicode_mode);
         match op {
             ClassSetOperator::Intersection => matched = matched && right,
             ClassSetOperator::Difference => matched = matched && !right,
@@ -2048,18 +2541,19 @@ fn class_set_operation_match_ends(
     operators: &[ClassSetOperator],
     negated: bool,
     ignore_case: bool,
+    unicode_mode: bool,
 ) -> Vec<usize> {
     let Some(first) = operands.first() else {
         return Vec::new();
     };
 
     let mut current = first
-        .match_ends(prepared, pos, ignore_case)
+        .match_ends(prepared, pos, ignore_case, unicode_mode)
         .into_iter()
         .collect::<HashSet<_>>();
     for (op, operand) in operators.iter().zip(operands.iter().skip(1)) {
         let rhs = operand
-            .match_ends(prepared, pos, ignore_case)
+            .match_ends(prepared, pos, ignore_case, unicode_mode)
             .into_iter()
             .collect::<HashSet<_>>();
         match op {
@@ -2083,17 +2577,47 @@ fn class_set_operation_match_ends(
     }
 }
 
+fn class_set_operation_match_starts(
+    prepared: &PreparedInput<'_>,
+    end: usize,
+    operands: &[CharClass],
+    operators: &[ClassSetOperator],
+    negated: bool,
+    ignore_case: bool,
+    unicode_mode: bool,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    for start in 0..=end {
+        if class_set_operation_match_ends(
+            prepared,
+            start,
+            operands,
+            operators,
+            negated,
+            ignore_case,
+            unicode_mode,
+        )
+        .iter()
+        .any(|candidate_end| *candidate_end == end)
+        {
+            out.push(start);
+        }
+    }
+    dedupe_sorted_asc(out)
+}
+
 fn expr_match_ends(
     expr: &Expr,
     prepared: &PreparedInput<'_>,
     pos: usize,
     ignore_case: bool,
+    unicode_mode: bool,
 ) -> Vec<usize> {
     match expr {
         Expr::Empty => vec![pos],
         Expr::Literal(expected) => prepared
             .char_at(pos)
-            .filter(|actual| chars_equal(*actual, *expected, ignore_case))
+            .filter(|actual| chars_equal(*actual, *expected, ignore_case, unicode_mode))
             .map(|_| pos + 1)
             .into_iter()
             .collect::<Vec<_>>(),
@@ -2102,7 +2626,13 @@ fn expr_match_ends(
             for part in parts {
                 let mut next = Vec::new();
                 for cursor in &cursors {
-                    next.extend(expr_match_ends(part, prepared, *cursor, ignore_case));
+                    next.extend(expr_match_ends(
+                        part,
+                        prepared,
+                        *cursor,
+                        ignore_case,
+                        unicode_mode,
+                    ));
                 }
                 if next.is_empty() {
                     return Vec::new();
@@ -2114,11 +2644,17 @@ fn expr_match_ends(
         Expr::Alternation(branches) => {
             let mut out = Vec::new();
             for branch in branches {
-                out.extend(expr_match_ends(branch, prepared, pos, ignore_case));
+                out.extend(expr_match_ends(
+                    branch,
+                    prepared,
+                    pos,
+                    ignore_case,
+                    unicode_mode,
+                ));
             }
             dedupe_sorted_desc(out)
         }
-        Expr::CharClass(class) => class.match_ends(prepared, pos, ignore_case),
+        Expr::CharClass(class) => class.match_ends(prepared, pos, ignore_case, unicode_mode),
         Expr::ClassSetOperation {
             operands,
             operators,
@@ -2130,6 +2666,7 @@ fn expr_match_ends(
             operators,
             *negated,
             ignore_case,
+            unicode_mode,
         ),
         Expr::UnicodeStringProperty(property) => property
             .match_at(prepared, pos)
@@ -2139,18 +2676,25 @@ fn expr_match_ends(
     }
 }
 
-fn expr_matches_single_char(expr: &Expr, ch: char, ignore_case: bool) -> bool {
+fn expr_matches_single_char(expr: &Expr, ch: char, ignore_case: bool, unicode_mode: bool) -> bool {
     match expr {
-        Expr::CharClass(class) => class.matches(ch, ignore_case),
+        Expr::CharClass(class) => class.matches(ch, ignore_case, unicode_mode),
         Expr::ClassSetOperation {
             operands,
             operators,
             negated,
-        } => class_set_operation_matches_char(operands, operators, *negated, ch, ignore_case),
+        } => class_set_operation_matches_char(
+            operands,
+            operators,
+            *negated,
+            ch,
+            ignore_case,
+            unicode_mode,
+        ),
         Expr::Alternation(branches) => branches
             .iter()
-            .any(|branch| expr_matches_single_char(branch, ch, ignore_case)),
-        Expr::Literal(expected) => chars_equal(ch, *expected, ignore_case),
+            .any(|branch| expr_matches_single_char(branch, ch, ignore_case, unicode_mode)),
+        Expr::Literal(expected) => chars_equal(ch, *expected, ignore_case, unicode_mode),
         Expr::UnicodeStringProperty(_) => false,
         _ => false,
     }
@@ -2166,15 +2710,18 @@ fn single_char_string(value: &str) -> Option<char> {
     }
 }
 
-fn expr_from_literal_string(value: &str) -> Expr {
-    let chars = value.chars().collect::<Vec<_>>();
-    if chars.is_empty() {
-        Expr::Empty
-    } else if chars.len() == 1 {
-        Expr::Literal(chars[0])
-    } else {
-        Expr::Sequence(chars.into_iter().map(Expr::Literal).collect::<Vec<_>>())
+fn unicode_string_property_match_starts(
+    property: &UnicodeStringProperty,
+    prepared: &PreparedInput<'_>,
+    end: usize,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    for start in 0..=end {
+        if property.match_at(prepared, start) == Some(end) {
+            out.push(start);
+        }
     }
+    dedupe_sorted_asc(out)
 }
 
 fn match_literal_string_at(
@@ -2182,11 +2729,12 @@ fn match_literal_string_at(
     pos: usize,
     candidate: &str,
     ignore_case: bool,
+    unicode_mode: bool,
 ) -> Option<usize> {
     let mut index = pos;
     for expected in candidate.chars() {
         let actual = prepared.char_at(index)?;
-        if !chars_equal(actual, expected, ignore_case) {
+        if !chars_equal(actual, expected, ignore_case, unicode_mode) {
             return None;
         }
         index += 1;
@@ -2199,6 +2747,22 @@ fn dedupe_sorted_desc(mut values: Vec<usize>) -> Vec<usize> {
     values.dedup();
     values.reverse();
     values
+}
+
+fn dedupe_sorted_asc(mut values: Vec<usize>) -> Vec<usize> {
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
+fn dedupe_name_sets(values: Vec<HashSet<String>>) -> Vec<HashSet<String>> {
+    let mut out: Vec<HashSet<String>> = Vec::new();
+    for value in values {
+        if !out.iter().any(|existing| existing == &value) {
+            out.push(value);
+        }
+    }
+    out
 }
 
 fn class_item_contains_non_scalar_string(item: &ClassItem) -> bool {
@@ -2265,9 +2829,9 @@ fn expr_contains_unicode_string_property(expr: &Expr) -> bool {
                 .iter()
                 .any(class_item_contains_unicode_string_property)
         }),
-        Expr::Alternation(branches) | Expr::Sequence(branches) => branches
-            .iter()
-            .any(expr_contains_unicode_string_property),
+        Expr::Alternation(branches) | Expr::Sequence(branches) => {
+            branches.iter().any(expr_contains_unicode_string_property)
+        }
         Expr::Group { expr, .. }
         | Expr::FlagModifierGroup { expr, .. }
         | Expr::LookAhead { expr, .. }
@@ -2302,7 +2866,15 @@ fn parse_unicode_property_name(raw: &str, unicode_sets_mode: bool) -> Option<Uni
     match raw {
         "L" | "Letter" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Letter)),
         "N" | "Number" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Number)),
-        "Nd" | "Decimal_Number" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::DecimalNumber)),
+        "Nd" | "Decimal_Number" => Some(UnicodePropertySpec::CodePoint(
+            UnicodeProperty::DecimalNumber,
+        )),
+        "Lu" | "Uppercase_Letter" => Some(UnicodePropertySpec::CodePoint(
+            UnicodeProperty::UppercaseLetter,
+        )),
+        "Ll" | "Lowercase_Letter" => Some(UnicodePropertySpec::CodePoint(
+            UnicodeProperty::LowercaseLetter,
+        )),
         "ASCII" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Ascii)),
         "Any" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Any)),
         "RGI_Emoji" if unicode_sets_mode => {
@@ -2317,12 +2889,20 @@ fn parse_unicode_property_pair(name: &str, value: &str) -> Option<UnicodePropert
         "gc" | "General_Category" => match value {
             "L" | "Letter" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Letter)),
             "N" | "Number" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::Number)),
-            "Nd" | "Decimal_Number" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::DecimalNumber)),
+            "Nd" | "Decimal_Number" => Some(UnicodePropertySpec::CodePoint(
+                UnicodeProperty::DecimalNumber,
+            )),
+            "Lu" | "Uppercase_Letter" => Some(UnicodePropertySpec::CodePoint(
+                UnicodeProperty::UppercaseLetter,
+            )),
+            "Ll" | "Lowercase_Letter" => Some(UnicodePropertySpec::CodePoint(
+                UnicodeProperty::LowercaseLetter,
+            )),
             _ => None,
         },
         "sc" | "Script" | "scx" | "Script_Extensions" => match value {
-            "Latin" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::ScriptLatin)),
-            "Greek" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::ScriptGreek)),
+            "Latin" | "Latn" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::ScriptLatin)),
+            "Greek" | "Grek" => Some(UnicodePropertySpec::CodePoint(UnicodeProperty::ScriptGreek)),
             _ => None,
         },
         _ => None,
@@ -2414,29 +2994,14 @@ fn control_escape_char(letter: char) -> char {
 fn is_unicode_identity_escape_outside_class(ch: char) -> bool {
     matches!(
         ch,
-        '$'
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | '.'
-            | '/'
-            | '?'
-            | '['
-            | '\\'
-            | ']'
-            | '^'
-            | '{'
-            | '|'
-            | '}'
+        '$' | '(' | ')' | '*' | '+' | '.' | '/' | '?' | '[' | '\\' | ']' | '^' | '{' | '|' | '}'
     )
 }
 
 fn is_unicode_identity_escape_in_class(ch: char) -> bool {
     matches!(
         ch,
-        '$'
-            | '('
+        '$' | '('
             | ')'
             | '*'
             | '+'
@@ -2490,8 +3055,36 @@ fn is_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+fn is_word_char_regex(ch: char, ignore_case: bool, unicode_mode: bool) -> bool {
+    if is_word_char(ch) {
+        return true;
+    }
+    if !(ignore_case && unicode_mode) {
+        return false;
+    }
+    is_word_char(canonicalize_unicode_char(ch))
+}
+
 fn is_space_char(ch: char) -> bool {
-    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000B}' | '\u{000C}') || ch.is_whitespace()
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
 }
 
 fn is_line_terminator(ch: char) -> bool {

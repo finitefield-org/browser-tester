@@ -202,8 +202,8 @@ impl Harness {
                 continue;
             }
 
-            let chunk_start = Self::utf16_index_to_byte_ceil(value, last_last_index)
-                .unwrap_or(value.len());
+            let chunk_start =
+                Self::utf16_index_to_byte_ceil(value, last_last_index).unwrap_or(value.len());
             let chunk_end =
                 Self::utf16_index_to_byte_ceil(value, result.index).unwrap_or(value.len());
 
