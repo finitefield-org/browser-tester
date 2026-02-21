@@ -138,6 +138,8 @@ impl Harness {
                 self.request_form_submit_with_env(target, env)?;
             }
 
+            self.maybe_capture_anchor_download(target)?;
+
             Ok(())
         })();
         self.dom.set_active_pseudo_element(None);

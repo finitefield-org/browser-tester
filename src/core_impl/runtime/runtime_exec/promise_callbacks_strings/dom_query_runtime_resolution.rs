@@ -166,7 +166,7 @@ impl Harness {
     pub(crate) fn resolve_dom_query_static(&mut self, target: &DomQuery) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
-            DomQuery::DocumentBody => Ok(self.dom.body()),
+            DomQuery::DocumentBody => Ok(Some(self.dom.ensure_document_body_element()?)),
             DomQuery::DocumentHead => Ok(self.dom.head()),
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
@@ -232,7 +232,7 @@ impl Harness {
     ) -> Result<Option<NodeId>> {
         match target {
             DomQuery::DocumentRoot => Ok(Some(self.dom.root)),
-            DomQuery::DocumentBody => Ok(self.dom.body()),
+            DomQuery::DocumentBody => Ok(Some(self.dom.ensure_document_body_element()?)),
             DomQuery::DocumentHead => Ok(self.dom.head()),
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::Var(name) => match env.get(name) {

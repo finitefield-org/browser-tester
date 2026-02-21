@@ -497,6 +497,13 @@ pub struct LocationNavigation {
     pub to: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadArtifact {
+    pub filename: Option<String>,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HistoryEntry {
     pub(crate) url: String,
@@ -650,6 +657,7 @@ pub(crate) struct BrowserApiState {
     pub(crate) local_storage_object: Rc<RefCell<ObjectValue>>,
     pub(crate) next_blob_url_id: usize,
     pub(crate) blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
+    pub(crate) downloads: Vec<DownloadArtifact>,
 }
 
 impl Default for BrowserApiState {
@@ -661,6 +669,7 @@ impl Default for BrowserApiState {
             local_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
             next_blob_url_id: 1,
             blob_url_objects: HashMap::new(),
+            downloads: Vec::new(),
         }
     }
 }

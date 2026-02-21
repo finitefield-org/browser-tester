@@ -22,7 +22,7 @@ mod selector;
 
 pub use core_dom_utils::{Error, Result, ThrownValue};
 pub use harness_api::{Harness, MockPage, MockWindow};
-pub use runtime_state::{LocationNavigation, LocationNavigationKind, PendingTimer};
+pub use runtime_state::{DownloadArtifact, LocationNavigation, LocationNavigationKind, PendingTimer};
 
 pub(crate) use core_dom_utils::*;
 pub(crate) use runtime_state::*;

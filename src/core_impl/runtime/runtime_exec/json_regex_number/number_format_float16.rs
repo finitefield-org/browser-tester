@@ -295,6 +295,176 @@ impl Harness {
         }
     }
 
+    pub(crate) fn resolve_number_to_locale_string_locale(
+        &self,
+        locale_arg: Option<&Value>,
+    ) -> Result<String> {
+        let requested = if let Some(locale_arg) = locale_arg {
+            self.intl_collect_locales(locale_arg)?
+        } else {
+            Vec::new()
+        };
+        Ok(Self::intl_select_locale_for_formatter(
+            IntlFormatterKind::NumberFormat,
+            &requested,
+        ))
+    }
+
+    pub(crate) fn parse_number_to_locale_string_fraction_digits(
+        options_arg: Option<&Value>,
+    ) -> Result<(Option<usize>, Option<usize>)> {
+        let Some(options_arg) = options_arg else {
+            return Ok((None, None));
+        };
+        match options_arg {
+            Value::Undefined | Value::Null => Ok((None, None)),
+            Value::Object(options) => {
+                let options = options.borrow();
+                let minimum = Self::parse_fraction_digits_option(
+                    &options,
+                    "minimumFractionDigits",
+                    "minimumFractionDigits must be between 0 and 100",
+                )?;
+                let maximum = Self::parse_fraction_digits_option(
+                    &options,
+                    "maximumFractionDigits",
+                    "maximumFractionDigits must be between 0 and 100",
+                )?;
+                if minimum.zip(maximum).is_some_and(|(min, max)| min > max) {
+                    return Err(Error::ScriptRuntime(
+                        "minimumFractionDigits cannot be greater than maximumFractionDigits"
+                            .into(),
+                    ));
+                }
+                Ok((minimum, maximum))
+            }
+            _ => Ok((None, None)),
+        }
+    }
+
+    fn parse_fraction_digits_option(
+        options: &ObjectValue,
+        key: &str,
+        out_of_range_message: &str,
+    ) -> Result<Option<usize>> {
+        let Some(value) = Self::object_get_entry(options, key) else {
+            return Ok(None);
+        };
+        if matches!(value, Value::Undefined) {
+            return Ok(None);
+        }
+        let digits = Self::value_to_i64(&value);
+        if !(0..=100).contains(&digits) {
+            return Err(Error::ScriptRuntime(out_of_range_message.into()));
+        }
+        Ok(Some(digits as usize))
+    }
+
+    pub(crate) fn format_number_to_locale_string(
+        value: f64,
+        locale: &str,
+        minimum_fraction_digits: Option<usize>,
+        maximum_fraction_digits: Option<usize>,
+    ) -> String {
+        if !value.is_finite() {
+            return Self::format_number_default(value);
+        }
+
+        let mut rendered = if let Some(maximum_fraction_digits) = maximum_fraction_digits {
+            let mut rounded = Self::number_to_fixed(value, maximum_fraction_digits);
+            if let Some(dot_index) = rounded.find('.') {
+                let minimum_kept = minimum_fraction_digits
+                    .unwrap_or(0)
+                    .min(maximum_fraction_digits);
+                let mut fraction_len = rounded.len().saturating_sub(dot_index + 1);
+                while fraction_len > minimum_kept && rounded.ends_with('0') {
+                    rounded.pop();
+                    fraction_len -= 1;
+                }
+                if fraction_len == 0 && rounded.ends_with('.') {
+                    rounded.pop();
+                }
+            }
+            rounded
+        } else {
+            Self::format_number_default(value)
+        };
+
+        if let Some(minimum_fraction_digits) = minimum_fraction_digits {
+            if !rendered.contains('e') && !rendered.contains('E') {
+                let existing = if let Some(dot_index) = rendered.find('.') {
+                    rendered.len().saturating_sub(dot_index + 1)
+                } else {
+                    rendered.push('.');
+                    0
+                };
+                if minimum_fraction_digits > existing {
+                    rendered.push_str(&"0".repeat(minimum_fraction_digits - existing));
+                }
+            }
+        }
+
+        Self::format_preformatted_number_for_locale(&rendered, locale)
+    }
+
+    fn format_preformatted_number_for_locale(rendered: &str, locale: &str) -> String {
+        let negative = rendered.starts_with('-');
+        let unsigned = if negative { &rendered[1..] } else { rendered };
+
+        let family = Self::intl_locale_family(locale);
+        let (group_sep, decimal_sep) = if family == "de" {
+            ('.', ',')
+        } else {
+            (',', '.')
+        };
+
+        if unsigned.contains('e') || unsigned.contains('E') {
+            let mut out = unsigned.to_string();
+            if decimal_sep != '.' {
+                out = out.replacen('.', &decimal_sep.to_string(), 1);
+            }
+            if negative && !Self::rendered_number_is_zero(&out) {
+                return format!("-{out}");
+            }
+            return out;
+        }
+
+        let mut parts = unsigned.splitn(2, '.');
+        let integer = parts.next().unwrap_or_default();
+        let fraction = parts.next();
+
+        let mut grouped = String::new();
+        for (index, ch) in integer.chars().rev().enumerate() {
+            if index > 0 && index % 3 == 0 {
+                grouped.push(group_sep);
+            }
+            grouped.push(ch);
+        }
+        let mut out = grouped.chars().rev().collect::<String>();
+        if out.is_empty() {
+            out.push('0');
+        }
+
+        if let Some(fraction) = fraction {
+            if !fraction.is_empty() {
+                out.push(decimal_sep);
+                out.push_str(fraction);
+            }
+        }
+
+        if negative && !Self::rendered_number_is_zero(&out) {
+            format!("-{out}")
+        } else {
+            out
+        }
+    }
+
+    fn rendered_number_is_zero(rendered: &str) -> bool {
+        rendered
+            .chars()
+            .all(|ch| matches!(ch, '0' | '.' | ',' | '-'))
+    }
+
     pub(crate) fn radix_digit_char(value: u32) -> char {
         if value < 10 {
             char::from(b'0' + value as u8)

@@ -155,6 +155,10 @@ impl MockWindow {
     pub fn take_trace_logs(&mut self) -> Result<Vec<String>> {
         self.with_current_harness_mut(|page| Ok(page.take_trace_logs()))
     }
+
+    pub fn take_downloads(&mut self) -> Result<Vec<DownloadArtifact>> {
+        self.with_current_harness_mut(|page| Ok(page.take_downloads()))
+    }
 }
 
 impl MockPage {

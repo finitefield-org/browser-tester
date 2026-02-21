@@ -1066,6 +1066,29 @@ fn number_instance_methods_work() -> Result<()> {
 }
 
 #[test]
+fn number_to_locale_string_honors_fraction_digit_options() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = (12.3456).toLocaleString(undefined, {
+              maximumFractionDigits: 2,
+              minimumFractionDigits: 2,
+            });
+            const b = (1200).toLocaleString('de-DE', { minimumFractionDigits: 2 });
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "12.35:1.200,00")?;
+    Ok(())
+}
+
+#[test]
 fn number_method_arity_errors_have_stable_messages() {
     let cases = [
         (

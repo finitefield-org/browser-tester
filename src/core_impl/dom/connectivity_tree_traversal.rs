@@ -1,6 +1,57 @@
 use super::*;
 
 impl Dom {
+    pub(crate) fn ensure_document_body_element(&mut self) -> Result<NodeId> {
+        if let Some(body) = self.body() {
+            return Ok(body);
+        }
+
+        let Some(document_element) = self.document_element() else {
+            return self.wrap_root_children_with_html_body();
+        };
+
+        if !self
+            .tag_name(document_element)
+            .map(|tag| tag.eq_ignore_ascii_case("html"))
+            .unwrap_or(false)
+        {
+            return self.wrap_root_children_with_html_body();
+        }
+
+        let body = self.create_element(document_element, "body".to_string(), HashMap::new());
+        let html_children = self.nodes[document_element.0].children.clone();
+        for child in html_children {
+            if child == body {
+                continue;
+            }
+
+            let keep_in_html = self
+                .tag_name(child)
+                .map(|tag| {
+                    tag.eq_ignore_ascii_case("head")
+                        || tag.eq_ignore_ascii_case("body")
+                        || tag.eq_ignore_ascii_case("frameset")
+                })
+                .unwrap_or(false);
+            if keep_in_html {
+                continue;
+            }
+            self.append_child(body, child)?;
+        }
+
+        Ok(body)
+    }
+
+    fn wrap_root_children_with_html_body(&mut self) -> Result<NodeId> {
+        let root_children = self.nodes[self.root.0].children.clone();
+        let html = self.create_element(self.root, "html".to_string(), HashMap::new());
+        let body = self.create_element(html, "body".to_string(), HashMap::new());
+        for child in root_children {
+            self.append_child(body, child)?;
+        }
+        Ok(body)
+    }
+
     pub(crate) fn can_have_children(&self, node_id: NodeId) -> bool {
         matches!(
             self.nodes.get(node_id.0).map(|n| &n.node_type),

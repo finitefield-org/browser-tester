@@ -884,6 +884,14 @@ fn anchor_download_blob_click_inside_handler_keeps_dom_state_for_following_state
     h.click("#run")?;
     h.assert_text("#result", "before|after")?;
     assert!(h.take_location_navigations().is_empty());
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("test.csv".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            bytes: b"abc".to_vec(),
+        }]
+    );
     Ok(())
 }
 

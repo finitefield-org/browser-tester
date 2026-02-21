@@ -63,6 +63,10 @@ impl Harness {
         std::mem::take(&mut self.location_history.location_navigations)
     }
 
+    pub fn take_downloads(&mut self) -> Vec<DownloadArtifact> {
+        std::mem::take(&mut self.browser_apis.downloads)
+    }
+
     pub fn location_reload_count(&self) -> usize {
         self.location_history.location_reload_count
     }
@@ -209,6 +213,38 @@ impl Harness {
             return None;
         }
         Some(details)
+    }
+
+    pub(crate) fn maybe_capture_anchor_download(&mut self, target: NodeId) -> Result<()> {
+        let is_anchor = self
+            .dom
+            .tag_name(target)
+            .map(|tag| tag.eq_ignore_ascii_case("a"))
+            .unwrap_or(false);
+        if !is_anchor {
+            return Ok(());
+        }
+        let Some(filename) = self.dom.attr(target, "download") else {
+            return Ok(());
+        };
+
+        let href = self.resolve_anchor_href(target);
+        let Some(blob) = self.browser_apis.blob_url_objects.get(&href).cloned() else {
+            return Ok(());
+        };
+        let blob = blob.borrow();
+        let mime_type = if blob.mime_type.is_empty() {
+            None
+        } else {
+            Some(blob.mime_type.clone())
+        };
+
+        self.browser_apis.downloads.push(DownloadArtifact {
+            filename: Some(filename),
+            mime_type,
+            bytes: blob.bytes.clone(),
+        });
+        Ok(())
     }
 
     pub(crate) fn is_effectively_disabled(&self, node: NodeId) -> bool {

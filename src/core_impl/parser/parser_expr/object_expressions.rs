@@ -337,6 +337,9 @@ pub(crate) fn parse_object_has_own_property_expr(src: &str) -> Result<Option<Exp
     let Some(target) = cursor.parse_identifier() else {
         return Ok(None);
     };
+    if matches!(target.as_str(), "document" | "window") {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
         return Ok(None);

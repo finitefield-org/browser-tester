@@ -264,6 +264,25 @@ impl Harness {
                     }
                     return Ok(Value::Undefined);
                 }
+                let is_document_object = matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                );
+                if is_document_object {
+                    let value = match key {
+                        "body" => self.dom.body().map(Value::Node).unwrap_or(Value::Null),
+                        "head" => self.dom.head().map(Value::Node).unwrap_or(Value::Null),
+                        "documentElement" => self
+                            .dom
+                            .document_element()
+                            .map(Value::Node)
+                            .unwrap_or(Value::Null),
+                        _ => Value::Undefined,
+                    };
+                    if !matches!(value, Value::Undefined) {
+                        return Ok(value);
+                    }
+                }
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }

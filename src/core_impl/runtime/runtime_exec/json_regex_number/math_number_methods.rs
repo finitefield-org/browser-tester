@@ -240,7 +240,19 @@ impl Harness {
                 )))
             }
             NumberInstanceMethod::ToLocaleString => {
-                Ok(Value::String(Self::format_number_default(numeric)))
+                let locale = self.resolve_number_to_locale_string_locale(args_value.first())?;
+                let (minimum_fraction_digits, maximum_fraction_digits) =
+                    Self::parse_number_to_locale_string_fraction_digits(args_value.get(1))?;
+                if minimum_fraction_digits.is_none() && maximum_fraction_digits.is_none() {
+                    Ok(Value::String(Self::format_number_default(numeric)))
+                } else {
+                    Ok(Value::String(Self::format_number_to_locale_string(
+                        numeric,
+                        &locale,
+                        minimum_fraction_digits,
+                        maximum_fraction_digits,
+                    )))
+                }
             }
             NumberInstanceMethod::ToPrecision => {
                 if let Some(arg) = args_value.first() {

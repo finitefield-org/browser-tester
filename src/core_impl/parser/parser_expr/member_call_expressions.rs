@@ -120,6 +120,19 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
             continue;
         }
 
+        let base = base_src.trim();
+        if !optional && (base == "document" || base == "window.document") {
+            let target = match member.as_str() {
+                "body" => Some(DomQuery::DocumentBody),
+                "head" => Some(DomQuery::DocumentHead),
+                "documentElement" => Some(DomQuery::DocumentElement),
+                _ => None,
+            };
+            if let Some(target) = target {
+                return Ok(Some(Expr::DomRef(target)));
+            }
+        }
+
         return Ok(Some(Expr::MemberGet {
             target: Box::new(parse_expr(base_src)?),
             member,

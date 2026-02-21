@@ -42,6 +42,23 @@ fn script_end_extractor_handles_regex_literals_with_quotes() -> browser_tester::
 }
 
 #[test]
+fn fragment_input_still_exposes_document_body() -> browser_tester::Result<()> {
+    let html = r##"
+    <div id="x">ok</div>
+    <div id="result"></div>
+    <script>
+      const hasBody = document.body ? "yes" : "no";
+      const bodyHasX = document.body && document.body.querySelector("#x") ? "yes" : "no";
+      document.getElementById("result").textContent = hasBody + ":" + bodyHasX;
+    </script>
+    "##;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "yes:yes")?;
+    Ok(())
+}
+
+#[test]
 fn array_from_supports_nodelist_and_map_callback() -> browser_tester::Result<()> {
     let html = r#"
     <ul>

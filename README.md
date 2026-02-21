@@ -87,6 +87,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
+- `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
 - Main APIs:
   - `Harness::from_html_with_local_storage(html, &[("key", "value"), ...])`
   - `Harness::from_html_with_url_and_local_storage(url, html, &[("key", "value"), ...])`
@@ -98,6 +99,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::set_location_mock_page(url, html)`
   - `Harness::clear_location_mock_pages()`
   - `Harness::take_location_navigations()`
+  - `Harness::take_downloads()`
   - `Harness::location_reload_count()`
 - For `History API` tests (`history.go(0)` / `history.back()` / `history.forward()`), you can reuse
   `set_location_mock_page()` to provide deterministic page contents for URLs in the history stack.
@@ -198,6 +200,41 @@ fn main() -> browser_tester::Result<()> {
 
     let h = Harness::from_html_with_local_storage(html, &[("token", "seeded-token")])?;
     h.assert_text("#out", "seeded-token")?;
+    Ok(())
+}
+```
+
+Download capture example:
+
+```rust
+use browser_tester::{DownloadArtifact, Harness};
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          const blob = new Blob(['a,b\n1,2\n'], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'report.csv';
+          a.click();
+          URL.revokeObjectURL(url);
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("report.csv".to_string()),
+            mime_type: Some("text/csv;charset=utf-8;".to_string()),
+            bytes: b"a,b\n1,2\n".to_vec(),
+        }]
+    );
     Ok(())
 }
 ```
