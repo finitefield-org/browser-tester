@@ -1170,7 +1170,7 @@ fn disabled_property_read_write_works() -> Result<()> {
     h.click("#toggle")?;
     h.assert_text("#result", "true:true")?;
     h.click("#enable")?;
-    h.assert_text("#result", "false:")?;
+    h.assert_text("#result", "false:null")?;
     Ok(())
 }
 

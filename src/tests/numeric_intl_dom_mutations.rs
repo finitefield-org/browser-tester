@@ -1144,7 +1144,7 @@ fn remove_and_has_attribute_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "true:false::")?;
+    h.assert_text("#result", "true:false::null")?;
     Ok(())
 }
 

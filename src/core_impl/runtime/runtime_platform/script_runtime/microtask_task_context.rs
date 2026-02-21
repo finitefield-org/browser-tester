@@ -38,18 +38,7 @@ impl Harness {
 
                 match task {
                     ScheduledMicrotask::Script { handler, mut env } => {
-                        let mut event =
-                            EventState::new("microtask", this.dom.root, this.scheduler.now_ms);
-                        let event_param = handler
-                            .first_event_param()
-                            .map(|event_param| event_param.to_string());
-                        this.bind_handler_params(&handler, &[], &mut env, &event_param, &event)?;
-                        let run =
-                            this.execute_stmts(&handler.stmts, &event_param, &mut event, &mut env);
-                        let run = run.map(|_| ());
-                        if let Err(err) = run {
-                            return Err(err);
-                        }
+                        this.run_script_microtask_handler(&handler, &mut env)?;
                     }
                     ScheduledMicrotask::Promise { reaction, settled } => {
                         this.run_promise_reaction_task(reaction, settled)?;
@@ -100,19 +89,21 @@ impl Harness {
         } else {
             Vec::new()
         };
-        self.bind_handler_params(handler, &event_args, env, &event_param, event)?;
-        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
-        env.remove(INTERNAL_RETURN_SLOT);
-        match flow {
-            ExecFlow::Continue => Ok(()),
-            ExecFlow::Break => Err(Error::ScriptRuntime(
-                "break statement outside of loop".into(),
-            )),
-            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                "continue statement outside of loop".into(),
-            )),
-            ExecFlow::Return => Ok(()),
-        }
+        self.with_callback_scope_depth(env, |this, callback_env| {
+            this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
+            let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+            callback_env.remove(INTERNAL_RETURN_SLOT);
+            match flow {
+                ExecFlow::Continue => Ok(()),
+                ExecFlow::Break => Err(Error::ScriptRuntime(
+                    "break statement outside of loop".into(),
+                )),
+                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                    "continue statement outside of loop".into(),
+                )),
+                ExecFlow::Return => Ok(()),
+            }
+        })
     }
 
     pub(crate) fn execute_timer_task_callback(
@@ -140,19 +131,60 @@ impl Harness {
         let event_param = handler
             .first_event_param()
             .map(|event_param| event_param.to_string());
-        self.bind_handler_params(&handler, callback_args, env, &event_param, event)?;
-        let flow = self.execute_stmts(&handler.stmts, &event_param, event, env)?;
-        env.remove(INTERNAL_RETURN_SLOT);
-        match flow {
-            ExecFlow::Continue => Ok(()),
-            ExecFlow::Break => Err(Error::ScriptRuntime(
-                "break statement outside of loop".into(),
-            )),
-            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                "continue statement outside of loop".into(),
-            )),
-            ExecFlow::Return => Ok(()),
+        self.with_callback_scope_depth(env, |this, callback_env| {
+            this.bind_handler_params(&handler, callback_args, callback_env, &event_param, event)?;
+            let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+            callback_env.remove(INTERNAL_RETURN_SLOT);
+            match flow {
+                ExecFlow::Continue => Ok(()),
+                ExecFlow::Break => Err(Error::ScriptRuntime(
+                    "break statement outside of loop".into(),
+                )),
+                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
+                    "continue statement outside of loop".into(),
+                )),
+                ExecFlow::Return => Ok(()),
+            }
+        })
+    }
+
+    fn run_script_microtask_handler(
+        &mut self,
+        handler: &ScriptHandler,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let mut event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
+        let event_param = handler
+            .first_event_param()
+            .map(|event_param| event_param.to_string());
+        self.with_callback_scope_depth(env, |this, callback_env| {
+            this.bind_handler_params(handler, &[], callback_env, &event_param, &event)?;
+            let run = this.execute_stmts(&handler.stmts, &event_param, &mut event, callback_env);
+            run.map(|_| ())
+        })
+    }
+
+    pub(crate) fn with_callback_scope_depth<T>(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+        run: impl FnOnce(&mut Self, &mut HashMap<String, Value>) -> Result<T>,
+    ) -> Result<T> {
+        let previous = env.get(INTERNAL_SCOPE_DEPTH_KEY).cloned();
+        let next_depth = Self::env_scope_depth(env).saturating_add(1);
+        env.insert(
+            INTERNAL_SCOPE_DEPTH_KEY.to_string(),
+            Value::Number(next_depth),
+        );
+        let result = run(self, env);
+        match previous {
+            Some(value) => {
+                env.insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), value);
+            }
+            None => {
+                env.remove(INTERNAL_SCOPE_DEPTH_KEY);
+            }
         }
+        result
     }
 
     pub(crate) fn is_internal_env_key(name: &str) -> bool {
@@ -187,11 +219,7 @@ impl Harness {
         }
     }
 
-    pub(crate) fn queue_listener_capture_env_update(
-        &mut self,
-        name: String,
-        value: Option<Value>,
-    ) {
+    pub(crate) fn queue_listener_capture_env_update(&mut self, name: String, value: Option<Value>) {
         if Self::is_internal_env_key(&name) {
             return;
         }

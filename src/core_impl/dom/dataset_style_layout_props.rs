@@ -47,7 +47,8 @@ impl Dom {
         }
 
         if decls.is_empty() {
-            element.attrs.remove("style");
+            // Keep an empty style attribute to match CSSStyleDeclaration behavior.
+            element.attrs.insert("style".to_string(), String::new());
         } else {
             element
                 .attrs
