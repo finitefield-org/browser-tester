@@ -22,6 +22,7 @@ impl Harness {
             sticky: false,
             has_indices: false,
             unicode: false,
+            unicode_sets: false,
         };
         let mut seen = HashSet::new();
         for ch in flags.chars() {
@@ -35,9 +36,17 @@ impl Harness {
                 's' => info.dot_all = true,
                 'y' => info.sticky = true,
                 'd' => info.has_indices = true,
-                'u' => info.unicode = true,
+                'u' => {
+                    if info.unicode_sets {
+                        return Err(format!("invalid regular expression flags: {flags}"));
+                    }
+                    info.unicode = true;
+                }
                 'v' => {
-                    return Err("invalid regular expression flags: v flag is not supported".into());
+                    if info.unicode {
+                        return Err(format!("invalid regular expression flags: {flags}"));
+                    }
+                    info.unicode_sets = true;
                 }
                 _ => return Err(format!("invalid regular expression flags: {flags}")),
             }
@@ -53,7 +62,8 @@ impl Harness {
         builder.case_insensitive(info.ignore_case);
         builder.multi_line(info.multiline);
         builder.dot_matches_new_line(info.dot_all);
-        builder.unicode_mode(info.unicode);
+        builder.unicode_mode(info.unicode || info.unicode_sets);
+        builder.unicode_sets_mode(info.unicode_sets);
         builder.build()
     }
 
@@ -74,6 +84,7 @@ impl Harness {
             sticky: info.sticky,
             has_indices: info.has_indices,
             unicode: info.unicode,
+            unicode_sets: info.unicode_sets,
             compiled,
             last_index: 0,
             properties: ObjectValue::default(),

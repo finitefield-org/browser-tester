@@ -172,7 +172,10 @@ impl Harness {
             cloned.last_index = 0;
             Rc::new(RefCell::new(cloned))
         };
-        let unicode = splitter.borrow().unicode;
+        let unicode = {
+            let splitter = splitter.borrow();
+            splitter.unicode || splitter.unicode_sets
+        };
         let input_len_utf16 = Self::utf16_length(value);
 
         if input_len_utf16 == 0 {
@@ -270,8 +273,9 @@ impl Harness {
 
             if result.full_match_start_byte == result.full_match_end_byte {
                 let mut regex = regex.borrow_mut();
+                let unicode = regex.unicode || regex.unicode_sets;
                 regex.last_index =
-                    Self::advance_string_index_utf16(value, regex.last_index, regex.unicode);
+                    Self::advance_string_index_utf16(value, regex.last_index, unicode);
             }
         }
 
@@ -321,8 +325,9 @@ impl Harness {
 
             if result.full_match_start_byte == result.full_match_end_byte {
                 let mut regex = regex.borrow_mut();
+                let unicode = regex.unicode || regex.unicode_sets;
                 regex.last_index =
-                    Self::advance_string_index_utf16(value, regex.last_index, regex.unicode);
+                    Self::advance_string_index_utf16(value, regex.last_index, unicode);
             }
         }
 

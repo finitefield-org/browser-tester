@@ -392,6 +392,7 @@ pub(crate) struct RegexValue {
     pub(crate) sticky: bool,
     pub(crate) has_indices: bool,
     pub(crate) unicode: bool,
+    pub(crate) unicode_sets: bool,
     pub(crate) compiled: Regex,
     pub(crate) last_index: usize,
     pub(crate) properties: ObjectValue,
@@ -408,6 +409,7 @@ impl PartialEq for RegexValue {
             && self.sticky == other.sticky
             && self.has_indices == other.has_indices
             && self.unicode == other.unicode
+            && self.unicode_sets == other.unicode_sets
             && self.last_index == other.last_index
             && self.properties == other.properties
     }
@@ -441,6 +443,7 @@ pub(crate) struct RegexFlags {
     pub(crate) sticky: bool,
     pub(crate) has_indices: bool,
     pub(crate) unicode: bool,
+    pub(crate) unicode_sets: bool,
 }
 
 impl Value {

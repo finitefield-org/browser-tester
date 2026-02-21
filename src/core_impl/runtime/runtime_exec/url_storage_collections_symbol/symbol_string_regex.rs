@@ -304,8 +304,9 @@ impl Harness {
                 }
                 if result.full_match_start_byte == result.full_match_end_byte {
                     let mut regex = regex.borrow_mut();
+                    let unicode = regex.unicode || regex.unicode_sets;
                     regex.last_index =
-                        Self::advance_string_index_utf16(value, regex.last_index, regex.unicode);
+                        Self::advance_string_index_utf16(value, regex.last_index, unicode);
                 }
             }
             if matches.is_empty() {

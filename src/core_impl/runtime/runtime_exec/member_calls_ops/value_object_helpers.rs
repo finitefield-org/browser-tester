@@ -371,7 +371,7 @@ impl Harness {
                     "sticky" => Value::Bool(regex.sticky),
                     "hasIndices" => Value::Bool(regex.has_indices),
                     "unicode" => Value::Bool(regex.unicode),
-                    "unicodeSets" => Value::Bool(false),
+                    "unicodeSets" => Value::Bool(regex.unicode_sets),
                     "lastIndex" => Value::Number(regex.last_index as i64),
                     "constructor" => Value::RegExpConstructor,
                     _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),

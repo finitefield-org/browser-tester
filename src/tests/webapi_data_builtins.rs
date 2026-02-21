@@ -146,6 +146,261 @@ fn regexp_constructor_properties_and_escape_work() -> Result<()> {
 }
 
 #[test]
+fn regexp_v_flag_and_unicode_sets_property_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const literal = /a/v;
+            const ctor = new RegExp('a', 'v');
+            const uvError = (() => {
+              try {
+                new RegExp('a', 'uv');
+                return 'noerr';
+              } catch (err) {
+                return String(err).includes('invalid regular expression flags');
+              }
+            })();
+            document.getElementById('result').textContent =
+              literal.test('a') + ':' +
+              literal.unicode + ':' + literal.unicodeSets + ':' +
+              ctor.unicode + ':' + ctor.unicodeSets + ':' +
+              uvError;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true:false:true:true")?;
+
+    let parse_err = Harness::from_html("<script>const re = /a/uv;</script>")
+        .expect_err("u and v flags together should fail during parse");
+    match parse_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression flags")),
+        other => panic!("unexpected uv flag parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_v_flag_scalar_class_set_operations_follow_js_constraints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = /[a&&a]/v.test('a');
+            const b = /[a&&b]/v.test('a');
+            const c = /[a--b]/v.test('a');
+            const d = /[a--a]/v.test('a');
+            const e = /[a&&a&&a]/v.test('a');
+            const f = /[a--b--c]/v.test('a');
+            const g = /[\d&&\w]/v.test('1') && !/[\d&&\w]/v.test('a');
+            const h = /[\d--\w]/v.test('1');
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' +
+              e + ':' + f + ':' + g + ':' + h;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true:false:true:true:true:false")?;
+
+    let multi_item_err = Harness::from_html("<script>const re = /[ab&&c]/v;</script>")
+        .expect_err("set operands with multiple items should fail in v mode");
+    match multi_item_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected multi-item set operand parse error: {other:?}"),
+    }
+
+    let range_operand_err = Harness::from_html("<script>const re = /[a-b&&b]/v;</script>")
+        .expect_err("range operand in set operation should fail in v mode");
+    match range_operand_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected range set operand parse error: {other:?}"),
+    }
+
+    let mixed_op_err = Harness::from_html("<script>const re = /[a&&b--c]/v;</script>")
+        .expect_err("mixing set operators at one level should fail in v mode");
+    match mixed_op_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected mixed set operator parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_v_flag_nested_class_set_operands_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = /[[ab]&&[bc]]/v.test('b');
+            const b = /[[ab]--[bc]]/v.test('a');
+            const c = /[[ab]&&[[bc]--[c]]]/v.test('b');
+            const d = /[[ab]--[[bc]&&[c]]]/v.test('b');
+            const e = /[[a-b]&&b]/v.test('b');
+            const f = /[[a-b]--b]/v.test('a');
+            const g = /[a&&[bc]]/v.test('a');
+            const h = /[[ab]&&c]/v.test('b');
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' +
+              e + ':' + f + ':' + g + ':' + h;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true:true:true:false:false")?;
+
+    let rhs_multi_item_err = Harness::from_html("<script>const re = /[a&&bc]/v;</script>")
+        .expect_err("set operand with multiple RHS items should fail without nesting");
+    match rhs_multi_item_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected RHS multi-item set operand parse error: {other:?}"),
+    }
+
+    let nested_rhs_multi_item_err =
+        Harness::from_html("<script>const re = /[[ab]&&bc]/v;</script>")
+            .expect_err("nested left operand and multi-item RHS should fail without nesting");
+    match nested_rhs_multi_item_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected nested RHS multi-item parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_v_flag_class_string_disjunction_q_escape_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const aHit = /[\q{ab}]/v.exec('xxabyy');
+            const a = aHit !== null && aHit[0] === 'ab';
+            const bHit = /[\q{a|bc}]/v.exec('zzbc');
+            const b = bHit !== null && bHit[0] === 'bc';
+            const c = /[\q{a\|b}]/v.test('a|b');
+            const d = /[\q{a\}b}]/v.test('a}b');
+            const e = /[\q{\x41}]/v.test('A');
+            const fHit = /[\q{}]/v.exec('x');
+            const f = fHit !== null && fHit[0] === '';
+            const g = /[^\q{a|b}]/v.test('c') && !/[^\q{a|b}]/v.test('a');
+            const h = /[\q{a|b}&&[ab]]/v.test('a') && /[\q{a|b}--\q{a}]/v.test('b');
+            const iHit = /[\q{ab}--\q{a}]/v.exec('xxabyy');
+            const i = iHit !== null && iHit[0] === 'ab';
+            const j = /[[\q{ab}]&&\q{ab|x}]/v.test('ab');
+            const kHit = /[[\q{ab}]--\q{a}]/v.exec('ab');
+            const k = kHit !== null && kHit[0] === 'ab';
+            const lHit = /[\q{ab|abc}]/v.exec('abcd');
+            const l = lHit !== null && lHit[0] === 'abc';
+            const mHit = /[[\q{ab}]]/v.exec('zab');
+            const m = mHit !== null && mHit[0] === 'ab';
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' +
+              e + ':' + f + ':' + g + ':' + h + ':' +
+              i + ':' + j + ':' + k + ':' + l + ':' + m;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true:true:true:true:true:true:true",
+    )?;
+
+    let missing_brace_err = Harness::from_html("<script>const re = /[\\q]/v;</script>")
+        .expect_err("q escape in v mode requires class string disjunction braces");
+    match missing_brace_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected q missing brace parse error: {other:?}"),
+    }
+
+    let invalid_escape_err = Harness::from_html("<script>const re = /[\\q{\\d}]/v;</script>")
+        .expect_err("class string disjunction should reject class escapes like \\d");
+    match invalid_escape_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected q invalid class escape parse error: {other:?}"),
+    }
+
+    let invalid_decimal_err = Harness::from_html("<script>const re = /[\\q{\\1}]/v;</script>")
+        .expect_err("class string disjunction should reject decimal escapes");
+    match invalid_decimal_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected q invalid decimal escape parse error: {other:?}"),
+    }
+
+    let negated_string_err = Harness::from_html("<script>const re = /[^\\q{ab}]/v;</script>")
+        .expect_err("negated class should reject non-scalar string disjunction alternatives");
+    match negated_string_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected q negated string parse error: {other:?}"),
+    }
+
+    let negated_set_string_err =
+        Harness::from_html("<script>const re = /[^\\q{ab}--\\q{a}]/v;</script>")
+            .expect_err("negated set operation should reject non-scalar string alternatives");
+    match negated_set_string_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected q negated set string parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_flag_modifier_groups_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a1 = /(?i:a)/.test('A');
+            const a2 = /(?-i:a)/.test('A');
+            const a3 = /(?i:a)(?-i:b)/.test('Ab');
+            const a4 = /(?m:^a$)/.test('x\na\ny');
+            const a5 = /(?s:.)/.test('\n');
+            const a6 = /(?i-:a)/.test('A');
+            document.getElementById('result').textContent =
+              a1 + ':' + a2 + ':' + a3 + ':' + a4 + ':' + a5 + ':' + a6;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true:true:true:true")?;
+
+    let dup_flag_err = Harness::from_html("<script>const re = /(?ii:a)/;</script>")
+        .expect_err("duplicate modifier flags should fail during parse");
+    match dup_flag_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected duplicate flag parse error: {other:?}"),
+    }
+
+    let empty_disable_err = Harness::from_html("<script>const re = /(?-:a)/;</script>")
+        .expect_err("invalid empty disable modifier should fail during parse");
+    match empty_disable_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected invalid modifier parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn regexp_last_index_inside_surrogate_pair_behaves_like_js_search_and_sticky() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -340,6 +595,29 @@ fn regexp_named_backreference_forward_reference_works() -> Result<()> {
 }
 
 #[test]
+fn regexp_named_backreference_literals_without_named_groups_in_non_unicode_mode() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = /\k/.test('k');
+            const b = /\k<a>/.test('k<a>');
+            const c = /\k<->/.test('k<->');
+            const d = /\k<>/.test('k<>');
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
 fn regexp_named_backreference_to_unknown_name_is_parse_error() -> Result<()> {
     let err = Harness::from_html("<script>const re = /\\k<a>(?<b>x)/;</script>")
         .expect_err("unknown named backreference should fail during parse");
@@ -347,6 +625,214 @@ fn regexp_named_backreference_to_unknown_name_is_parse_error() -> Result<()> {
         Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
         other => panic!("unexpected unknown named backreference parse error: {other:?}"),
     }
+
+    let err_u = Harness::from_html("<script>const re = /\\k<a>/u;</script>")
+        .expect_err("named backreference syntax should be strict in unicode mode");
+    match err_u {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode named backreference parse error: {other:?}"),
+    }
+
+    let err_invalid_name_with_named_capture =
+        Harness::from_html("<script>const re = /(?<a>x)\\k<->/;</script>")
+            .expect_err("invalid named backreference name should fail when named groups exist");
+    match err_invalid_name_with_named_capture {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected invalid name parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_numeric_backreference_and_legacy_octal_behavior_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const c1 = String.fromCharCode(1);
+            const c2 = String.fromCharCode(2);
+            const c8 = String.fromCharCode(8);
+
+            const a = /\1(a)/.exec('a');
+            const b = /(a)\2/.test('a' + c2);
+            const c = /(a)\18/.test('a' + c1 + '8');
+            const d = /(a)\8/.test('a8');
+            const e = /[\1]/.test(c1);
+            const f = /[\10]/.test(c8);
+            const g = /[\18]/.test(c1) && /[\18]/.test('8');
+
+            document.getElementById('result').textContent =
+              a[0] + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a:true:true:true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_numeric_backreference_invalid_in_unicode_mode_is_parse_error() -> Result<()> {
+    let err1 = Harness::from_html("<script>const re = /\\2(a)/u;</script>")
+        .expect_err("numeric backreference beyond capture count should fail in unicode mode");
+    match err1 {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode numeric backreference parse error: {other:?}"),
+    }
+
+    let err2 = Harness::from_html("<script>const re = /[\\1]/u;</script>")
+        .expect_err("numeric class escape should fail in unicode mode");
+    match err2 {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode class numeric escape parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_legacy_brace_and_empty_class_compat_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const braceLiteral = /a{b}/.test('a{b}');
+            const braceLiteral2 = /a{1,a}/.test('a{1,a}');
+            const emptyClass = /[]/.test('a');
+            const negEmpty = /[^]/.test('\n');
+            const octal = /\07/.test('\x07');
+            const nul8 = /\08/.test(String.fromCharCode(0) + '8');
+            const classOctal = /[\07]/.test('\x07');
+            const classNulOrEight =
+              /[\08]/.test(String.fromCharCode(0)) && /[\08]/.test('8');
+            document.getElementById('result').textContent =
+              braceLiteral + ':' + braceLiteral2 + ':' +
+              emptyClass + ':' + negEmpty + ':' +
+              octal + ':' + nul8 + ':' + classOctal + ':' + classNulOrEight;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:false:true:true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn regexp_class_range_order_and_unicode_decimal_escape_errors_match_js() -> Result<()> {
+    let class_range_err = Harness::from_html("<script>const re = /[z-a]/;</script>")
+        .expect_err("range out of order should fail during parse");
+    match class_range_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected class range parse error: {other:?}"),
+    }
+
+    let unicode_decimal_err = Harness::from_html("<script>const re = /\\07/u;</script>")
+        .expect_err("unicode decimal escape should fail during parse");
+    match unicode_decimal_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode decimal parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_unicode_mode_rejects_invalid_identity_escapes() -> Result<()> {
+    let err1 = Harness::from_html("<script>const re = /\\a/u;</script>")
+        .expect_err("unicode mode should reject identity escapes like \\a");
+    match err1 {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode identity escape parse error: {other:?}"),
+    }
+
+    let err2 = Harness::from_html("<script>const re = /[\\q]/u;</script>")
+        .expect_err("unicode mode should reject class identity escapes like \\q");
+    match err2 {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode class identity parse error: {other:?}"),
+    }
+
+    let err3 = Harness::from_html("<script>const re = /\\-/u;</script>")
+        .expect_err("unicode mode should reject escaped hyphen outside class");
+    match err3 {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode escaped hyphen parse error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn regexp_unicode_property_escapes_and_non_unicode_u_escape_compat_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = /\p{L}/u.test('A');
+            const b = /\P{L}/u.test('1');
+            const c = /\p{Nd}/u.test('9') && /\p{Nd}/u.test('٣');
+            const d = /\p{ASCII}/u.test('A') && !/\p{ASCII}/u.test('🙂');
+            const e = /\p{Any}/u.test('🙂');
+            const f = /\p{gc=Letter}/u.test('Z');
+            const g = /\p{sc=Latin}/u.test('A') && !/\p{sc=Latin}/u.test('Γ');
+            const g2 = /\p{sc=Greek}/u.test('Γ') && !/\p{sc=Greek}/u.test('A');
+            const g3 = /\p{Script=Greek}/u.test('Ω');
+            const g4 = /\p{scx=Greek}/u.test('Γ') && !/\p{scx=Greek}/u.test('A');
+            const g5 = /\p{Script_Extensions=Latin}/u.test('A');
+            const h = /\p{L}/.test('p{L}');
+            const i = /\u{61}/.test('u'.repeat(61));
+            const j = /\u{61}/u.test('a');
+            const k = /\p{RGI_Emoji}/v.test('🙂');
+            const l = /[\p{RGI_Emoji}]/v.test('🙂');
+            const m = /\p{RGI_Emoji}/v.test('A');
+            const n = /\p{RGI_Emoji}/v.test('👨‍👩‍👧‍👦');
+            const o = /\p{RGI_Emoji}/v.test('0️⃣');
+            const p = /[\p{RGI_Emoji}a]/v.test('a');
+            const q = /[\p{RGI_Emoji}\p{ASCII}]/v.exec('0️⃣')[0] === '0️⃣';
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' +
+              f + ':' + g + ':' + g2 + ':' + g3 + ':' + g4 + ':' + g5 + ':' + h + ':' + i + ':' + j + ':' +
+              k + ':' + l + ':' + m + ':' + n + ':' + o + ':' + p + ':' + q;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:false:true:true:true:true",
+    )?;
+
+    let err = Harness::from_html("<script>const re = /\\p{RGI_Emoji}/u;</script>")
+        .expect_err("unsupported unicode property name should fail in unicode mode");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected unicode property parse error: {other:?}"),
+    }
+
+    let negated_err = Harness::from_html("<script>const re = /\\P{RGI_Emoji}/v;</script>")
+        .expect_err("negated unicode string property should fail in unicode sets mode");
+    match negated_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected negated unicode string property parse error: {other:?}"),
+    }
+
+    let negated_class_err = Harness::from_html("<script>const re = /[^\\p{RGI_Emoji}]/v;</script>")
+        .expect_err("negated class containing unicode string property should fail");
+    match negated_class_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("invalid regular expression")),
+        other => panic!("unexpected negated class unicode string parse error: {other:?}"),
+    }
+
     Ok(())
 }
 
