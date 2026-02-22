@@ -127,6 +127,7 @@ impl Harness {
             DomProp::Slot => Some("slot"),
             DomProp::Role => Some("role"),
             DomProp::ElementTiming => Some("elementTiming"),
+            DomProp::HtmlFor => Some("htmlFor"),
             DomProp::Name => Some("name"),
             DomProp::Lang => Some("lang"),
             DomProp::Dir => Some("dir"),

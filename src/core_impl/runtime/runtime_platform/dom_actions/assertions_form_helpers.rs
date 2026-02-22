@@ -116,7 +116,14 @@ impl Harness {
         }
 
         let mut out = Vec::new();
-        self.collect_form_controls(form, &mut out);
+        for node in self.dom.all_element_nodes() {
+            if !is_form_control(&self.dom, node) {
+                continue;
+            }
+            if self.resolve_form_for_submit(node) == Some(form) {
+                out.push(node);
+            }
+        }
         Ok(out)
     }
 
@@ -162,6 +169,9 @@ impl Harness {
             .ok_or_else(|| Error::ScriptRuntime("FormData target is not an element".into()))?;
 
         if tag.eq_ignore_ascii_case("button") {
+            return Ok(false);
+        }
+        if tag.eq_ignore_ascii_case("output") {
             return Ok(false);
         }
 
@@ -280,15 +290,6 @@ impl Harness {
                     name
                 ))),
             },
-        }
-    }
-
-    pub(crate) fn collect_form_controls(&self, node: NodeId, out: &mut Vec<NodeId>) {
-        for child in &self.dom.nodes[node.0].children {
-            if is_form_control(&self.dom, *child) {
-                out.push(*child);
-            }
-            self.collect_form_controls(*child, out);
         }
     }
 }

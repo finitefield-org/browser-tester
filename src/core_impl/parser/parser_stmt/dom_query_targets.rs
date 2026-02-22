@@ -86,6 +86,7 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "id"
             | "indeterminate"
             | "interestForElement"
+            | "htmlFor"
             | "innerHTML"
             | "innerText"
             | "insertAdjacentElement"

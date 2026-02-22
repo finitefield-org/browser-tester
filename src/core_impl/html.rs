@@ -275,6 +275,12 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
             let executable_script = tag.eq_ignore_ascii_case("script")
                 && is_executable_script_type(attrs.get("type").map(String::as_str));
             close_optional_description_item_start_tag(&dom, &mut stack, &tag);
+            close_optional_list_item_start_tag(&dom, &mut stack, &tag);
+            close_optional_option_start_tag(&dom, &mut stack, &tag);
+            close_optional_optgroup_start_tag(&dom, &mut stack, &tag);
+            close_optional_ruby_text_start_tag(&dom, &mut stack, &tag);
+            close_optional_ruby_fallback_parenthesis_start_tag(&dom, &mut stack, &tag);
+            close_optional_paragraph_start_tag(&dom, &mut stack, &tag);
 
             let parent = *stack
                 .last()
@@ -306,6 +312,20 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                 continue;
             }
 
+            if tag.eq_ignore_ascii_case("noscript") && !self_closing {
+                let close = find_case_insensitive_raw_end_tag(bytes, i, b"noscript")
+                    .ok_or_else(|| Error::HtmlParse("unclosed <noscript>".into()))?;
+                if let Some(noscript_body) = html.get(i..close) {
+                    if !noscript_body.is_empty() {
+                        dom.create_text(node, noscript_body.to_string());
+                    }
+                }
+                i = close;
+                let (_, after_end) = parse_end_tag(html, i)?;
+                i = after_end;
+                continue;
+            }
+
             if !self_closing && !is_void_tag(&tag) {
                 stack.push(node);
             }
@@ -322,7 +342,13 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                 let parent = *stack
                     .last()
                     .ok_or_else(|| Error::HtmlParse("missing parent element".into()))?;
-                dom.create_text(parent, decode_html_character_references(text));
+                let mut decoded = decode_html_character_references(text);
+                if should_strip_initial_pre_newline(&dom, parent) {
+                    decoded = strip_initial_pre_newline(&decoded);
+                }
+                if !decoded.is_empty() {
+                    dom.create_text(parent, decoded);
+                }
             }
         }
     }
@@ -330,6 +356,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
     dom.initialize_form_control_values()?;
     dom.normalize_radio_groups()?;
     dom.normalize_named_details_groups()?;
+    dom.normalize_single_head_element()?;
     dom.normalize_single_body_element()?;
     Ok(ParseOutput { dom, scripts })
 }
@@ -356,6 +383,209 @@ fn close_optional_description_item_start_tag(dom: &Dom, stack: &mut Vec<NodeId>,
     if let Some(index) = close_index {
         stack.truncate(index);
     }
+}
+
+fn close_optional_list_item_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !tag.eq_ignore_ascii_case("li") {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("li") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("ol")
+            || open_tag.eq_ignore_ascii_case("ul")
+            || open_tag.eq_ignore_ascii_case("menu")
+        {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn close_optional_option_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !(tag.eq_ignore_ascii_case("option") || tag.eq_ignore_ascii_case("optgroup")) {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("option") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("optgroup")
+            || open_tag.eq_ignore_ascii_case("select")
+            || open_tag.eq_ignore_ascii_case("datalist")
+        {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn close_optional_optgroup_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !tag.eq_ignore_ascii_case("optgroup") {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("optgroup") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("select") {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn close_optional_ruby_text_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !(tag.eq_ignore_ascii_case("rt") || tag.eq_ignore_ascii_case("rp")) {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("rt") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("ruby") {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn close_optional_ruby_fallback_parenthesis_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !(tag.eq_ignore_ascii_case("rt") || tag.eq_ignore_ascii_case("rp")) {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("rp") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("ruby") {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn close_optional_paragraph_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !is_optional_paragraph_terminator_tag(tag) {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("p") {
+            close_index = Some(index);
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
+}
+
+fn is_optional_paragraph_terminator_tag(tag: &str) -> bool {
+    matches!(
+        tag.to_ascii_lowercase().as_str(),
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "details"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hgroup"
+            | "hr"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "search"
+            | "section"
+            | "table"
+            | "ul"
+    )
+}
+
+fn should_strip_initial_pre_newline(dom: &Dom, parent: NodeId) -> bool {
+    dom.tag_name(parent)
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("pre"))
+        && dom.nodes[parent.0].children.is_empty()
+}
+
+fn strip_initial_pre_newline(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("\r\n") {
+        return rest.to_string();
+    }
+    if let Some(rest) = text.strip_prefix('\n') {
+        return rest.to_string();
+    }
+    if let Some(rest) = text.strip_prefix('\r') {
+        return rest.to_string();
+    }
+    text.to_string()
 }
 
 fn is_executable_script_type(raw_type: Option<&str>) -> bool {

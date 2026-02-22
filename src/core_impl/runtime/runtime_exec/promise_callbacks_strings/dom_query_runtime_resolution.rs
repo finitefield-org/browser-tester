@@ -19,6 +19,62 @@ impl Harness {
         }
     }
 
+    fn form_elements_named_item(&self, controls: &[NodeId], key: &str) -> Option<NodeId> {
+        if let Ok(index) = key.parse::<usize>() {
+            return controls.get(index).copied();
+        }
+
+        controls
+            .iter()
+            .copied()
+            .find(|node| self.dom.attr(*node, "id").is_some_and(|id| id == key))
+            .or_else(|| {
+                controls
+                    .iter()
+                    .copied()
+                    .find(|node| self.dom.attr(*node, "name").is_some_and(|name| name == key))
+            })
+    }
+
+    fn resolve_form_elements_index_static(
+        &mut self,
+        controls: &[NodeId],
+        index: &DomIndex,
+    ) -> Result<Option<NodeId>> {
+        match index {
+            DomIndex::Static(index) => Ok(controls.get(*index).copied()),
+            DomIndex::Dynamic(expr_src) => {
+                let expr = parse_expr(expr_src)?;
+                match expr {
+                    Expr::String(name) => Ok(self.form_elements_named_item(controls, &name)),
+                    _ => Err(Error::ScriptRuntime(
+                        "dynamic index in static context".into(),
+                    )),
+                }
+            }
+        }
+    }
+
+    fn resolve_form_elements_index_runtime(
+        &mut self,
+        controls: &[NodeId],
+        index: &DomIndex,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<NodeId>> {
+        match index {
+            DomIndex::Static(index) => Ok(controls.get(*index).copied()),
+            DomIndex::Dynamic(expr_src) => {
+                let expr = parse_expr(expr_src)?;
+                let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                let value = self.eval_expr(&expr, env, &None, &event)?;
+                if let Some(index) = self.value_as_index(&value) {
+                    return Ok(controls.get(index).copied());
+                }
+                Ok(self.form_elements_named_item(controls, &value.as_string()))
+            }
+        }
+    }
+
     pub(crate) fn resolve_dom_query_var_path_value(
         &self,
         base: &str,
@@ -216,8 +272,7 @@ impl Harness {
                     return Ok(None);
                 };
                 let all = self.form_elements(form_node)?;
-                let index = self.resolve_runtime_dom_index(index, None)?;
-                Ok(all.get(index).copied())
+                self.resolve_form_elements_index_static(&all, index)
             }
             DomQuery::Var(_) | DomQuery::VarPath { .. } => Err(Error::ScriptRuntime(
                 "element variable cannot be resolved in static context".into(),
@@ -298,8 +353,7 @@ impl Harness {
                     return Ok(None);
                 };
                 let all = self.form_elements(form_node)?;
-                let index = self.resolve_runtime_dom_index(index, Some(env))?;
-                Ok(all.get(index).copied())
+                self.resolve_form_elements_index_runtime(&all, index, env)
             }
             _ => self.resolve_dom_query_static(target),
         }
@@ -393,6 +447,7 @@ impl Harness {
             DomProp::Slot => "slot".into(),
             DomProp::Role => "role".into(),
             DomProp::ElementTiming => "elementTiming".into(),
+            DomProp::HtmlFor => "htmlFor".into(),
             DomProp::Name => "name".into(),
             DomProp::Lang => "lang".into(),
             DomProp::Dir => "dir".into(),

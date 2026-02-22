@@ -49,7 +49,17 @@ impl Harness {
                             Ok(Self::new_object_value(attrs))
                         }
                         DomProp::AssignedSlot => Ok(Value::Null),
-                        DomProp::Value => Ok(Value::String(self.dom.value(node)?)),
+                        DomProp::Value => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("li"))
+                            {
+                                Ok(Value::Number(self.li_value_property(node)))
+                            } else {
+                                Ok(Value::String(self.dom.value(node)?))
+                            }
+                        }
                         DomProp::Files => self.input_files_value(node),
                         DomProp::FilesLength => match self.input_files_value(node)? {
                             Value::Array(values) => Ok(Value::Number(values.borrow().len() as i64)),
@@ -197,6 +207,9 @@ impl Harness {
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
+                        DomProp::HtmlFor => {
+                            Ok(Value::String(self.dom.attr(node, "for").unwrap_or_default()))
+                        }
                         DomProp::Name => Ok(Value::String(
                             self.dom.attr(node, "name").unwrap_or_default(),
                         )),

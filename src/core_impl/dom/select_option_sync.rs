@@ -186,6 +186,32 @@ impl Dom {
                 continue;
             }
 
+            let is_output = self
+                .tag_name(node)
+                .map(|tag| tag.eq_ignore_ascii_case("output"))
+                .unwrap_or(false);
+            if is_output {
+                let default_value = self.text_content(node);
+                let element = self
+                    .element_mut(node)
+                    .ok_or_else(|| Error::ScriptRuntime("output target is not an element".into()))?;
+                element.value = default_value;
+                continue;
+            }
+
+            let is_progress = self
+                .tag_name(node)
+                .map(|tag| tag.eq_ignore_ascii_case("progress"))
+                .unwrap_or(false);
+            if is_progress {
+                let has_value_attr = self.attr(node, "value").is_some();
+                let element = self.element_mut(node).ok_or_else(|| {
+                    Error::ScriptRuntime("progress target is not an element".into())
+                })?;
+                element.indeterminate = !has_value_attr;
+                continue;
+            }
+
             let is_select = self
                 .tag_name(node)
                 .map(|tag| tag.eq_ignore_ascii_case("select"))

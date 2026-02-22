@@ -662,6 +662,7 @@ pub(crate) enum DomProp {
     Slot,
     Role,
     ElementTiming,
+    HtmlFor,
     Name,
     Lang,
     Dir,

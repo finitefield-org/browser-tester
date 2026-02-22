@@ -108,7 +108,35 @@ impl Dom {
     }
 
     pub(crate) fn disabled(&self, node_id: NodeId) -> bool {
-        self.element(node_id).map(|e| e.disabled).unwrap_or(false)
+        let Some(element) = self.element(node_id) else {
+            return false;
+        };
+        if element.disabled {
+            return true;
+        }
+        if element.tag_name.eq_ignore_ascii_case("option") {
+            let mut cursor = self.parent(node_id);
+            while let Some(parent) = cursor {
+                if self
+                    .tag_name(parent)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("optgroup"))
+                    && self.attr(parent, "disabled").is_some()
+                {
+                    return true;
+                }
+                if self
+                    .tag_name(parent)
+                    .is_some_and(|tag| {
+                        tag.eq_ignore_ascii_case("select")
+                            || tag.eq_ignore_ascii_case("datalist")
+                    })
+                {
+                    break;
+                }
+                cursor = self.parent(parent);
+            }
+        }
+        false
     }
 
     pub(crate) fn readonly(&self, node_id: NodeId) -> bool {
@@ -194,6 +222,9 @@ impl Dom {
                     element.selection_start = len;
                     element.selection_end = len;
                     element.selection_direction = "none".to_string();
+                }
+                if element.tag_name.eq_ignore_ascii_case("progress") {
+                    element.indeterminate = false;
                 }
             } else if lowered == "type" {
                 if is_color_input_element(element) {
@@ -414,6 +445,9 @@ impl Dom {
                 element.selection_start = len;
                 element.selection_end = len;
                 element.selection_direction = "none".to_string();
+                if element.tag_name.eq_ignore_ascii_case("progress") {
+                    element.indeterminate = true;
+                }
             } else if lowered == "checked" {
                 element.checked = false;
             } else if lowered == "disabled" {

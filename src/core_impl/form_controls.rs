@@ -23,6 +23,7 @@ pub(super) fn is_form_control(dom: &Dom, node_id: NodeId) -> bool {
         || element.tag_name.eq_ignore_ascii_case("select")
         || element.tag_name.eq_ignore_ascii_case("textarea")
         || element.tag_name.eq_ignore_ascii_case("button")
+        || element.tag_name.eq_ignore_ascii_case("output")
 }
 
 pub(super) fn is_checkbox_input(dom: &Dom, node_id: NodeId) -> bool {

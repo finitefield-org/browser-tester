@@ -249,7 +249,18 @@ impl Harness {
                             DomProp::OuterHtml => {
                                 self.dom.set_outer_html(node, &value.as_string())?
                             }
-                            DomProp::Value => self.dom.set_value(node, &value.as_string())?,
+                            DomProp::Value => {
+                                if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("li"))
+                                {
+                                    let next = Self::value_to_i64(&value);
+                                    self.dom.set_attr(node, "value", &next.to_string())?;
+                                } else {
+                                    self.dom.set_value(node, &value.as_string())?;
+                                }
+                            }
                             DomProp::ValueAsNumber => self.set_input_value_as_number(
                                 node,
                                 Self::coerce_number_for_number_constructor(&value),
@@ -352,6 +363,7 @@ impl Harness {
                                 self.dom
                                     .set_attr(node, "elementtiming", &value.as_string())?
                             }
+                            DomProp::HtmlFor => self.dom.set_attr(node, "for", &value.as_string())?,
                             DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                             DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                             DomProp::Dir => self.dom.set_attr(node, "dir", &value.as_string())?,

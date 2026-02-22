@@ -553,6 +553,21 @@ impl Harness {
                 continue;
             }
 
+            if self
+                .dom
+                .tag_name(control)
+                .map(|tag| tag.eq_ignore_ascii_case("output"))
+                .unwrap_or(false)
+            {
+                let default_value = self
+                    .dom
+                    .element(control)
+                    .map(|element| element.value.clone())
+                    .unwrap_or_default();
+                self.dom.set_value(control, &default_value)?;
+                continue;
+            }
+
             let default_value = self.dom.attr(control, "value").unwrap_or_default();
             self.dom.set_value(control, &default_value)?;
         }

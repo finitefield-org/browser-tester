@@ -68,6 +68,39 @@ impl Harness {
             if tag.eq_ignore_ascii_case("fieldset") {
                 return "group".to_string();
             }
+            if tag.eq_ignore_ascii_case("figure") {
+                return "figure".to_string();
+            }
+            if tag.eq_ignore_ascii_case("form") {
+                return "form".to_string();
+            }
+            if tag.eq_ignore_ascii_case("header") {
+                return self.resolved_header_role(node);
+            }
+            if tag.eq_ignore_ascii_case("hgroup") {
+                return "group".to_string();
+            }
+            if tag.eq_ignore_ascii_case("hr") {
+                return "separator".to_string();
+            }
+            if tag.eq_ignore_ascii_case("html") {
+                return "document".to_string();
+            }
+            if tag.eq_ignore_ascii_case("input") {
+                return self.resolved_input_role(node);
+            }
+            if tag.len() == 2 {
+                let mut chars = tag.chars();
+                if let (Some(prefix), Some(level), None) = (chars.next(), chars.next(), chars.next())
+                {
+                    if (prefix == 'h' || prefix == 'H') && ('1'..='6').contains(&level) {
+                        return "heading".to_string();
+                    }
+                }
+            }
+            if tag.eq_ignore_ascii_case("footer") {
+                return self.resolved_footer_role(node);
+            }
             if tag.eq_ignore_ascii_case("b") {
                 return "generic".to_string();
             }
@@ -80,13 +113,236 @@ impl Harness {
             if tag.eq_ignore_ascii_case("data") {
                 return "generic".to_string();
             }
-            if (tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area"))
+            if tag.eq_ignore_ascii_case("i") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("img") {
+                if self.dom.attr(node, "alt").is_some_and(|alt| alt.is_empty()) {
+                    return "presentation".to_string();
+                }
+                return "img".to_string();
+            }
+            if tag.eq_ignore_ascii_case("ins") {
+                return "insertion".to_string();
+            }
+            if tag.eq_ignore_ascii_case("li") {
+                return self.resolved_list_item_role(node);
+            }
+            if tag.eq_ignore_ascii_case("main") {
+                return "main".to_string();
+            }
+            if tag.eq_ignore_ascii_case("ol") {
+                return "list".to_string();
+            }
+            if tag.eq_ignore_ascii_case("menu") {
+                return "list".to_string();
+            }
+            if tag.eq_ignore_ascii_case("meter") {
+                return "meter".to_string();
+            }
+            if tag.eq_ignore_ascii_case("nav") {
+                return "navigation".to_string();
+            }
+            if tag.eq_ignore_ascii_case("optgroup") {
+                return "group".to_string();
+            }
+            if tag.eq_ignore_ascii_case("option") {
+                return "option".to_string();
+            }
+            if tag.eq_ignore_ascii_case("output") {
+                return "status".to_string();
+            }
+            if tag.eq_ignore_ascii_case("p") {
+                return "paragraph".to_string();
+            }
+            if tag.eq_ignore_ascii_case("pre") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("progress") {
+                return "progressbar".to_string();
+            }
+            if tag.eq_ignore_ascii_case("q") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("s") {
+                return "deletion".to_string();
+            }
+            if tag.eq_ignore_ascii_case("samp") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("small") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("strong") {
+                return "strong".to_string();
+            }
+            if tag.eq_ignore_ascii_case("select") {
+                return self.resolved_select_role(node);
+            }
+            if tag.eq_ignore_ascii_case("section") {
+                return self.resolved_section_role(node);
+            }
+            if tag.eq_ignore_ascii_case("search") {
+                return "search".to_string();
+            }
+            if (tag.eq_ignore_ascii_case("a")
+                || tag.eq_ignore_ascii_case("area")
+                || tag.eq_ignore_ascii_case("link"))
                 && self.dom.attr(node, "href").is_some()
             {
                 return "link".to_string();
             }
         }
         String::new()
+    }
+
+    pub(crate) fn footer_has_scoped_ancestor(&self, node: NodeId) -> bool {
+        let mut cursor = self.dom.parent(node);
+        while let Some(parent) = cursor {
+            if self.dom.tag_name(parent).is_some_and(|tag| {
+                tag.eq_ignore_ascii_case("article")
+                    || tag.eq_ignore_ascii_case("aside")
+                    || tag.eq_ignore_ascii_case("main")
+                    || tag.eq_ignore_ascii_case("nav")
+                    || tag.eq_ignore_ascii_case("section")
+            }) {
+                return true;
+            }
+
+            if self.dom.attr(parent, "role").is_some_and(|role| {
+                let normalized = role.trim().to_ascii_lowercase();
+                matches!(
+                    normalized.as_str(),
+                    "article" | "complementary" | "main" | "navigation" | "region"
+                )
+            }) {
+                return true;
+            }
+
+            cursor = self.dom.parent(parent);
+        }
+        false
+    }
+
+    pub(crate) fn resolved_footer_role(&self, node: NodeId) -> String {
+        if self.footer_has_scoped_ancestor(node) {
+            "generic".to_string()
+        } else {
+            "contentinfo".to_string()
+        }
+    }
+
+    pub(crate) fn resolved_header_role(&self, node: NodeId) -> String {
+        if self.footer_has_scoped_ancestor(node) {
+            "generic".to_string()
+        } else {
+            "banner".to_string()
+        }
+    }
+
+    pub(crate) fn has_accessible_name_for_landmark(&self, node: NodeId) -> bool {
+        if self
+            .dom
+            .attr(node, "aria-label")
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return true;
+        }
+
+        let Some(raw_ids) = self.dom.attr(node, "aria-labelledby") else {
+            return false;
+        };
+
+        raw_ids.split_whitespace().any(|id_ref| {
+            self.dom
+                .by_id(id_ref)
+                .is_some_and(|label_node| !self.dom.text_content(label_node).trim().is_empty())
+        })
+    }
+
+    pub(crate) fn resolved_section_role(&self, node: NodeId) -> String {
+        if self.has_accessible_name_for_landmark(node) {
+            "region".to_string()
+        } else {
+            "generic".to_string()
+        }
+    }
+
+    pub(crate) fn resolved_input_role(&self, node: NodeId) -> String {
+        let input_type = self
+            .dom
+            .attr(node, "type")
+            .unwrap_or_else(|| "text".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let has_list = self.dom.attr(node, "list").is_some();
+
+        match input_type.as_str() {
+            "button" | "image" | "reset" | "submit" => "button".to_string(),
+            "checkbox" => "checkbox".to_string(),
+            "number" => "spinbutton".to_string(),
+            "radio" => "radio".to_string(),
+            "range" => "slider".to_string(),
+            "search" => {
+                if has_list {
+                    "combobox".to_string()
+                } else {
+                    "searchbox".to_string()
+                }
+            }
+            "color" | "date" | "datetime-local" | "file" | "hidden" | "month" | "password"
+            | "time" | "week" => String::new(),
+            "email" | "tel" | "text" | "url" => {
+                if has_list {
+                    "combobox".to_string()
+                } else {
+                    "textbox".to_string()
+                }
+            }
+            _ => {
+                if has_list {
+                    "combobox".to_string()
+                } else {
+                    "textbox".to_string()
+                }
+            }
+        }
+    }
+
+    pub(crate) fn resolved_list_item_role(&self, node: NodeId) -> String {
+        let Some(parent) = self.dom.parent(node) else {
+            return String::new();
+        };
+        if self.dom.tag_name(parent).is_some_and(|tag| {
+            tag.eq_ignore_ascii_case("ol")
+                || tag.eq_ignore_ascii_case("ul")
+                || tag.eq_ignore_ascii_case("menu")
+        }) {
+            "listitem".to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    pub(crate) fn resolved_select_role(&self, node: NodeId) -> String {
+        let multiple = self.dom.attr(node, "multiple").is_some();
+        let size_is_listbox = self
+            .dom
+            .attr(node, "size")
+            .and_then(|raw| Self::parse_non_negative_int(&raw))
+            .is_some_and(|size| size > 1);
+        if !multiple && !size_is_listbox {
+            "combobox".to_string()
+        } else {
+            "listbox".to_string()
+        }
+    }
+
+    pub(crate) fn li_value_property(&self, node: NodeId) -> i64 {
+        self.dom
+            .attr(node, "value")
+            .and_then(|raw| raw.trim().parse::<i64>().ok())
+            .unwrap_or(0)
     }
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
@@ -133,11 +389,9 @@ impl Harness {
     }
 
     pub(crate) fn canvas_dimension_value(&self, node: NodeId, name: &str) -> i64 {
-        let is_canvas = self
-            .dom
-            .tag_name(node)
-            .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
-        let default = if is_canvas {
+        let default = if self.dom.tag_name(node).is_some_and(|tag| {
+            tag.eq_ignore_ascii_case("canvas") || tag.eq_ignore_ascii_case("iframe")
+        }) {
             Self::canvas_dimension_default(name)
         } else {
             0
@@ -434,6 +688,15 @@ impl Harness {
                             ))
                         }
                     }
+                    "media" => Ok(Value::String(
+                        self.dom.attr(*node, "media").unwrap_or_default(),
+                    )),
+                    "sizes" => Ok(Value::String(
+                        self.dom.attr(*node, "sizes").unwrap_or_default(),
+                    )),
+                    "srcset" | "srcSet" => Ok(Value::String(
+                        self.dom.attr(*node, "srcset").unwrap_or_default(),
+                    )),
                     "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
                     "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
                     "tagName" => Ok(Value::String(

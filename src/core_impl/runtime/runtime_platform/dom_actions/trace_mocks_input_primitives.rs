@@ -153,6 +153,7 @@ impl Harness {
         tag.eq_ignore_ascii_case("button")
             || tag.eq_ignore_ascii_case("select")
             || tag.eq_ignore_ascii_case("textarea")
+            || tag.eq_ignore_ascii_case("output")
     }
 
     pub(crate) fn resolve_label_control(&self, label: NodeId) -> Option<NodeId> {

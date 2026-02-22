@@ -246,6 +246,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("slot", None) => DomProp::Slot,
         ("role", None) => DomProp::Role,
         ("elementTiming", None) => DomProp::ElementTiming,
+        ("htmlFor", None) => DomProp::HtmlFor,
         ("name", None) => DomProp::Name,
         ("lang", None) => DomProp::Lang,
         ("dir", None) => DomProp::Dir,

@@ -240,6 +240,43 @@ impl Dom {
         Ok(())
     }
 
+    pub(crate) fn normalize_single_head_element(&mut self) -> Result<()> {
+        let Some(document_element) = self.document_element() else {
+            return Ok(());
+        };
+        if !self
+            .tag_name(document_element)
+            .map(|tag| tag.eq_ignore_ascii_case("html"))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let head_children = self
+            .child_elements(document_element)
+            .into_iter()
+            .filter(|child| {
+                self.tag_name(*child)
+                    .map(|tag| tag.eq_ignore_ascii_case("head"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        if head_children.len() <= 1 {
+            return Ok(());
+        }
+
+        let primary_head = head_children[0];
+        for extra_head in head_children.into_iter().skip(1) {
+            let children = self.nodes[extra_head.0].children.clone();
+            for child in children {
+                self.append_child(primary_head, child)?;
+            }
+            self.remove_child(document_element, extra_head)?;
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn document_title(&self) -> String {
         self.query_selector("title")
             .ok()

@@ -5,6 +5,15 @@ impl Dom {
         let element = self
             .element(node_id)
             .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
+        if element.tag_name.eq_ignore_ascii_case("option") {
+            if let Some(value) = element.attrs.get("value") {
+                return Ok(value.clone());
+            }
+            return Ok(self.text_content(node_id));
+        }
+        if element.tag_name.eq_ignore_ascii_case("output") {
+            return Ok(self.text_content(node_id));
+        }
         if is_checkbox_or_radio_input_element(element) && !element.attrs.contains_key("value") {
             return Ok("on".to_string());
         }
@@ -22,6 +31,30 @@ impl Dom {
         if self
             .tag_name(node_id)
             .map(|tag| tag.eq_ignore_ascii_case("data"))
+            .unwrap_or(false)
+        {
+            self.set_attr(node_id, "value", value)?;
+            return Ok(());
+        }
+        if self
+            .tag_name(node_id)
+            .map(|tag| tag.eq_ignore_ascii_case("option"))
+            .unwrap_or(false)
+        {
+            self.set_attr(node_id, "value", value)?;
+            return Ok(());
+        }
+        if self
+            .tag_name(node_id)
+            .map(|tag| tag.eq_ignore_ascii_case("output"))
+            .unwrap_or(false)
+        {
+            self.set_text_content(node_id, value)?;
+            return Ok(());
+        }
+        if self
+            .tag_name(node_id)
+            .map(|tag| tag.eq_ignore_ascii_case("progress"))
             .unwrap_or(false)
         {
             self.set_attr(node_id, "value", value)?;
