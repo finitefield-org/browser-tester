@@ -229,8 +229,23 @@ impl Harness {
                     Ok(value)
                 }
             }
-            Expr::Yield(inner) => self.eval_expr(inner, env, event_param, event),
-            Expr::YieldStar(inner) => self.eval_expr(inner, env, event_param, event),
+            Expr::Yield(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                if let Some(yields) = self.script_runtime.generator_yield_stack.last() {
+                    yields.borrow_mut().push(value.clone());
+                }
+                Ok(value)
+            }
+            Expr::YieldStar(inner) => {
+                let value = self.eval_expr(inner, env, event_param, event)?;
+                if let Some(yields) = self.script_runtime.generator_yield_stack.last() {
+                    let values = self
+                        .array_like_values_from_value(&value)
+                        .unwrap_or_else(|_| vec![value.clone()]);
+                    yields.borrow_mut().extend(values);
+                }
+                Ok(value)
+            }
             Expr::Comma(parts) => {
                 let mut last = Value::Undefined;
                 for part in parts {

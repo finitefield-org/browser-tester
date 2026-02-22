@@ -46,21 +46,29 @@ impl Harness {
 
     pub(crate) fn new_async_iterator_value(&mut self, values: Vec<Value>) -> Value {
         let iterator = Rc::new(RefCell::new(ObjectValue::new(vec![
-            (INTERNAL_ASYNC_ITERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_ASYNC_ITERATOR_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             (
                 INTERNAL_ASYNC_ITERATOR_VALUES_KEY.to_string(),
                 Self::new_array_value(values),
             ),
-            (INTERNAL_ASYNC_ITERATOR_INDEX_KEY.to_string(), Value::Number(0)),
+            (
+                INTERNAL_ASYNC_ITERATOR_INDEX_KEY.to_string(),
+                Value::Number(0),
+            ),
         ])));
         let iterator_value = Value::Object(iterator.clone());
         let next = self.new_async_iterator_next_callable(iterator_value.clone());
         let self_factory = self.new_async_iterator_self_callable(iterator_value.clone());
         let async_dispose = self.new_async_iterator_async_dispose_callable(iterator_value);
 
-        let async_iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator);
+        let async_iterator_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator);
         let async_iterator_key = self.property_key_to_storage_key(&async_iterator_symbol);
-        let async_dispose_symbol = self.eval_symbol_static_property(SymbolStaticProperty::AsyncDispose);
+        let async_dispose_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::AsyncDispose);
         let async_dispose_key = self.property_key_to_storage_key(&async_dispose_symbol);
 
         let mut entries = iterator.borrow_mut();

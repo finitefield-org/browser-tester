@@ -212,6 +212,87 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     {
         let mut cursor = Cursor::new(src);
         cursor.skip_ws();
+        if cursor.consume_ascii("function") {
+            cursor.skip_ws();
+            if cursor.consume_byte(b'*') {
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'(') {
+                    let _ = cursor
+                        .parse_identifier()
+                        .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+                    cursor.skip_ws();
+                    cursor.expect_byte(b'(')?;
+                }
+                let params_src = cursor.read_until_byte(b')')?;
+                cursor.expect_byte(b')')?;
+                let parsed_params =
+                    parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
+                cursor.skip_ws();
+                let body = cursor.read_balanced_block(b'{', b'}')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                let body_stmts = prepend_callback_param_prologue_stmts(
+                    parse_block_statements(&body)?,
+                    &parsed_params.prologue,
+                )?;
+                return Ok(Some(Expr::Function {
+                    handler: ScriptHandler {
+                        params: parsed_params.params,
+                        stmts: body_stmts,
+                    },
+                    is_async: false,
+                    is_generator: true,
+                }));
+            }
+        }
+    }
+
+    {
+        let mut cursor = Cursor::new(src);
+        cursor.skip_ws();
+        if try_consume_async_function_prefix(&mut cursor) {
+            cursor.consume_ascii("function");
+            cursor.skip_ws();
+            if cursor.consume_byte(b'*') {
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'(') {
+                    let _ = cursor
+                        .parse_identifier()
+                        .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+                    cursor.skip_ws();
+                    cursor.expect_byte(b'(')?;
+                }
+                let params_src = cursor.read_until_byte(b')')?;
+                cursor.expect_byte(b')')?;
+                let parsed_params =
+                    parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
+                cursor.skip_ws();
+                let body = cursor.read_balanced_block(b'{', b'}')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                let body_stmts = prepend_callback_param_prologue_stmts(
+                    parse_block_statements(&body)?,
+                    &parsed_params.prologue,
+                )?;
+                return Ok(Some(Expr::Function {
+                    handler: ScriptHandler {
+                        params: parsed_params.params,
+                        stmts: body_stmts,
+                    },
+                    is_async: true,
+                    is_generator: true,
+                }));
+            }
+        }
+    }
+
+    {
+        let mut cursor = Cursor::new(src);
+        cursor.skip_ws();
         if try_consume_async_function_prefix(&mut cursor) {
             let (params, body, concise_body) =
                 parse_callback(&mut cursor, usize::MAX, "function parameters")?;
@@ -229,6 +310,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
             return Ok(Some(Expr::Function {
                 handler: ScriptHandler { params, stmts },
                 is_async: true,
+                is_generator: false,
             }));
         }
     }
@@ -252,6 +334,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                     return Ok(Some(Expr::Function {
                         handler: ScriptHandler { params, stmts },
                         is_async: true,
+                        is_generator: false,
                     }));
                 }
             }
@@ -289,6 +372,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::Function {
         handler: ScriptHandler { params, stmts },
         is_async: false,
+        is_generator: false,
     }))
 }
 

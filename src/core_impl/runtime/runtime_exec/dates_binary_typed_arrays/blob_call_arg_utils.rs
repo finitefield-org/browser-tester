@@ -15,7 +15,8 @@ impl Harness {
     }
 
     pub(crate) fn new_readable_stream_placeholder_value(&mut self, chunks: Vec<Value>) -> Value {
-        let async_iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator);
+        let async_iterator_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator);
         let async_iterator_key = self.property_key_to_storage_key(&async_iterator_symbol);
         Self::new_object_value(vec![
             (

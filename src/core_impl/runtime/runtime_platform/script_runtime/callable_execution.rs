@@ -7,6 +7,7 @@ impl Harness {
         env: &HashMap<String, Value>,
         global_scope: bool,
         is_async: bool,
+        is_generator: bool,
     ) -> Value {
         let local_bindings = Self::collect_function_scope_bindings(&handler);
         let scope_depth = Self::env_scope_depth(env);
@@ -42,8 +43,10 @@ impl Harness {
             captured_pending_function_decls,
             captured_global_names,
             local_bindings,
+            prototype_object: Rc::new(RefCell::new(ObjectValue::default())),
             global_scope,
             is_async,
+            is_generator,
         }))
     }
 
@@ -199,17 +202,18 @@ impl Harness {
                             return Err(Error::ScriptRuntime("callback is not a function".into()));
                         };
                         let entries = entries.borrow();
-                        let chunks =
-                            match Self::object_get_entry(&entries, INTERNAL_ASYNC_ITERATOR_VALUES_KEY)
-                            {
-                                Some(Value::Array(values)) => values.borrow().clone(),
-                                _ => {
-                                    return Err(Error::ScriptRuntime(
-                                        "ReadableStream async iterator has invalid internal state"
-                                            .into(),
-                                    ));
-                                }
-                            };
+                        let chunks = match Self::object_get_entry(
+                            &entries,
+                            INTERNAL_ASYNC_ITERATOR_VALUES_KEY,
+                        ) {
+                            Some(Value::Array(values)) => values.borrow().clone(),
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "ReadableStream async iterator has invalid internal state"
+                                        .into(),
+                                ));
+                            }
+                        };
                         Ok(self.new_async_iterator_value(chunks))
                     }
                     "async_iterator_next" => {
@@ -219,19 +223,19 @@ impl Harness {
                             ));
                         }
                         let iterator = self.async_iterator_target_from_callable(callable)?;
-                        let result =
-                            if let Some(value) = self.async_iterator_next_value_from_object(&iterator)?
-                            {
-                                Self::new_object_value(vec![
-                                    ("value".to_string(), value),
-                                    ("done".to_string(), Value::Bool(false)),
-                                ])
-                            } else {
-                                Self::new_object_value(vec![
-                                    ("value".to_string(), Value::Undefined),
-                                    ("done".to_string(), Value::Bool(true)),
-                                ])
-                            };
+                        let result = if let Some(value) =
+                            self.async_iterator_next_value_from_object(&iterator)?
+                        {
+                            Self::new_object_value(vec![
+                                ("value".to_string(), value),
+                                ("done".to_string(), Value::Bool(false)),
+                            ])
+                        } else {
+                            Self::new_object_value(vec![
+                                ("value".to_string(), Value::Undefined),
+                                ("done".to_string(), Value::Bool(true)),
+                            ])
+                        };
                         let promise = self.new_pending_promise();
                         self.promise_resolve(&promise, result)?;
                         Ok(Value::Promise(promise))
@@ -239,7 +243,8 @@ impl Harness {
                     "async_iterator_self" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime(
-                                "AsyncIterator[Symbol.asyncIterator] does not take arguments".into(),
+                                "AsyncIterator[Symbol.asyncIterator] does not take arguments"
+                                    .into(),
                             ));
                         }
                         let iterator = self.async_iterator_target_from_callable(callable)?;
@@ -269,6 +274,12 @@ impl Harness {
                         let promise = self.new_pending_promise();
                         self.promise_resolve(&promise, dispose_result)?;
                         Ok(Value::Promise(promise))
+                    }
+                    "async_generator_function_constructor" => {
+                        self.build_async_generator_function_from_constructor_values(args)
+                    }
+                    "generator_function_constructor" => {
+                        self.build_generator_function_from_constructor_values(args)
                     }
                     "boolean_constructor" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
@@ -411,12 +422,30 @@ impl Harness {
                     &event_param,
                     &call_event,
                 )?;
+                let yield_collector = if function.is_generator {
+                    Some(Rc::new(RefCell::new(Vec::new())))
+                } else {
+                    None
+                };
+                if let Some(yields) = &yield_collector {
+                    this.script_runtime
+                        .generator_yield_stack
+                        .push(yields.clone());
+                }
                 let flow = this.execute_stmts(
                     &function.handler.stmts,
                     &event_param,
                     &mut call_event,
                     &mut call_env,
-                )?;
+                );
+                if yield_collector.is_some() {
+                    let _ = this.script_runtime.generator_yield_stack.pop();
+                }
+                let flow = flow?;
+                let generator_yields = yield_collector
+                    .as_ref()
+                    .map(|values| values.borrow().clone())
+                    .unwrap_or_default();
                 for name in &global_sync_keys {
                     if Self::is_internal_env_key(name) || function.local_bindings.contains(name) {
                         continue;
@@ -471,6 +500,12 @@ impl Harness {
                         }
                     }
                 }
+                if function.is_generator {
+                    if function.is_async {
+                        return Ok(this.new_async_iterator_value(generator_yields));
+                    }
+                    return Ok(this.new_iterator_value(generator_yields));
+                }
                 match flow {
                     ExecFlow::Continue => Ok(Value::Undefined),
                     ExecFlow::Break => Err(Error::ScriptRuntime(
@@ -489,7 +524,7 @@ impl Harness {
             result
         };
 
-        if function.is_async {
+        if function.is_async && !function.is_generator {
             let promise = self.new_pending_promise();
             match run(self, caller_env) {
                 Ok(value) => {

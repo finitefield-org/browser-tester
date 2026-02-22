@@ -586,6 +586,7 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) env: ScriptEnv,
     pub(crate) pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
     pub(crate) listener_capture_env_stack: Vec<ListenerCaptureFrame>,
+    pub(crate) generator_yield_stack: Vec<Rc<RefCell<Vec<Value>>>>,
 }
 
 #[derive(Debug)]

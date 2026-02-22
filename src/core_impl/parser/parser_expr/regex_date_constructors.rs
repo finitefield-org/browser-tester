@@ -143,10 +143,17 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
     cursor.skip_ws();
-    if cursor.peek() != Some(b'(') {
+    let callee = if cursor.peek() == Some(b'(') {
+        let callee_src = cursor.read_balanced_block(b'(', b')')?;
+        parse_expr(callee_src.trim())?
+    } else if let Some(name) = cursor.parse_identifier() {
+        if name != "GeneratorFunction" && name != "AsyncGeneratorFunction" {
+            return Ok(None);
+        }
+        Expr::Var(name)
+    } else {
         return Ok(None);
-    }
-    let callee_src = cursor.read_balanced_block(b'(', b')')?;
+    };
     cursor.skip_ws();
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let raw_args = split_top_level_by_char(&args_src, b',');
@@ -169,7 +176,6 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     if !cursor.eof() {
         return Ok(None);
     }
-    let callee = parse_expr(callee_src.trim())?;
     Ok(Some(Expr::TypedArrayConstructWithCallee {
         callee: Box::new(callee),
         args: parsed,

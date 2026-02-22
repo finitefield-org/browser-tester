@@ -422,8 +422,10 @@ pub(crate) struct FunctionValue {
     pub(crate) captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
     pub(crate) captured_global_names: HashSet<String>,
     pub(crate) local_bindings: HashSet<String>,
+    pub(crate) prototype_object: Rc<RefCell<ObjectValue>>,
     pub(crate) global_scope: bool,
     pub(crate) is_async: bool,
+    pub(crate) is_generator: bool,
 }
 
 impl PartialEq for FunctionValue {
@@ -431,6 +433,7 @@ impl PartialEq for FunctionValue {
         self.handler == other.handler
             && self.global_scope == other.global_scope
             && self.is_async == other.is_async
+            && self.is_generator == other.is_generator
     }
 }
 

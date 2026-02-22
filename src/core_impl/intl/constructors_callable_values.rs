@@ -291,8 +291,10 @@ impl Harness {
             captured_pending_function_decls: Vec::new(),
             captured_global_names: HashSet::new(),
             local_bindings: HashSet::new(),
+            prototype_object: Rc::new(RefCell::new(ObjectValue::default())),
             global_scope: true,
             is_async: false,
+            is_generator: false,
         }))
     }
 

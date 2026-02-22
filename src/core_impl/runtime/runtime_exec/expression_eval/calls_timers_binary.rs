@@ -335,9 +335,18 @@ impl Harness {
                     let node = self.dom.create_detached_text(text.clone());
                     Ok(Value::Node(node))
                 }
-                Expr::Function { handler, is_async } => {
-                    Ok(self.make_function_value(handler.clone(), env, false, *is_async))
-                }
+                Expr::Function {
+                    handler,
+                    is_async,
+                    is_generator,
+                } => Ok(self.make_function_value(
+                    handler.clone(),
+                    env,
+                    false,
+                    *is_async,
+                    *is_generator,
+                )),
+
                 Expr::SetTimeout { handler, delay_ms } => {
                     let delay = self.eval_expr(delay_ms, env, event_param, event)?;
                     let delay = Self::value_to_i64(&delay);

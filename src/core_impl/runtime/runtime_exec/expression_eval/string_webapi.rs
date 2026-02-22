@@ -816,7 +816,13 @@ impl Harness {
                     let stmts = parse_block_statements(&body_src).map_err(|err| {
                         Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
                     })?;
-                    Ok(self.make_function_value(ScriptHandler { params, stmts }, env, true, false))
+                    Ok(self.make_function_value(
+                        ScriptHandler { params, stmts },
+                        env,
+                        true,
+                        false,
+                        false,
+                    ))
                 }
                 _ => Err(Error::ScriptRuntime(UNHANDLED_EXPR_CHUNK.into())),
             }

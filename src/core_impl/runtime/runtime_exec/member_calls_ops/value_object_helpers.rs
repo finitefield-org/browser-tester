@@ -91,7 +91,8 @@ impl Harness {
             }
             if tag.len() == 2 {
                 let mut chars = tag.chars();
-                if let (Some(prefix), Some(level), None) = (chars.next(), chars.next(), chars.next())
+                if let (Some(prefix), Some(level), None) =
+                    (chars.next(), chars.next(), chars.next())
                 {
                     if (prefix == 'h' || prefix == 'H') && ('1'..='6').contains(&level) {
                         return "heading".to_string();
@@ -382,9 +383,11 @@ impl Harness {
         let mut has_table_ancestor = false;
 
         while let Some(parent) = cursor {
-            if self.dom.attr(parent, "role").is_some_and(|role| {
-                role.trim().eq_ignore_ascii_case("grid")
-            }) {
+            if self
+                .dom
+                .attr(parent, "role")
+                .is_some_and(|role| role.trim().eq_ignore_ascii_case("grid"))
+            {
                 return "gridcell".to_string();
             }
 
@@ -642,6 +645,8 @@ impl Harness {
                 "async_iterator_next" => "async_iterator_next",
                 "async_iterator_self" => "async_iterator_self",
                 "async_iterator_async_dispose" => "async_iterator_async_dispose",
+                "async_generator_function_constructor" => "async_generator_function_constructor",
+                "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
                 _ => return None,
             }),
@@ -876,9 +881,9 @@ impl Harness {
                     "default" if self.is_track_element(*node) => {
                         Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
                     }
-                    "disablePictureInPicture" | "disablepictureinpicture" => {
-                        Ok(Value::Bool(self.dom.attr(*node, "disablepictureinpicture").is_some()))
-                    }
+                    "disablePictureInPicture" | "disablepictureinpicture" => Ok(Value::Bool(
+                        self.dom.attr(*node, "disablepictureinpicture").is_some(),
+                    )),
                     "media" => Ok(Value::String(
                         self.dom.attr(*node, "media").unwrap_or_default(),
                     )),
@@ -1018,6 +1023,28 @@ impl Harness {
                             .unwrap_or(Value::Undefined));
                     }
                 }
+                if Self::is_generator_function_prototype_object(&entries) {
+                    if let Some(symbol) = self
+                        .symbol_runtime
+                        .well_known_symbols
+                        .get("Symbol.toStringTag")
+                    {
+                        if key == Self::symbol_storage_key(symbol.id) {
+                            return Ok(Value::String("GeneratorFunction".to_string()));
+                        }
+                    }
+                }
+                if Self::is_async_generator_function_prototype_object(&entries) {
+                    if let Some(symbol) = self
+                        .symbol_runtime
+                        .well_known_symbols
+                        .get("Symbol.toStringTag")
+                    {
+                        if key == Self::symbol_storage_key(symbol.id) {
+                            return Ok(Value::String("AsyncGeneratorFunction".to_string()));
+                        }
+                    }
+                }
                 if Self::is_url_search_params_object(&entries) {
                     if key == "size" {
                         let size =
@@ -1153,6 +1180,24 @@ impl Harness {
                     "lastIndex" => Value::Number(regex.last_index as i64),
                     "constructor" => Value::RegExpConstructor,
                     _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
+                };
+                Ok(value)
+            }
+            Value::Function(function) => {
+                let value = match key {
+                    "constructor" => {
+                        if function.is_generator {
+                            if function.is_async {
+                                self.new_async_generator_function_constructor_value()
+                            } else {
+                                self.new_generator_function_constructor_value()
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    }
+                    "prototype" => Value::Object(function.prototype_object.clone()),
+                    _ => Value::Undefined,
                 };
                 Ok(value)
             }

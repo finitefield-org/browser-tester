@@ -561,6 +561,13 @@ impl Harness {
             Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract) => Err(
                 Error::ScriptRuntime("Abstract class TypedArray not directly constructable".into()),
             ),
+            other if self.is_callable_value(&other) => {
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                self.execute_callable_value(&other, &evaluated_args, event)
+            }
             _ => Err(Error::ScriptRuntime("value is not a constructor".into())),
         }
     }

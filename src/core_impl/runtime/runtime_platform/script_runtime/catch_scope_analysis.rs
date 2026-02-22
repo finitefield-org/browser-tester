@@ -243,7 +243,7 @@ impl Harness {
             break;
         }
         let (handler, is_async) = resolved?;
-        Some(self.make_function_value(handler, env, false, is_async))
+        Some(self.make_function_value(handler, env, false, is_async, false))
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {

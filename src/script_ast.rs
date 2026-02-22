@@ -602,6 +602,7 @@ pub(crate) enum Expr {
     Function {
         handler: ScriptHandler,
         is_async: bool,
+        is_generator: bool,
     },
     QueueMicrotask {
         handler: ScriptHandler,

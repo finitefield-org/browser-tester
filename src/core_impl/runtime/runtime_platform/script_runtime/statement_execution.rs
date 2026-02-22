@@ -31,7 +31,7 @@ impl Harness {
                         is_async,
                     } => {
                         let function =
-                            self.make_function_value(handler.clone(), env, false, *is_async);
+                            self.make_function_value(handler.clone(), env, false, *is_async, false);
                         env.insert(name.clone(), function);
                     }
                     Stmt::VarAssign { name, op, expr } => {
@@ -303,8 +303,11 @@ impl Harness {
                                     .tag_name(node)
                                     .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
                                 {
-                                    let _ =
-                                        self.set_details_open_state_with_env(node, value.truthy(), env)?;
+                                    let _ = self.set_details_open_state_with_env(
+                                        node,
+                                        value.truthy(),
+                                        env,
+                                    )?;
                                 } else {
                                     if value.truthy() {
                                         self.dom.set_attr(node, "open", "true")?;
@@ -363,7 +366,9 @@ impl Harness {
                                 self.dom
                                     .set_attr(node, "elementtiming", &value.as_string())?
                             }
-                            DomProp::HtmlFor => self.dom.set_attr(node, "for", &value.as_string())?,
+                            DomProp::HtmlFor => {
+                                self.dom.set_attr(node, "for", &value.as_string())?
+                            }
                             DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                             DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                             DomProp::Dir => self.dom.set_attr(node, "dir", &value.as_string())?,
@@ -381,13 +386,11 @@ impl Harness {
                                 self.dom
                                     .set_attr(node, "contenteditable", &value.as_string())?
                             }
-                            DomProp::Draggable => {
-                                self.dom.set_attr(
-                                    node,
-                                    "draggable",
-                                    if value.truthy() { "true" } else { "false" },
-                                )?
-                            }
+                            DomProp::Draggable => self.dom.set_attr(
+                                node,
+                                "draggable",
+                                if value.truthy() { "true" } else { "false" },
+                            )?,
                             DomProp::EnterKeyHint => {
                                 self.dom
                                     .set_attr(node, "enterkeyhint", &value.as_string())?
@@ -402,23 +405,27 @@ impl Harness {
                             DomProp::InputMode => {
                                 self.dom.set_attr(node, "inputmode", &value.as_string())?
                             }
-                            DomProp::Nonce => self.dom.set_attr(node, "nonce", &value.as_string())?,
+                            DomProp::Nonce => {
+                                self.dom.set_attr(node, "nonce", &value.as_string())?
+                            }
                             DomProp::Popover => {
                                 self.dom.set_attr(node, "popover", &value.as_string())?
                             }
-                            DomProp::Spellcheck => {
-                                self.dom.set_attr(
-                                    node,
-                                    "spellcheck",
-                                    if value.truthy() { "true" } else { "false" },
-                                )?
-                            }
-                            DomProp::TabIndex => self
-                                .dom
-                                .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?,
-                            DomProp::Translate => self
-                                .dom
-                                .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?,
+                            DomProp::Spellcheck => self.dom.set_attr(
+                                node,
+                                "spellcheck",
+                                if value.truthy() { "true" } else { "false" },
+                            )?,
+                            DomProp::TabIndex => self.dom.set_attr(
+                                node,
+                                "tabindex",
+                                &Self::value_to_i64(&value).to_string(),
+                            )?,
+                            DomProp::Translate => self.dom.set_attr(
+                                node,
+                                "translate",
+                                if value.truthy() { "yes" } else { "no" },
+                            )?,
                             DomProp::Cite => self.dom.set_attr(node, "cite", &value.as_string())?,
                             DomProp::DateTime => {
                                 self.dom.set_attr(node, "datetime", &value.as_string())?
@@ -430,14 +437,10 @@ impl Harness {
                                 self.dom.set_attr(node, "align", &value.as_string())?
                             }
                             DomProp::ColSpan => {
-                                if self
-                                    .dom
-                                    .tag_name(node)
-                                    .is_some_and(|tag| {
-                                        tag.eq_ignore_ascii_case("col")
-                                            || tag.eq_ignore_ascii_case("colgroup")
-                                    })
-                                {
+                                if self.dom.tag_name(node).is_some_and(|tag| {
+                                    tag.eq_ignore_ascii_case("col")
+                                        || tag.eq_ignore_ascii_case("colgroup")
+                                }) {
                                     self.set_col_span_value(node, &value)?
                                 } else {
                                     self.dom_runtime
