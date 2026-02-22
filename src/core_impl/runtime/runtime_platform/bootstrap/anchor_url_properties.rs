@@ -1,6 +1,35 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn resolve_media_src(&self, node: NodeId) -> String {
+        if let Some(raw) = self.dom.attr(node, "src") {
+            return self.resolve_document_target_url(&raw);
+        }
+
+        let source_attr = self
+            .dom
+            .child_elements(node)
+            .into_iter()
+            .find_map(|child| {
+                if self
+                    .dom
+                    .tag_name(child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("source"))
+                {
+                    self.dom.attr(child, "src")
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        if source_attr.is_empty() {
+            String::new()
+        } else {
+            self.resolve_document_target_url(&source_attr)
+        }
+    }
+
     pub(crate) fn anchor_rel_tokens(&self, node: NodeId) -> Vec<String> {
         self.dom
             .attr(node, "rel")
@@ -12,7 +41,7 @@ impl Harness {
 
     pub(crate) fn resolve_anchor_href(&self, node: NodeId) -> String {
         let raw = self.dom.attr(node, "href").unwrap_or_default();
-        self.resolve_location_target_url(&raw)
+        self.resolve_document_target_url(&raw)
     }
 
     pub(crate) fn anchor_location_parts(&self, node: NodeId) -> LocationParts {

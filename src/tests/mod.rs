@@ -1,6 +1,19 @@
 use super::*;
 
 mod collections_url_typed_arrays;
+mod dom_abbr_element;
+mod dom_address_element;
+mod dom_area_element;
+mod dom_article_element;
+mod dom_aside_element;
+mod dom_audio_element;
+mod dom_b_element;
+mod dom_base_element;
+mod dom_bdi_element;
+mod dom_bdo_element;
+mod dom_blockquote_element;
+mod dom_body_element;
+mod dom_br_element;
 mod dom_events_input_runtime;
 mod dom_navigation_dialog;
 mod language_core_expressions;

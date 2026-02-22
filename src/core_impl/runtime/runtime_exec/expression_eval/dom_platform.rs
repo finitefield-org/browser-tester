@@ -193,9 +193,7 @@ impl Harness {
                         DomProp::Slot => Ok(Value::String(
                             self.dom.attr(node, "slot").unwrap_or_default(),
                         )),
-                        DomProp::Role => Ok(Value::String(
-                            self.dom.attr(node, "role").unwrap_or_default(),
-                        )),
+                        DomProp::Role => Ok(Value::String(self.resolved_role_for_node(node))),
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
@@ -204,6 +202,22 @@ impl Harness {
                         )),
                         DomProp::Lang => Ok(Value::String(
                             self.dom.attr(node, "lang").unwrap_or_default(),
+                        )),
+                        DomProp::Dir => Ok(Value::String(self.resolved_dir_for_node(node))),
+                        DomProp::Cite => Ok(Value::String(
+                            self.dom.attr(node, "cite").unwrap_or_default(),
+                        )),
+                        DomProp::BrClear => Ok(Value::String(
+                            self.dom.attr(node, "clear").unwrap_or_default(),
+                        )),
+                        DomProp::NodeEventHandler(event_name) => Ok(self
+                            .dom_runtime
+                            .node_expando_props
+                            .get(&(node, event_name.clone()))
+                            .cloned()
+                            .unwrap_or(Value::Null)),
+                        DomProp::BodyDeprecatedAttr(attr_name) => Ok(Value::String(
+                            self.dom.attr(node, attr_name).unwrap_or_default(),
                         )),
                         DomProp::ClientWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
                         DomProp::ClientHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
@@ -239,6 +253,7 @@ impl Harness {
                         DomProp::Url | DomProp::DocumentUri => {
                             Ok(Value::String(self.document_url.clone()))
                         }
+                        DomProp::BaseUri => Ok(Value::String(self.document_base_url())),
                         DomProp::Location => {
                             Ok(Value::Object(self.dom_runtime.location_object.clone()))
                         }
@@ -332,6 +347,27 @@ impl Harness {
                         DomProp::ChildrenLength => {
                             Ok(Value::Number(self.dom.child_element_count(node) as i64))
                         }
+                        DomProp::AudioSrc => Ok(Value::String(self.resolve_media_src(node))),
+                        DomProp::AudioAutoplay => {
+                            Ok(Value::Bool(self.dom.has_attr(node, "autoplay")?))
+                        }
+                        DomProp::AudioControls => {
+                            Ok(Value::Bool(self.dom.has_attr(node, "controls")?))
+                        }
+                        DomProp::AudioControlsList => Ok(Value::String(
+                            self.dom.attr(node, "controlslist").unwrap_or_default(),
+                        )),
+                        DomProp::AudioCrossOrigin => Ok(Value::String(
+                            self.dom.attr(node, "crossorigin").unwrap_or_default(),
+                        )),
+                        DomProp::AudioDisableRemotePlayback => Ok(Value::Bool(
+                            self.dom.has_attr(node, "disableremoteplayback")?,
+                        )),
+                        DomProp::AudioLoop => Ok(Value::Bool(self.dom.has_attr(node, "loop")?)),
+                        DomProp::AudioMuted => Ok(Value::Bool(self.dom.has_attr(node, "muted")?)),
+                        DomProp::AudioPreload => Ok(Value::String(
+                            self.dom.attr(node, "preload").unwrap_or_default(),
+                        )),
                         DomProp::AriaString(prop_name) => Ok(Value::String(
                             self.dom
                                 .attr(node, &Self::aria_property_to_attr_name(prop_name))

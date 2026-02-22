@@ -1,6 +1,72 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn first_base_attr(&self, attr_name: &str) -> Option<String> {
+        let base_nodes = self.dom.query_selector_all("base").ok()?;
+        base_nodes
+            .into_iter()
+            .find_map(|node| self.dom.attr(node, attr_name))
+    }
+
+    pub(crate) fn document_base_url(&self) -> String {
+        let fallback = self.document_url.clone();
+        let Some(raw_href) = self.first_base_attr("href") else {
+            return fallback;
+        };
+
+        let href = raw_href.trim();
+        if href.is_empty() {
+            return fallback;
+        }
+
+        if let Some(parts) = LocationParts::parse(href) {
+            if matches!(parts.scheme.as_str(), "data" | "javascript") {
+                return fallback;
+            }
+            return parts.href();
+        }
+
+        let resolved = self.resolve_location_target_url(href);
+        if let Some(parts) = LocationParts::parse(&resolved) {
+            if matches!(parts.scheme.as_str(), "data" | "javascript") {
+                return fallback;
+            }
+            return parts.href();
+        }
+
+        fallback
+    }
+
+    pub(crate) fn resolve_document_target_url(&self, input: &str) -> String {
+        let input = input.trim();
+        if let Some(parts) = LocationParts::parse(input) {
+            return parts.href();
+        }
+
+        let base_url = self.document_base_url();
+        if let Some(base_parts) = LocationParts::parse(&base_url) {
+            return Self::resolve_url_against_base_parts(input, &base_parts);
+        }
+
+        self.resolve_location_target_url(input)
+    }
+
+    pub(crate) fn sanitize_base_target_value(target: &str) -> String {
+        if target
+            .chars()
+            .any(|ch| matches!(ch, '\n' | '\r' | '\t' | '<'))
+        {
+            return "_blank".to_string();
+        }
+        target.to_string()
+    }
+
+    pub(crate) fn default_hyperlink_target(&self) -> String {
+        self.first_base_attr("target")
+            .map(|value| Self::sanitize_base_target_value(&value))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
         if input.is_empty() {

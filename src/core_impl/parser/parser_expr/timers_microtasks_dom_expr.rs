@@ -192,6 +192,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
                     "location" | "history" | "window" | "document" | "navigator" | "clipboard"
                 )
         );
+    let is_media_target = is_anchor_target;
 
     let prop = match (head.as_str(), nested.as_ref()) {
         ("attributes", None) => DomProp::Attributes,
@@ -247,6 +248,47 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("elementTiming", None) => DomProp::ElementTiming,
         ("name", None) => DomProp::Name,
         ("lang", None) => DomProp::Lang,
+        ("dir", None) => DomProp::Dir,
+        ("cite", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::Cite,
+        ("clear", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::BrClear
+        }
+        ("aLink", None) | ("alink", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("alink".to_string())
+        }
+        ("background", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("background".to_string())
+        }
+        ("bgColor", None) | ("bgcolor", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("bgcolor".to_string())
+        }
+        ("bottomMargin", None) | ("bottommargin", None)
+            if matches!(target, DomQuery::DocumentBody) =>
+        {
+            DomProp::BodyDeprecatedAttr("bottommargin".to_string())
+        }
+        ("leftMargin", None) | ("leftmargin", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("leftmargin".to_string())
+        }
+        ("link", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("link".to_string())
+        }
+        ("rightMargin", None) | ("rightmargin", None)
+            if matches!(target, DomQuery::DocumentBody) =>
+        {
+            DomProp::BodyDeprecatedAttr("rightmargin".to_string())
+        }
+        ("text", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("text".to_string())
+        }
+        ("topMargin", None) | ("topmargin", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("topmargin".to_string())
+        }
+        ("vLink", None) | ("vlink", None) if matches!(target, DomQuery::DocumentBody) => {
+            DomProp::BodyDeprecatedAttr("vlink".to_string())
+        }
         ("clientWidth", None) => DomProp::ClientWidth,
         ("clientHeight", None) => DomProp::ClientHeight,
         ("clientLeft", None) => DomProp::ClientLeft,
@@ -276,6 +318,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("readyState", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::ReadyState,
         ("referrer", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Referrer,
         ("title", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Title,
+        ("baseURI", None) => DomProp::BaseUri,
         ("URL", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Url,
         ("documentURI", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::DocumentUri,
         ("location", None) if matches!(target, DomQuery::DocumentRoot) => DomProp::Location,
@@ -376,6 +419,21 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             DomProp::ScriptsLength
         }
         ("children", Some(length)) if length == "length" => DomProp::ChildrenLength,
+        ("src", None) if is_media_target => DomProp::AudioSrc,
+        ("autoplay", None) if is_media_target => DomProp::AudioAutoplay,
+        ("controls", None) if is_media_target => DomProp::AudioControls,
+        ("controlsList", None) | ("controlslist", None) if is_media_target => {
+            DomProp::AudioControlsList
+        }
+        ("crossOrigin", None) | ("crossorigin", None) if is_media_target => {
+            DomProp::AudioCrossOrigin
+        }
+        ("disableRemotePlayback", None) | ("disableremoteplayback", None) if is_media_target => {
+            DomProp::AudioDisableRemotePlayback
+        }
+        ("loop", None) if is_media_target => DomProp::AudioLoop,
+        ("muted", None) if is_media_target => DomProp::AudioMuted,
+        ("preload", None) if is_media_target => DomProp::AudioPreload,
         ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
             DomProp::AnchorAttributionSrc
         }
@@ -417,6 +475,13 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         }
         (prop_name, None) if is_aria_string_property(prop_name) => {
             DomProp::AriaString(prop_name.to_string())
+        }
+        (event_name, None)
+            if event_name.starts_with("on")
+                && !matches!(target, DomQuery::DocumentRoot)
+                && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::NodeEventHandler(event_name.to_ascii_lowercase())
         }
         _ => {
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {

@@ -186,6 +186,13 @@ impl Harness {
             self.dom_runtime
                 .node_event_handler_props
                 .insert((node, event_type), handler);
+            self.dom_runtime
+                .node_expando_props
+                .insert((node, key.to_string()), Value::Function(function));
+        } else {
+            self.dom_runtime
+                .node_expando_props
+                .insert((node, key.to_string()), Value::Null);
         }
         Ok(true)
     }
@@ -197,6 +204,16 @@ impl Harness {
         value: Value,
     ) -> Result<()> {
         if self.set_node_event_handler_property(node, key, value.clone())? {
+            return Ok(());
+        }
+
+        if key == "text"
+            && self
+                .dom
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+        {
+            self.dom.set_attr(node, "text", &value.as_string())?;
             return Ok(());
         }
 
@@ -261,7 +278,72 @@ impl Harness {
                 .set_attr(node, "elementtiming", &value.as_string())?,
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
-            "title" => self.dom.set_document_title(&value.as_string())?,
+            "dir" => self.dom.set_attr(node, "dir", &value.as_string())?,
+            "cite" => self.dom.set_attr(node, "cite", &value.as_string())?,
+            "clear" => self.dom.set_attr(node, "clear", &value.as_string())?,
+            "aLink" | "alink" => self.dom.set_attr(node, "alink", &value.as_string())?,
+            "background" => self.dom.set_attr(node, "background", &value.as_string())?,
+            "bgColor" | "bgcolor" => self.dom.set_attr(node, "bgcolor", &value.as_string())?,
+            "bottomMargin" | "bottommargin" => {
+                self.dom
+                    .set_attr(node, "bottommargin", &value.as_string())?
+            }
+            "leftMargin" | "leftmargin" => {
+                self.dom.set_attr(node, "leftmargin", &value.as_string())?
+            }
+            "link" => self.dom.set_attr(node, "link", &value.as_string())?,
+            "rightMargin" | "rightmargin" => {
+                self.dom.set_attr(node, "rightmargin", &value.as_string())?
+            }
+            "topMargin" | "topmargin" => {
+                self.dom.set_attr(node, "topmargin", &value.as_string())?
+            }
+            "vLink" | "vlink" => self.dom.set_attr(node, "vlink", &value.as_string())?,
+            "title" => self.dom.set_attr(node, "title", &value.as_string())?,
+            "src" => self.dom.set_attr(node, "src", &value.as_string())?,
+            "autoplay" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "autoplay", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "autoplay")?;
+                }
+            }
+            "controls" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "controls", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "controls")?;
+                }
+            }
+            "controlsList" | "controlslist" => {
+                self.dom
+                    .set_attr(node, "controlslist", &value.as_string())?
+            }
+            "crossOrigin" | "crossorigin" => {
+                self.dom.set_attr(node, "crossorigin", &value.as_string())?
+            }
+            "disableRemotePlayback" | "disableremoteplayback" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "disableremoteplayback", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "disableremoteplayback")?;
+                }
+            }
+            "loop" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "loop", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "loop")?;
+                }
+            }
+            "muted" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "muted", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "muted")?;
+                }
+            }
+            "preload" => self.dom.set_attr(node, "preload", &value.as_string())?,
             "attributionSrc" | "attributionsrc" => {
                 self.dom
                     .set_attr(node, "attributionsrc", &value.as_string())?

@@ -328,6 +328,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
 
     dom.initialize_form_control_values()?;
     dom.normalize_radio_groups()?;
+    dom.normalize_single_body_element()?;
     Ok(ParseOutput { dom, scripts })
 }
 

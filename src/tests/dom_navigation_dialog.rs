@@ -602,6 +602,112 @@ fn anchor_text_alias_and_read_only_properties_work() -> Result<()> {
 }
 
 #[test]
+fn anchor_click_follows_href_for_relative_and_non_http_urls() -> Result<()> {
+    let html = r#"
+        <a id='web' href='/docs/page?x=1#intro'>web</a>
+        <a id='mail' href='mailto:m.bluth@example.com'>mail</a>
+        <a id='phone' href='tel:+123456789'>phone</a>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://example.com/base/index.html", html)?;
+    h.click("#web")?;
+    h.click("#mail")?;
+    h.click("#phone")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::Assign,
+                from: "https://example.com/base/index.html".to_string(),
+                to: "https://example.com/docs/page?x=1#intro".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::Assign,
+                from: "https://example.com/docs/page?x=1#intro".to_string(),
+                to: "mailto:m.bluth@example.com".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::Assign,
+                from: "mailto:m.bluth@example.com".to_string(),
+                to: "tel:+123456789".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn anchor_click_navigation_is_skipped_without_href_download_or_target_blank() -> Result<()> {
+    let html = r#"
+        <a id='nohref'>nohref</a>
+        <a id='blank' href='/blank' target='_blank'>blank</a>
+        <a id='download' href='/report.csv' download='report.csv'>download</a>
+        <a id='self' href='/self'>self</a>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#nohref")?;
+    h.click("#blank")?;
+    h.click("#download")?;
+    h.click("#self")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "https://app.local/self".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn press_enter_activates_anchor_with_href_and_respects_keydown_prevent_default() -> Result<()> {
+    let html = r#"
+        <a id='go' href='/go'>Go</a>
+        <a id='blocked' href='/blocked'>Blocked</a>
+        <a id='plain'>Plain</a>
+        <p id='result'></p>
+        <script>
+          let clicks = 0;
+          document.getElementById('go').addEventListener('click', () => {
+            clicks = clicks + 1;
+            document.getElementById('result').textContent = 'go:' + clicks;
+          });
+          document.getElementById('blocked').addEventListener('keydown', (event) => {
+            event.preventDefault();
+          });
+          document.getElementById('blocked').addEventListener('click', () => {
+            document.getElementById('result').textContent = 'blocked-click';
+          });
+          document.getElementById('plain').addEventListener('click', () => {
+            document.getElementById('result').textContent = 'plain-click';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.press_enter("#go")?;
+    h.assert_text("#result", "go:1")?;
+    h.press_enter("#blocked")?;
+    h.assert_text("#result", "go:1")?;
+    h.press_enter("#plain")?;
+    h.assert_text("#result", "go:1")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "https://app.local/go".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn history_properties_push_state_and_replace_state_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

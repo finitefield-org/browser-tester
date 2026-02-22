@@ -215,22 +215,23 @@ impl Harness {
         Some(details)
     }
 
-    pub(crate) fn maybe_capture_anchor_download(&mut self, target: NodeId) -> Result<()> {
-        let is_anchor = self
-            .dom
-            .tag_name(target)
-            .map(|tag| tag.eq_ignore_ascii_case("a"))
-            .unwrap_or(false);
-        if !is_anchor {
-            return Ok(());
+    pub(crate) fn is_hyperlink_element(&self, node: NodeId) -> bool {
+        self.dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area"))
+    }
+
+    pub(crate) fn maybe_capture_anchor_download(&mut self, target: NodeId) -> Result<bool> {
+        if !self.is_hyperlink_element(target) {
+            return Ok(false);
         }
         let Some(filename) = self.dom.attr(target, "download") else {
-            return Ok(());
+            return Ok(false);
         };
 
         let href = self.resolve_anchor_href(target);
         let Some(blob) = self.browser_apis.blob_url_objects.get(&href).cloned() else {
-            return Ok(());
+            return Ok(false);
         };
         let blob = blob.borrow();
         let mime_type = if blob.mime_type.is_empty() {
@@ -244,7 +245,41 @@ impl Harness {
             mime_type,
             bytes: blob.bytes.clone(),
         });
-        Ok(())
+        Ok(true)
+    }
+
+    pub(crate) fn maybe_follow_anchor_hyperlink(&mut self, target: NodeId) -> Result<()> {
+        if !self.is_hyperlink_element(target) {
+            return Ok(());
+        }
+        if self.dom.attr(target, "href").is_none() {
+            return Ok(());
+        }
+        // If download is present, current-context navigation is suppressed.
+        if self.dom.attr(target, "download").is_some() {
+            return Ok(());
+        }
+
+        let target_attr = self
+            .dom
+            .attr(target, "target")
+            .unwrap_or_else(|| self.default_hyperlink_target())
+            .to_ascii_lowercase();
+        if !matches!(
+            target_attr.as_str(),
+            "" | "_self" | "_parent" | "_top" | "_unfencedtop"
+        ) {
+            return Ok(());
+        }
+
+        let href = self.resolve_anchor_href(target);
+        if href
+            .split_once(':')
+            .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("javascript"))
+        {
+            return Ok(());
+        }
+        self.navigate_location(&href, LocationNavigationKind::Assign)
     }
 
     pub(crate) fn is_effectively_disabled(&self, node: NodeId) -> bool {

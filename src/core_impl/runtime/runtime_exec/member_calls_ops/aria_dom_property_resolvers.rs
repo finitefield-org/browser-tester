@@ -129,6 +129,9 @@ impl Harness {
             DomProp::ElementTiming => Some("elementTiming"),
             DomProp::Name => Some("name"),
             DomProp::Lang => Some("lang"),
+            DomProp::Dir => Some("dir"),
+            DomProp::Cite => Some("cite"),
+            DomProp::BrClear => Some("clear"),
             DomProp::ClientWidth => Some("clientWidth"),
             DomProp::ClientHeight => Some("clientHeight"),
             DomProp::ClientLeft => Some("clientLeft"),
@@ -150,6 +153,16 @@ impl Harness {
             DomProp::FirstElementChild => Some("firstElementChild"),
             DomProp::LastElementChild => Some("lastElementChild"),
             DomProp::Title => Some("title"),
+            DomProp::BaseUri => Some("baseURI"),
+            DomProp::AudioSrc => Some("src"),
+            DomProp::AudioAutoplay => Some("autoplay"),
+            DomProp::AudioControls => Some("controls"),
+            DomProp::AudioControlsList => Some("controlsList"),
+            DomProp::AudioCrossOrigin => Some("crossOrigin"),
+            DomProp::AudioDisableRemotePlayback => Some("disableRemotePlayback"),
+            DomProp::AudioLoop => Some("loop"),
+            DomProp::AudioMuted => Some("muted"),
+            DomProp::AudioPreload => Some("preload"),
             DomProp::AnchorAttributionSrc => Some("attributionSrc"),
             DomProp::AnchorDownload => Some("download"),
             DomProp::AnchorHash => Some("hash"),
@@ -177,6 +190,8 @@ impl Harness {
             DomProp::AnchorRev => Some("rev"),
             DomProp::AnchorShape => Some("shape"),
             DomProp::Dataset(_)
+            | DomProp::NodeEventHandler(_)
+            | DomProp::BodyDeprecatedAttr(_)
             | DomProp::Style(_)
             | DomProp::ClassListLength
             | DomProp::PartLength

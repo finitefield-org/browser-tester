@@ -201,6 +201,45 @@ impl Dom {
             .or_else(|| self.query_selector("frameset").ok().flatten())
     }
 
+    pub(crate) fn normalize_single_body_element(&mut self) -> Result<()> {
+        let Some(document_element) = self.document_element() else {
+            return Ok(());
+        };
+        if !self
+            .tag_name(document_element)
+            .map(|tag| tag.eq_ignore_ascii_case("html"))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let body_like_children = self
+            .child_elements(document_element)
+            .into_iter()
+            .filter(|child| {
+                self.tag_name(*child)
+                    .map(|tag| {
+                        tag.eq_ignore_ascii_case("body") || tag.eq_ignore_ascii_case("frameset")
+                    })
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        if body_like_children.len() <= 1 {
+            return Ok(());
+        }
+
+        let primary_body = body_like_children[0];
+        for extra_body in body_like_children.into_iter().skip(1) {
+            let children = self.nodes[extra_body.0].children.clone();
+            for child in children {
+                self.append_child(primary_body, child)?;
+            }
+            self.remove_child(document_element, extra_body)?;
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn document_title(&self) -> String {
         self.query_selector("title")
             .ok()

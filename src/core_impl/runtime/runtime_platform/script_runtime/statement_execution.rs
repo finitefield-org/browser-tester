@@ -345,7 +345,70 @@ impl Harness {
                             }
                             DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                             DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
+                            DomProp::Dir => self.dom.set_attr(node, "dir", &value.as_string())?,
+                            DomProp::Cite => self.dom.set_attr(node, "cite", &value.as_string())?,
+                            DomProp::BrClear => {
+                                self.dom.set_attr(node, "clear", &value.as_string())?
+                            }
+                            DomProp::NodeEventHandler(event_name) => {
+                                let _ = self.set_node_event_handler_property(
+                                    node,
+                                    event_name,
+                                    value.clone(),
+                                )?;
+                            }
+                            DomProp::BodyDeprecatedAttr(attr_name) => {
+                                self.dom.set_attr(node, attr_name, &value.as_string())?
+                            }
                             DomProp::Title => self.dom.set_document_title(&value.as_string())?,
+                            DomProp::AudioSrc => {
+                                self.dom.set_attr(node, "src", &value.as_string())?
+                            }
+                            DomProp::AudioAutoplay => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "autoplay", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "autoplay")?;
+                                }
+                            }
+                            DomProp::AudioControls => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "controls", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "controls")?;
+                                }
+                            }
+                            DomProp::AudioControlsList => {
+                                self.dom
+                                    .set_attr(node, "controlslist", &value.as_string())?
+                            }
+                            DomProp::AudioCrossOrigin => {
+                                self.dom.set_attr(node, "crossorigin", &value.as_string())?
+                            }
+                            DomProp::AudioDisableRemotePlayback => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "disableremoteplayback", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "disableremoteplayback")?;
+                                }
+                            }
+                            DomProp::AudioLoop => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "loop", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "loop")?;
+                                }
+                            }
+                            DomProp::AudioMuted => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "muted", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "muted")?;
+                                }
+                            }
+                            DomProp::AudioPreload => {
+                                self.dom.set_attr(node, "preload", &value.as_string())?
+                            }
                             DomProp::Location | DomProp::LocationHref => self.navigate_location(
                                 &value.as_string(),
                                 LocationNavigationKind::HrefSet,
@@ -506,6 +569,7 @@ impl Harness {
                             | DomProp::Referrer
                             | DomProp::Url
                             | DomProp::DocumentUri
+                            | DomProp::BaseUri
                             | DomProp::LocationOrigin
                             | DomProp::LocationAncestorOrigins
                             | DomProp::History

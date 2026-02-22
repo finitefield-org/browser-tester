@@ -218,7 +218,10 @@ impl Harness {
                 self.reset_form_with_env(target, env)?;
             }
 
-            self.maybe_capture_anchor_download(target)?;
+            let captured_download = self.maybe_capture_anchor_download(target)?;
+            if !captured_download {
+                self.maybe_follow_anchor_hyperlink(target)?;
+            }
 
             Ok(())
         })();
@@ -240,6 +243,37 @@ impl Harness {
     pub fn blur(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || self.blur_node(target))
+    }
+
+    pub fn press_enter(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        stacker::grow(32 * 1024 * 1024, || {
+            self.with_script_env_always(|this, env| this.press_enter_with_env(target, env))
+        })
+    }
+
+    pub(crate) fn press_enter_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+
+        self.focus_node_with_env(target, env)?;
+        let keydown = self.dispatch_event_with_env(target, "keydown", env, true)?;
+        if !keydown.default_prevented
+            && self
+                .dom
+                .tag_name(target)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("a"))
+            && self.dom.attr(target, "href").is_some()
+        {
+            self.click_node_with_env(target, env)?;
+        }
+        let _ = self.dispatch_event_with_env(target, "keyup", env, true)?;
+        Ok(())
     }
 
     pub fn submit(&mut self, selector: &str) -> Result<()> {

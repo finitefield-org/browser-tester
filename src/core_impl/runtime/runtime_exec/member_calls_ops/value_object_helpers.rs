@@ -1,6 +1,58 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn resolved_dir_for_node(&self, node: NodeId) -> String {
+        if let Some(explicit) = self.dom.attr(node, "dir") {
+            return explicit;
+        }
+        if self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("bdi"))
+        {
+            return "auto".to_string();
+        }
+        String::new()
+    }
+
+    pub(crate) fn resolved_role_for_node(&self, node: NodeId) -> String {
+        if let Some(explicit) = self.dom.attr(node, "role") {
+            return explicit;
+        }
+        if let Some(tag) = self.dom.tag_name(node) {
+            if tag.eq_ignore_ascii_case("address") {
+                return "group".to_string();
+            }
+            if tag.eq_ignore_ascii_case("aside") {
+                return "complementary".to_string();
+            }
+            if tag.eq_ignore_ascii_case("article") {
+                return "article".to_string();
+            }
+            if tag.eq_ignore_ascii_case("blockquote") {
+                return "blockquote".to_string();
+            }
+            if tag.eq_ignore_ascii_case("body") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("b") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("bdi") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("bdo") {
+                return "generic".to_string();
+            }
+            if (tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area"))
+                && self.dom.attr(node, "href").is_some()
+            {
+                return "link".to_string();
+            }
+        }
+        String::new()
+    }
+
     pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(ArrayValue::new(values))))
     }
@@ -162,6 +214,54 @@ impl Harness {
                     "name" => Ok(Value::String(
                         self.dom.attr(*node, "name").unwrap_or_default(),
                     )),
+                    "dir" => Ok(Value::String(self.resolved_dir_for_node(*node))),
+                    "cite" => Ok(Value::String(
+                        self.dom.attr(*node, "cite").unwrap_or_default(),
+                    )),
+                    "clear" => Ok(Value::String(
+                        self.dom.attr(*node, "clear").unwrap_or_default(),
+                    )),
+                    "aLink" | "alink" => Ok(Value::String(
+                        self.dom.attr(*node, "alink").unwrap_or_default(),
+                    )),
+                    "background" => Ok(Value::String(
+                        self.dom.attr(*node, "background").unwrap_or_default(),
+                    )),
+                    "bgColor" | "bgcolor" => Ok(Value::String(
+                        self.dom.attr(*node, "bgcolor").unwrap_or_default(),
+                    )),
+                    "bottomMargin" | "bottommargin" => Ok(Value::String(
+                        self.dom.attr(*node, "bottommargin").unwrap_or_default(),
+                    )),
+                    "leftMargin" | "leftmargin" => Ok(Value::String(
+                        self.dom.attr(*node, "leftmargin").unwrap_or_default(),
+                    )),
+                    "link" => Ok(Value::String(
+                        self.dom.attr(*node, "link").unwrap_or_default(),
+                    )),
+                    "rightMargin" | "rightmargin" => Ok(Value::String(
+                        self.dom.attr(*node, "rightmargin").unwrap_or_default(),
+                    )),
+                    "text" => Ok(Value::String(
+                        if self
+                            .dom
+                            .tag_name(*node)
+                            .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+                        {
+                            self.dom.attr(*node, "text").unwrap_or_default()
+                        } else {
+                            self.dom.text_content(*node)
+                        },
+                    )),
+                    "topMargin" | "topmargin" => Ok(Value::String(
+                        self.dom.attr(*node, "topmargin").unwrap_or_default(),
+                    )),
+                    "vLink" | "vlink" => Ok(Value::String(
+                        self.dom.attr(*node, "vlink").unwrap_or_default(),
+                    )),
+                    "title" => Ok(Value::String(
+                        self.dom.attr(*node, "title").unwrap_or_default(),
+                    )),
                     "type" => Ok(Value::String(
                         self.dom.attr(*node, "type").unwrap_or_default(),
                     )),
@@ -174,6 +274,8 @@ impl Harness {
                     "className" => Ok(Value::String(
                         self.dom.attr(*node, "class").unwrap_or_default(),
                     )),
+                    "role" => Ok(Value::String(self.resolved_role_for_node(*node))),
+                    "baseURI" => Ok(Value::String(self.document_base_url())),
                     "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
                     "options" => {
                         if !is_select {
@@ -201,6 +303,12 @@ impl Harness {
                         }
                         Ok(Value::Number(select_options().len() as i64))
                     }
+                    _ if key.starts_with("on") => Ok(self
+                        .dom_runtime
+                        .node_expando_props
+                        .get(&(*node, key.to_string()))
+                        .cloned()
+                        .unwrap_or(Value::Null)),
                     _ => Ok(self
                         .dom_runtime
                         .node_expando_props

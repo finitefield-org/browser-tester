@@ -3,7 +3,17 @@ use super::*;
 impl Dom {
     pub(crate) fn text_content(&self, node_id: NodeId) -> String {
         match &self.nodes[node_id.0].node_type {
-            NodeType::Document | NodeType::Element(_) => {
+            NodeType::Document => {
+                let mut out = String::new();
+                for child in &self.nodes[node_id.0].children {
+                    out.push_str(&self.text_content(*child));
+                }
+                out
+            }
+            NodeType::Element(element) => {
+                if element.tag_name.eq_ignore_ascii_case("br") {
+                    return "\n".to_string();
+                }
                 let mut out = String::new();
                 for child in &self.nodes[node_id.0].children {
                     out.push_str(&self.text_content(*child));

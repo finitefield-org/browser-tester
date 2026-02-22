@@ -410,20 +410,26 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `new FormData(form)`, `formData.get(name)`, `formData.has(name)`,
   `formData.getAll(name).length`
 - DOM updates: `textContent`, `innerText`, `value`, `checked`, `disabled`, `readonly`, `required`, `hidden`, `className`, `id`, `name`, `classList.*`,
+  `title`,
   `setAttribute/getAttribute/hasAttribute/removeAttribute`, `dataset.*`, `style.*`,
   `matches(selector)`, `closest(selector)` (returns `null` when not matched),
   `getComputedStyle(element).getPropertyValue(property)`,
   `createElement/createTextNode`, `append/appendChild/prepend/removeChild/insertBefore/remove()`,
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
   Element base properties/methods: `attributes`, `children`, `childElementCount`, `firstElementChild`, `lastElementChild`,
-  `nextElementSibling`, `previousElementSibling`, `tagName`, `localName`, `namespaceURI`, `outerHTML`,
-  `slot`, `role`, `elementTiming`, reflected `aria*` properties, `getAttributeNames()`, `hasAttributes()`,
+  `nextElementSibling`, `previousElementSibling`, `tagName`, `localName`, `namespaceURI`, `baseURI`, `outerHTML`,
+  `slot`, `role` (with implicit `article` for `<article>`, implicit `blockquote` for `<blockquote>`, implicit `complementary` for `<aside>`, implicit `group` for `<address>`, implicit `generic` for `<body>/<b>/<bdi>/<bdo>`, and implicit `link` for `<a>/<area>` with `href`), `elementTiming`, `dir` (`<bdi>` defaults to `auto` when omitted), `cite`, `clear` (`<br>` deprecated attribute reflection), reflected `aria*` properties, `getAttributeNames()`, `hasAttributes()`,
   `toggleAttribute(name[, force])`, `checkVisibility()`, `getElementsByClassName()`, `getElementsByTagName()`,
   dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
 - HTMLAnchorElement API: `href`, `protocol`, `host`, `hostname`, `port`, `pathname`, `search`, `hash`,
   `origin` (read-only), `username`, `password`, `download`, `hreflang`, `ping`, `referrerPolicy`,
   `rel`, `relList`, `target`, `text` (`textContent` alias), `type`, `attributionSrc`, `interestForElement`,
-  obsolete reflected properties (`charset`, `coords`, `rev`, `shape`), and `toString()` (same as `href`)
+  obsolete reflected properties (`charset`, `coords`, `rev`, `shape`), and `toString()` (same as `href`);
+  relative URLs are resolved against document base URL (including the first `<base href>` when present)
+- HTMLAreaElement hyperlink subset: `href`, URL part reflection (`protocol`, `host`, `hostname`, `port`, `pathname`, `search`, `hash`, `origin`, `username`, `password`),
+  `download`, `ping`, `referrerPolicy`, `rel`, `target`, `type`, `coords`, `shape`, and `toString()` (same as `href`)
+- HTMLAudioElement attribute/property subset: `src` (falls back to first nested `<source src>` when `src` is absent),
+  `autoplay`, `controls`, `controlsList`, `crossOrigin`, `disableRemotePlayback`, `loop`, `muted`, and `preload`
 - History API: `history.length`, `history.state`, `history.scrollRestoration`,
   `history.back()`, `history.forward()`, `history.go([delta])`,
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
@@ -511,6 +517,18 @@ Fields:
 2. Do not perform navigation or similar default browser actions (`preventDefault` state is observable via `event.defaultPrevented`).
 3. When `form method="dialog"` and the submit is not canceled, close the ancestor `<dialog>` and fire dialog close-related events.
 
+`click` on hyperlink element (`<a href>` or `<area href>`):
+1. Fire `click` on the element.
+2. If canceled with `preventDefault()`, stop.
+3. If `download` is present and `href` points to an object URL from `URL.createObjectURL`, capture a deterministic download artifact.
+4. Otherwise, when effective `target` resolves to the current context (`""`, `_self`, `_parent`, `_top`, `_unfencedTop`), follow `href` via deterministic location navigation.
+5. If the element has no `target` attribute, the first `<base target>` is used as the default target (newline/tab/`<` is sanitized to `_blank`).
+
+`press_enter(selector)` on a focused anchor (`<a href>`):
+1. Dispatch `keydown`.
+2. If not canceled, activate the anchor (same click/default-action path as `click`).
+3. Dispatch `keyup`.
+
 ## 9. Runtime Execution Model
 
 ### 9.1 Initialization
@@ -564,6 +582,7 @@ impl Harness {
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()>;
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()>;
     pub fn click(&mut self, selector: &str) -> Result<()>;
+    pub fn press_enter(&mut self, selector: &str) -> Result<()>;
     pub fn focus(&mut self, selector: &str) -> Result<()>;
     pub fn blur(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;

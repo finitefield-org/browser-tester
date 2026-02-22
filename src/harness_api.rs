@@ -132,6 +132,10 @@ impl MockWindow {
         self.with_current_harness_mut(|page| page.click(selector))
     }
 
+    pub fn press_enter(&mut self, selector: &str) -> Result<()> {
+        self.with_current_harness_mut(|page| page.press_enter(selector))
+    }
+
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         self.with_current_harness_mut(|page| page.submit(selector))
     }

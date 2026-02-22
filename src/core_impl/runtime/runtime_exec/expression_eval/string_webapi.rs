@@ -682,7 +682,9 @@ impl Harness {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     if let Value::Node(node) = &value {
                         if let Some(tag_name) = self.dom.tag_name(*node) {
-                            if tag_name.eq_ignore_ascii_case("a") {
+                            if tag_name.eq_ignore_ascii_case("a")
+                                || tag_name.eq_ignore_ascii_case("area")
+                            {
                                 return Ok(Value::String(self.resolve_anchor_href(*node)));
                             }
                         }
