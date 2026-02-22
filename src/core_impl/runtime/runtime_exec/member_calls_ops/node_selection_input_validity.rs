@@ -1326,6 +1326,42 @@ impl Harness {
         let Some(tag_name) = self.dom.tag_name(node) else {
             return Ok(validity);
         };
+        if tag_name.eq_ignore_ascii_case("textarea") {
+            let value = self.dom.value(node)?;
+            let required = self.dom.required(node);
+            let readonly = self.dom.readonly(node);
+
+            if required && !readonly && value.is_empty() {
+                validity.value_missing = true;
+            }
+
+            if !value.is_empty() {
+                let value_len = value.chars().count() as i64;
+                if let Some(min_len) = self.parse_attr_i64(node, "minlength") {
+                    if min_len >= 0 && value_len < min_len {
+                        validity.too_short = true;
+                    }
+                }
+                if let Some(max_len) = self.parse_attr_i64(node, "maxlength") {
+                    if max_len >= 0 && value_len > max_len {
+                        validity.too_long = true;
+                    }
+                }
+            }
+
+            validity.custom_error = !self.dom.custom_validity_message(node)?.is_empty();
+            validity.valid = !(validity.value_missing
+                || validity.type_mismatch
+                || validity.pattern_mismatch
+                || validity.too_long
+                || validity.too_short
+                || validity.range_underflow
+                || validity.range_overflow
+                || validity.step_mismatch
+                || validity.bad_input
+                || validity.custom_error);
+            return Ok(validity);
+        }
         if !tag_name.eq_ignore_ascii_case("input") {
             let custom_error = !self.dom.custom_validity_message(node)?.is_empty();
             validity.custom_error = custom_error;

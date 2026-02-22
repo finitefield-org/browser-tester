@@ -277,6 +277,53 @@ impl Dom {
         Ok(())
     }
 
+    pub(crate) fn normalize_implied_table_bodies(&mut self) -> Result<()> {
+        let table_nodes = self
+            .all_element_nodes()
+            .into_iter()
+            .filter(|node| {
+                self.tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("table"))
+            })
+            .collect::<Vec<_>>();
+
+        for table in table_nodes {
+            let children = self.child_elements(table);
+            if children.is_empty() {
+                continue;
+            }
+
+            let has_explicit_tbody = children.iter().any(|child| {
+                self.tag_name(*child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("tbody"))
+            });
+            if has_explicit_tbody {
+                continue;
+            }
+
+            let direct_rows = children
+                .into_iter()
+                .filter(|child| {
+                    self.tag_name(*child)
+                        .is_some_and(|tag| tag.eq_ignore_ascii_case("tr"))
+                })
+                .collect::<Vec<_>>();
+            if direct_rows.is_empty() {
+                continue;
+            }
+
+            let first_row = direct_rows[0];
+            let tbody = self.create_element(table, "tbody".to_string(), HashMap::new());
+            self.insert_before(table, tbody, first_row)?;
+
+            for row in direct_rows {
+                self.append_child(tbody, row)?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn document_title(&self) -> String {
         self.query_selector("title")
             .ok()

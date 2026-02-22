@@ -137,6 +137,9 @@ impl Harness {
             if tag.eq_ignore_ascii_case("menu") {
                 return "list".to_string();
             }
+            if tag.eq_ignore_ascii_case("ul") {
+                return "list".to_string();
+            }
             if tag.eq_ignore_ascii_case("meter") {
                 return "meter".to_string();
             }
@@ -175,6 +178,42 @@ impl Harness {
             }
             if tag.eq_ignore_ascii_case("strong") {
                 return "strong".to_string();
+            }
+            if tag.eq_ignore_ascii_case("sub") {
+                return "subscript".to_string();
+            }
+            if tag.eq_ignore_ascii_case("sup") {
+                return "superscript".to_string();
+            }
+            if tag.eq_ignore_ascii_case("table") {
+                return "table".to_string();
+            }
+            if tag.eq_ignore_ascii_case("tbody") {
+                return "rowgroup".to_string();
+            }
+            if tag.eq_ignore_ascii_case("tfoot") {
+                return "rowgroup".to_string();
+            }
+            if tag.eq_ignore_ascii_case("thead") {
+                return "rowgroup".to_string();
+            }
+            if tag.eq_ignore_ascii_case("tr") {
+                return "row".to_string();
+            }
+            if tag.eq_ignore_ascii_case("th") {
+                return self.resolved_table_header_role(node);
+            }
+            if tag.eq_ignore_ascii_case("td") {
+                return self.resolved_table_data_cell_role(node);
+            }
+            if tag.eq_ignore_ascii_case("textarea") {
+                return "textbox".to_string();
+            }
+            if tag.eq_ignore_ascii_case("time") {
+                return "time".to_string();
+            }
+            if tag.eq_ignore_ascii_case("u") {
+                return "generic".to_string();
             }
             if tag.eq_ignore_ascii_case("select") {
                 return self.resolved_select_role(node);
@@ -338,11 +377,92 @@ impl Harness {
         }
     }
 
+    pub(crate) fn resolved_table_data_cell_role(&self, node: NodeId) -> String {
+        let mut cursor = self.dom.parent(node);
+        let mut has_table_ancestor = false;
+
+        while let Some(parent) = cursor {
+            if self.dom.attr(parent, "role").is_some_and(|role| {
+                role.trim().eq_ignore_ascii_case("grid")
+            }) {
+                return "gridcell".to_string();
+            }
+
+            if self
+                .dom
+                .tag_name(parent)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("table"))
+            {
+                has_table_ancestor = true;
+            }
+
+            cursor = self.dom.parent(parent);
+        }
+
+        if has_table_ancestor {
+            "cell".to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    pub(crate) fn resolved_table_header_role(&self, node: NodeId) -> String {
+        if let Some(scope) = self.dom.attr(node, "scope") {
+            let scope = scope.trim().to_ascii_lowercase();
+            if matches!(scope.as_str(), "row" | "rowgroup") {
+                return "rowheader".to_string();
+            }
+            if matches!(scope.as_str(), "col" | "colgroup") {
+                return "columnheader".to_string();
+            }
+        }
+
+        let Some(parent) = self.dom.parent(node) else {
+            return "columnheader".to_string();
+        };
+        if !self
+            .dom
+            .tag_name(parent)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("tr"))
+        {
+            return "columnheader".to_string();
+        }
+
+        let has_data_cell_sibling = self.dom.nodes[parent.0].children.iter().any(|child| {
+            self.dom
+                .tag_name(*child)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("td"))
+        });
+
+        if has_data_cell_sibling {
+            "rowheader".to_string()
+        } else {
+            "columnheader".to_string()
+        }
+    }
+
     pub(crate) fn li_value_property(&self, node: NodeId) -> i64 {
         self.dom
             .attr(node, "value")
             .and_then(|raw| raw.trim().parse::<i64>().ok())
             .unwrap_or(0)
+    }
+
+    pub(crate) fn is_track_element(&self, node: NodeId) -> bool {
+        self.dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("track"))
+    }
+
+    pub(crate) fn normalized_track_kind(&self, node: NodeId) -> String {
+        let Some(raw) = self.dom.attr(node, "kind") else {
+            return "subtitles".to_string();
+        };
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "subtitles" | "captions" | "descriptions" | "chapters" | "metadata" => normalized,
+            _ => "metadata".to_string(),
+        }
     }
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
@@ -605,7 +725,59 @@ impl Harness {
                     "name" => Ok(Value::String(
                         self.dom.attr(*node, "name").unwrap_or_default(),
                     )),
+                    "lang" => Ok(Value::String(
+                        self.dom.attr(*node, "lang").unwrap_or_default(),
+                    )),
                     "dir" => Ok(Value::String(self.resolved_dir_for_node(*node))),
+                    "accessKey" | "accesskey" => Ok(Value::String(
+                        self.dom.attr(*node, "accesskey").unwrap_or_default(),
+                    )),
+                    "autocapitalize" => Ok(Value::String(
+                        self.dom.attr(*node, "autocapitalize").unwrap_or_default(),
+                    )),
+                    "autocorrect" => Ok(Value::String(
+                        self.dom.attr(*node, "autocorrect").unwrap_or_default(),
+                    )),
+                    "contentEditable" | "contenteditable" => Ok(Value::String(
+                        self.dom
+                            .attr(*node, "contenteditable")
+                            .unwrap_or_else(|| "inherit".to_string()),
+                    )),
+                    "draggable" => Ok(Value::Bool(
+                        self.dom
+                            .attr(*node, "draggable")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                    )),
+                    "enterKeyHint" | "enterkeyhint" => Ok(Value::String(
+                        self.dom.attr(*node, "enterkeyhint").unwrap_or_default(),
+                    )),
+                    "inert" => Ok(Value::Bool(self.dom.has_attr(*node, "inert")?)),
+                    "inputMode" | "inputmode" => Ok(Value::String(
+                        self.dom.attr(*node, "inputmode").unwrap_or_default(),
+                    )),
+                    "nonce" => Ok(Value::String(
+                        self.dom.attr(*node, "nonce").unwrap_or_default(),
+                    )),
+                    "popover" => Ok(Value::String(
+                        self.dom.attr(*node, "popover").unwrap_or_default(),
+                    )),
+                    "spellcheck" => Ok(Value::Bool(
+                        self.dom
+                            .attr(*node, "spellcheck")
+                            .is_some_and(|value| !value.eq_ignore_ascii_case("false")),
+                    )),
+                    "tabIndex" | "tabindex" => Ok(Value::Number(
+                        self.dom
+                            .attr(*node, "tabindex")
+                            .and_then(|raw| raw.trim().parse::<i64>().ok())
+                            .unwrap_or(-1),
+                    )),
+                    "translate" => Ok(Value::Bool(
+                        !self
+                            .dom
+                            .attr(*node, "translate")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("no")),
+                    )),
                     "cite" => Ok(Value::String(
                         self.dom.attr(*node, "cite").unwrap_or_default(),
                     )),
@@ -688,8 +860,32 @@ impl Harness {
                             ))
                         }
                     }
+                    "kind" if self.is_track_element(*node) => {
+                        Ok(Value::String(self.normalized_track_kind(*node)))
+                    }
+                    "srclang" | "srcLang" if self.is_track_element(*node) => Ok(Value::String(
+                        self.dom.attr(*node, "srclang").unwrap_or_default(),
+                    )),
+                    "label" if self.is_track_element(*node) => Ok(Value::String(
+                        self.dom.attr(*node, "label").unwrap_or_default(),
+                    )),
+                    "default" if self.is_track_element(*node) => {
+                        Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
+                    }
+                    "disablePictureInPicture" | "disablepictureinpicture" => {
+                        Ok(Value::Bool(self.dom.attr(*node, "disablepictureinpicture").is_some()))
+                    }
                     "media" => Ok(Value::String(
                         self.dom.attr(*node, "media").unwrap_or_default(),
+                    )),
+                    "playsInline" | "playsinline" => {
+                        Ok(Value::Bool(self.dom.attr(*node, "playsinline").is_some()))
+                    }
+                    "poster" => Ok(Value::String(
+                        self.dom
+                            .attr(*node, "poster")
+                            .map(|raw| self.resolve_document_target_url(&raw))
+                            .unwrap_or_default(),
                     )),
                     "sizes" => Ok(Value::String(
                         self.dom.attr(*node, "sizes").unwrap_or_default(),

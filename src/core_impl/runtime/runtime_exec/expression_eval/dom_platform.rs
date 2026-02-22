@@ -217,6 +217,55 @@ impl Harness {
                             self.dom.attr(node, "lang").unwrap_or_default(),
                         )),
                         DomProp::Dir => Ok(Value::String(self.resolved_dir_for_node(node))),
+                        DomProp::AccessKey => Ok(Value::String(
+                            self.dom.attr(node, "accesskey").unwrap_or_default(),
+                        )),
+                        DomProp::AutoCapitalize => Ok(Value::String(
+                            self.dom.attr(node, "autocapitalize").unwrap_or_default(),
+                        )),
+                        DomProp::AutoCorrect => Ok(Value::String(
+                            self.dom.attr(node, "autocorrect").unwrap_or_default(),
+                        )),
+                        DomProp::ContentEditable => Ok(Value::String(
+                            self.dom
+                                .attr(node, "contenteditable")
+                                .unwrap_or_else(|| "inherit".to_string()),
+                        )),
+                        DomProp::Draggable => Ok(Value::Bool(
+                            self.dom
+                                .attr(node, "draggable")
+                                .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                        )),
+                        DomProp::EnterKeyHint => Ok(Value::String(
+                            self.dom.attr(node, "enterkeyhint").unwrap_or_default(),
+                        )),
+                        DomProp::Inert => Ok(Value::Bool(self.dom.has_attr(node, "inert")?)),
+                        DomProp::InputMode => Ok(Value::String(
+                            self.dom.attr(node, "inputmode").unwrap_or_default(),
+                        )),
+                        DomProp::Nonce => Ok(Value::String(
+                            self.dom.attr(node, "nonce").unwrap_or_default(),
+                        )),
+                        DomProp::Popover => Ok(Value::String(
+                            self.dom.attr(node, "popover").unwrap_or_default(),
+                        )),
+                        DomProp::Spellcheck => Ok(Value::Bool(
+                            self.dom
+                                .attr(node, "spellcheck")
+                                .is_some_and(|value| !value.eq_ignore_ascii_case("false")),
+                        )),
+                        DomProp::TabIndex => Ok(Value::Number(
+                            self.dom
+                                .attr(node, "tabindex")
+                                .and_then(|raw| raw.trim().parse::<i64>().ok())
+                                .unwrap_or(-1),
+                        )),
+                        DomProp::Translate => Ok(Value::Bool(
+                            !self
+                                .dom
+                                .attr(node, "translate")
+                                .is_some_and(|value| value.eq_ignore_ascii_case("no")),
+                        )),
                         DomProp::Cite => Ok(Value::String(
                             self.dom.attr(node, "cite").unwrap_or_default(),
                         )),
@@ -407,10 +456,22 @@ impl Harness {
                         DomProp::AudioDisableRemotePlayback => Ok(Value::Bool(
                             self.dom.has_attr(node, "disableremoteplayback")?,
                         )),
+                        DomProp::VideoDisablePictureInPicture => Ok(Value::Bool(
+                            self.dom.has_attr(node, "disablepictureinpicture")?,
+                        )),
                         DomProp::AudioLoop => Ok(Value::Bool(self.dom.has_attr(node, "loop")?)),
                         DomProp::AudioMuted => Ok(Value::Bool(self.dom.has_attr(node, "muted")?)),
                         DomProp::AudioPreload => Ok(Value::String(
                             self.dom.attr(node, "preload").unwrap_or_default(),
+                        )),
+                        DomProp::VideoPlaysInline => {
+                            Ok(Value::Bool(self.dom.has_attr(node, "playsinline")?))
+                        }
+                        DomProp::VideoPoster => Ok(Value::String(
+                            self.dom
+                                .attr(node, "poster")
+                                .map(|raw| self.resolve_document_target_url(&raw))
+                                .unwrap_or_default(),
                         )),
                         DomProp::AriaString(prop_name) => Ok(Value::String(
                             self.dom

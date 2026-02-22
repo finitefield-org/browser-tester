@@ -367,6 +367,58 @@ impl Harness {
                             DomProp::Name => self.dom.set_attr(node, "name", &value.as_string())?,
                             DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                             DomProp::Dir => self.dom.set_attr(node, "dir", &value.as_string())?,
+                            DomProp::AccessKey => {
+                                self.dom.set_attr(node, "accesskey", &value.as_string())?
+                            }
+                            DomProp::AutoCapitalize => {
+                                self.dom
+                                    .set_attr(node, "autocapitalize", &value.as_string())?
+                            }
+                            DomProp::AutoCorrect => {
+                                self.dom.set_attr(node, "autocorrect", &value.as_string())?
+                            }
+                            DomProp::ContentEditable => {
+                                self.dom
+                                    .set_attr(node, "contenteditable", &value.as_string())?
+                            }
+                            DomProp::Draggable => {
+                                self.dom.set_attr(
+                                    node,
+                                    "draggable",
+                                    if value.truthy() { "true" } else { "false" },
+                                )?
+                            }
+                            DomProp::EnterKeyHint => {
+                                self.dom
+                                    .set_attr(node, "enterkeyhint", &value.as_string())?
+                            }
+                            DomProp::Inert => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "inert", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "inert")?;
+                                }
+                            }
+                            DomProp::InputMode => {
+                                self.dom.set_attr(node, "inputmode", &value.as_string())?
+                            }
+                            DomProp::Nonce => self.dom.set_attr(node, "nonce", &value.as_string())?,
+                            DomProp::Popover => {
+                                self.dom.set_attr(node, "popover", &value.as_string())?
+                            }
+                            DomProp::Spellcheck => {
+                                self.dom.set_attr(
+                                    node,
+                                    "spellcheck",
+                                    if value.truthy() { "true" } else { "false" },
+                                )?
+                            }
+                            DomProp::TabIndex => self
+                                .dom
+                                .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?,
+                            DomProp::Translate => self
+                                .dom
+                                .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?,
                             DomProp::Cite => self.dom.set_attr(node, "cite", &value.as_string())?,
                             DomProp::DateTime => {
                                 self.dom.set_attr(node, "datetime", &value.as_string())?
@@ -441,6 +493,13 @@ impl Harness {
                                     self.dom.remove_attr(node, "disableremoteplayback")?;
                                 }
                             }
+                            DomProp::VideoDisablePictureInPicture => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "disablepictureinpicture", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "disablepictureinpicture")?;
+                                }
+                            }
                             DomProp::AudioLoop => {
                                 if value.truthy() {
                                     self.dom.set_attr(node, "loop", "true")?;
@@ -457,6 +516,16 @@ impl Harness {
                             }
                             DomProp::AudioPreload => {
                                 self.dom.set_attr(node, "preload", &value.as_string())?
+                            }
+                            DomProp::VideoPlaysInline => {
+                                if value.truthy() {
+                                    self.dom.set_attr(node, "playsinline", "true")?;
+                                } else {
+                                    self.dom.remove_attr(node, "playsinline")?;
+                                }
+                            }
+                            DomProp::VideoPoster => {
+                                self.dom.set_attr(node, "poster", &value.as_string())?
                             }
                             DomProp::Location | DomProp::LocationHref => self.navigate_location(
                                 &value.as_string(),

@@ -250,6 +250,19 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("name", None) => DomProp::Name,
         ("lang", None) => DomProp::Lang,
         ("dir", None) => DomProp::Dir,
+        ("accessKey", None) | ("accesskey", None) => DomProp::AccessKey,
+        ("autocapitalize", None) => DomProp::AutoCapitalize,
+        ("autocorrect", None) => DomProp::AutoCorrect,
+        ("contentEditable", None) | ("contenteditable", None) => DomProp::ContentEditable,
+        ("draggable", None) => DomProp::Draggable,
+        ("enterKeyHint", None) | ("enterkeyhint", None) => DomProp::EnterKeyHint,
+        ("inert", None) => DomProp::Inert,
+        ("inputMode", None) | ("inputmode", None) => DomProp::InputMode,
+        ("nonce", None) => DomProp::Nonce,
+        ("popover", None) => DomProp::Popover,
+        ("spellcheck", None) => DomProp::Spellcheck,
+        ("tabIndex", None) | ("tabindex", None) => DomProp::TabIndex,
+        ("translate", None) => DomProp::Translate,
         ("cite", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::Cite,
         ("dateTime", None) | ("datetime", None) if !matches!(target, DomQuery::DocumentRoot) => {
             DomProp::DateTime
@@ -455,9 +468,16 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("disableRemotePlayback", None) | ("disableremoteplayback", None) if is_media_target => {
             DomProp::AudioDisableRemotePlayback
         }
+        ("disablePictureInPicture", None) | ("disablepictureinpicture", None) if is_media_target => {
+            DomProp::VideoDisablePictureInPicture
+        }
         ("loop", None) if is_media_target => DomProp::AudioLoop,
         ("muted", None) if is_media_target => DomProp::AudioMuted,
         ("preload", None) if is_media_target => DomProp::AudioPreload,
+        ("playsInline", None) | ("playsinline", None) if is_media_target => {
+            DomProp::VideoPlaysInline
+        }
+        ("poster", None) if is_media_target => DomProp::VideoPoster,
         ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
             DomProp::AnchorAttributionSrc
         }

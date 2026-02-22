@@ -272,7 +272,12 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
 
             let (tag, attrs, self_closing, next) = parse_start_tag(html, i)?;
             i = next;
+            let inside_template = stack.iter().any(|node| {
+                dom.tag_name(*node)
+                    .is_some_and(|open_tag| open_tag.eq_ignore_ascii_case("template"))
+            });
             let executable_script = tag.eq_ignore_ascii_case("script")
+                && !inside_template
                 && is_executable_script_type(attrs.get("type").map(String::as_str));
             close_optional_description_item_start_tag(&dom, &mut stack, &tag);
             close_optional_list_item_start_tag(&dom, &mut stack, &tag);
@@ -326,6 +331,23 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                 continue;
             }
 
+            if tag.eq_ignore_ascii_case("title") && !self_closing {
+                let close = find_case_insensitive_raw_end_tag(bytes, i, b"title")
+                    .ok_or_else(|| Error::HtmlParse("unclosed <title>".into()))?;
+                if let Some(title_body) = html.get(i..close) {
+                    if !title_body.is_empty() {
+                        let decoded = decode_html_character_references(title_body);
+                        if !decoded.is_empty() {
+                            dom.create_text(node, decoded);
+                        }
+                    }
+                }
+                i = close;
+                let (_, after_end) = parse_end_tag(html, i)?;
+                i = after_end;
+                continue;
+            }
+
             if !self_closing && !is_void_tag(&tag) {
                 stack.push(node);
             }
@@ -358,6 +380,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
     dom.normalize_named_details_groups()?;
     dom.normalize_single_head_element()?;
     dom.normalize_single_body_element()?;
+    dom.normalize_implied_table_bodies()?;
     Ok(ParseOutput { dom, scripts })
 }
 

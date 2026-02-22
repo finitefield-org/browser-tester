@@ -279,6 +279,37 @@ impl Harness {
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
             "dir" => self.dom.set_attr(node, "dir", &value.as_string())?,
+            "accessKey" | "accesskey" => self.dom.set_attr(node, "accesskey", &value.as_string())?,
+            "autocapitalize" => self.dom.set_attr(node, "autocapitalize", &value.as_string())?,
+            "autocorrect" => self.dom.set_attr(node, "autocorrect", &value.as_string())?,
+            "contentEditable" | "contenteditable" => {
+                self.dom.set_attr(node, "contenteditable", &value.as_string())?
+            }
+            "draggable" => self
+                .dom
+                .set_attr(node, "draggable", if value.truthy() { "true" } else { "false" })?,
+            "enterKeyHint" | "enterkeyhint" => {
+                self.dom.set_attr(node, "enterkeyhint", &value.as_string())?
+            }
+            "inert" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "inert", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "inert")?;
+                }
+            }
+            "inputMode" | "inputmode" => self.dom.set_attr(node, "inputmode", &value.as_string())?,
+            "nonce" => self.dom.set_attr(node, "nonce", &value.as_string())?,
+            "popover" => self.dom.set_attr(node, "popover", &value.as_string())?,
+            "spellcheck" => self
+                .dom
+                .set_attr(node, "spellcheck", if value.truthy() { "true" } else { "false" })?,
+            "tabIndex" | "tabindex" => self
+                .dom
+                .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?,
+            "translate" => self
+                .dom
+                .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?,
             "cite" => self.dom.set_attr(node, "cite", &value.as_string())?,
             "dateTime" | "datetime" => self.dom.set_attr(node, "datetime", &value.as_string())?,
             "clear" => self.dom.set_attr(node, "clear", &value.as_string())?,
@@ -341,6 +372,13 @@ impl Harness {
                     self.dom.remove_attr(node, "disableremoteplayback")?;
                 }
             }
+            "disablePictureInPicture" | "disablepictureinpicture" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "disablepictureinpicture", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "disablepictureinpicture")?;
+                }
+            }
             "loop" => {
                 if value.truthy() {
                     self.dom.set_attr(node, "loop", "true")?;
@@ -356,6 +394,14 @@ impl Harness {
                 }
             }
             "preload" => self.dom.set_attr(node, "preload", &value.as_string())?,
+            "playsInline" | "playsinline" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "playsinline", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "playsinline")?;
+                }
+            }
+            "poster" => self.dom.set_attr(node, "poster", &value.as_string())?,
             "attributionSrc" | "attributionsrc" => {
                 self.dom
                     .set_attr(node, "attributionsrc", &value.as_string())?
@@ -379,6 +425,42 @@ impl Harness {
             "search" => self.set_anchor_url_property(node, "search", value.clone())?,
             "target" => self.dom.set_attr(node, "target", &value.as_string())?,
             "type" => self.dom.set_attr(node, "type", &value.as_string())?,
+            "kind"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
+            {
+                self.dom.set_attr(node, "kind", &value.as_string())?
+            }
+            "srclang" | "srcLang"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
+            {
+                self.dom.set_attr(node, "srclang", &value.as_string())?
+            }
+            "label"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
+            {
+                self.dom.set_attr(node, "label", &value.as_string())?
+            }
+            "default"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
+            {
+                if value.truthy() {
+                    self.dom.set_attr(node, "default", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "default")?;
+                }
+            }
             "media" => self.dom.set_attr(node, "media", &value.as_string())?,
             "sizes" => self.dom.set_attr(node, "sizes", &value.as_string())?,
             "srcset" | "srcSet" => self.dom.set_attr(node, "srcset", &value.as_string())?,
