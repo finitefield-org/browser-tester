@@ -149,16 +149,17 @@ impl Harness {
     }
 
     pub(crate) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
-        let stmts = parse_block_statements(script)?;
-        self.with_script_env(|this, env| {
-            let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
-            this.run_in_task_context(|inner| {
-                inner
-                    .execute_stmts(&stmts, &None, &mut event, env)
-                    .map(|_| ())
-            })
-        })?;
-
-        Ok(())
+        stacker::grow(32 * 1024 * 1024, || -> Result<()> {
+            let stmts = parse_block_statements(script)?;
+            self.with_script_env(|this, env| {
+                let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
+                this.run_in_task_context(|inner| {
+                    inner
+                        .execute_stmts(&stmts, &None, &mut event, env)
+                        .map(|_| ())
+                })
+            })?;
+            Ok(())
+        })
     }
 }

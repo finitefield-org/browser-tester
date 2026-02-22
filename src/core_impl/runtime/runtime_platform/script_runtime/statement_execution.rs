@@ -1,7 +1,24 @@
 use super::*;
 
 impl Harness {
+    const EXEC_STMTS_STACK_RED_ZONE: usize = 64 * 1024;
+    const EXEC_STMTS_STACK_SIZE: usize = 32 * 1024 * 1024;
+
     pub(crate) fn execute_stmts(
+        &mut self,
+        stmts: &[Stmt],
+        event_param: &Option<String>,
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<ExecFlow> {
+        stacker::maybe_grow(
+            Self::EXEC_STMTS_STACK_RED_ZONE,
+            Self::EXEC_STMTS_STACK_SIZE,
+            || self.execute_stmts_impl(stmts, event_param, event, env),
+        )
+    }
+
+    fn execute_stmts_impl(
         &mut self,
         stmts: &[Stmt],
         event_param: &Option<String>,
