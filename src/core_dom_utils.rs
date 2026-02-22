@@ -43,6 +43,20 @@ pub(crate) const INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY: &str =
 pub(crate) const INTERNAL_STORAGE_KEY_PREFIX: &str = "\u{0}\u{0}bt_storage:";
 pub(crate) const INTERNAL_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_storage:object";
 pub(crate) const INTERNAL_STORAGE_ENTRIES_KEY: &str = "\u{0}\u{0}bt_storage:entries";
+pub(crate) const INTERNAL_ITERATOR_KEY_PREFIX: &str = "\u{0}\u{0}bt_iterator:";
+pub(crate) const INTERNAL_ITERATOR_CONSTRUCTOR_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_iterator:constructor";
+pub(crate) const INTERNAL_ITERATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_iterator:object";
+pub(crate) const INTERNAL_ITERATOR_VALUES_KEY: &str = "\u{0}\u{0}bt_iterator:values";
+pub(crate) const INTERNAL_ITERATOR_INDEX_KEY: &str = "\u{0}\u{0}bt_iterator:index";
+pub(crate) const INTERNAL_ASYNC_ITERATOR_KEY_PREFIX: &str = "\u{0}\u{0}bt_async_iterator:";
+pub(crate) const INTERNAL_ASYNC_ITERATOR_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_async_iterator:object";
+pub(crate) const INTERNAL_ASYNC_ITERATOR_VALUES_KEY: &str =
+    "\u{0}\u{0}bt_async_iterator:values";
+pub(crate) const INTERNAL_ASYNC_ITERATOR_INDEX_KEY: &str = "\u{0}\u{0}bt_async_iterator:index";
+pub(crate) const INTERNAL_ASYNC_ITERATOR_TARGET_KEY: &str =
+    "\u{0}\u{0}bt_async_iterator:target";
 pub(crate) const DEFAULT_COLOR_INPUT_VALUE: &str = "#000000";
 pub(crate) const DEFAULT_RANGE_INPUT_MIN: f64 = 0.0;
 pub(crate) const DEFAULT_RANGE_INPUT_MAX: f64 = 100.0;

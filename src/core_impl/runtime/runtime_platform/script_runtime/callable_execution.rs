@@ -194,6 +194,82 @@ impl Harness {
                             ("done".to_string(), Value::Bool(false)),
                         ]))
                     }
+                    "readable_stream_async_iterator" => {
+                        let Value::Object(entries) = callable else {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        };
+                        let entries = entries.borrow();
+                        let chunks =
+                            match Self::object_get_entry(&entries, INTERNAL_ASYNC_ITERATOR_VALUES_KEY)
+                            {
+                                Some(Value::Array(values)) => values.borrow().clone(),
+                                _ => {
+                                    return Err(Error::ScriptRuntime(
+                                        "ReadableStream async iterator has invalid internal state"
+                                            .into(),
+                                    ));
+                                }
+                            };
+                        Ok(self.new_async_iterator_value(chunks))
+                    }
+                    "async_iterator_next" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "AsyncIterator.next does not take arguments".into(),
+                            ));
+                        }
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        let result =
+                            if let Some(value) = self.async_iterator_next_value_from_object(&iterator)?
+                            {
+                                Self::new_object_value(vec![
+                                    ("value".to_string(), value),
+                                    ("done".to_string(), Value::Bool(false)),
+                                ])
+                            } else {
+                                Self::new_object_value(vec![
+                                    ("value".to_string(), Value::Undefined),
+                                    ("done".to_string(), Value::Bool(true)),
+                                ])
+                            };
+                        let promise = self.new_pending_promise();
+                        self.promise_resolve(&promise, result)?;
+                        Ok(Value::Promise(promise))
+                    }
+                    "async_iterator_self" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "AsyncIterator[Symbol.asyncIterator] does not take arguments".into(),
+                            ));
+                        }
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        Ok(Value::Object(iterator))
+                    }
+                    "async_iterator_async_dispose" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "AsyncIterator[Symbol.asyncDispose] does not take arguments".into(),
+                            ));
+                        }
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        let return_value = {
+                            let entries = iterator.borrow();
+                            Self::object_get_entry(&entries, "return")
+                        };
+                        let dispose_result = if let Some(return_method) = return_value {
+                            if !self.is_callable_value(&return_method) {
+                                return Err(Error::ScriptRuntime(
+                                    "AsyncIterator.return is not a function".into(),
+                                ));
+                            }
+                            self.execute_callable_value(&return_method, &[], event)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let promise = self.new_pending_promise();
+                        self.promise_resolve(&promise, dispose_result)?;
+                        Ok(Value::Promise(promise))
+                    }
                     "boolean_constructor" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))

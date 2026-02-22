@@ -198,6 +198,7 @@ impl Harness {
         let intl = Self::new_object_value(intl_entries);
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
+        let iterator_constructor = self.new_iterator_constructor_value();
         let url_constructor = Value::UrlConstructor;
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
@@ -209,6 +210,7 @@ impl Harness {
             &intl,
             &string_constructor,
             &boolean_constructor,
+            &iterator_constructor,
             &url_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
@@ -234,6 +236,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Boolean".to_string(), boolean_constructor);
+        self.script_runtime
+            .env
+            .insert("Iterator".to_string(), iterator_constructor);
         self.script_runtime
             .env
             .insert("URL".to_string(), url_constructor);

@@ -355,6 +355,41 @@ impl Harness {
                 }
                 Value::Bool(all)
             }
+            "values" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "values does not take arguments".into(),
+                    ));
+                }
+                self.new_iterator_value(values.borrow().clone())
+            }
+            "keys" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("keys does not take arguments".into()));
+                }
+                self.new_iterator_value(
+                    (0..values.borrow().len())
+                        .map(|index| Value::Number(index as i64))
+                        .collect(),
+                )
+            }
+            "entries" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "entries does not take arguments".into(),
+                    ));
+                }
+                self.new_iterator_value(
+                    values
+                        .borrow()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            Self::new_array_value(vec![Value::Number(index as i64), value.clone()])
+                        })
+                        .collect(),
+                )
+            }
             "fill" => {
                 if evaluated_args.is_empty() || evaluated_args.len() > 3 {
                     return Err(Error::ScriptRuntime(

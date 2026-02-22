@@ -1203,7 +1203,9 @@ impl Harness {
                             Value::Map(map) => self.map_entries_array(&map),
                             Value::Set(set) => set.borrow().values.clone(),
                             Value::Object(entries) => {
-                                if Self::is_url_search_params_object(&entries.borrow()) {
+                                if Self::is_iterator_object(&entries.borrow()) {
+                                    self.iterator_collect_remaining_values(&entries)?
+                                } else if Self::is_url_search_params_object(&entries.borrow()) {
                                     Self::url_search_params_pairs_from_object_entries(
                                         &entries.borrow(),
                                     )

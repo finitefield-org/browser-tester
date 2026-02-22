@@ -142,7 +142,21 @@ impl Harness {
                 }
             }
             Value::Object(entries) => {
-                if Self::is_url_search_params_object(&entries.borrow()) {
+                if Self::is_iterator_object(&entries.borrow()) {
+                    let snapshot = self.iterator_collect_remaining_values(&entries)?;
+                    for (idx, value) in snapshot.into_iter().enumerate() {
+                        self.execute_array_callback_in_env(
+                            callback,
+                            &[
+                                value,
+                                Value::Number(idx as i64),
+                                Value::Object(entries.clone()),
+                            ],
+                            env,
+                            event,
+                        )?;
+                    }
+                } else if Self::is_url_search_params_object(&entries.borrow()) {
                     let snapshot =
                         Self::url_search_params_pairs_from_object_entries(&entries.borrow());
                     for (key, value) in snapshot {

@@ -85,6 +85,7 @@ impl Harness {
             "Intl",
             "String",
             "Boolean",
+            "Iterator",
             "URL",
             "HTMLElement",
             "HTMLInputElement",
@@ -98,6 +99,7 @@ impl Harness {
         intl: &Value,
         string_constructor: &Value,
         boolean_constructor: &Value,
+        iterator_constructor: &Value,
         url_constructor: &Value,
         html_element_constructor: &Value,
         html_input_element_constructor: &Value,
@@ -161,6 +163,7 @@ impl Harness {
             ("Intl".to_string(), intl.clone()),
             ("String".to_string(), string_constructor.clone()),
             ("Boolean".to_string(), boolean_constructor.clone()),
+            ("Iterator".to_string(), iterator_constructor.clone()),
             ("URL".to_string(), url_constructor.clone()),
             ("HTMLElement".to_string(), html_element_constructor.clone()),
             (

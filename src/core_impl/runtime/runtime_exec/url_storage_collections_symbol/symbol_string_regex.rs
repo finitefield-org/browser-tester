@@ -38,6 +38,8 @@ impl Harness {
             || key.starts_with(INTERNAL_CANVAS_KEY_PREFIX)
             || key.starts_with(INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX)
             || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_ITERATOR_KEY_PREFIX)
+            || key.starts_with(INTERNAL_ASYNC_ITERATOR_KEY_PREFIX)
     }
 
     pub(crate) fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {

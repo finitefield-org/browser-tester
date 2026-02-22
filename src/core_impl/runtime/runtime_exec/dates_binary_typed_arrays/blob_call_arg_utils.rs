@@ -14,11 +14,19 @@ impl Harness {
         Value::Blob(Rc::new(RefCell::new(BlobValue { bytes, mime_type })))
     }
 
-    pub(crate) fn new_readable_stream_placeholder_value() -> Value {
-        Self::new_object_value(vec![(
-            INTERNAL_READABLE_STREAM_OBJECT_KEY.to_string(),
-            Value::Bool(true),
-        )])
+    pub(crate) fn new_readable_stream_placeholder_value(&mut self, chunks: Vec<Value>) -> Value {
+        let async_iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator);
+        let async_iterator_key = self.property_key_to_storage_key(&async_iterator_symbol);
+        Self::new_object_value(vec![
+            (
+                INTERNAL_READABLE_STREAM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                async_iterator_key,
+                self.new_readable_stream_async_iterator_callable(chunks),
+            ),
+        ])
     }
 
     pub(crate) fn new_uint8_typed_array_from_bytes(bytes: &[u8]) -> Value {
@@ -175,7 +183,13 @@ impl Harness {
                         "Blob.stream does not take arguments".into(),
                     ));
                 }
-                Ok(Some(Self::new_readable_stream_placeholder_value()))
+                let bytes = blob.borrow().bytes.clone();
+                let chunks = if bytes.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Self::new_uint8_typed_array_from_bytes(&bytes)]
+                };
+                Ok(Some(self.new_readable_stream_placeholder_value(chunks)))
             }
             _ => Ok(None),
         }
@@ -269,6 +283,13 @@ impl Harness {
                 .collect::<Vec<_>>()),
             Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
             Value::Object(entries) => {
+                let is_iterator = {
+                    let entries_ref = entries.borrow();
+                    Self::is_iterator_object(&entries_ref)
+                };
+                if is_iterator {
+                    return self.iterator_collect_remaining_values(entries);
+                }
                 let entries = entries.borrow();
                 if Self::is_url_search_params_object(&entries) {
                     return Ok(Self::url_search_params_pairs_from_object_entries(&entries)
@@ -303,6 +324,13 @@ impl Harness {
                 .collect::<Vec<_>>()),
             Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
             Value::Object(entries) => {
+                let is_iterator = {
+                    let entries_ref = entries.borrow();
+                    Self::is_iterator_object(&entries_ref)
+                };
+                if is_iterator {
+                    return self.iterator_collect_remaining_values(entries);
+                }
                 let entries = entries.borrow();
                 if Self::is_url_search_params_object(&entries) {
                     return Ok(Self::url_search_params_pairs_from_object_entries(&entries)

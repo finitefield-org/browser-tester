@@ -177,6 +177,33 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        let is_iterator_constructor = {
+                            let entries = object.borrow();
+                            Self::is_iterator_constructor_object(&entries)
+                        };
+                        if is_iterator_constructor {
+                            if let Some(value) = self.eval_iterator_constructor_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        let is_iterator = {
+                            let entries = object.borrow();
+                            Self::is_iterator_object(&entries)
+                        };
+                        if is_iterator {
+                            if let Some(value) = self.eval_iterator_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                                event,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
                         if Self::is_canvas_2d_context_object(&object.borrow()) {
                             if let Some(value) = self.eval_canvas_2d_context_member_call(
                                 object,
@@ -272,7 +299,7 @@ impl Harness {
                         Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
                             format!("{:.0}", value)
                         }
-                        other => other.as_string(),
+                        other => self.property_key_to_storage_key(&other),
                     };
                     self.object_property_from_value(&receiver, &key)
                 }
