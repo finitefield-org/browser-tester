@@ -78,9 +78,6 @@ fn menu_role_override_and_compact_attribute_roundtrip_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        "list:true:3|toolbar:toolbar|list:true|true:true",
-    )?;
+    h.assert_text("#result", "list:true:3|toolbar:toolbar|list:true|true:true")?;
     Ok(())
 }

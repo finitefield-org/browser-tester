@@ -57,7 +57,9 @@ impl Harness {
             Value::Object(_)
             | Value::Promise(_)
             | Value::Map(_)
+            | Value::WeakMap(_)
             | Value::Set(_)
+            | Value::WeakSet(_)
             | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
@@ -68,7 +70,9 @@ impl Harness {
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
+            | Value::WeakMapConstructor
             | Value::SetConstructor
+            | Value::WeakSetConstructor
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::PromiseCapability(_)
@@ -101,7 +105,9 @@ impl Harness {
             | Value::Object(_)
             | Value::Promise(_)
             | Value::Map(_)
+            | Value::WeakMap(_)
             | Value::Set(_)
+            | Value::WeakSet(_)
             | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
@@ -112,7 +118,9 @@ impl Harness {
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
+            | Value::WeakMapConstructor
             | Value::SetConstructor
+            | Value::WeakSetConstructor
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::PromiseCapability(_)

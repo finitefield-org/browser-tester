@@ -192,9 +192,9 @@ impl Dom {
                 .unwrap_or(false);
             if is_output {
                 let default_value = self.text_content(node);
-                let element = self
-                    .element_mut(node)
-                    .ok_or_else(|| Error::ScriptRuntime("output target is not an element".into()))?;
+                let element = self.element_mut(node).ok_or_else(|| {
+                    Error::ScriptRuntime("output target is not an element".into())
+                })?;
                 element.value = default_value;
                 continue;
             }

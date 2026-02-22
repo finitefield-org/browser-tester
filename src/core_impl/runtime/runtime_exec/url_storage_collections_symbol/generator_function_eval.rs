@@ -13,22 +13,35 @@ impl Harness {
             ),
         ])));
         let constructor_value = Value::Object(constructor.clone());
-        let generator_prototype = Self::new_object_value(vec![(
-            "next".to_string(),
-            Self::new_builtin_placeholder_function(),
-        )]);
-        let prototype = Self::new_object_value(vec![
+        let generator_prototype = Rc::new(RefCell::new(ObjectValue::new(vec![(
+            INTERNAL_GENERATOR_PROTOTYPE_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])));
+        {
+            let mut generator_prototype_entries = generator_prototype.borrow_mut();
+            for (key, value) in Self::generator_prototype_method_entries() {
+                Self::object_set_entry(&mut generator_prototype_entries, key, value);
+            }
+        }
+        let generator_prototype_value = Value::Object(generator_prototype.clone());
+        let prototype = Rc::new(RefCell::new(ObjectValue::new(vec![
             (
                 INTERNAL_GENERATOR_FUNCTION_PROTOTYPE_OBJECT_KEY.to_string(),
                 Value::Bool(true),
             ),
             ("constructor".to_string(), constructor_value.clone()),
-            ("prototype".to_string(), generator_prototype),
-        ]);
+            ("prototype".to_string(), generator_prototype_value),
+        ])));
+        let prototype_value = Value::Object(prototype.clone());
+        Self::object_set_entry(
+            &mut generator_prototype.borrow_mut(),
+            "constructor".to_string(),
+            prototype_value.clone(),
+        );
         Self::object_set_entry(
             &mut constructor.borrow_mut(),
             "prototype".to_string(),
-            prototype,
+            prototype_value,
         );
         constructor_value
     }

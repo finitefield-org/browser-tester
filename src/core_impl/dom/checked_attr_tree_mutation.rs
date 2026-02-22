@@ -124,13 +124,9 @@ impl Dom {
                 {
                     return true;
                 }
-                if self
-                    .tag_name(parent)
-                    .is_some_and(|tag| {
-                        tag.eq_ignore_ascii_case("select")
-                            || tag.eq_ignore_ascii_case("datalist")
-                    })
-                {
+                if self.tag_name(parent).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("select") || tag.eq_ignore_ascii_case("datalist")
+                }) {
                     break;
                 }
                 cursor = self.parent(parent);
@@ -337,8 +333,11 @@ impl Dom {
             }
 
             if is_details && (lowered == "open" || lowered == "name") {
-                details_open_group_to_enforce =
-                    element.attrs.get("name").cloned().filter(|name| !name.is_empty());
+                details_open_group_to_enforce = element
+                    .attrs
+                    .get("name")
+                    .cloned()
+                    .filter(|name| !name.is_empty());
             }
             (is_option, lowered)
         };

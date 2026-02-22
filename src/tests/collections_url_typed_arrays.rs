@@ -709,6 +709,295 @@ fn map_constructor_clone_and_error_cases_work() -> Result<()> {
 }
 
 #[test]
+fn weak_map_basic_methods_and_key_rules_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const wm = new WeakMap();
+            const obj = {};
+            const fnKey = function() {};
+            const unique = Symbol('u');
+
+            wm.set(obj, 'obj');
+            wm.set(fnKey, 'fn');
+            wm.set(unique, 'sym');
+
+            const gotObj = wm.get(obj);
+            const hasFn = wm.has(fnKey);
+            const deleted = wm.delete(fnKey);
+            const hasFnAfter = wm.has(fnKey);
+
+            const primitiveGet = wm.get(1);
+            const primitiveHas = wm.has('x');
+            const primitiveDelete = wm.delete(null);
+
+            const ctor = wm.constructor === WeakMap;
+            const text = String(wm);
+            const clearType = typeof wm.clear;
+
+            let regThrows = false;
+            try {
+              wm.set(Symbol.for('shared'), 1);
+            } catch (e) {
+              regThrows = true;
+            }
+
+            document.getElementById('result').textContent =
+              gotObj + ':' +
+              hasFn + ':' +
+              deleted + ':' +
+              hasFnAfter + ':' +
+              primitiveGet + ':' +
+              primitiveHas + ':' +
+              primitiveDelete + ':' +
+              ctor + ':' +
+              text + ':' +
+              clearType + ':' +
+              regThrows;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "obj:true:true:false:undefined:false:false:true:[object WeakMap]:undefined:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn weak_map_get_or_insert_and_constructor_clone_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const keyA = {};
+            const keyB = {};
+            const keyC = {};
+            const lazyKey = {};
+
+            const fromIterable = new WeakMap([[keyA, 'a'], [keyB, 'b']]);
+            const fromClone = new WeakMap(fromIterable);
+
+            const first = fromClone.getOrInsert(keyA, 'aa');
+            const inserted = fromClone.getOrInsert(keyC, 3);
+            const computed1 = fromClone.getOrInsertComputed(keyC, function() { return 9; });
+            const computed2 = fromClone.getOrInsertComputed(keyB, function(k) {
+              return k === keyB ? 'bb' : 'x';
+            });
+
+            let calls = 0;
+            const lazy1 = fromClone.getOrInsertComputed(lazyKey, function(k) {
+              calls = calls + 1;
+              return k === lazyKey ? 'lazy' : 'bad';
+            });
+            const lazy2 = fromClone.getOrInsertComputed(lazyKey, function() {
+              calls = calls + 1;
+              return 'ignored';
+            });
+
+            let invalidThrows = false;
+            try {
+              fromClone.getOrInsert(1, 'x');
+            } catch (e) {
+              invalidThrows = true;
+            }
+
+            document.getElementById('result').textContent =
+              fromClone.get(keyA) + ':' +
+              fromClone.get(keyB) + ':' +
+              first + ':' +
+              inserted + ':' +
+              computed1 + ':' +
+              computed2 + ':' +
+              lazy1 + ':' +
+              lazy2 + ':' +
+              calls + ':' +
+              invalidThrows + ':' +
+              (fromClone === fromIterable);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a:b:a:3:3:b:lazy:lazy:1:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn weak_map_constructor_and_invalid_calls_error() {
+    let err = Harness::from_html("<script>WeakMap();</script>")
+        .expect_err("calling WeakMap constructor without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("WeakMap constructor must be called with new"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>new WeakMap([[1, 'x']]);</script>")
+        .expect_err("WeakMap keys must be objects or non-registered symbols");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("Invalid value used as weak map key"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>const wm = new WeakMap(); wm.clear();</script>")
+        .expect_err("WeakMap.clear should not exist");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("WeakMap.clear is not a function")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn weak_set_basic_methods_and_key_rules_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const ws = new WeakSet();
+            const obj = {};
+            const fnKey = function() {};
+            const unique = Symbol('u');
+            const chainObj = {};
+
+            const addReturn = ws.add(obj) === ws;
+            ws.add(fnKey);
+            ws.add(unique);
+            ws.add(obj);
+
+            const chainHas = (new WeakSet()).add(chainObj).has(chainObj);
+
+            const hasObj = ws.has(obj);
+            const hasFn = ws.has(fnKey);
+            const deleted = ws.delete(fnKey);
+            const hasFnAfter = ws.has(fnKey);
+
+            const primitiveHas = ws.has(1);
+            const primitiveDelete = ws.delete('x');
+
+            const ctor = ws.constructor === WeakSet;
+            const text = String(ws);
+            const clearType = typeof ws.clear;
+
+            let regThrows = false;
+            try {
+              ws.add(Symbol.for('shared'));
+            } catch (e) {
+              regThrows = true;
+            }
+
+            document.getElementById('result').textContent =
+              addReturn + ':' +
+              chainHas + ':' +
+              hasObj + ':' +
+              hasFn + ':' +
+              deleted + ':' +
+              hasFnAfter + ':' +
+              primitiveHas + ':' +
+              primitiveDelete + ':' +
+              ctor + ':' +
+              text + ':' +
+              clearType + ':' +
+              regThrows;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:false:false:false:true:[object WeakSet]:undefined:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn weak_set_constructor_clone_and_error_cases_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = {};
+            const b = {};
+            const c = {};
+            const fromIterable = new WeakSet([a, b, a]);
+            const clone = new WeakSet(fromIterable);
+            const addRet = clone.add(c) === clone;
+
+            let invalidThrows = false;
+            try {
+              clone.add(1);
+            } catch (e) {
+              invalidThrows = true;
+            }
+
+            document.getElementById('result').textContent =
+              clone.has(a) + ':' +
+              clone.has(b) + ':' +
+              clone.has(c) + ':' +
+              addRet + ':' +
+              invalidThrows + ':' +
+              (clone === fromIterable);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn weak_set_constructor_and_invalid_calls_error() {
+    let err = Harness::from_html("<script>WeakSet();</script>")
+        .expect_err("calling WeakSet constructor without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("WeakSet constructor must be called with new"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>new WeakSet([1]);</script>")
+        .expect_err("WeakSet values must be objects or non-registered symbols");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("Invalid value used in weak set"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err =
+        Harness::from_html("<script>const ws = new WeakSet(); ws.union(new Set([1]));</script>")
+            .expect_err("WeakSet.union should not exist");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("WeakSet.union is not a function")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>const ws = new WeakSet(); ws.get({});</script>")
+        .expect_err("WeakSet.get should not exist");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("WeakSet.get is not a function")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn set_basic_methods_and_iteration_order_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

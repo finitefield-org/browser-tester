@@ -510,7 +510,11 @@ fn close_optional_ruby_text_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &
     }
 }
 
-fn close_optional_ruby_fallback_parenthesis_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+fn close_optional_ruby_fallback_parenthesis_start_tag(
+    dom: &Dom,
+    stack: &mut Vec<NodeId>,
+    tag: &str,
+) {
     if !(tag.eq_ignore_ascii_case("rt") || tag.eq_ignore_ascii_case("rp")) {
         return;
     }

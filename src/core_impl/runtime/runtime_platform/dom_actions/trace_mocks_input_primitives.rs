@@ -283,7 +283,11 @@ impl Harness {
         self.navigate_location(&href, LocationNavigationKind::Assign)
     }
 
-    pub(crate) fn is_within_first_legend_of_fieldset(&self, node: NodeId, fieldset: NodeId) -> bool {
+    pub(crate) fn is_within_first_legend_of_fieldset(
+        &self,
+        node: NodeId,
+        fieldset: NodeId,
+    ) -> bool {
         let first_legend = self.dom.child_elements(fieldset).into_iter().find(|child| {
             self.dom
                 .tag_name(*child)

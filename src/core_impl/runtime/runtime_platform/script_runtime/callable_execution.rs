@@ -216,28 +216,79 @@ impl Harness {
                         };
                         Ok(self.new_async_iterator_value(chunks))
                     }
-                    "async_iterator_next" => {
+                    "iterator_self" => {
                         if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Iterator[Symbol.iterator] does not take arguments".into(),
+                            ));
+                        }
+                        let iterator = self.iterator_target_from_callable(callable)?;
+                        Ok(Value::Object(iterator))
+                    }
+                    "async_generator_result_value" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Self::new_async_iterator_result_object(value, false))
+                    }
+                    "async_generator_result_done" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Self::new_async_iterator_result_object(value, true))
+                    }
+                    "async_iterator_next" => {
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        let is_async_generator = {
+                            let entries = iterator.borrow();
+                            Self::is_async_generator_object(&entries)
+                        };
+                        if !is_async_generator && !args.is_empty() {
                             return Err(Error::ScriptRuntime(
                                 "AsyncIterator.next does not take arguments".into(),
                             ));
                         }
-                        let iterator = self.async_iterator_target_from_callable(callable)?;
                         let result = if let Some(value) =
                             self.async_iterator_next_value_from_object(&iterator)?
                         {
-                            Self::new_object_value(vec![
-                                ("value".to_string(), value),
-                                ("done".to_string(), Value::Bool(false)),
-                            ])
+                            if is_async_generator {
+                                return self
+                                    .resolve_async_generator_iterator_result_promise(value, false);
+                            }
+                            Self::new_async_iterator_result_object(value, false)
                         } else {
-                            Self::new_object_value(vec![
-                                ("value".to_string(), Value::Undefined),
-                                ("done".to_string(), Value::Bool(true)),
-                            ])
+                            Self::new_async_iterator_result_object(Value::Undefined, true)
                         };
                         let promise = self.new_pending_promise();
                         self.promise_resolve(&promise, result)?;
+                        Ok(Value::Promise(promise))
+                    }
+                    "async_iterator_return" => {
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        let is_async_generator = {
+                            let entries = iterator.borrow();
+                            Self::is_async_generator_object(&entries)
+                        };
+                        if !is_async_generator {
+                            return Err(Error::ScriptRuntime(
+                                "AsyncIterator.return is not a function".into(),
+                            ));
+                        }
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        self.close_async_iterator_object(&iterator)?;
+                        self.resolve_async_generator_iterator_result_promise(value, true)
+                    }
+                    "async_iterator_throw" => {
+                        let iterator = self.async_iterator_target_from_callable(callable)?;
+                        let is_async_generator = {
+                            let entries = iterator.borrow();
+                            Self::is_async_generator_object(&entries)
+                        };
+                        if !is_async_generator {
+                            return Err(Error::ScriptRuntime(
+                                "AsyncIterator.throw is not a function".into(),
+                            ));
+                        }
+                        let reason = args.first().cloned().unwrap_or(Value::Undefined);
+                        self.close_async_iterator_object(&iterator)?;
+                        let promise = self.new_pending_promise();
+                        self.promise_reject(&promise, reason);
                         Ok(Value::Promise(promise))
                     }
                     "async_iterator_self" => {
@@ -441,7 +492,16 @@ impl Harness {
                 if yield_collector.is_some() {
                     let _ = this.script_runtime.generator_yield_stack.pop();
                 }
-                let flow = flow?;
+                let flow = match flow {
+                    Ok(flow) => flow,
+                    Err(Error::ScriptRuntime(msg))
+                        if function.is_generator
+                            && msg == INTERNAL_GENERATOR_YIELD_LIMIT_REACHED =>
+                    {
+                        ExecFlow::Continue
+                    }
+                    Err(err) => return Err(err),
+                };
                 let generator_yields = yield_collector
                     .as_ref()
                     .map(|values| values.borrow().clone())
@@ -502,9 +562,9 @@ impl Harness {
                 }
                 if function.is_generator {
                     if function.is_async {
-                        return Ok(this.new_async_iterator_value(generator_yields));
+                        return Ok(this.new_async_generator_value(generator_yields));
                     }
-                    return Ok(this.new_iterator_value(generator_yields));
+                    return Ok(this.new_generator_value(generator_yields));
                 }
                 match flow {
                     ExecFlow::Continue => Ok(Value::Undefined),

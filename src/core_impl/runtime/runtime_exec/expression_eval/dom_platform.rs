@@ -207,9 +207,9 @@ impl Harness {
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
-                        DomProp::HtmlFor => {
-                            Ok(Value::String(self.dom.attr(node, "for").unwrap_or_default()))
-                        }
+                        DomProp::HtmlFor => Ok(Value::String(
+                            self.dom.attr(node, "for").unwrap_or_default(),
+                        )),
                         DomProp::Name => Ok(Value::String(
                             self.dom.attr(node, "name").unwrap_or_default(),
                         )),
@@ -279,14 +279,10 @@ impl Harness {
                             self.dom.attr(node, "align").unwrap_or_default(),
                         )),
                         DomProp::ColSpan => {
-                            if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| {
-                                    tag.eq_ignore_ascii_case("col")
-                                        || tag.eq_ignore_ascii_case("colgroup")
-                                })
-                            {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("col")
+                                    || tag.eq_ignore_ascii_case("colgroup")
+                            }) {
                                 Ok(Value::Number(self.col_span_value(node)))
                             } else {
                                 Ok(self

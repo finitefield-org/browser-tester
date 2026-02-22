@@ -35,10 +35,7 @@ fn noscript_in_body_treats_children_as_text_when_scripting_is_enabled() -> Resul
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        ":NOSCRIPT:0:0:true:true:Rocks!|none:none|:true",
-    )?;
+    h.assert_text("#result", ":NOSCRIPT:0:0:true:true:Rocks!|none:none|:true")?;
     Ok(())
 }
 

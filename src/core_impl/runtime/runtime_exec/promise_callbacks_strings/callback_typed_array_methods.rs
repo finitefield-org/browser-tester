@@ -83,6 +83,27 @@ impl Harness {
                 };
             }
 
+            if let Value::WeakMap(weak_map) = target_value {
+                return match method {
+                    TypedArrayInstanceMethod::Set => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "WeakMap.set requires exactly two arguments".into(),
+                            ));
+                        }
+                        let key = self.eval_expr(&args[0], env, event_param, event)?;
+                        let value = self.eval_expr(&args[1], env, event_param, event)?;
+                        Self::ensure_weak_map_key(&key)?;
+                        self.weak_map_set_entry(&mut weak_map.borrow_mut(), key, value);
+                        Ok(Value::WeakMap(weak_map.clone()))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
+
             if let Value::Set(set) = target_value {
                 return match method {
                     TypedArrayInstanceMethod::Entries => {

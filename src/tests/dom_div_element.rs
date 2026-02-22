@@ -61,6 +61,9 @@ fn div_role_override_restore_and_obsolete_align_attribute_roundtrip() -> Result<
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "generic:center|region:region:right|generic:true:true")?;
+    h.assert_text(
+        "#result",
+        "generic:center|region:region:right|generic:true:true",
+    )?;
     Ok(())
 }

@@ -22,7 +22,10 @@ fn dialog_implicit_role_and_role_assignment_roundtrip() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "dialog|alertdialog:alertdialog|dialog:true|DIALOG")?;
+    h.assert_text(
+        "#result",
+        "dialog|alertdialog:alertdialog|dialog:true|DIALOG",
+    )?;
     Ok(())
 }
 

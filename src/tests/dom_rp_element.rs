@@ -36,10 +36,7 @@ fn rp_optional_end_tag_closes_before_rt_and_preserves_fallback_text() -> Result<
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        "2:2:0:(:)::RUBY|note:note|:true",
-    )?;
+    h.assert_text("#result", "2:2:0:(:)::RUBY|note:note|:true")?;
     Ok(())
 }
 

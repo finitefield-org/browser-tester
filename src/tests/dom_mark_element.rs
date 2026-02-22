@@ -39,10 +39,7 @@ fn mark_highlight_usage_and_match_queries_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        ":::2:1|salamander:salamander:true:MARK",
-    )?;
+    h.assert_text("#result", ":::2:1|salamander:salamander:true:MARK")?;
     Ok(())
 }
 

@@ -27,6 +27,44 @@ impl Harness {
         }
     }
 
+    pub(crate) fn weak_map_entry_index(&self, map: &WeakMapValue, key: &Value) -> Option<usize> {
+        map.entries
+            .iter()
+            .position(|(existing_key, _)| self.same_value_zero(existing_key, key))
+    }
+
+    pub(crate) fn weak_map_set_entry(&self, map: &mut WeakMapValue, key: Value, value: Value) {
+        if let Some(index) = self.weak_map_entry_index(map, &key) {
+            map.entries[index].1 = value;
+        } else {
+            map.entries.push((key, value));
+        }
+    }
+
+    pub(crate) fn weak_map_accepts_key(value: &Value) -> bool {
+        match value {
+            Value::String(_)
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::Float(_)
+            | Value::BigInt(_)
+            | Value::Null
+            | Value::Undefined => false,
+            Value::Symbol(symbol) => symbol.registry_key.is_none(),
+            _ => true,
+        }
+    }
+
+    pub(crate) fn ensure_weak_map_key(value: &Value) -> Result<()> {
+        if Self::weak_map_accepts_key(value) {
+            Ok(())
+        } else {
+            Err(Error::ScriptRuntime(
+                "Invalid value used as weak map key".into(),
+            ))
+        }
+    }
+
     pub(crate) fn map_entries_array(&self, map: &Rc<RefCell<MapValue>>) -> Vec<Value> {
         map.borrow()
             .entries
@@ -52,6 +90,17 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_weak_map_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "set" | "get" | "has" | "delete" | "getOrInsert" | "getOrInsertComputed"
+        )
+    }
+
+    pub(crate) fn is_weak_set_method_name(name: &str) -> bool {
+        matches!(name, "add" | "has" | "delete")
+    }
+
     pub(crate) fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {
         set.values
             .iter()
@@ -61,6 +110,32 @@ impl Harness {
     pub(crate) fn set_add_value(&self, set: &mut SetValue, value: Value) {
         if self.set_value_index(set, &value).is_none() {
             set.values.push(value);
+        }
+    }
+
+    pub(crate) fn weak_set_value_index(&self, set: &WeakSetValue, value: &Value) -> Option<usize> {
+        set.values
+            .iter()
+            .position(|existing_value| self.same_value_zero(existing_value, value))
+    }
+
+    pub(crate) fn weak_set_add_value(&self, set: &mut WeakSetValue, value: Value) {
+        if self.weak_set_value_index(set, &value).is_none() {
+            set.values.push(value);
+        }
+    }
+
+    pub(crate) fn weak_set_accepts_value(value: &Value) -> bool {
+        Self::weak_map_accepts_key(value)
+    }
+
+    pub(crate) fn ensure_weak_set_value(value: &Value) -> Result<()> {
+        if Self::weak_set_accepts_value(value) {
+            Ok(())
+        } else {
+            Err(Error::ScriptRuntime(
+                "Invalid value used in weak set".into(),
+            ))
         }
     }
 

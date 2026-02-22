@@ -55,6 +55,65 @@ impl Harness {
         Ok(Value::Map(map))
     }
 
+    pub(crate) fn eval_weak_map_construct(
+        &mut self,
+        iterable: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "WeakMap constructor must be called with new".into(),
+            ));
+        }
+
+        let weak_map = Rc::new(RefCell::new(WeakMapValue {
+            entries: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+
+        let Some(iterable) = iterable else {
+            return Ok(Value::WeakMap(weak_map));
+        };
+
+        let iterable = self.eval_expr(iterable, env, event_param, event)?;
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::WeakMap(weak_map));
+        }
+
+        match iterable {
+            Value::WeakMap(source) => {
+                let source = source.borrow();
+                weak_map.borrow_mut().entries = source.entries.clone();
+            }
+            other => {
+                let entries = self.array_like_values_from_value(&other)?;
+                for entry in entries {
+                    let pair = self.array_like_values_from_value(&entry).map_err(|_| {
+                        Error::ScriptRuntime(
+                            "WeakMap constructor iterable values must be [key, value] pairs".into(),
+                        )
+                    })?;
+                    if pair.len() < 2 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap constructor iterable values must be [key, value] pairs".into(),
+                        ));
+                    }
+                    Self::ensure_weak_map_key(&pair[0])?;
+                    self.weak_map_set_entry(
+                        &mut weak_map.borrow_mut(),
+                        pair[0].clone(),
+                        pair[1].clone(),
+                    );
+                }
+            }
+        }
+
+        Ok(Value::WeakMap(weak_map))
+    }
+
     pub(crate) fn eval_map_static_method(
         &mut self,
         method: MapStaticMethod,
@@ -214,6 +273,159 @@ impl Harness {
                     "variable '{}' is not a Map",
                     target
                 ))),
+            };
+        }
+
+        if let Value::WeakMap(weak_map) = target_value {
+            let weak_map = weak_map.clone();
+            return match method {
+                MapInstanceMethod::Get => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap.get requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    if !Self::weak_map_accepts_key(&key) {
+                        return Ok(Value::Undefined);
+                    }
+                    let weak_map_ref = weak_map.borrow();
+                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                        Ok(weak_map_ref.entries[index].1.clone())
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                }
+                MapInstanceMethod::Has => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap.has requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    if !Self::weak_map_accepts_key(&key) {
+                        return Ok(Value::Bool(false));
+                    }
+                    let has = self
+                        .weak_map_entry_index(&weak_map.borrow(), &key)
+                        .is_some();
+                    Ok(Value::Bool(has))
+                }
+                MapInstanceMethod::Delete => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap.delete requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    if !Self::weak_map_accepts_key(&key) {
+                        return Ok(Value::Bool(false));
+                    }
+                    let mut weak_map_ref = weak_map.borrow_mut();
+                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                        weak_map_ref.entries.remove(index);
+                        Ok(Value::Bool(true))
+                    } else {
+                        Ok(Value::Bool(false))
+                    }
+                }
+                MapInstanceMethod::GetOrInsert => {
+                    if args.len() != 2 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap.getOrInsert requires exactly two arguments".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    Self::ensure_weak_map_key(&key)?;
+                    let default_value = self.eval_expr(&args[1], env, event_param, event)?;
+                    let mut weak_map_ref = weak_map.borrow_mut();
+                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                        Ok(weak_map_ref.entries[index].1.clone())
+                    } else {
+                        weak_map_ref.entries.push((key, default_value.clone()));
+                        Ok(default_value)
+                    }
+                }
+                MapInstanceMethod::GetOrInsertComputed => {
+                    if args.len() != 2 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap.getOrInsertComputed requires exactly two arguments".into(),
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    Self::ensure_weak_map_key(&key)?;
+                    {
+                        let weak_map_ref = weak_map.borrow();
+                        if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                            return Ok(weak_map_ref.entries[index].1.clone());
+                        }
+                    }
+                    let callback = self.eval_expr(&args[1], env, event_param, event)?;
+                    let computed =
+                        self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
+                    weak_map.borrow_mut().entries.push((key, computed.clone()));
+                    Ok(computed)
+                }
+                MapInstanceMethod::Clear => Err(Error::ScriptRuntime(
+                    "WeakMap.clear is not a function".into(),
+                )),
+                MapInstanceMethod::ForEach => Err(Error::ScriptRuntime(
+                    "WeakMap.forEach is not a function".into(),
+                )),
+            };
+        }
+
+        if let Value::WeakSet(weak_set) = target_value {
+            let weak_set = weak_set.clone();
+            return match method {
+                MapInstanceMethod::Has => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakSet.has requires exactly one argument".into(),
+                        ));
+                    }
+                    let value = self.eval_expr(&args[0], env, event_param, event)?;
+                    if !Self::weak_set_accepts_value(&value) {
+                        return Ok(Value::Bool(false));
+                    }
+                    let has = self
+                        .weak_set_value_index(&weak_set.borrow(), &value)
+                        .is_some();
+                    Ok(Value::Bool(has))
+                }
+                MapInstanceMethod::Delete => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakSet.delete requires exactly one argument".into(),
+                        ));
+                    }
+                    let value = self.eval_expr(&args[0], env, event_param, event)?;
+                    if !Self::weak_set_accepts_value(&value) {
+                        return Ok(Value::Bool(false));
+                    }
+                    let mut weak_set_ref = weak_set.borrow_mut();
+                    if let Some(index) = self.weak_set_value_index(&weak_set_ref, &value) {
+                        weak_set_ref.values.remove(index);
+                        Ok(Value::Bool(true))
+                    } else {
+                        Ok(Value::Bool(false))
+                    }
+                }
+                MapInstanceMethod::Get => {
+                    Err(Error::ScriptRuntime("WeakSet.get is not a function".into()))
+                }
+                MapInstanceMethod::Clear => Err(Error::ScriptRuntime(
+                    "WeakSet.clear is not a function".into(),
+                )),
+                MapInstanceMethod::ForEach => Err(Error::ScriptRuntime(
+                    "WeakSet.forEach is not a function".into(),
+                )),
+                MapInstanceMethod::GetOrInsert => Err(Error::ScriptRuntime(
+                    "WeakSet.getOrInsert is not a function".into(),
+                )),
+                MapInstanceMethod::GetOrInsertComputed => Err(Error::ScriptRuntime(
+                    "WeakSet.getOrInsertComputed is not a function".into(),
+                )),
             };
         }
 
@@ -481,6 +693,50 @@ impl Harness {
         Ok(Value::Set(set))
     }
 
+    pub(crate) fn eval_weak_set_construct(
+        &mut self,
+        iterable: &Option<Box<Expr>>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if !called_with_new {
+            return Err(Error::ScriptRuntime(
+                "WeakSet constructor must be called with new".into(),
+            ));
+        }
+
+        let weak_set = Rc::new(RefCell::new(WeakSetValue {
+            values: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+
+        let Some(iterable) = iterable else {
+            return Ok(Value::WeakSet(weak_set));
+        };
+
+        let iterable = self.eval_expr(iterable, env, event_param, event)?;
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::WeakSet(weak_set));
+        }
+
+        match iterable {
+            Value::WeakSet(source) => {
+                let source = source.borrow();
+                weak_set.borrow_mut().values = source.values.clone();
+            }
+            other => {
+                let values = self.array_like_values_from_value(&other)?;
+                for value in values {
+                    Self::ensure_weak_set_value(&value)?;
+                    self.weak_set_add_value(&mut weak_set.borrow_mut(), value);
+                }
+            }
+        }
+        Ok(Value::WeakSet(weak_set))
+    }
+
     pub(crate) fn eval_set_method(
         &mut self,
         target: &str,
@@ -493,6 +749,45 @@ impl Harness {
         let target_value = env
             .get(target)
             .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+
+        if let Value::WeakSet(weak_set) = target_value {
+            let weak_set = weak_set.clone();
+            return match method {
+                SetInstanceMethod::Add => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakSet.add requires exactly one argument".into(),
+                        ));
+                    }
+                    let value = self.eval_expr(&args[0], env, event_param, event)?;
+                    Self::ensure_weak_set_value(&value)?;
+                    self.weak_set_add_value(&mut weak_set.borrow_mut(), value);
+                    Ok(Value::WeakSet(weak_set))
+                }
+                SetInstanceMethod::Union => Err(Error::ScriptRuntime(
+                    "WeakSet.union is not a function".into(),
+                )),
+                SetInstanceMethod::Intersection => Err(Error::ScriptRuntime(
+                    "WeakSet.intersection is not a function".into(),
+                )),
+                SetInstanceMethod::Difference => Err(Error::ScriptRuntime(
+                    "WeakSet.difference is not a function".into(),
+                )),
+                SetInstanceMethod::SymmetricDifference => Err(Error::ScriptRuntime(
+                    "WeakSet.symmetricDifference is not a function".into(),
+                )),
+                SetInstanceMethod::IsDisjointFrom => Err(Error::ScriptRuntime(
+                    "WeakSet.isDisjointFrom is not a function".into(),
+                )),
+                SetInstanceMethod::IsSubsetOf => Err(Error::ScriptRuntime(
+                    "WeakSet.isSubsetOf is not a function".into(),
+                )),
+                SetInstanceMethod::IsSupersetOf => Err(Error::ScriptRuntime(
+                    "WeakSet.isSupersetOf is not a function".into(),
+                )),
+            };
+        }
+
         let Value::Set(set) = target_value else {
             return Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not a Set",

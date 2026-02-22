@@ -21,8 +21,12 @@ impl Harness {
     }
 
     fn viewport_dimensions(&self) -> (f64, f64) {
-        let width = self.viewport_dimension_value("innerWidth").unwrap_or(1024.0);
-        let height = self.viewport_dimension_value("innerHeight").unwrap_or(768.0);
+        let width = self
+            .viewport_dimension_value("innerWidth")
+            .unwrap_or(1024.0);
+        let height = self
+            .viewport_dimension_value("innerHeight")
+            .unwrap_or(768.0);
         (width, height)
     }
 
@@ -36,12 +40,7 @@ impl Harness {
         }
     }
 
-    fn eval_media_dimension_comparison(
-        &self,
-        dimension: &str,
-        operator: &str,
-        rhs: &str,
-    ) -> bool {
+    fn eval_media_dimension_comparison(&self, dimension: &str, operator: &str, rhs: &str) -> bool {
         let rhs = match Self::parse_media_length_px(rhs) {
             Some(value) => value,
             None => return false,
@@ -270,9 +269,11 @@ impl Harness {
                     .tag_name(child)
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("source"))
                 {
-                    self.dom
-                        .attr(child, "src")
-                        .or_else(|| self.dom.attr(child, "srcset").and_then(|v| Self::first_srcset_url(&v)))
+                    self.dom.attr(child, "src").or_else(|| {
+                        self.dom
+                            .attr(child, "srcset")
+                            .and_then(|v| Self::first_srcset_url(&v))
+                    })
                 } else {
                     None
                 }

@@ -642,9 +642,14 @@ impl Harness {
                 "intl_segmenter_segments_iterator" => "intl_segmenter_segments_iterator",
                 "intl_segmenter_iterator_next" => "intl_segmenter_iterator_next",
                 "readable_stream_async_iterator" => "readable_stream_async_iterator",
+                "iterator_self" => "iterator_self",
                 "async_iterator_next" => "async_iterator_next",
+                "async_iterator_return" => "async_iterator_return",
+                "async_iterator_throw" => "async_iterator_throw",
                 "async_iterator_self" => "async_iterator_self",
                 "async_iterator_async_dispose" => "async_iterator_async_dispose",
+                "async_generator_result_value" => "async_generator_result_value",
+                "async_generator_result_done" => "async_generator_result_done",
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
@@ -1008,6 +1013,11 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
+                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+                    .and_then(|symbol| symbol.description.as_deref())
+                    .is_some_and(|description| description == "Symbol.toStringTag")
+                    || key == "Symbol.toStringTag";
                 if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
                     if key == "length" {
                         return Ok(Value::Number(text.chars().count() as i64));
@@ -1023,26 +1033,78 @@ impl Harness {
                             .unwrap_or(Value::Undefined));
                     }
                 }
-                if Self::is_generator_function_prototype_object(&entries) {
-                    if let Some(symbol) = self
-                        .symbol_runtime
-                        .well_known_symbols
-                        .get("Symbol.toStringTag")
-                    {
-                        if key == Self::symbol_storage_key(symbol.id) {
-                            return Ok(Value::String("GeneratorFunction".to_string()));
+                if Self::is_generator_object(&entries) && key == "constructor" {
+                    let constructor = self.new_generator_function_constructor_value();
+                    if let Value::Object(constructor_entries) = constructor {
+                        let constructor_entries = constructor_entries.borrow();
+                        if let Some(value) =
+                            Self::object_get_entry(&constructor_entries, "prototype")
+                        {
+                            return Ok(value);
                         }
                     }
                 }
-                if Self::is_async_generator_function_prototype_object(&entries) {
-                    if let Some(symbol) = self
-                        .symbol_runtime
-                        .well_known_symbols
-                        .get("Symbol.toStringTag")
-                    {
-                        if key == Self::symbol_storage_key(symbol.id) {
-                            return Ok(Value::String("AsyncGeneratorFunction".to_string()));
+                if Self::is_async_generator_object(&entries) && key == "constructor" {
+                    let constructor = self.new_async_generator_function_constructor_value();
+                    if let Value::Object(constructor_entries) = constructor {
+                        let constructor_entries = constructor_entries.borrow();
+                        if let Some(value) =
+                            Self::object_get_entry(&constructor_entries, "prototype")
+                        {
+                            return Ok(value);
                         }
+                    }
+                }
+                if Self::is_generator_function_prototype_object(&entries) && key_is_to_string_tag {
+                    return Ok(Value::String("GeneratorFunction".to_string()));
+                }
+                if Self::is_generator_object(&entries)
+                    || Self::is_generator_prototype_object(&entries)
+                {
+                    if key_is_to_string_tag {
+                        return Ok(Value::String("Generator".to_string()));
+                    }
+                }
+                if key_is_to_string_tag {
+                    let looks_like_generator_prototype = matches!(
+                        Self::object_get_entry(&entries, "constructor"),
+                        Some(Value::Object(constructor))
+                            if Self::is_generator_function_prototype_object(&constructor.borrow())
+                    ) && Self::object_get_entry(
+                        &entries, "next",
+                    )
+                    .is_some()
+                        && Self::object_get_entry(&entries, "return").is_some()
+                        && Self::object_get_entry(&entries, "throw").is_some();
+                    if looks_like_generator_prototype {
+                        return Ok(Value::String("Generator".to_string()));
+                    }
+                }
+                if Self::is_async_generator_function_prototype_object(&entries)
+                    && key_is_to_string_tag
+                {
+                    return Ok(Value::String("AsyncGeneratorFunction".to_string()));
+                }
+                if Self::is_async_generator_object(&entries)
+                    || Self::is_async_generator_prototype_object(&entries)
+                {
+                    if key_is_to_string_tag {
+                        return Ok(Value::String("AsyncGenerator".to_string()));
+                    }
+                }
+                if key_is_to_string_tag {
+                    let looks_like_async_generator_prototype =
+                        matches!(
+                            Self::object_get_entry(&entries, "constructor"),
+                            Some(Value::Object(constructor))
+                                if Self::is_async_generator_function_prototype_object(
+                                    &constructor.borrow()
+                                )
+                        ) && Self::object_get_entry(&entries, "next").is_some()
+                            && Self::object_get_entry(&entries, "return").is_some()
+                            && Self::object_get_entry(&entries, "throw").is_some();
+                    if looks_like_async_generator_prototype {
+                        return Ok(Value::String("AsyncGenerator".to_string()));
                     }
                 }
                 if Self::is_url_search_params_object(&entries) {
@@ -1114,8 +1176,15 @@ impl Harness {
             }
             Value::Map(map) => {
                 let map = map.borrow();
+                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
+                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+                    .and_then(|symbol| symbol.description.as_deref())
+                    .is_some_and(|description| description == "Symbol.toStringTag")
+                    || key == "Symbol.toStringTag";
                 if key == "size" {
                     Ok(Value::Number(map.entries.len() as i64))
+                } else if key_is_to_string_tag {
+                    Ok(Value::String("Map".to_string()))
                 } else if key == "constructor" {
                     Ok(Value::MapConstructor)
                 } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
@@ -1126,10 +1195,55 @@ impl Harness {
                     Ok(Value::Undefined)
                 }
             }
+            Value::WeakMap(weak_map) => {
+                let weak_map = weak_map.borrow();
+                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
+                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+                    .and_then(|symbol| symbol.description.as_deref())
+                    .is_some_and(|description| description == "Symbol.toStringTag")
+                    || key == "Symbol.toStringTag";
+                if key_is_to_string_tag {
+                    Ok(Value::String("WeakMap".to_string()))
+                } else if key == "constructor" {
+                    Ok(Value::WeakMapConstructor)
+                } else if let Some(value) = Self::object_get_entry(&weak_map.properties, key) {
+                    Ok(value)
+                } else if Self::is_weak_map_method_name(key) {
+                    Ok(Self::new_builtin_placeholder_function())
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::WeakSet(weak_set) => {
+                let weak_set = weak_set.borrow();
+                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
+                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+                    .and_then(|symbol| symbol.description.as_deref())
+                    .is_some_and(|description| description == "Symbol.toStringTag")
+                    || key == "Symbol.toStringTag";
+                if key_is_to_string_tag {
+                    Ok(Value::String("WeakSet".to_string()))
+                } else if key == "constructor" {
+                    Ok(Value::WeakSetConstructor)
+                } else if let Some(value) = Self::object_get_entry(&weak_set.properties, key) {
+                    Ok(value)
+                } else if Self::is_weak_set_method_name(key) {
+                    Ok(Self::new_builtin_placeholder_function())
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             Value::Set(set) => {
                 let set = set.borrow();
+                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
+                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+                    .and_then(|symbol| symbol.description.as_deref())
+                    .is_some_and(|description| description == "Symbol.toStringTag")
+                    || key == "Symbol.toStringTag";
                 if key == "size" {
                     Ok(Value::Number(set.values.len() as i64))
+                } else if key_is_to_string_tag {
+                    Ok(Value::String("Set".to_string()))
                 } else if key == "constructor" {
                     Ok(Value::SetConstructor)
                 } else {

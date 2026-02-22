@@ -258,6 +258,11 @@ pub(crate) enum Expr {
         called_with_new: bool,
     },
     MapConstructor,
+    WeakMapConstruct {
+        iterable: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    WeakMapConstructor,
     MapStaticMethod {
         method: MapStaticMethod,
         args: Vec<Expr>,
@@ -281,6 +286,11 @@ pub(crate) enum Expr {
         called_with_new: bool,
     },
     SetConstructor,
+    WeakSetConstruct {
+        iterable: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
+    WeakSetConstructor,
     SetMethod {
         target: String,
         method: SetInstanceMethod,

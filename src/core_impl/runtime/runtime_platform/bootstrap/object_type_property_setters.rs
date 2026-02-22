@@ -279,17 +279,25 @@ impl Harness {
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
             "dir" => self.dom.set_attr(node, "dir", &value.as_string())?,
-            "accessKey" | "accesskey" => self.dom.set_attr(node, "accesskey", &value.as_string())?,
-            "autocapitalize" => self.dom.set_attr(node, "autocapitalize", &value.as_string())?,
+            "accessKey" | "accesskey" => {
+                self.dom.set_attr(node, "accesskey", &value.as_string())?
+            }
+            "autocapitalize" => self
+                .dom
+                .set_attr(node, "autocapitalize", &value.as_string())?,
             "autocorrect" => self.dom.set_attr(node, "autocorrect", &value.as_string())?,
             "contentEditable" | "contenteditable" => {
-                self.dom.set_attr(node, "contenteditable", &value.as_string())?
+                self.dom
+                    .set_attr(node, "contenteditable", &value.as_string())?
             }
-            "draggable" => self
-                .dom
-                .set_attr(node, "draggable", if value.truthy() { "true" } else { "false" })?,
+            "draggable" => self.dom.set_attr(
+                node,
+                "draggable",
+                if value.truthy() { "true" } else { "false" },
+            )?,
             "enterKeyHint" | "enterkeyhint" => {
-                self.dom.set_attr(node, "enterkeyhint", &value.as_string())?
+                self.dom
+                    .set_attr(node, "enterkeyhint", &value.as_string())?
             }
             "inert" => {
                 if value.truthy() {
@@ -298,18 +306,24 @@ impl Harness {
                     self.dom.remove_attr(node, "inert")?;
                 }
             }
-            "inputMode" | "inputmode" => self.dom.set_attr(node, "inputmode", &value.as_string())?,
+            "inputMode" | "inputmode" => {
+                self.dom.set_attr(node, "inputmode", &value.as_string())?
+            }
             "nonce" => self.dom.set_attr(node, "nonce", &value.as_string())?,
             "popover" => self.dom.set_attr(node, "popover", &value.as_string())?,
-            "spellcheck" => self
-                .dom
-                .set_attr(node, "spellcheck", if value.truthy() { "true" } else { "false" })?,
-            "tabIndex" | "tabindex" => self
-                .dom
-                .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?,
-            "translate" => self
-                .dom
-                .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?,
+            "spellcheck" => self.dom.set_attr(
+                node,
+                "spellcheck",
+                if value.truthy() { "true" } else { "false" },
+            )?,
+            "tabIndex" | "tabindex" => {
+                self.dom
+                    .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?
+            }
+            "translate" => {
+                self.dom
+                    .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?
+            }
             "cite" => self.dom.set_attr(node, "cite", &value.as_string())?,
             "dateTime" | "datetime" => self.dom.set_attr(node, "datetime", &value.as_string())?,
             "clear" => self.dom.set_attr(node, "clear", &value.as_string())?,
@@ -334,12 +348,9 @@ impl Harness {
             "vLink" | "vlink" => self.dom.set_attr(node, "vlink", &value.as_string())?,
             "title" => self.dom.set_attr(node, "title", &value.as_string())?,
             "span"
-                if self
-                    .dom
-                    .tag_name(node)
-                    .is_some_and(|tag| {
-                        tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
-                    }) =>
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
+                }) =>
             {
                 self.set_col_span_value(node, &value)?
             }
@@ -601,9 +612,19 @@ impl Harness {
                 Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
                 Ok(())
             }
+            Value::WeakMap(weak_map) => {
+                let key = self.property_key_to_storage_key(key_value);
+                Self::object_set_entry(&mut weak_map.borrow_mut().properties, key, value);
+                Ok(())
+            }
             Value::Set(set) => {
                 let key = self.property_key_to_storage_key(key_value);
                 Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
+                Ok(())
+            }
+            Value::WeakSet(weak_set) => {
+                let key = self.property_key_to_storage_key(key_value);
+                Self::object_set_entry(&mut weak_set.borrow_mut().properties, key, value);
                 Ok(())
             }
             Value::RegExp(regex) => {

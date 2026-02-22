@@ -1,8 +1,8 @@
 use super::*;
 
 impl Harness {
-    pub(crate) fn new_iterator_constructor_value(&self) -> Value {
-        let prototype = Self::new_object_value(vec![
+    pub(crate) fn iterator_prototype_method_entries() -> Vec<(String, Value)> {
+        vec![
             ("next".to_string(), Self::new_builtin_placeholder_function()),
             ("drop".to_string(), Self::new_builtin_placeholder_function()),
             (
@@ -33,7 +33,24 @@ impl Harness {
                 "toArray".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-        ]);
+        ]
+    }
+
+    pub(crate) fn generator_prototype_method_entries() -> Vec<(String, Value)> {
+        let mut entries = Self::iterator_prototype_method_entries();
+        entries.push((
+            "return".to_string(),
+            Self::new_builtin_placeholder_function(),
+        ));
+        entries.push((
+            "throw".to_string(),
+            Self::new_builtin_placeholder_function(),
+        ));
+        entries
+    }
+
+    pub(crate) fn new_iterator_constructor_value(&self) -> Value {
+        let prototype = Self::new_object_value(Self::iterator_prototype_method_entries());
         Self::new_object_value(vec![
             (
                 INTERNAL_ITERATOR_CONSTRUCTOR_OBJECT_KEY.to_string(),
@@ -48,45 +65,71 @@ impl Harness {
         ])
     }
 
-    pub(crate) fn new_iterator_value(&self, values: Vec<Value>) -> Value {
+    pub(crate) fn new_iterator_self_callable(&self, iterator: Value) -> Value {
         Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("iterator_self".to_string()),
+            ),
+            (INTERNAL_ITERATOR_TARGET_KEY.to_string(), iterator),
+        ])
+    }
+
+    pub(crate) fn new_iterator_value(&mut self, values: Vec<Value>) -> Value {
+        let iterator = Rc::new(RefCell::new(ObjectValue::new(vec![
             (INTERNAL_ITERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
             (
                 INTERNAL_ITERATOR_VALUES_KEY.to_string(),
                 Self::new_array_value(values),
             ),
             (INTERNAL_ITERATOR_INDEX_KEY.to_string(), Value::Number(0)),
-            ("next".to_string(), Self::new_builtin_placeholder_function()),
-            ("drop".to_string(), Self::new_builtin_placeholder_function()),
+        ])));
+        let iterator_value = Value::Object(iterator.clone());
+        let iterator_self = self.new_iterator_self_callable(iterator_value.clone());
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+
+        let mut entries = iterator.borrow_mut();
+        for (key, value) in Self::iterator_prototype_method_entries() {
+            Self::object_set_entry(&mut entries, key, value);
+        }
+        Self::object_set_entry(&mut entries, iterator_key, iterator_self);
+        drop(entries);
+
+        iterator_value
+    }
+
+    pub(crate) fn new_generator_value(&mut self, values: Vec<Value>) -> Value {
+        let iterator = Rc::new(RefCell::new(ObjectValue::new(vec![
+            (INTERNAL_ITERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (INTERNAL_GENERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
             (
-                "every".to_string(),
-                Self::new_builtin_placeholder_function(),
+                INTERNAL_ITERATOR_VALUES_KEY.to_string(),
+                Self::new_array_value(values),
             ),
-            (
-                "filter".to_string(),
-                Self::new_builtin_placeholder_function(),
-            ),
-            ("find".to_string(), Self::new_builtin_placeholder_function()),
-            (
-                "flatMap".to_string(),
-                Self::new_builtin_placeholder_function(),
-            ),
-            (
-                "forEach".to_string(),
-                Self::new_builtin_placeholder_function(),
-            ),
-            ("map".to_string(), Self::new_builtin_placeholder_function()),
-            (
-                "reduce".to_string(),
-                Self::new_builtin_placeholder_function(),
-            ),
-            ("some".to_string(), Self::new_builtin_placeholder_function()),
-            ("take".to_string(), Self::new_builtin_placeholder_function()),
-            (
-                "toArray".to_string(),
-                Self::new_builtin_placeholder_function(),
-            ),
-        ])
+            (INTERNAL_ITERATOR_INDEX_KEY.to_string(), Value::Number(0)),
+        ])));
+        let iterator_value = Value::Object(iterator.clone());
+        let iterator_self = self.new_iterator_self_callable(iterator_value.clone());
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+
+        let mut entries = iterator.borrow_mut();
+        for (key, value) in Self::generator_prototype_method_entries() {
+            Self::object_set_entry(&mut entries, key, value);
+        }
+        Self::object_set_entry(&mut entries, iterator_key, iterator_self);
+        Self::object_set_entry(
+            &mut entries,
+            to_string_tag_key,
+            Value::String("Generator".to_string()),
+        );
+        drop(entries);
+
+        iterator_value
     }
 
     pub(crate) fn is_iterator_constructor_object(
@@ -103,6 +146,67 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_ITERATOR_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn is_generator_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_GENERATOR_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_generator_prototype_object(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_GENERATOR_PROTOTYPE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn iterator_target_from_callable(
+        &self,
+        callable: &Value,
+    ) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime("callback is not a function".into()));
+        };
+        let entries = entries.borrow();
+        let Some(Value::Object(target)) =
+            Self::object_get_entry(&entries, INTERNAL_ITERATOR_TARGET_KEY)
+        else {
+            return Err(Error::ScriptRuntime(
+                "Iterator callable has invalid internal state".into(),
+            ));
+        };
+        if !Self::is_iterator_object(&target.borrow()) {
+            return Err(Error::ScriptRuntime(
+                "Iterator callable has invalid internal state".into(),
+            ));
+        }
+        Ok(target)
+    }
+
+    pub(crate) fn close_iterator_object(&self, iterator: &Rc<RefCell<ObjectValue>>) -> Result<()> {
+        let mut entries = iterator.borrow_mut();
+        if !Self::is_iterator_object(&entries) {
+            return Err(Error::ScriptRuntime("value is not an Iterator".into()));
+        }
+        let values = match Self::object_get_entry(&entries, INTERNAL_ITERATOR_VALUES_KEY) {
+            Some(Value::Array(values)) => values,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "Iterator has invalid internal state".into(),
+                ));
+            }
+        };
+        let len = values.borrow().len();
+        Self::object_set_entry(
+            &mut entries,
+            INTERNAL_ITERATOR_INDEX_KEY.to_string(),
+            Value::Number(len as i64),
+        );
+        Ok(())
     }
 
     pub(crate) fn iterator_next_value_from_object(
@@ -207,12 +311,16 @@ impl Harness {
         evaluated_args: &[Value],
         event: &EventState,
     ) -> Result<Option<Value>> {
-        if !Self::is_iterator_object(&iterator.borrow()) {
-            return Ok(None);
-        }
+        let is_generator = {
+            let entries = iterator.borrow();
+            if !Self::is_iterator_object(&entries) {
+                return Ok(None);
+            }
+            Self::is_generator_object(&entries)
+        };
         let value = match member {
             "next" => {
-                if !evaluated_args.is_empty() {
+                if !is_generator && !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Iterator.next does not take arguments".into(),
                     ));
@@ -228,6 +336,25 @@ impl Harness {
                         ("done".to_string(), Value::Bool(true)),
                     ])
                 }
+            }
+            "return" => {
+                if !is_generator {
+                    return Ok(None);
+                }
+                let value = evaluated_args.first().cloned().unwrap_or(Value::Undefined);
+                self.close_iterator_object(iterator)?;
+                Self::new_object_value(vec![
+                    ("value".to_string(), value),
+                    ("done".to_string(), Value::Bool(true)),
+                ])
+            }
+            "throw" => {
+                if !is_generator {
+                    return Ok(None);
+                }
+                let thrown = evaluated_args.first().cloned().unwrap_or(Value::Undefined);
+                self.close_iterator_object(iterator)?;
+                return Err(Error::ScriptThrown(ThrownValue::new(thrown)));
             }
             "toArray" => {
                 if !evaluated_args.is_empty() {

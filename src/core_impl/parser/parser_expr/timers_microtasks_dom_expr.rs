@@ -468,7 +468,9 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("disableRemotePlayback", None) | ("disableremoteplayback", None) if is_media_target => {
             DomProp::AudioDisableRemotePlayback
         }
-        ("disablePictureInPicture", None) | ("disablepictureinpicture", None) if is_media_target => {
+        ("disablePictureInPicture", None) | ("disablepictureinpicture", None)
+            if is_media_target =>
+        {
             DomProp::VideoDisablePictureInPicture
         }
         ("loop", None) if is_media_target => DomProp::AudioLoop,

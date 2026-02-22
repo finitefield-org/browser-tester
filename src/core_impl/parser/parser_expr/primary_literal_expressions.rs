@@ -115,11 +115,19 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_weak_map_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_url_expr(src)? {
         return Ok(expr);
     }
 
     if let Some(expr) = parse_url_search_params_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_weak_set_expr(src)? {
         return Ok(expr);
     }
 

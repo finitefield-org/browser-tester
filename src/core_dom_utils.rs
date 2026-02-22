@@ -49,11 +49,20 @@ pub(crate) const INTERNAL_ITERATOR_CONSTRUCTOR_OBJECT_KEY: &str =
 pub(crate) const INTERNAL_ITERATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_iterator:object";
 pub(crate) const INTERNAL_ITERATOR_VALUES_KEY: &str = "\u{0}\u{0}bt_iterator:values";
 pub(crate) const INTERNAL_ITERATOR_INDEX_KEY: &str = "\u{0}\u{0}bt_iterator:index";
+pub(crate) const INTERNAL_ITERATOR_TARGET_KEY: &str = "\u{0}\u{0}bt_iterator:target";
 pub(crate) const INTERNAL_ASYNC_ITERATOR_KEY_PREFIX: &str = "\u{0}\u{0}bt_async_iterator:";
 pub(crate) const INTERNAL_ASYNC_ITERATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_async_iterator:object";
 pub(crate) const INTERNAL_ASYNC_ITERATOR_VALUES_KEY: &str = "\u{0}\u{0}bt_async_iterator:values";
 pub(crate) const INTERNAL_ASYNC_ITERATOR_INDEX_KEY: &str = "\u{0}\u{0}bt_async_iterator:index";
 pub(crate) const INTERNAL_ASYNC_ITERATOR_TARGET_KEY: &str = "\u{0}\u{0}bt_async_iterator:target";
+pub(crate) const INTERNAL_ASYNC_GENERATOR_KEY_PREFIX: &str = "\u{0}\u{0}bt_async_generator:";
+pub(crate) const INTERNAL_ASYNC_GENERATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_async_generator:object";
+pub(crate) const INTERNAL_ASYNC_GENERATOR_PROTOTYPE_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_async_generator:prototype_object";
+pub(crate) const INTERNAL_GENERATOR_KEY_PREFIX: &str = "\u{0}\u{0}bt_generator:";
+pub(crate) const INTERNAL_GENERATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_generator:object";
+pub(crate) const INTERNAL_GENERATOR_PROTOTYPE_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_generator:prototype_object";
 pub(crate) const INTERNAL_GENERATOR_FUNCTION_KEY_PREFIX: &str = "\u{0}\u{0}bt_generator_function:";
 pub(crate) const INTERNAL_GENERATOR_FUNCTION_CONSTRUCTOR_OBJECT_KEY: &str =
     "\u{0}\u{0}bt_generator_function:constructor_object";
@@ -65,6 +74,9 @@ pub(crate) const INTERNAL_ASYNC_GENERATOR_FUNCTION_CONSTRUCTOR_OBJECT_KEY: &str 
     "\u{0}\u{0}bt_async_generator_function:constructor_object";
 pub(crate) const INTERNAL_ASYNC_GENERATOR_FUNCTION_PROTOTYPE_OBJECT_KEY: &str =
     "\u{0}\u{0}bt_async_generator_function:prototype_object";
+pub(crate) const INTERNAL_GENERATOR_YIELD_LIMIT_REACHED: &str =
+    "\u{0}\u{0}bt_generator:yield_limit_reached";
+pub(crate) const GENERATOR_MAX_BUFFERED_YIELDS: usize = 2048;
 pub(crate) const DEFAULT_COLOR_INPUT_VALUE: &str = "#000000";
 pub(crate) const DEFAULT_RANGE_INPUT_MIN: f64 = 0.0;
 pub(crate) const DEFAULT_RANGE_INPUT_MAX: f64 = 100.0;

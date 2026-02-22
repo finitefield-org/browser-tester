@@ -144,6 +144,75 @@ impl Harness {
                         }
                     }
 
+                    if let Value::WeakMap(weak_map) = &receiver {
+                        let weak_map_member_override = {
+                            let weak_map_ref = weak_map.borrow();
+                            Self::object_get_entry(&weak_map_ref.properties, member)
+                        };
+                        if let Some(callee) = weak_map_member_override {
+                            return self
+                                .execute_callable_value_with_env(
+                                    &callee,
+                                    &evaluated_args,
+                                    event,
+                                    Some(env),
+                                )
+                                .map_err(|err| match err {
+                                    Error::ScriptRuntime(msg)
+                                        if msg == "callback is not a function" =>
+                                    {
+                                        Error::ScriptRuntime(format!(
+                                            "'{}' is not a function",
+                                            member
+                                        ))
+                                    }
+                                    other => other,
+                                });
+                        }
+                        if let Some(value) = self.eval_weak_map_member_call_from_values(
+                            weak_map,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
+
+                    if let Value::WeakSet(weak_set) = &receiver {
+                        let weak_set_member_override = {
+                            let weak_set_ref = weak_set.borrow();
+                            Self::object_get_entry(&weak_set_ref.properties, member)
+                        };
+                        if let Some(callee) = weak_set_member_override {
+                            return self
+                                .execute_callable_value_with_env(
+                                    &callee,
+                                    &evaluated_args,
+                                    event,
+                                    Some(env),
+                                )
+                                .map_err(|err| match err {
+                                    Error::ScriptRuntime(msg)
+                                        if msg == "callback is not a function" =>
+                                    {
+                                        Error::ScriptRuntime(format!(
+                                            "'{}' is not a function",
+                                            member
+                                        ))
+                                    }
+                                    other => other,
+                                });
+                        }
+                        if let Some(value) = self.eval_weak_set_member_call_from_values(
+                            weak_set,
+                            member,
+                            &evaluated_args,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
+
                     if let Value::UrlConstructor = &receiver {
                         let url_constructor_override = {
                             let entries = self.browser_apis.url_constructor_properties.borrow();

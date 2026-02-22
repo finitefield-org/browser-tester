@@ -1,7 +1,8 @@
 use super::*;
 
-mod async_iterator_helpers;
 mod async_generator_function_helpers;
+mod async_generator_helpers;
+mod async_iterator_helpers;
 mod collections_url_typed_arrays;
 mod dom_abbr_element;
 mod dom_address_element;
@@ -113,6 +114,7 @@ mod dom_var_element;
 mod dom_video_element;
 mod dom_wbr_element;
 mod generator_function_helpers;
+mod generator_helpers;
 mod iterator_helpers;
 mod language_core_expressions;
 mod numeric_intl_dom_mutations;

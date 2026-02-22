@@ -1203,6 +1203,90 @@ pub(crate) fn parse_map_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::MapConstructor))
 }
 
+pub(crate) fn parse_weak_map_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("WeakMap") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "WeakMap supports zero or one argument".into(),
+            ));
+        }
+        let iterable = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse(
+                    "WeakMap argument cannot be empty".into(),
+                ));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::WeakMapConstruct {
+            iterable,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::WeakMapConstruct {
+                iterable: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::WeakMapConstructor))
+}
+
 pub(crate) fn parse_url_expr(src: &str) -> Result<Option<Expr>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -1534,6 +1618,90 @@ pub(crate) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(Expr::SetConstructor))
+}
+
+pub(crate) fn parse_weak_set_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("WeakSet") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() == Some(b'(') {
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        let raw_args = split_top_level_by_char(&args_src, b',');
+        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+            Vec::new()
+        } else {
+            raw_args
+        };
+        if args.len() > 1 {
+            return Err(Error::ScriptParse(
+                "WeakSet supports zero or one argument".into(),
+            ));
+        }
+        let iterable = if let Some(first) = args.first() {
+            let first = first.trim();
+            if first.is_empty() {
+                return Err(Error::ScriptParse(
+                    "WeakSet argument cannot be empty".into(),
+                ));
+            }
+            Some(Box::new(parse_expr(first)?))
+        } else {
+            None
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::WeakSetConstruct {
+            iterable,
+            called_with_new,
+        }));
+    }
+
+    if called_with_new {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::WeakSetConstruct {
+                iterable: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::WeakSetConstructor))
 }
 
 pub(crate) fn parse_symbol_expr(src: &str) -> Result<Option<Expr>> {

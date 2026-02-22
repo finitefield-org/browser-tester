@@ -297,7 +297,9 @@ impl Harness {
                 | Value::Object(_)
                 | Value::Promise(_)
                 | Value::Map(_)
+                | Value::WeakMap(_)
                 | Value::Set(_)
+                | Value::WeakSet(_)
                 | Value::Blob(_)
                 | Value::ArrayBuffer(_)
                 | Value::TypedArray(_)
@@ -308,7 +310,9 @@ impl Harness {
                 | Value::ArrayBufferConstructor
                 | Value::PromiseConstructor
                 | Value::MapConstructor
+                | Value::WeakMapConstructor
                 | Value::SetConstructor
+                | Value::WeakSetConstructor
                 | Value::SymbolConstructor
                 | Value::RegExpConstructor
                 | Value::PromiseCapability(_)
@@ -337,7 +341,9 @@ impl Harness {
             Value::Array(_)
             | Value::Promise(_)
             | Value::Map(_)
+            | Value::WeakMap(_)
             | Value::Set(_)
+            | Value::WeakSet(_)
             | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_)
@@ -348,7 +354,9 @@ impl Harness {
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
+            | Value::WeakMapConstructor
             | Value::SetConstructor
+            | Value::WeakSetConstructor
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::PromiseCapability(_)
@@ -386,6 +394,12 @@ impl Harness {
     }
 
     pub(crate) fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
+        if let (Value::Object(left), Value::Object(right)) = (left, right) {
+            if Self::is_iterator_constructor_object(&right.borrow()) {
+                return Self::is_iterator_object(&left.borrow());
+            }
+        }
+
         if let Value::Node(node) = left {
             if self.is_named_constructor_value(right, "HTMLElement") {
                 return self.dom.element(*node).is_some();
@@ -404,7 +418,9 @@ impl Harness {
             (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
             (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
             (Value::Map(left), Value::Map(right)) => Rc::ptr_eq(left, right),
+            (Value::WeakMap(left), Value::WeakMap(right)) => Rc::ptr_eq(left, right),
             (Value::Set(left), Value::Set(right)) => Rc::ptr_eq(left, right),
+            (Value::WeakSet(left), Value::WeakSet(right)) => Rc::ptr_eq(left, right),
             (Value::Promise(left), Value::Promise(right)) => Rc::ptr_eq(left, right),
             (Value::TypedArray(left), Value::TypedArray(right)) => Rc::ptr_eq(left, right),
             (Value::Blob(left), Value::Blob(right)) => Rc::ptr_eq(left, right),
@@ -471,7 +487,9 @@ impl Harness {
             (Value::Node(l), Value::Node(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
             (Value::Map(l), Value::Map(r)) => Rc::ptr_eq(l, r),
+            (Value::WeakMap(l), Value::WeakMap(r)) => Rc::ptr_eq(l, r),
             (Value::Set(l), Value::Set(r)) => Rc::ptr_eq(l, r),
+            (Value::WeakSet(l), Value::WeakSet(r)) => Rc::ptr_eq(l, r),
             (Value::Promise(l), Value::Promise(r)) => Rc::ptr_eq(l, r),
             (Value::TypedArray(l), Value::TypedArray(r)) => Rc::ptr_eq(l, r),
             (Value::Blob(l), Value::Blob(r)) => Rc::ptr_eq(l, r),
@@ -483,7 +501,9 @@ impl Harness {
             (Value::ArrayBufferConstructor, Value::ArrayBufferConstructor) => true,
             (Value::PromiseConstructor, Value::PromiseConstructor) => true,
             (Value::MapConstructor, Value::MapConstructor) => true,
+            (Value::WeakMapConstructor, Value::WeakMapConstructor) => true,
             (Value::SetConstructor, Value::SetConstructor) => true,
+            (Value::WeakSetConstructor, Value::WeakSetConstructor) => true,
             (Value::SymbolConstructor, Value::SymbolConstructor) => true,
             (Value::RegExpConstructor, Value::RegExpConstructor) => true,
             (Value::PromiseCapability(l), Value::PromiseCapability(r)) => Rc::ptr_eq(l, r),

@@ -77,9 +77,6 @@ fn legend_role_override_restore_and_optgroup_child_usage_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        ":Japan cities:Japan:2|note:note|:true",
-    )?;
+    h.assert_text("#result", ":Japan cities:Japan:2|note:note|:true")?;
     Ok(())
 }

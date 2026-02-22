@@ -64,9 +64,6 @@ MD5 ("Hello world") = 3e25960a79dbc69b674cd4ec67a72c62</samp>
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        "generic::1:true:true|note:note|generic:true",
-    )?;
+    h.assert_text("#result", "generic::1:true:true|note:note|generic:true")?;
     Ok(())
 }

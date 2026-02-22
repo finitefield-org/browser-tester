@@ -127,7 +127,19 @@ pub(crate) struct MapValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WeakMapValue {
+    pub(crate) entries: Vec<(Value, Value)>,
+    pub(crate) properties: ObjectValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SetValue {
+    pub(crate) values: Vec<Value>,
+    pub(crate) properties: ObjectValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WeakSetValue {
     pub(crate) values: Vec<Value>,
     pub(crate) properties: ObjectValue,
 }
@@ -267,7 +279,9 @@ pub(crate) enum Value {
     Object(Rc<RefCell<ObjectValue>>),
     Promise(Rc<RefCell<PromiseValue>>),
     Map(Rc<RefCell<MapValue>>),
+    WeakMap(Rc<RefCell<WeakMapValue>>),
     Set(Rc<RefCell<SetValue>>),
+    WeakSet(Rc<RefCell<WeakSetValue>>),
     Blob(Rc<RefCell<BlobValue>>),
     ArrayBuffer(Rc<RefCell<ArrayBufferValue>>),
     TypedArray(Rc<RefCell<TypedArrayValue>>),
@@ -277,7 +291,9 @@ pub(crate) enum Value {
     ArrayBufferConstructor,
     PromiseConstructor,
     MapConstructor,
+    WeakMapConstructor,
     SetConstructor,
+    WeakSetConstructor,
     SymbolConstructor,
     RegExpConstructor,
     PromiseCapability(Rc<PromiseCapabilityFunction>),
@@ -462,7 +478,9 @@ impl Value {
             Self::Object(_) => true,
             Self::Promise(_) => true,
             Self::Map(_) => true,
+            Self::WeakMap(_) => true,
             Self::Set(_) => true,
+            Self::WeakSet(_) => true,
             Self::Blob(_) => true,
             Self::ArrayBuffer(_) => true,
             Self::TypedArray(_) => true,
@@ -472,7 +490,9 @@ impl Value {
             Self::ArrayBufferConstructor => true,
             Self::PromiseConstructor => true,
             Self::MapConstructor => true,
+            Self::WeakMapConstructor => true,
             Self::SetConstructor => true,
+            Self::WeakSetConstructor => true,
             Self::SymbolConstructor => true,
             Self::RegExpConstructor => true,
             Self::PromiseCapability(_) => true,
@@ -570,7 +590,9 @@ impl Value {
             }
             Self::Promise(_) => "[object Promise]".into(),
             Self::Map(_) => "[object Map]".into(),
+            Self::WeakMap(_) => "[object WeakMap]".into(),
             Self::Set(_) => "[object Set]".into(),
+            Self::WeakSet(_) => "[object WeakSet]".into(),
             Self::Blob(_) => "[object Blob]".into(),
             Self::ArrayBuffer(_) => "[object ArrayBuffer]".into(),
             Self::TypedArray(value) => {
@@ -586,7 +608,9 @@ impl Value {
             Self::ArrayBufferConstructor => "ArrayBuffer".to_string(),
             Self::PromiseConstructor => "Promise".to_string(),
             Self::MapConstructor => "Map".to_string(),
+            Self::WeakMapConstructor => "WeakMap".to_string(),
             Self::SetConstructor => "Set".to_string(),
+            Self::WeakSetConstructor => "WeakSet".to_string(),
             Self::SymbolConstructor => "Symbol".to_string(),
             Self::RegExpConstructor => "RegExp".to_string(),
             Self::PromiseCapability(_) => "[object Function]".into(),

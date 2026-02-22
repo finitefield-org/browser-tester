@@ -285,6 +285,17 @@ impl Harness {
                     called_with_new,
                 } => self.eval_map_construct(iterable, *called_with_new, env, event_param, event),
                 Expr::MapConstructor => Ok(Value::MapConstructor),
+                Expr::WeakMapConstruct {
+                    iterable,
+                    called_with_new,
+                } => self.eval_weak_map_construct(
+                    iterable,
+                    *called_with_new,
+                    env,
+                    event_param,
+                    event,
+                ),
+                Expr::WeakMapConstructor => Ok(Value::WeakMapConstructor),
                 Expr::MapStaticMethod { method, args } => {
                     self.eval_map_static_method(*method, args, env, event_param, event)
                 }
@@ -320,6 +331,17 @@ impl Harness {
                     called_with_new,
                 } => self.eval_set_construct(iterable, *called_with_new, env, event_param, event),
                 Expr::SetConstructor => Ok(Value::SetConstructor),
+                Expr::WeakSetConstruct {
+                    iterable,
+                    called_with_new,
+                } => self.eval_weak_set_construct(
+                    iterable,
+                    *called_with_new,
+                    env,
+                    event_param,
+                    event,
+                ),
+                Expr::WeakSetConstructor => Ok(Value::WeakSetConstructor),
                 Expr::SetMethod {
                     target,
                     method,

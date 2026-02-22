@@ -76,6 +76,9 @@ line 2</pre>
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "generic:PRE:60:soft|72:hard|img:img|generic:true")?;
+    h.assert_text(
+        "#result",
+        "generic:PRE:60:soft|72:hard|img:img|generic:true",
+    )?;
     Ok(())
 }

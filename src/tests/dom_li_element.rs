@@ -54,10 +54,7 @@ fn li_implicit_role_and_value_property_behavior_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        "listitem:listitem:listitem:|3:3:0|9:9|7:7:I:I",
-    )?;
+    h.assert_text("#result", "listitem:listitem:listitem:|3:3:0|9:9|7:7:I:I")?;
     Ok(())
 }
 
@@ -131,6 +128,9 @@ fn li_optional_end_tag_parsing_works_for_ul_and_ol() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "3:2:Neil Armstrong,Alan Bean,Peter Conrad|third item,fourth item:3:0")?;
+    h.assert_text(
+        "#result",
+        "3:2:Neil Armstrong,Alan Bean,Peter Conrad|third item,fourth item:3:0",
+    )?;
     Ok(())
 }

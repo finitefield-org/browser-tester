@@ -144,7 +144,9 @@ impl Harness {
                         | Value::ArrayBufferConstructor
                         | Value::PromiseConstructor
                         | Value::MapConstructor
+                        | Value::WeakMapConstructor
                         | Value::SetConstructor
+                        | Value::WeakSetConstructor
                         | Value::SymbolConstructor
                         | Value::RegExpConstructor
                         | Value::PromiseCapability(_) => "function",
@@ -155,7 +157,9 @@ impl Harness {
                         | Value::Array(_)
                         | Value::Object(_)
                         | Value::Map(_)
+                        | Value::WeakMap(_)
                         | Value::Set(_)
+                        | Value::WeakSet(_)
                         | Value::Blob(_)
                         | Value::Promise(_)
                         | Value::ArrayBuffer(_)
@@ -180,7 +184,9 @@ impl Harness {
                             | Value::ArrayBufferConstructor
                             | Value::PromiseConstructor
                             | Value::MapConstructor
+                            | Value::WeakMapConstructor
                             | Value::SetConstructor
+                            | Value::WeakSetConstructor
                             | Value::SymbolConstructor
                             | Value::RegExpConstructor
                             | Value::PromiseCapability(_) => "function",
@@ -191,7 +197,9 @@ impl Harness {
                             | Value::Array(_)
                             | Value::Object(_)
                             | Value::Map(_)
+                            | Value::WeakMap(_)
                             | Value::Set(_)
+                            | Value::WeakSet(_)
                             | Value::Blob(_)
                             | Value::Promise(_)
                             | Value::ArrayBuffer(_)
@@ -232,7 +240,13 @@ impl Harness {
             Expr::Yield(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
                 if let Some(yields) = self.script_runtime.generator_yield_stack.last() {
-                    yields.borrow_mut().push(value.clone());
+                    let mut yields = yields.borrow_mut();
+                    yields.push(value.clone());
+                    if yields.len() >= GENERATOR_MAX_BUFFERED_YIELDS {
+                        return Err(Error::ScriptRuntime(
+                            INTERNAL_GENERATOR_YIELD_LIMIT_REACHED.into(),
+                        ));
+                    }
                 }
                 Ok(value)
             }
@@ -242,7 +256,15 @@ impl Harness {
                     let values = self
                         .array_like_values_from_value(&value)
                         .unwrap_or_else(|_| vec![value.clone()]);
-                    yields.borrow_mut().extend(values);
+                    let mut yields = yields.borrow_mut();
+                    for item in values {
+                        yields.push(item);
+                        if yields.len() >= GENERATOR_MAX_BUFFERED_YIELDS {
+                            return Err(Error::ScriptRuntime(
+                                INTERNAL_GENERATOR_YIELD_LIMIT_REACHED.into(),
+                            ));
+                        }
+                    }
                 }
                 Ok(value)
             }

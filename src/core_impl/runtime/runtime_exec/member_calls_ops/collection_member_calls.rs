@@ -746,6 +746,170 @@ impl Harness {
         Ok(Some(value))
     }
 
+    pub(crate) fn eval_weak_map_member_call_from_values(
+        &mut self,
+        weak_map: &Rc<RefCell<WeakMapValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "set" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.set requires exactly two arguments".into(),
+                    ));
+                }
+                Self::ensure_weak_map_key(&evaluated_args[0])?;
+                self.weak_map_set_entry(
+                    &mut weak_map.borrow_mut(),
+                    evaluated_args[0].clone(),
+                    evaluated_args[1].clone(),
+                );
+                Value::WeakMap(weak_map.clone())
+            }
+            "get" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.get requires exactly one argument".into(),
+                    ));
+                }
+                if !Self::weak_map_accepts_key(&evaluated_args[0]) {
+                    return Ok(Some(Value::Undefined));
+                }
+                let weak_map_ref = weak_map.borrow();
+                if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &evaluated_args[0]) {
+                    weak_map_ref.entries[index].1.clone()
+                } else {
+                    Value::Undefined
+                }
+            }
+            "has" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.has requires exactly one argument".into(),
+                    ));
+                }
+                if !Self::weak_map_accepts_key(&evaluated_args[0]) {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let has = self
+                    .weak_map_entry_index(&weak_map.borrow(), &evaluated_args[0])
+                    .is_some();
+                Value::Bool(has)
+            }
+            "delete" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.delete requires exactly one argument".into(),
+                    ));
+                }
+                if !Self::weak_map_accepts_key(&evaluated_args[0]) {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let mut weak_map_ref = weak_map.borrow_mut();
+                if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &evaluated_args[0]) {
+                    weak_map_ref.entries.remove(index);
+                    Value::Bool(true)
+                } else {
+                    Value::Bool(false)
+                }
+            }
+            "getOrInsert" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.getOrInsert requires exactly two arguments".into(),
+                    ));
+                }
+                let key = evaluated_args[0].clone();
+                Self::ensure_weak_map_key(&key)?;
+                let default_value = evaluated_args[1].clone();
+                let mut weak_map_ref = weak_map.borrow_mut();
+                if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                    weak_map_ref.entries[index].1.clone()
+                } else {
+                    weak_map_ref.entries.push((key, default_value.clone()));
+                    default_value
+                }
+            }
+            "getOrInsertComputed" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakMap.getOrInsertComputed requires exactly two arguments".into(),
+                    ));
+                }
+                let key = evaluated_args[0].clone();
+                Self::ensure_weak_map_key(&key)?;
+                {
+                    let weak_map_ref = weak_map.borrow();
+                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                        return Ok(Some(weak_map_ref.entries[index].1.clone()));
+                    }
+                }
+                let callback = evaluated_args[1].clone();
+                let computed =
+                    self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
+                weak_map.borrow_mut().entries.push((key, computed.clone()));
+                computed
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    pub(crate) fn eval_weak_set_member_call_from_values(
+        &mut self,
+        weak_set: &Rc<RefCell<WeakSetValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "add" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakSet.add requires exactly one argument".into(),
+                    ));
+                }
+                Self::ensure_weak_set_value(&evaluated_args[0])?;
+                self.weak_set_add_value(&mut weak_set.borrow_mut(), evaluated_args[0].clone());
+                Value::WeakSet(weak_set.clone())
+            }
+            "has" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakSet.has requires exactly one argument".into(),
+                    ));
+                }
+                if !Self::weak_set_accepts_value(&evaluated_args[0]) {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let has = self
+                    .weak_set_value_index(&weak_set.borrow(), &evaluated_args[0])
+                    .is_some();
+                Value::Bool(has)
+            }
+            "delete" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "WeakSet.delete requires exactly one argument".into(),
+                    ));
+                }
+                if !Self::weak_set_accepts_value(&evaluated_args[0]) {
+                    return Ok(Some(Value::Bool(false)));
+                }
+                let mut weak_set_ref = weak_set.borrow_mut();
+                if let Some(index) = self.weak_set_value_index(&weak_set_ref, &evaluated_args[0]) {
+                    weak_set_ref.values.remove(index);
+                    Value::Bool(true)
+                } else {
+                    Value::Bool(false)
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
     pub(crate) fn eval_nodelist_member_call(
         &mut self,
         nodes: &[NodeId],

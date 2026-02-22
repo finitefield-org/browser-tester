@@ -38,7 +38,9 @@ impl Harness {
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
+            | Value::WeakMapConstructor
             | Value::SetConstructor
+            | Value::WeakSetConstructor
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::Symbol(_)
@@ -51,7 +53,9 @@ impl Harness {
             ))),
             Value::Promise(_)
             | Value::Map(_)
+            | Value::WeakMap(_)
             | Value::Set(_)
+            | Value::WeakSet(_)
             | Value::Blob(_)
             | Value::ArrayBuffer(_)
             | Value::TypedArray(_) => Ok(Some("{}".to_string())),
@@ -203,6 +207,9 @@ impl Harness {
                     properties: map.properties.clone(),
                 }))))
             }
+            Value::WeakMap(_) => Err(Error::ScriptRuntime(
+                "structuredClone value is not cloneable".into(),
+            )),
             Value::Set(set) => {
                 let set = set.borrow();
                 Ok(Value::Set(Rc::new(RefCell::new(SetValue {
@@ -210,6 +217,9 @@ impl Harness {
                     properties: set.properties.clone(),
                 }))))
             }
+            Value::WeakSet(_) => Err(Error::ScriptRuntime(
+                "structuredClone value is not cloneable".into(),
+            )),
             Value::Array(values) => {
                 let ptr = Rc::as_ptr(values) as usize;
                 if array_stack.contains(&ptr) {
@@ -263,7 +273,9 @@ impl Harness {
             | Value::ArrayBufferConstructor
             | Value::PromiseConstructor
             | Value::MapConstructor
+            | Value::WeakMapConstructor
             | Value::SetConstructor
+            | Value::WeakSetConstructor
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::PromiseCapability(_)
