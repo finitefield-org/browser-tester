@@ -418,9 +418,10 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `before/after/replaceWith`, `insertAdjacentElement/insertAdjacentText/insertAdjacentHTML`, `innerHTML`,
   Element base properties/methods: `attributes`, `children`, `childElementCount`, `firstElementChild`, `lastElementChild`,
   `nextElementSibling`, `previousElementSibling`, `tagName`, `localName`, `namespaceURI`, `baseURI`, `outerHTML`,
-  `slot`, `role` (with implicit `article` for `<article>`, implicit `blockquote` for `<blockquote>`, implicit `complementary` for `<aside>`, implicit `group` for `<address>`, implicit `generic` for `<body>/<b>/<bdi>/<bdo>`, and implicit `link` for `<a>/<area>` with `href`), `elementTiming`, `dir` (`<bdi>` defaults to `auto` when omitted), `cite`, `clear` (`<br>` deprecated attribute reflection), reflected `aria*` properties, `getAttributeNames()`, `hasAttributes()`,
+  `slot`, `role` (with implicit `article` for `<article>`, implicit `blockquote` for `<blockquote>`, implicit `caption` for `<caption>`, implicit `code` for `<code>`, implicit `complementary` for `<aside>`, implicit `group` for `<address>/<details>/<fieldset>`, implicit `button` for `<button>`, implicit `listbox` for `<datalist>`, implicit `deletion` for `<del>`, implicit `term` for `<dfn>`, implicit `emphasis` for `<em>`, implicit `generic` for `<body>/<b>/<bdi>/<bdo>/<data>/<div>`, and implicit `link` for `<a>/<area>` with `href`), `elementTiming`, `dir` (`<bdi>` defaults to `auto` when omitted), `cite`, `dateTime`, `clear` (`<br>` deprecated attribute reflection), `align` (`<caption>` deprecated attribute reflection), `span` (`<col>/<colgroup>` positive-integer reflection, invalid values normalize to `1`), reflected `aria*` properties, `getAttributeNames()`, `hasAttributes()`,
   `toggleAttribute(name[, force])`, `checkVisibility()`, `getElementsByClassName()`, `getElementsByTagName()`,
-  dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`
+  dialog APIs: `open`, `returnValue`, `closedBy`, `show()`, `showModal()`, `close([value])`, `requestClose([value])`,
+  declarative button commands: `<button commandfor="...">` with `command="show-modal|close|request-close"`
 - HTMLAnchorElement API: `href`, `protocol`, `host`, `hostname`, `port`, `pathname`, `search`, `hash`,
   `origin` (read-only), `username`, `password`, `download`, `hreflang`, `ping`, `referrerPolicy`,
   `rel`, `relList`, `target`, `text` (`textContent` alias), `type`, `attributionSrc`, `interestForElement`,
@@ -430,6 +431,10 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `download`, `ping`, `referrerPolicy`, `rel`, `target`, `type`, `coords`, `shape`, and `toString()` (same as `href`)
 - HTMLAudioElement attribute/property subset: `src` (falls back to first nested `<source src>` when `src` is absent),
   `autoplay`, `controls`, `controlsList`, `crossOrigin`, `disableRemotePlayback`, `loop`, `muted`, and `preload`
+- HTMLCanvasElement subset: `width`/`height` property reflection (defaults `300x150` when unset),
+  `getContext('2d'[, { alpha }])`, `toDataURL([type])`, and 2D context basics
+  (`fillStyle`, `strokeStyle`, `lineWidth`, `fillRect`, `strokeRect`, `clearRect`,
+  `beginPath`, `closePath`, `moveTo`, `lineTo`, `arc`, `fill`, `stroke`, `getContextAttributes`)
 - History API: `history.length`, `history.state`, `history.scrollRestoration`,
   `history.back()`, `history.forward()`, `history.go([delta])`,
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`

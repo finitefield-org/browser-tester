@@ -160,6 +160,86 @@ impl Harness {
         self.click_node(target)
     }
 
+    pub(crate) fn set_details_open_state_with_env(
+        &mut self,
+        details: NodeId,
+        open: bool,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<bool> {
+        if !self
+            .dom
+            .tag_name(details)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+        {
+            return Ok(false);
+        }
+
+        let was_open = self.dom.has_attr(details, "open")?;
+        if was_open == open {
+            return Ok(false);
+        }
+
+        let mut peers_to_close_toggle = Vec::new();
+        if open {
+            let group_name = self.dom.attr(details, "name").unwrap_or_default();
+            if !group_name.is_empty() {
+                for candidate in self.dom.query_selector_all("details")? {
+                    if candidate == details {
+                        continue;
+                    }
+                    if self.dom.attr(candidate, "name").as_deref() != Some(group_name.as_str()) {
+                        continue;
+                    }
+                    if self.dom.has_attr(candidate, "open")? {
+                        peers_to_close_toggle.push(candidate);
+                    }
+                }
+            }
+        }
+
+        if open {
+            self.dom.set_attr(details, "open", "true")?;
+        } else {
+            self.dom.remove_attr(details, "open")?;
+        }
+
+        let (old_state, new_state) = if open {
+            ("closed", "open")
+        } else {
+            ("open", "closed")
+        };
+        let _ = self.dispatch_event_with_options(
+            details,
+            "toggle",
+            env,
+            true,
+            false,
+            false,
+            None,
+            Some(old_state),
+            Some(new_state),
+        )?;
+
+        for peer in peers_to_close_toggle {
+            if self.dom.has_attr(peer, "open")? {
+                continue;
+            }
+            let _ = self.dispatch_event_with_options(
+                peer,
+                "toggle",
+                env,
+                true,
+                false,
+                false,
+                None,
+                Some("open"),
+                Some("closed"),
+            )?;
+        }
+
+        Ok(true)
+    }
+
     pub(crate) fn click_node_with_env(
         &mut self,
         target: NodeId,
@@ -184,14 +264,8 @@ impl Harness {
             }
 
             if let Some(details) = self.resolve_details_for_summary_click(target) {
-                if self.dom.has_attr(details, "open")? {
-                    self.dom.remove_attr(details, "open")?;
-                } else {
-                    self.dom.set_attr(details, "open", "true")?;
-                }
-                let _ = self.dispatch_event_with_options(
-                    details, "toggle", env, true, false, false, None, None, None,
-                )?;
+                let next_open = !self.dom.has_attr(details, "open")?;
+                let _ = self.set_details_open_state_with_env(details, next_open, env)?;
             }
 
             if is_checkbox_input(&self.dom, target) {
@@ -211,6 +285,10 @@ impl Harness {
                 }
             }
 
+            if self.run_button_command_with_env(target, env)? {
+                return Ok(());
+            }
+
             if is_submit_control(&self.dom, target) {
                 self.request_form_submit_with_env(target, Some(target), env)?;
             }
@@ -227,6 +305,68 @@ impl Harness {
         })();
         self.dom.set_active_pseudo_element(None);
         result
+    }
+
+    pub(crate) fn run_button_command_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<bool> {
+        if !self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+        {
+            return Ok(false);
+        }
+
+        let Some(command) = self.dom.attr(target, "command") else {
+            return Ok(false);
+        };
+        let Some(command_for) = self.dom.attr(target, "commandfor") else {
+            return Ok(false);
+        };
+
+        let Some(controlled) = self.dom.by_id(&command_for) else {
+            return Ok(true);
+        };
+        let command = command.to_ascii_lowercase();
+        let return_value = self.dom.attr(target, "value").map(Value::String);
+
+        match command.as_str() {
+            "show-modal" => {
+                if self
+                    .dom
+                    .tag_name(controlled)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("dialog"))
+                {
+                    self.show_dialog_with_env(controlled, true, env)?;
+                }
+                Ok(true)
+            }
+            "close" => {
+                if self
+                    .dom
+                    .tag_name(controlled)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("dialog"))
+                {
+                    self.close_dialog_with_env(controlled, return_value, env)?;
+                }
+                Ok(true)
+            }
+            "request-close" => {
+                if self
+                    .dom
+                    .tag_name(controlled)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("dialog"))
+                {
+                    self.request_close_dialog_with_env(controlled, return_value, env)?;
+                }
+                Ok(true)
+            }
+            _ if command.starts_with("--") => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     pub(crate) fn click_node(&mut self, target: NodeId) -> Result<()> {
@@ -264,11 +404,10 @@ impl Harness {
         self.focus_node_with_env(target, env)?;
         let keydown = self.dispatch_event_with_env(target, "keydown", env, true)?;
         if !keydown.default_prevented
-            && self
-                .dom
-                .tag_name(target)
-                .is_some_and(|tag| tag.eq_ignore_ascii_case("a"))
-            && self.dom.attr(target, "href").is_some()
+            && self.dom.tag_name(target).is_some_and(|tag| {
+                (tag.eq_ignore_ascii_case("a") && self.dom.attr(target, "href").is_some())
+                    || tag.eq_ignore_ascii_case("button")
+            })
         {
             self.click_node_with_env(target, env)?;
         }

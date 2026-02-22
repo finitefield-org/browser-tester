@@ -250,10 +250,33 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("lang", None) => DomProp::Lang,
         ("dir", None) => DomProp::Dir,
         ("cite", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::Cite,
+        ("dateTime", None) | ("datetime", None) if !matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::DateTime
+        }
         ("clear", None)
             if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
         {
             DomProp::BrClear
+        }
+        ("align", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::CaptionAlign
+        }
+        ("span", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::ColSpan
+        }
+        ("width", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::CanvasWidth
+        }
+        ("height", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::CanvasHeight
         }
         ("aLink", None) | ("alink", None) if matches!(target, DomQuery::DocumentBody) => {
             DomProp::BodyDeprecatedAttr("alink".to_string())

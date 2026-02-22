@@ -324,6 +324,76 @@ impl Harness {
                     self.dom.query_selector_all_from(&node, &selector)?,
                 )))
             }
+            "getContext" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
+                    return Err(Error::ScriptRuntime(
+                        "getContext requires one or two arguments".into(),
+                    ));
+                }
+                let is_canvas = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+                if !is_canvas {
+                    return Ok(None);
+                }
+                let context_kind = evaluated_args[0].as_string().to_ascii_lowercase();
+                if context_kind != "2d" {
+                    return Ok(Some(Value::Null));
+                }
+                let key = INTERNAL_CANVAS_2D_CONTEXT_NODE_EXPANDO_KEY.to_string();
+                if let Some(existing) = self
+                    .dom_runtime
+                    .node_expando_props
+                    .get(&(node, key.clone()))
+                {
+                    return Ok(Some(existing.clone()));
+                }
+                let alpha = evaluated_args
+                    .get(1)
+                    .map(Self::canvas_2d_alpha_from_options)
+                    .unwrap_or(true);
+                let context = self.new_canvas_2d_context_value(alpha);
+                self.dom_runtime
+                    .node_expando_props
+                    .insert((node, key), context.clone());
+                Ok(Some(context))
+            }
+            "toDataURL" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "toDataURL supports at most two arguments".into(),
+                    ));
+                }
+                let is_canvas = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+                if !is_canvas {
+                    return Ok(None);
+                }
+                let mime = evaluated_args
+                    .first()
+                    .map(Value::as_string)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "image/png".to_string());
+                let mime = if mime.eq_ignore_ascii_case("image/png")
+                    || mime.eq_ignore_ascii_case("image/jpeg")
+                    || mime.eq_ignore_ascii_case("image/webp")
+                {
+                    mime.to_ascii_lowercase()
+                } else {
+                    "image/png".to_string()
+                };
+                let payload = match mime.as_str() {
+                    "image/jpeg" => "/9j/4AAQSkZJRgABAQAAAQABAAD/2w==",
+                    "image/webp" => "UklGRhIAAABXRUJQVlA4TA0AAAAvAAAAAA==",
+                    _ => {
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+                    }
+                };
+                Ok(Some(Value::String(format!("data:{mime};base64,{payload}"))))
+            }
             "getElementsByClassName" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -465,6 +535,90 @@ impl Harness {
                     self.dom.set_selection_range(node, 0, len, "none")?;
                 }
                 Ok(Some(Value::Undefined))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn canvas_2d_alpha_from_options(options: &Value) -> bool {
+        match options {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Self::object_get_entry(&entries, "alpha")
+                    .map(|value| value.truthy())
+                    .unwrap_or(true)
+            }
+            _ => true,
+        }
+    }
+
+    pub(crate) fn eval_canvas_2d_context_member_call(
+        &mut self,
+        context_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let context = context_object.borrow_mut();
+        let fill_style = Self::object_get_entry(&context, "fillStyle")
+            .map(|value| value.as_string())
+            .unwrap_or_else(|| "#000000".to_string());
+        let stroke_style = Self::object_get_entry(&context, "strokeStyle")
+            .map(|value| value.as_string())
+            .unwrap_or_else(|| "#000000".to_string());
+        match member {
+            "fillRect" | "clearRect" | "strokeRect" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} requires exactly four arguments"
+                    )));
+                }
+                let _ = &fill_style;
+                let _ = &stroke_style;
+                Ok(Some(Value::Undefined))
+            }
+            "beginPath" | "closePath" | "fill" | "stroke" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(format!("{member} takes no arguments")));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "moveTo" | "lineTo" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} requires exactly two arguments"
+                    )));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "arc" => {
+                if evaluated_args.len() < 5 || evaluated_args.len() > 6 {
+                    return Err(Error::ScriptRuntime(
+                        "arc requires five or six arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "getContextAttributes" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getContextAttributes takes no arguments".into(),
+                    ));
+                }
+                let alpha = Self::object_get_entry(&context, INTERNAL_CANVAS_2D_ALPHA_KEY)
+                    .map(|value| value.truthy())
+                    .unwrap_or(true);
+                Ok(Some(Self::new_object_value(vec![(
+                    "alpha".to_string(),
+                    Value::Bool(alpha),
+                )])))
+            }
+            "toString" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("toString takes no arguments".into()));
+                }
+                Ok(Some(Value::String(
+                    "[object CanvasRenderingContext2D]".to_string(),
+                )))
             }
             _ => Ok(None),
         }

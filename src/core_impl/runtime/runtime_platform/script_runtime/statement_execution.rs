@@ -287,10 +287,19 @@ impl Harness {
                                 self.dom.set_indeterminate(node, value.truthy())?
                             }
                             DomProp::Open => {
-                                if value.truthy() {
-                                    self.dom.set_attr(node, "open", "true")?;
+                                if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+                                {
+                                    let _ =
+                                        self.set_details_open_state_with_env(node, value.truthy(), env)?;
                                 } else {
-                                    self.dom.remove_attr(node, "open")?;
+                                    if value.truthy() {
+                                        self.dom.set_attr(node, "open", "true")?;
+                                    } else {
+                                        self.dom.remove_attr(node, "open")?;
+                                    }
                                 }
                             }
                             DomProp::ReturnValue => {
@@ -347,8 +356,36 @@ impl Harness {
                             DomProp::Lang => self.dom.set_attr(node, "lang", &value.as_string())?,
                             DomProp::Dir => self.dom.set_attr(node, "dir", &value.as_string())?,
                             DomProp::Cite => self.dom.set_attr(node, "cite", &value.as_string())?,
+                            DomProp::DateTime => {
+                                self.dom.set_attr(node, "datetime", &value.as_string())?
+                            }
                             DomProp::BrClear => {
                                 self.dom.set_attr(node, "clear", &value.as_string())?
+                            }
+                            DomProp::CaptionAlign => {
+                                self.dom.set_attr(node, "align", &value.as_string())?
+                            }
+                            DomProp::ColSpan => {
+                                if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("col")
+                                            || tag.eq_ignore_ascii_case("colgroup")
+                                    })
+                                {
+                                    self.set_col_span_value(node, &value)?
+                                } else {
+                                    self.dom_runtime
+                                        .node_expando_props
+                                        .insert((node, "span".to_string()), value);
+                                }
+                            }
+                            DomProp::CanvasWidth => {
+                                self.set_canvas_dimension_value(node, "width", &value)?
+                            }
+                            DomProp::CanvasHeight => {
+                                self.set_canvas_dimension_value(node, "height", &value)?
                             }
                             DomProp::NodeEventHandler(event_name) => {
                                 let _ = self.set_node_event_handler_property(
@@ -692,11 +729,29 @@ impl Harness {
                     } => {
                         let node = self.resolve_dom_query_required_runtime(target, env)?;
                         let value = self.eval_expr(value, env, event_param, event)?;
-                        self.dom.set_attr(node, name, &value.as_string())?;
+                        if name.eq_ignore_ascii_case("open")
+                            && self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+                        {
+                            let _ = self.set_details_open_state_with_env(node, true, env)?;
+                        } else {
+                            self.dom.set_attr(node, name, &value.as_string())?;
+                        }
                     }
                     Stmt::DomRemoveAttribute { target, name } => {
                         let node = self.resolve_dom_query_required_runtime(target, env)?;
-                        self.dom.remove_attr(node, name)?;
+                        if name.eq_ignore_ascii_case("open")
+                            && self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+                        {
+                            let _ = self.set_details_open_state_with_env(node, false, env)?;
+                        } else {
+                            self.dom.remove_attr(node, name)?;
+                        }
                     }
                     Stmt::NodeTreeMutation {
                         target,

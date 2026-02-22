@@ -59,6 +59,54 @@ impl Dom {
         Ok(())
     }
 
+    pub(crate) fn normalize_named_details_groups(&mut self) -> Result<()> {
+        let mut seen_open_names = std::collections::HashSet::new();
+        for node in self.all_element_nodes() {
+            if !self
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+            {
+                continue;
+            }
+            let name = self.attr(node, "name").unwrap_or_default();
+            if name.is_empty() || self.attr(node, "open").is_none() {
+                continue;
+            }
+            if !seen_open_names.insert(name.clone()) {
+                self.remove_attr(node, "open")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn close_other_named_details_in_group(
+        &mut self,
+        target: NodeId,
+        group_name: &str,
+    ) -> Result<()> {
+        if group_name.is_empty() {
+            return Ok(());
+        }
+        for node in self.all_element_nodes() {
+            if node == target {
+                continue;
+            }
+            if !self
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
+            {
+                continue;
+            }
+            if self.attr(node, "name").as_deref() != Some(group_name) {
+                continue;
+            }
+            if self.attr(node, "open").is_some() {
+                self.remove_attr(node, "open")?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn disabled(&self, node_id: NodeId) -> bool {
         self.element(node_id).map(|e| e.disabled).unwrap_or(false)
     }
@@ -91,11 +139,13 @@ impl Dom {
             None
         };
         let connected = self.is_connected(node_id);
+        let mut details_open_group_to_enforce = None;
         let (is_option, lowered) = {
             let element = self.element_mut(node_id).ok_or_else(|| {
                 Error::ScriptRuntime("setAttribute target is not an element".into())
             })?;
             let is_option = element.tag_name.eq_ignore_ascii_case("option");
+            let is_details = element.tag_name.eq_ignore_ascii_case("details");
             let was_file_input = is_file_input_element(element);
             let lowered = name.to_ascii_lowercase();
             element.attrs.insert(lowered.clone(), value.to_string());
@@ -254,6 +304,11 @@ impl Dom {
             } else if lowered == "required" {
                 element.required = true;
             }
+
+            if is_details && (lowered == "open" || lowered == "name") {
+                details_open_group_to_enforce =
+                    element.attrs.get("name").cloned().filter(|name| !name.is_empty());
+            }
             (is_option, lowered)
         };
 
@@ -304,6 +359,11 @@ impl Dom {
 
         if is_option && (lowered == "selected" || lowered == "value") {
             self.sync_select_value_for_option(node_id)?;
+        }
+        if let Some(group_name) = details_open_group_to_enforce {
+            if self.attr(node_id, "open").is_some() {
+                self.close_other_named_details_in_group(node_id, &group_name)?;
+            }
         }
 
         Ok(())

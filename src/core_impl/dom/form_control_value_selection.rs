@@ -19,6 +19,14 @@ impl Dom {
         {
             return self.set_select_value(node_id, value);
         }
+        if self
+            .tag_name(node_id)
+            .map(|tag| tag.eq_ignore_ascii_case("data"))
+            .unwrap_or(false)
+        {
+            self.set_attr(node_id, "value", value)?;
+            return Ok(());
+        }
 
         let (is_checkbox_or_radio, next_value) = {
             let element = self

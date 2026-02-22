@@ -72,6 +72,17 @@ impl Harness {
         {
             return Some(target);
         }
+        if let Some(form_id) = self.dom.attr(target, "form") {
+            let owner = self.dom.by_id(&form_id)?;
+            if self
+                .dom
+                .tag_name(owner)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+            {
+                return Some(owner);
+            }
+            return None;
+        }
         self.dom.find_ancestor_by_tag(target, "form")
     }
 

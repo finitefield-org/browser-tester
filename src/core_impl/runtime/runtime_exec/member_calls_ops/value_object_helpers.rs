@@ -35,6 +35,39 @@ impl Harness {
             if tag.eq_ignore_ascii_case("body") {
                 return "generic".to_string();
             }
+            if tag.eq_ignore_ascii_case("button") {
+                return "button".to_string();
+            }
+            if tag.eq_ignore_ascii_case("caption") {
+                return "caption".to_string();
+            }
+            if tag.eq_ignore_ascii_case("code") {
+                return "code".to_string();
+            }
+            if tag.eq_ignore_ascii_case("datalist") {
+                return "listbox".to_string();
+            }
+            if tag.eq_ignore_ascii_case("details") {
+                return "group".to_string();
+            }
+            if tag.eq_ignore_ascii_case("div") {
+                return "generic".to_string();
+            }
+            if tag.eq_ignore_ascii_case("dialog") {
+                return "dialog".to_string();
+            }
+            if tag.eq_ignore_ascii_case("del") {
+                return "deletion".to_string();
+            }
+            if tag.eq_ignore_ascii_case("dfn") {
+                return "term".to_string();
+            }
+            if tag.eq_ignore_ascii_case("em") {
+                return "emphasis".to_string();
+            }
+            if tag.eq_ignore_ascii_case("fieldset") {
+                return "group".to_string();
+            }
             if tag.eq_ignore_ascii_case("b") {
                 return "generic".to_string();
             }
@@ -44,6 +77,9 @@ impl Harness {
             if tag.eq_ignore_ascii_case("bdo") {
                 return "generic".to_string();
             }
+            if tag.eq_ignore_ascii_case("data") {
+                return "generic".to_string();
+            }
             if (tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area"))
                 && self.dom.attr(node, "href").is_some()
             {
@@ -51,6 +87,100 @@ impl Harness {
             }
         }
         String::new()
+    }
+
+    pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
+        let value = raw.trim().parse::<i64>().ok()?;
+        if value < 0 { None } else { Some(value) }
+    }
+
+    pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
+        let value = raw.trim().parse::<i64>().ok()?;
+        if value <= 0 { None } else { Some(value) }
+    }
+
+    pub(crate) fn col_span_value(&self, node: NodeId) -> i64 {
+        self.dom
+            .attr(node, "span")
+            .and_then(|raw| Self::parse_positive_int(&raw))
+            .unwrap_or(1)
+    }
+
+    pub(crate) fn set_col_span_value(&mut self, node: NodeId, value: &Value) -> Result<()> {
+        let next = match value {
+            Value::Number(number) => *number,
+            Value::Float(number) if number.is_finite() => *number as i64,
+            Value::BigInt(number) => number.to_string().parse::<i64>().unwrap_or(1),
+            other => other.as_string().trim().parse::<i64>().unwrap_or(1),
+        };
+        let next = if next <= 0 { 1 } else { next };
+        self.dom.set_attr(node, "span", &next.to_string())
+    }
+
+    pub(crate) fn is_canvas_2d_context_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_CANVAS_2D_CONTEXT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn canvas_dimension_default(name: &str) -> i64 {
+        match name {
+            "width" => 300,
+            "height" => 150,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn canvas_dimension_value(&self, node: NodeId, name: &str) -> i64 {
+        let is_canvas = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+        let default = if is_canvas {
+            Self::canvas_dimension_default(name)
+        } else {
+            0
+        };
+        self.dom
+            .attr(node, name)
+            .and_then(|raw| Self::parse_non_negative_int(&raw))
+            .unwrap_or(default)
+    }
+
+    pub(crate) fn set_canvas_dimension_value(
+        &mut self,
+        node: NodeId,
+        name: &str,
+        value: &Value,
+    ) -> Result<()> {
+        let next = match value {
+            Value::Number(number) => *number,
+            Value::Float(number) if number.is_finite() => *number as i64,
+            Value::BigInt(number) => number.to_string().parse::<i64>().unwrap_or(0),
+            other => other.as_string().trim().parse::<i64>().unwrap_or(0),
+        };
+        let next = next.max(0);
+        self.dom.set_attr(node, name, &next.to_string())
+    }
+
+    pub(crate) fn new_canvas_2d_context_value(&self, alpha: bool) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CANVAS_2D_CONTEXT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (INTERNAL_CANVAS_2D_ALPHA_KEY.to_string(), Value::Bool(alpha)),
+            (
+                "fillStyle".to_string(),
+                Value::String("#000000".to_string()),
+            ),
+            (
+                "strokeStyle".to_string(),
+                Value::String("#000000".to_string()),
+            ),
+            ("lineWidth".to_string(), Value::Number(1)),
+        ])
     }
 
     pub(crate) fn new_array_value(values: Vec<Value>) -> Value {
@@ -187,6 +317,13 @@ impl Harness {
                     .tag_name(*node)
                     .map(|tag| tag.eq_ignore_ascii_case("select"))
                     .unwrap_or(false);
+                let is_col_or_colgroup = self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| {
+                        tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
+                    })
+                    .unwrap_or(false);
                 let select_options = || {
                     let mut options = Vec::new();
                     self.dom.collect_select_options(*node, &mut options);
@@ -218,8 +355,14 @@ impl Harness {
                     "cite" => Ok(Value::String(
                         self.dom.attr(*node, "cite").unwrap_or_default(),
                     )),
+                    "dateTime" | "datetime" => Ok(Value::String(
+                        self.dom.attr(*node, "datetime").unwrap_or_default(),
+                    )),
                     "clear" => Ok(Value::String(
                         self.dom.attr(*node, "clear").unwrap_or_default(),
+                    )),
+                    "align" => Ok(Value::String(
+                        self.dom.attr(*node, "align").unwrap_or_default(),
                     )),
                     "aLink" | "alink" => Ok(Value::String(
                         self.dom.attr(*node, "alink").unwrap_or_default(),
@@ -262,9 +405,37 @@ impl Harness {
                     "title" => Ok(Value::String(
                         self.dom.attr(*node, "title").unwrap_or_default(),
                     )),
-                    "type" => Ok(Value::String(
-                        self.dom.attr(*node, "type").unwrap_or_default(),
-                    )),
+                    "span" if is_col_or_colgroup => Ok(Value::Number(self.col_span_value(*node))),
+                    "type" => {
+                        if self
+                            .dom
+                            .tag_name(*node)
+                            .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                        {
+                            let normalized = self
+                                .dom
+                                .attr(*node, "type")
+                                .map(|value| value.trim().to_string())
+                                .filter(|value| !value.is_empty())
+                                .map(|value| {
+                                    if value.eq_ignore_ascii_case("reset") {
+                                        "reset".to_string()
+                                    } else if value.eq_ignore_ascii_case("button") {
+                                        "button".to_string()
+                                    } else {
+                                        "submit".to_string()
+                                    }
+                                })
+                                .unwrap_or_else(|| "submit".to_string());
+                            Ok(Value::String(normalized))
+                        } else {
+                            Ok(Value::String(
+                                self.dom.attr(*node, "type").unwrap_or_default(),
+                            ))
+                        }
+                    }
+                    "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
+                    "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
                     "tagName" => Ok(Value::String(
                         self.dom
                             .tag_name(*node)

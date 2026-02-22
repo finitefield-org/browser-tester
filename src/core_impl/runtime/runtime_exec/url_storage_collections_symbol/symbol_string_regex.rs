@@ -35,6 +35,7 @@ impl Harness {
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_CANVAS_KEY_PREFIX)
             || key.starts_with(INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX)
             || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
     }

@@ -274,6 +274,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
             i = next;
             let executable_script = tag.eq_ignore_ascii_case("script")
                 && is_executable_script_type(attrs.get("type").map(String::as_str));
+            close_optional_description_item_start_tag(&dom, &mut stack, &tag);
 
             let parent = *stack
                 .last()
@@ -328,8 +329,33 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
 
     dom.initialize_form_control_values()?;
     dom.normalize_radio_groups()?;
+    dom.normalize_named_details_groups()?;
     dom.normalize_single_body_element()?;
     Ok(ParseOutput { dom, scripts })
+}
+
+fn close_optional_description_item_start_tag(dom: &Dom, stack: &mut Vec<NodeId>, tag: &str) {
+    if !(tag.eq_ignore_ascii_case("dt") || tag.eq_ignore_ascii_case("dd")) {
+        return;
+    }
+
+    let mut close_index = None;
+    for index in (1..stack.len()).rev() {
+        let Some(open_tag) = dom.tag_name(stack[index]) else {
+            continue;
+        };
+        if open_tag.eq_ignore_ascii_case("dt") || open_tag.eq_ignore_ascii_case("dd") {
+            close_index = Some(index);
+            break;
+        }
+        if open_tag.eq_ignore_ascii_case("dl") {
+            break;
+        }
+    }
+
+    if let Some(index) = close_index {
+        stack.truncate(index);
+    }
 }
 
 fn is_executable_script_type(raw_type: Option<&str>) -> bool {

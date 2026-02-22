@@ -280,7 +280,9 @@ impl Harness {
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
             "dir" => self.dom.set_attr(node, "dir", &value.as_string())?,
             "cite" => self.dom.set_attr(node, "cite", &value.as_string())?,
+            "dateTime" | "datetime" => self.dom.set_attr(node, "datetime", &value.as_string())?,
             "clear" => self.dom.set_attr(node, "clear", &value.as_string())?,
+            "align" => self.dom.set_attr(node, "align", &value.as_string())?,
             "aLink" | "alink" => self.dom.set_attr(node, "alink", &value.as_string())?,
             "background" => self.dom.set_attr(node, "background", &value.as_string())?,
             "bgColor" | "bgcolor" => self.dom.set_attr(node, "bgcolor", &value.as_string())?,
@@ -300,6 +302,16 @@ impl Harness {
             }
             "vLink" | "vlink" => self.dom.set_attr(node, "vlink", &value.as_string())?,
             "title" => self.dom.set_attr(node, "title", &value.as_string())?,
+            "span"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| {
+                        tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
+                    }) =>
+            {
+                self.set_col_span_value(node, &value)?
+            }
             "src" => self.dom.set_attr(node, "src", &value.as_string())?,
             "autoplay" => {
                 if value.truthy() {
@@ -367,6 +379,8 @@ impl Harness {
             "search" => self.set_anchor_url_property(node, "search", value.clone())?,
             "target" => self.dom.set_attr(node, "target", &value.as_string())?,
             "type" => self.dom.set_attr(node, "type", &value.as_string())?,
+            "width" => self.set_canvas_dimension_value(node, "width", &value)?,
+            "height" => self.set_canvas_dimension_value(node, "height", &value)?,
             "username" => self.set_anchor_url_property(node, "username", value.clone())?,
             "charset" => self.dom.set_attr(node, "charset", &value.as_string())?,
             "coords" => self.dom.set_attr(node, "coords", &value.as_string())?,

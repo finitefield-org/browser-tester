@@ -207,9 +207,40 @@ impl Harness {
                         DomProp::Cite => Ok(Value::String(
                             self.dom.attr(node, "cite").unwrap_or_default(),
                         )),
+                        DomProp::DateTime => Ok(Value::String(
+                            self.dom.attr(node, "datetime").unwrap_or_default(),
+                        )),
                         DomProp::BrClear => Ok(Value::String(
                             self.dom.attr(node, "clear").unwrap_or_default(),
                         )),
+                        DomProp::CaptionAlign => Ok(Value::String(
+                            self.dom.attr(node, "align").unwrap_or_default(),
+                        )),
+                        DomProp::ColSpan => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| {
+                                    tag.eq_ignore_ascii_case("col")
+                                        || tag.eq_ignore_ascii_case("colgroup")
+                                })
+                            {
+                                Ok(Value::Number(self.col_span_value(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "span".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::CanvasWidth => {
+                            Ok(Value::Number(self.canvas_dimension_value(node, "width")))
+                        }
+                        DomProp::CanvasHeight => {
+                            Ok(Value::Number(self.canvas_dimension_value(node, "height")))
+                        }
                         DomProp::NodeEventHandler(event_name) => Ok(self
                             .dom_runtime
                             .node_expando_props

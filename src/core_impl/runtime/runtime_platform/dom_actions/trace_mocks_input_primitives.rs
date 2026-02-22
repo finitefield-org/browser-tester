@@ -282,6 +282,19 @@ impl Harness {
         self.navigate_location(&href, LocationNavigationKind::Assign)
     }
 
+    pub(crate) fn is_within_first_legend_of_fieldset(&self, node: NodeId, fieldset: NodeId) -> bool {
+        let first_legend = self.dom.child_elements(fieldset).into_iter().find(|child| {
+            self.dom
+                .tag_name(*child)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("legend"))
+        });
+        let Some(first_legend) = first_legend else {
+            return false;
+        };
+
+        node == first_legend || self.dom.is_descendant_of(node, first_legend)
+    }
+
     pub(crate) fn is_effectively_disabled(&self, node: NodeId) -> bool {
         if self.dom.disabled(node) {
             return true;
@@ -298,6 +311,10 @@ impl Harness {
                 .is_some_and(|tag| tag.eq_ignore_ascii_case("fieldset"))
                 && self.dom.disabled(parent)
             {
+                if self.is_within_first_legend_of_fieldset(node, parent) {
+                    cursor = self.dom.parent(parent);
+                    continue;
+                }
                 return true;
             }
             cursor = self.dom.parent(parent);

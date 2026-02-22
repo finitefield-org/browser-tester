@@ -177,6 +177,15 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        if Self::is_canvas_2d_context_object(&object.borrow()) {
+                            if let Some(value) = self.eval_canvas_2d_context_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
                         let is_document_object = {
                             let entries = object.borrow();
                             matches!(
