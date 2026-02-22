@@ -1,6 +1,9 @@
 use super::*;
 
 impl Harness {
+    const EVAL_EXPR_STACK_RED_ZONE: usize = 64 * 1024;
+    const EVAL_EXPR_STACK_SIZE: usize = 32 * 1024 * 1024;
+
     pub(crate) fn bind_timer_id_to_task_env(&mut self, name: &str, expr: &Expr, value: &Value) {
         if !matches!(
             expr,
@@ -22,6 +25,20 @@ impl Harness {
     }
 
     pub(crate) fn eval_expr(
+        &mut self,
+        expr: &Expr,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        stacker::maybe_grow(
+            Self::EVAL_EXPR_STACK_RED_ZONE,
+            Self::EVAL_EXPR_STACK_SIZE,
+            || self.eval_expr_impl(expr, env, event_param, event),
+        )
+    }
+
+    fn eval_expr_impl(
         &mut self,
         expr: &Expr,
         env: &HashMap<String, Value>,

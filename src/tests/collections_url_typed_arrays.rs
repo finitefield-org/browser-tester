@@ -1749,6 +1749,42 @@ fn nested_object_literal_parses_without_recursion_overflow() -> Result<()> {
 }
 
 #[test]
+fn deeply_nested_binary_expression_evaluates_on_small_thread_stack() -> Result<()> {
+    let mut expression = String::from("Date.now()");
+    for _ in 0..12_000 {
+        expression.push_str(" + 1");
+    }
+
+    let html = format!(
+        r#"
+        <p id='result'></p>
+        <script>
+          const value = {expression};
+          document.getElementById('result').textContent = value > 0 ? 'ok' : 'ng';
+        </script>
+        "#
+    );
+
+    let handle = std::thread::Builder::new()
+        .name("small-stack-runtime-eval".to_string())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || -> std::result::Result<(), String> {
+            let h = Harness::from_html(&html).map_err(|err| err.to_string())?;
+            h.assert_text("#result", "ok")
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })
+        .map_err(|err| Error::ScriptRuntime(err.to_string()))?;
+
+    handle
+        .join()
+        .map_err(|_| Error::ScriptRuntime("small-stack runtime thread panicked".into()))?
+        .map_err(Error::ScriptRuntime)?;
+
+    Ok(())
+}
+
+#[test]
 fn arrow_function_with_object_destructuring_parameter_parses() -> Result<()> {
     let html = r#"
         <p id='result'></p>
