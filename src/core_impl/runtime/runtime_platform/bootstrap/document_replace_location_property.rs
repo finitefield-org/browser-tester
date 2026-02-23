@@ -22,6 +22,10 @@ impl Harness {
         self.script_runtime.listener_capture_env_stack.clear();
         self.script_runtime.pending_loop_labels.clear();
         self.script_runtime.loop_label_stack.clear();
+        self.script_runtime.module_export_stack.clear();
+        self.script_runtime.module_referrer_stack.clear();
+        self.script_runtime.module_cache.clear();
+        self.script_runtime.loading_modules.clear();
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();

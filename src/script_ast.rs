@@ -1007,11 +1007,34 @@ pub(crate) struct ClassMethodDecl {
     pub(crate) is_generator: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportBinding {
+    pub(crate) imported: String,
+    pub(crate) local: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt {
+    ImportDecl {
+        specifier: String,
+        default_binding: Option<String>,
+        namespace_binding: Option<String>,
+        named_bindings: Vec<ImportBinding>,
+        attribute_type: Option<String>,
+    },
     VarDecl {
         name: String,
         kind: VarDeclKind,
+        expr: Expr,
+    },
+    ExportDecl {
+        declaration: Box<Stmt>,
+        bindings: Vec<(String, String)>,
+    },
+    ExportNamed {
+        bindings: Vec<(String, String)>,
+    },
+    ExportDefaultExpr {
         expr: Expr,
     },
     FunctionDecl {
@@ -1153,6 +1176,11 @@ pub(crate) enum Stmt {
         body: Vec<Stmt>,
     },
     ForOf {
+        item_var: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    ForAwaitOf {
         item_var: String,
         iterable: Expr,
         body: Vec<Stmt>,

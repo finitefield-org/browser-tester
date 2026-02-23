@@ -119,14 +119,27 @@ impl Harness {
     ) -> HashMap<String, (ScriptHandler, bool, bool)> {
         let mut out = HashMap::new();
         for stmt in stmts {
-            if let Stmt::FunctionDecl {
-                name,
-                handler,
-                is_async,
-                is_generator,
-            } = stmt
-            {
-                out.insert(name.clone(), (handler.clone(), *is_async, *is_generator));
+            match stmt {
+                Stmt::FunctionDecl {
+                    name,
+                    handler,
+                    is_async,
+                    is_generator,
+                } => {
+                    out.insert(name.clone(), (handler.clone(), *is_async, *is_generator));
+                }
+                Stmt::ExportDecl { declaration, .. } => {
+                    if let Stmt::FunctionDecl {
+                        name,
+                        handler,
+                        is_async,
+                        is_generator,
+                    } = declaration.as_ref()
+                    {
+                        out.insert(name.clone(), (handler.clone(), *is_async, *is_generator));
+                    }
+                }
+                _ => {}
             }
         }
         out
@@ -152,6 +165,22 @@ impl Harness {
             Stmt::VarDecl { name, .. } => {
                 out.insert(name.clone());
             }
+            Stmt::ImportDecl {
+                default_binding,
+                namespace_binding,
+                named_bindings,
+                ..
+            } => {
+                if let Some(name) = default_binding {
+                    out.insert(name.clone());
+                }
+                if let Some(name) = namespace_binding {
+                    out.insert(name.clone());
+                }
+                for binding in named_bindings {
+                    out.insert(binding.local.clone());
+                }
+            }
             Stmt::ArrayDestructureAssign {
                 targets,
                 decl_kind: Some(_),
@@ -175,6 +204,9 @@ impl Harness {
             }
             Stmt::ClassDecl { name, .. } => {
                 out.insert(name.clone());
+            }
+            Stmt::ExportDecl { declaration, .. } => {
+                Self::collect_scope_bindings_from_stmt(declaration, out);
             }
             Stmt::Label { stmt, .. } => {
                 Self::collect_scope_bindings_from_stmt(stmt, out);
@@ -206,7 +238,9 @@ impl Harness {
                 }
                 Self::collect_scope_bindings_from_stmts(body, out);
             }
-            Stmt::ForIn { item_var, body, .. } | Stmt::ForOf { item_var, body, .. } => {
+            Stmt::ForIn { item_var, body, .. }
+            | Stmt::ForOf { item_var, body, .. }
+            | Stmt::ForAwaitOf { item_var, body, .. } => {
                 out.insert(item_var.clone());
                 Self::collect_scope_bindings_from_stmts(body, out);
             }

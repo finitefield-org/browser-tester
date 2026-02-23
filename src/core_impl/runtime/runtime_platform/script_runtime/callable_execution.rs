@@ -154,6 +154,9 @@ impl Harness {
     ) -> Result<Value> {
         match constructor {
             Value::Function(function) => {
+                if function.is_generator {
+                    return Err(Error::ScriptRuntime("value is not a constructor".into()));
+                }
                 let instance = if let Some(instance) = this_arg {
                     if Self::is_primitive_value(&instance) {
                         return Err(Error::ScriptRuntime(
@@ -597,7 +600,10 @@ impl Harness {
                         );
                     }
                     if let Some(super_prototype) = function.class_super_prototype.clone() {
-                        call_env.insert(INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(), super_prototype);
+                        call_env.insert(
+                            INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(),
+                            super_prototype,
+                        );
                     }
                     let mut global_sync_keys = HashSet::new();
                     let caller_view = caller_env;

@@ -588,6 +588,12 @@ pub(crate) struct ListenerCaptureFrame {
     pub(crate) pending_env_updates: HashMap<String, Option<Value>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum ModuleExportBinding {
+    Local(String),
+    Value(Value),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ScriptRuntimeState {
     pub(crate) env: ScriptEnv,
@@ -596,6 +602,10 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) generator_yield_stack: Vec<Rc<RefCell<Vec<Value>>>>,
     pub(crate) pending_loop_labels: Vec<Vec<String>>,
     pub(crate) loop_label_stack: Vec<HashSet<String>>,
+    pub(crate) module_export_stack: Vec<Rc<RefCell<HashMap<String, ModuleExportBinding>>>>,
+    pub(crate) module_referrer_stack: Vec<String>,
+    pub(crate) module_cache: HashMap<String, HashMap<String, Value>>,
+    pub(crate) loading_modules: HashSet<String>,
 }
 
 #[derive(Debug)]

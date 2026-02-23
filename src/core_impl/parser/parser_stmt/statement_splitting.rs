@@ -44,6 +44,9 @@ pub(crate) fn split_top_level_statements(body: &str) -> Vec<String> {
                     if is_do_statement_prefix(head) && is_keyword_prefix(tail, "while") {
                         continue;
                     }
+                    if is_if_statement_prefix(head) && is_keyword_prefix(tail, "else") {
+                        continue;
+                    }
                     let end = if should_keep_semicolon_with_head(head) {
                         i
                     } else {
@@ -88,6 +91,10 @@ pub(crate) fn should_split_after_closing_brace(
     if is_keyword_prefix(tail, "else") {
         return false;
     }
+    if is_keyword_prefix(tail, "from") {
+        // Keep `import { ... } from "..."` / `export { ... } from "..."` together.
+        return false;
+    }
     if is_keyword_prefix(tail, "catch") {
         return false;
     }
@@ -119,6 +126,31 @@ pub(crate) fn is_do_statement_prefix(src: &str) -> bool {
         break;
     }
     consume_keyword(&mut cursor, "do")
+}
+
+pub(crate) fn is_if_statement_prefix(src: &str) -> bool {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws_and_comments();
+
+    loop {
+        let before_label = cursor.pos();
+        let Some(_) = cursor.parse_identifier() else {
+            break;
+        };
+        cursor.skip_ws();
+        if cursor.consume_byte(b':') {
+            cursor.skip_ws_and_comments();
+            continue;
+        }
+        cursor.set_pos(before_label);
+        break;
+    }
+
+    if !consume_keyword(&mut cursor, "if") {
+        return false;
+    }
+    cursor.skip_ws_and_comments();
+    cursor.peek() == Some(b'(') && cursor.read_balanced_block(b'(', b')').is_ok()
 }
 
 pub(crate) fn should_keep_semicolon_with_head(head: &str) -> bool {

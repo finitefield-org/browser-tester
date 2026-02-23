@@ -1,16 +1,17 @@
 use super::*;
 
 pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
-    parse_block_statements_with_export_flag(body, false)
+    parse_block_statements_with_flags(body, false, false)
 }
 
 pub(crate) fn parse_module_block_statements(body: &str) -> Result<Vec<Stmt>> {
-    parse_block_statements_with_export_flag(body, true)
+    parse_block_statements_with_flags(body, true, true)
 }
 
-pub(crate) fn parse_block_statements_with_export_flag(
+pub(crate) fn parse_block_statements_with_flags(
     body: &str,
     allow_top_level_export: bool,
+    allow_top_level_import: bool,
 ) -> Result<Vec<Stmt>> {
     let sanitized = strip_js_comments(body);
     let raw_stmts = split_top_level_statements(sanitized.as_str());
@@ -38,7 +39,11 @@ pub(crate) fn parse_block_statements_with_export_flag(
                     )));
                 }
 
-                let parsed = parse_single_statement_with_export_flag(stmt, allow_top_level_export)?;
+                let parsed = parse_single_statement_with_flags(
+                    stmt,
+                    allow_top_level_export,
+                    allow_top_level_import,
+                )?;
                 stmts.push(parsed);
             }
         }
@@ -49,9 +54,22 @@ pub(crate) fn parse_block_statements_with_export_flag(
 
 pub(crate) fn split_var_decl_list_statements(stmt: &str) -> Vec<String> {
     let stmt = stmt.trim();
+    let mut prefix = String::new();
+    let mut candidate = stmt;
+    if let Some(after_export) = stmt.strip_prefix("export") {
+        if !after_export
+            .as_bytes()
+            .first()
+            .is_some_and(|b| is_ident_char(*b))
+        {
+            prefix = "export ".to_string();
+            candidate = after_export.trim_start();
+        }
+    }
+
     let mut declaration = None;
     for kw in ["const", "let", "var"] {
-        if let Some(after) = stmt.strip_prefix(kw) {
+        if let Some(after) = candidate.strip_prefix(kw) {
             if after.as_bytes().first().is_some_and(|b| is_ident_char(*b)) {
                 continue;
             }
@@ -74,7 +92,7 @@ pub(crate) fn split_var_decl_list_statements(stmt: &str) -> Vec<String> {
 
     let mut out = Vec::with_capacity(parts.len());
     for part in parts {
-        out.push(format!("{kw} {}", part.trim()));
+        out.push(format!("{prefix}{kw} {}", part.trim()));
     }
     out
 }
@@ -154,12 +172,13 @@ pub(crate) fn attach_else_branch_to_if_chain(stmt: &mut Stmt, else_branch: Vec<S
 }
 
 pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
-    parse_single_statement_with_export_flag(stmt, false)
+    parse_single_statement_with_flags(stmt, false, false)
 }
 
-pub(crate) fn parse_single_statement_with_export_flag(
+pub(crate) fn parse_single_statement_with_flags(
     stmt: &str,
     allow_top_level_export: bool,
+    allow_top_level_import: bool,
 ) -> Result<Stmt> {
     let stmt = stmt.trim();
 
@@ -174,6 +193,16 @@ pub(crate) fn parse_single_statement_with_export_flag(
     } else if starts_with_keyword(stmt, "export") {
         return Err(Error::ScriptParse(
             "export declarations may only appear in module scripts".into(),
+        ));
+    }
+
+    if allow_top_level_import {
+        if let Some(parsed) = parse_import_stmt(stmt)? {
+            return Ok(parsed);
+        }
+    } else if is_static_import_statement_prefix(stmt) {
+        return Err(Error::ScriptParse(
+            "import declarations may only appear at top level of module scripts".into(),
         ));
     }
 
@@ -337,6 +366,256 @@ pub(crate) fn parse_single_statement_with_export_flag(
     Ok(Stmt::Expr(expr))
 }
 
+pub(crate) fn is_static_import_statement_prefix(stmt: &str) -> bool {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "import") {
+        return false;
+    }
+    cursor.skip_ws();
+    matches!(
+        cursor.peek(),
+        Some(b'"' | b'\'' | b'{' | b'*' | b'_' | b'$' | b'a'..=b'z' | b'A'..=b'Z')
+    )
+}
+
+pub(crate) fn parse_import_attribute_type(cursor: &mut Cursor<'_>) -> Result<Option<String>> {
+    if !consume_keyword(cursor, "with") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let attrs_src = cursor.read_balanced_block(b'{', b'}')?;
+    let attrs_src = attrs_src.trim();
+    if attrs_src.is_empty() {
+        return Ok(None);
+    }
+
+    let mut attr_type = None;
+    let mut parts = split_top_level_by_char(attrs_src, b',');
+    if parts.len() > 1 && parts.last().is_some_and(|part| part.trim().is_empty()) {
+        parts.pop();
+    }
+    for part in parts {
+        let mut item = Cursor::new(part.trim());
+        item.skip_ws();
+        let key = if matches!(item.peek(), Some(b'"' | b'\'')) {
+            item.parse_string_literal()?
+        } else {
+            item.parse_identifier().ok_or_else(|| {
+                Error::ScriptParse(format!("invalid import attribute key: {}", part.trim()))
+            })?
+        };
+        item.skip_ws();
+        item.expect_byte(b':')?;
+        item.skip_ws();
+        let value = item.parse_string_literal()?;
+        item.skip_ws();
+        if !item.eof() {
+            return Err(Error::ScriptParse(format!(
+                "invalid import attribute entry: {}",
+                part.trim()
+            )));
+        }
+        if key == "type" {
+            attr_type = Some(value);
+        } else {
+            return Err(Error::ScriptParse(format!(
+                "unsupported import attribute: {key}"
+            )));
+        }
+    }
+    Ok(attr_type)
+}
+
+pub(crate) fn parse_import_specifier_list(src: &str) -> Result<Vec<ImportBinding>> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    let mut parts = split_top_level_by_char(src, b',');
+    if parts.len() > 1 && parts.last().is_some_and(|part| part.trim().is_empty()) {
+        parts.pop();
+    }
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(Error::ScriptParse(
+                "import specifier cannot be empty".into(),
+            ));
+        }
+        let mut cursor = Cursor::new(part);
+        cursor.skip_ws();
+        let (imported, imported_is_string) = if matches!(cursor.peek(), Some(b'"' | b'\'')) {
+            (cursor.parse_string_literal()?, true)
+        } else {
+            (
+                cursor
+                    .parse_identifier()
+                    .ok_or_else(|| Error::ScriptParse("invalid import specifier".into()))?,
+                false,
+            )
+        };
+        cursor.skip_ws();
+        let local = if consume_keyword(&mut cursor, "as") {
+            cursor.skip_ws();
+            cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse("invalid import alias".into()))?
+        } else if imported_is_string {
+            return Err(Error::ScriptParse(
+                "string import specifier requires an alias".into(),
+            ));
+        } else {
+            imported.clone()
+        };
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported import specifier: {part}"
+            )));
+        }
+        out.push(ImportBinding { imported, local });
+    }
+    Ok(out)
+}
+
+pub(crate) fn parse_import_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "import") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if cursor.eof() {
+        return Err(Error::ScriptParse(
+            "import statement requires a module specifier".into(),
+        ));
+    }
+
+    let mut default_binding = None;
+    let mut namespace_binding = None;
+    let mut named_bindings = Vec::new();
+
+    if matches!(cursor.peek(), Some(b'"' | b'\'')) {
+        let specifier = cursor.parse_string_literal()?;
+        cursor.skip_ws();
+        let attribute_type = parse_import_attribute_type(&mut cursor)?;
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported import statement tail: {stmt}"
+            )));
+        }
+        return Ok(Some(Stmt::ImportDecl {
+            specifier,
+            default_binding,
+            namespace_binding,
+            named_bindings,
+            attribute_type,
+        }));
+    }
+
+    if cursor.peek() == Some(b'*') {
+        cursor.consume_byte(b'*');
+        cursor.skip_ws();
+        if !consume_keyword(&mut cursor, "as") {
+            return Err(Error::ScriptParse(
+                "namespace import requires `as`".into(),
+            ));
+        }
+        cursor.skip_ws();
+        namespace_binding = Some(
+            cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse("invalid namespace import alias".into()))?,
+        );
+    } else if cursor.peek() == Some(b'{') {
+        let specifier_src = cursor.read_balanced_block(b'{', b'}')?;
+        named_bindings = parse_import_specifier_list(&specifier_src)?;
+    } else {
+        default_binding = Some(
+            cursor
+                .parse_identifier()
+                .ok_or_else(|| Error::ScriptParse("invalid default import binding".into()))?,
+        );
+        cursor.skip_ws();
+        if cursor.consume_byte(b',') {
+            cursor.skip_ws();
+            if cursor.peek() == Some(b'*') {
+                cursor.consume_byte(b'*');
+                cursor.skip_ws();
+                if !consume_keyword(&mut cursor, "as") {
+                    return Err(Error::ScriptParse(
+                        "namespace import requires `as`".into(),
+                    ));
+                }
+                cursor.skip_ws();
+                namespace_binding = Some(cursor.parse_identifier().ok_or_else(|| {
+                    Error::ScriptParse("invalid namespace import alias".into())
+                })?);
+            } else if cursor.peek() == Some(b'{') {
+                let specifier_src = cursor.read_balanced_block(b'{', b'}')?;
+                named_bindings = parse_import_specifier_list(&specifier_src)?;
+            } else {
+                return Err(Error::ScriptParse(
+                    "invalid import clause after default binding".into(),
+                ));
+            }
+        }
+    }
+
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "from") {
+        return Err(Error::ScriptParse(
+            "import clause requires `from`".into(),
+        ));
+    }
+    cursor.skip_ws();
+    let specifier = cursor.parse_string_literal()?;
+    cursor.skip_ws();
+    let attribute_type = parse_import_attribute_type(&mut cursor)?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported import statement tail: {stmt}"
+        )));
+    }
+
+    let mut seen_locals = HashSet::new();
+    if let Some(local) = &default_binding {
+        seen_locals.insert(local.clone());
+    }
+    if let Some(local) = &namespace_binding {
+        if !seen_locals.insert(local.clone()) {
+            return Err(Error::ScriptParse(format!(
+                "duplicate import binding name: {local}"
+            )));
+        }
+    }
+    for binding in &named_bindings {
+        if !seen_locals.insert(binding.local.clone()) {
+            return Err(Error::ScriptParse(format!(
+                "duplicate import binding name: {}",
+                binding.local
+            )));
+        }
+    }
+
+    Ok(Some(Stmt::ImportDecl {
+        specifier,
+        default_binding,
+        namespace_binding,
+        named_bindings,
+        attribute_type,
+    }))
+}
+
 pub(crate) fn parse_export_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -360,34 +639,50 @@ pub(crate) fn parse_export_stmt(stmt: &str) -> Result<Option<Stmt>> {
         cursor.skip_ws();
         let remainder = cursor.src.get(cursor.i..).unwrap_or_default().trim();
         if remainder.is_empty() {
-            return Err(Error::ScriptParse(
-                "export default requires a value".into(),
-            ));
+            return Err(Error::ScriptParse("export default requires a value".into()));
         }
 
         if starts_with_keyword(remainder, "function") || starts_with_keyword(remainder, "async") {
             if let Ok(Some(parsed)) = parse_function_decl_stmt(remainder) {
-                return Ok(Some(parsed));
+                if let Stmt::FunctionDecl { name, .. } = &parsed {
+                    let local_name = name.clone();
+                    return Ok(Some(Stmt::ExportDecl {
+                        declaration: Box::new(parsed),
+                        bindings: vec![(local_name, "default".to_string())],
+                    }));
+                }
+                return Ok(Some(Stmt::ExportDefaultExpr {
+                    expr: parse_expr(trim_optional_trailing_semicolon(remainder))?,
+                }));
             }
         }
         if starts_with_keyword(remainder, "class") {
             if let Ok(Some(parsed)) = parse_class_decl_stmt(remainder) {
-                return Ok(Some(parsed));
+                if let Stmt::ClassDecl { name, .. } = &parsed {
+                    let local_name = name.clone();
+                    return Ok(Some(Stmt::ExportDecl {
+                        declaration: Box::new(parsed),
+                        bindings: vec![(local_name, "default".to_string())],
+                    }));
+                }
+                return Ok(Some(Stmt::ExportDefaultExpr {
+                    expr: parse_expr(trim_optional_trailing_semicolon(remainder))?,
+                }));
             }
         }
 
         let expr_src = trim_optional_trailing_semicolon(remainder);
         if expr_src.is_empty() {
-            return Err(Error::ScriptParse(
-                "export default requires a value".into(),
-            ));
+            return Err(Error::ScriptParse("export default requires a value".into()));
         }
-        return Ok(Some(Stmt::Expr(parse_expr(expr_src)?)));
+        return Ok(Some(Stmt::ExportDefaultExpr {
+            expr: parse_expr(expr_src)?,
+        }));
     }
 
     if cursor.peek() == Some(b'{') {
         let specifier_src = cursor.read_balanced_block(b'{', b'}')?;
-        parse_export_specifier_list(&specifier_src)?;
+        let bindings = parse_export_specifier_list(&specifier_src)?;
         cursor.skip_ws();
         if consume_keyword(&mut cursor, "from") {
             return Err(Error::ScriptParse(
@@ -401,7 +696,7 @@ pub(crate) fn parse_export_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "unsupported export statement tail: {stmt}"
             )));
         }
-        return Ok(Some(Stmt::Empty));
+        return Ok(Some(Stmt::ExportNamed { bindings }));
     }
 
     let remainder = cursor.src.get(cursor.i..).unwrap_or_default().trim();
@@ -411,36 +706,25 @@ pub(crate) fn parse_export_stmt(stmt: &str) -> Result<Option<Stmt>> {
         ));
     }
 
-    let decl_chunks = split_var_decl_list_statements(remainder);
-    if decl_chunks.len() > 1 {
-        let mut stmts = Vec::with_capacity(decl_chunks.len());
-        for chunk in decl_chunks {
-            let parsed = parse_single_statement_with_export_flag(chunk.trim(), false)?;
-            if !is_exportable_declaration_stmt(&parsed) {
-                return Err(Error::ScriptParse(format!(
-                    "unsupported export declaration: {stmt}"
-                )));
-            }
-            stmts.push(parsed);
-        }
-        return Ok(Some(Stmt::Block { stmts }));
-    }
-
-    let parsed = parse_single_statement_with_export_flag(remainder, false)?;
+    let parsed = parse_single_statement_with_flags(remainder, false, false)?;
     if !is_exportable_declaration_stmt(&parsed) {
         return Err(Error::ScriptParse(format!(
             "unsupported export declaration: {stmt}"
         )));
     }
-    Ok(Some(parsed))
+    Ok(Some(Stmt::ExportDecl {
+        bindings: export_bindings_from_declaration_stmt(&parsed),
+        declaration: Box::new(parsed),
+    }))
 }
 
-pub(crate) fn parse_export_specifier_list(src: &str) -> Result<()> {
+pub(crate) fn parse_export_specifier_list(src: &str) -> Result<Vec<(String, String)>> {
     let src = src.trim();
     if src.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
+    let mut out = Vec::new();
     let mut parts = split_top_level_by_char(src, b',');
     if parts.len() > 1 && parts.last().is_some_and(|part| part.trim().is_empty()) {
         parts.pop();
@@ -454,35 +738,63 @@ pub(crate) fn parse_export_specifier_list(src: &str) -> Result<()> {
         }
         let mut cursor = Cursor::new(part);
         cursor.skip_ws();
-        parse_export_specifier_name(&mut cursor, false)?;
+        let local = parse_export_specifier_name(&mut cursor, false)?;
         cursor.skip_ws();
-        if consume_keyword(&mut cursor, "as") {
+        let exported = if consume_keyword(&mut cursor, "as") {
             cursor.skip_ws();
-            parse_export_specifier_name(&mut cursor, true)?;
-            cursor.skip_ws();
-        }
+            parse_export_specifier_name(&mut cursor, true)?
+        } else {
+            local.clone()
+        };
+        cursor.skip_ws();
         if !cursor.eof() {
             return Err(Error::ScriptParse(format!(
                 "unsupported export specifier: {part}"
             )));
         }
+        out.push((local, exported));
     }
-    Ok(())
+    Ok(out)
 }
 
 pub(crate) fn parse_export_specifier_name(
     cursor: &mut Cursor<'_>,
     allow_string_literal: bool,
-) -> Result<()> {
+) -> Result<String> {
     if allow_string_literal && matches!(cursor.peek(), Some(b'"' | b'\'')) {
-        let _ = cursor.parse_string_literal()?;
-        return Ok(());
+        return cursor.parse_string_literal();
     }
 
-    if cursor.parse_identifier().is_none() {
-        return Err(Error::ScriptParse("invalid export specifier name".into()));
+    cursor
+        .parse_identifier()
+        .ok_or_else(|| Error::ScriptParse("invalid export specifier name".into()))
+}
+
+pub(crate) fn export_bindings_from_declaration_stmt(stmt: &Stmt) -> Vec<(String, String)> {
+    match stmt {
+        Stmt::VarDecl { name, .. } => vec![(name.clone(), name.clone())],
+        Stmt::FunctionDecl { name, .. } => vec![(name.clone(), name.clone())],
+        Stmt::ClassDecl { name, .. } => vec![(name.clone(), name.clone())],
+        Stmt::ArrayDestructureAssign {
+            targets,
+            decl_kind: Some(_),
+            ..
+        } => targets
+            .iter()
+            .flatten()
+            .cloned()
+            .map(|name| (name.clone(), name))
+            .collect(),
+        Stmt::ObjectDestructureAssign {
+            bindings,
+            decl_kind: Some(_),
+            ..
+        } => bindings
+            .iter()
+            .map(|(_, target)| (target.clone(), target.clone()))
+            .collect(),
+        _ => Vec::new(),
     }
-    Ok(())
 }
 
 pub(crate) fn is_exportable_declaration_stmt(stmt: &Stmt) -> bool {
@@ -512,6 +824,11 @@ pub(crate) fn parse_labeled_stmt(stmt: &str) -> Result<Option<Stmt>> {
     if !cursor.consume_byte(b':') {
         return Ok(None);
     }
+    if is_reserved_label_word(&name) {
+        return Err(Error::ScriptParse(format!(
+            "label cannot use reserved word: {name}"
+        )));
+    }
     cursor.skip_ws();
     if cursor.eof() {
         return Err(Error::ScriptParse(format!(
@@ -520,6 +837,29 @@ pub(crate) fn parse_labeled_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
     let rest = cursor.src.get(cursor.i..).unwrap_or_default();
     let parsed = parse_single_statement(rest)?;
+    if matches!(
+        parsed,
+        Stmt::VarDecl {
+            kind: VarDeclKind::Let | VarDeclKind::Const,
+            ..
+        } | Stmt::ClassDecl { .. }
+    ) {
+        return Err(Error::ScriptParse(
+            "lexical declaration cannot be labeled".into(),
+        ));
+    }
+    if let Stmt::FunctionDecl {
+        is_async,
+        is_generator,
+        ..
+    } = &parsed
+    {
+        if *is_async || *is_generator {
+            return Err(Error::ScriptParse(
+                "only non-async, non-generator functions may be labeled".into(),
+            ));
+        }
+    }
     Ok(Some(Stmt::Label {
         name,
         stmt: Box::new(parsed),
@@ -610,11 +950,7 @@ pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
 
 pub(crate) fn parse_empty_stmt(stmt: &str) -> Option<Stmt> {
     let stmt = stmt.trim();
-    if stmt == ";" {
-        Some(Stmt::Empty)
-    } else {
-        None
-    }
+    if stmt == ";" { Some(Stmt::Empty) } else { None }
 }
 
 pub(crate) fn starts_with_keyword(src: &str, keyword: &str) -> bool {
@@ -631,29 +967,91 @@ pub(crate) fn trim_optional_trailing_semicolon(src: &str) -> &str {
     trimmed
 }
 
-pub(crate) fn find_top_level_else_keyword(src: &str) -> Option<usize> {
+pub(crate) fn collect_top_level_if_branch_candidate_ends(src: &str) -> Vec<usize> {
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut scanner = JsLexScanner::new();
+    let mut out = Vec::new();
 
     while i < bytes.len() {
-        if scanner.is_top_level() && bytes[i] == b'e' {
-            if i + 4 <= bytes.len()
-                && &bytes[i..i + 4] == b"else"
-                && (i == 0 || !is_ident_char(bytes[i - 1]))
-                && (i + 4 == bytes.len() || !is_ident_char(bytes[i + 4]))
-            {
-                return Some(i);
-            }
-        }
+        let current = i;
+        let b = bytes[current];
+        let was_top_level = scanner.is_top_level();
         i = scanner.advance(bytes, i);
+        if !was_top_level {
+            continue;
+        }
+
+        match b {
+            b';' => out.push(i),
+            b'}' => {
+                if scanner.is_top_level() {
+                    out.push(i);
+                }
+            }
+            b'e' => {
+                if current + 4 <= bytes.len()
+                    && &bytes[current..current + 4] == b"else"
+                    && (current == 0 || !is_ident_char(bytes[current - 1]))
+                    && (current + 4 == bytes.len() || !is_ident_char(bytes[current + 4]))
+                {
+                    out.push(current);
+                }
+            }
+            _ => {}
+        }
     }
 
-    None
+    out.push(src.len());
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 pub(crate) fn is_ident_char(b: u8) -> bool {
     b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+}
+
+pub(crate) fn is_reserved_label_word(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "null"
+            | "true"
+            | "false"
+    )
 }
 
 pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -686,39 +1084,53 @@ pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
-    let (then_raw, else_raw) = if tail.starts_with('{') {
-        let mut branch_cursor = Cursor::new(tail);
-        let _ = branch_cursor.read_balanced_block(b'{', b'}')?;
-        let split = branch_cursor.pos();
-        let then_raw = tail
-            .get(..split)
-            .ok_or_else(|| Error::ScriptParse("invalid if branch slice".into()))?;
-        let rest = tail
-            .get(split..)
-            .ok_or_else(|| Error::ScriptParse("invalid if remainder slice".into()))?
-            .trim();
+    let mut then_raw = None;
+    let mut else_raw = None;
+    let mut branch_error = None;
 
-        if rest.is_empty() {
-            (then_raw, None)
-        } else if let Some(after_else) = strip_else_prefix(rest) {
-            (then_raw, Some(after_else))
-        } else {
-            return Err(Error::ScriptParse(format!(
-                "unsupported tokens after if block: {rest}"
-            )));
+    for end in collect_top_level_if_branch_candidate_ends(tail) {
+        let Some(candidate_then) = tail.get(..end) else {
+            continue;
+        };
+        if candidate_then.trim().is_empty() {
+            continue;
         }
-    } else {
-        if let Some(pos) = find_top_level_else_keyword(tail) {
-            let then_raw = tail
-                .get(..pos)
-                .ok_or_else(|| Error::ScriptParse("invalid then branch".into()))?;
-            let else_raw = tail
-                .get(pos + 4..)
-                .ok_or_else(|| Error::ScriptParse("invalid else branch".into()))?;
-            (then_raw, Some(else_raw))
+
+        let rest = tail.get(end..).unwrap_or_default().trim_start();
+        let candidate_else = if rest.is_empty() {
+            None
         } else {
-            (tail, None)
+            strip_else_prefix(rest)
+        };
+        if !rest.is_empty() && candidate_else.is_none() {
+            continue;
         }
+
+        if let Err(err) = parse_if_branch(candidate_then) {
+            branch_error = Some(err);
+            continue;
+        }
+
+        if let Some(candidate_else) = candidate_else {
+            if let Err(err) = parse_if_branch(candidate_else) {
+                branch_error = Some(err);
+                continue;
+            }
+            then_raw = Some(candidate_then);
+            else_raw = Some(candidate_else);
+        } else {
+            then_raw = Some(candidate_then);
+            else_raw = None;
+        }
+    }
+
+    let Some(then_raw) = then_raw else {
+        if let Some(err) = branch_error {
+            return Err(err);
+        }
+        return Err(Error::ScriptParse(format!(
+            "if statement has invalid branch syntax: {stmt}"
+        )));
     };
 
     let then_stmts = parse_if_branch(then_raw)?;
@@ -1033,6 +1445,11 @@ pub(crate) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "unsupported break statement: {stmt}"
             )));
         };
+        if is_reserved_label_word(&label) {
+            return Err(Error::ScriptParse(format!(
+                "break label cannot use reserved word: {label}"
+            )));
+        }
         cursor.skip_ws();
         Some(label)
     };
@@ -1066,6 +1483,11 @@ pub(crate) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "unsupported continue statement: {stmt}"
             )));
         };
+        if is_reserved_label_word(&label) {
+            return Err(Error::ScriptParse(format!(
+                "continue label cannot use reserved word: {label}"
+            )));
+        }
         cursor.skip_ws();
         Some(label)
     };
@@ -1093,11 +1515,37 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     cursor.skip_ws();
+    let is_for_await = consume_keyword(&mut cursor, "await");
+    if is_for_await {
+        cursor.skip_ws();
+    }
     let header_src = cursor.read_balanced_block(b'(', b')')?;
     let header_src = header_src.trim();
     let header_parts = split_top_level_by_char(header_src, b';');
 
-    let parsed_for = if header_parts.len() == 3 {
+    let parsed_for = if is_for_await {
+        if header_parts.len() != 1 {
+            return Err(Error::ScriptParse(format!(
+                "for await statement requires an of-clause: {stmt}"
+            )));
+        }
+        let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
+            return Err(Error::ScriptParse(format!(
+                "for await statement requires an of-clause: {stmt}"
+            )));
+        };
+        if kind != ForInOfKind::Of {
+            return Err(Error::ScriptParse(format!(
+                "for await statement only supports of: {stmt}"
+            )));
+        }
+        let iterable = parse_expr(iterable_src.trim())?;
+        Stmt::ForAwaitOf {
+            item_var,
+            iterable,
+            body: Vec::new(),
+        }
+    } else if header_parts.len() == 3 {
         let init = parse_for_clause_stmts(header_parts[0])?;
         let cond = if header_parts[1].trim().is_empty() {
             None
@@ -1118,6 +1566,11 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "unsupported for statement: {stmt}"
             )));
         };
+        if kind == ForInOfKind::Of && item_var == "async" {
+            return Err(Error::ScriptParse(
+                "The left-hand side of a for-of loop may not be 'async'".into(),
+            ));
+        }
         let iterable = parse_expr(iterable_src.trim())?;
         match kind {
             ForInOfKind::In => Stmt::ForIn {
@@ -1165,6 +1618,13 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
         Stmt::ForOf {
             item_var, iterable, ..
         } => Stmt::ForOf {
+            item_var,
+            iterable,
+            body,
+        },
+        Stmt::ForAwaitOf {
+            item_var, iterable, ..
+        } => Stmt::ForAwaitOf {
             item_var,
             iterable,
             body,

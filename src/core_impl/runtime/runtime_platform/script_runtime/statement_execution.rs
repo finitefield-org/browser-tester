@@ -18,55 +18,81 @@ impl Harness {
         )
     }
 
-    fn direct_decl_names_and_const_flag(stmt: &Stmt) -> Vec<(String, bool)> {
+    fn direct_decl_binding_kinds(stmt: &Stmt) -> Vec<(String, bool)> {
         match stmt {
+            Stmt::ImportDecl {
+                default_binding,
+                namespace_binding,
+                named_bindings,
+                ..
+            } => {
+                let mut out = Vec::new();
+                if let Some(name) = default_binding {
+                    out.push((name.clone(), true));
+                }
+                if let Some(name) = namespace_binding {
+                    out.push((name.clone(), true));
+                }
+                out.extend(
+                    named_bindings
+                        .iter()
+                        .map(|binding| (binding.local.clone(), true)),
+                );
+                out
+            }
             Stmt::VarDecl { name, kind, .. } => {
-                vec![(name.clone(), matches!(kind, VarDeclKind::Const))]
+                vec![(name.clone(), !matches!(kind, VarDeclKind::Var))]
             }
             Stmt::FunctionDecl { name, .. } => vec![(name.clone(), false)],
-            Stmt::ClassDecl { name, .. } => vec![(name.clone(), false)],
+            Stmt::ClassDecl { name, .. } => vec![(name.clone(), true)],
+            Stmt::ExportDecl { declaration, .. } => Self::direct_decl_binding_kinds(declaration),
             Stmt::ArrayDestructureAssign {
                 targets,
                 decl_kind: Some(kind),
                 ..
-            } => targets
-                .iter()
-                .flatten()
-                .cloned()
-                .map(|name| (name, matches!(kind, VarDeclKind::Const)))
-                .collect(),
+            } => {
+                let is_lexical = !matches!(kind, VarDeclKind::Var);
+                targets
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .map(|name| (name, is_lexical))
+                    .collect()
+            }
             Stmt::ObjectDestructureAssign {
                 bindings,
                 decl_kind: Some(kind),
                 ..
-            } => bindings
-                .iter()
-                .map(|(_, target_name)| (target_name.clone(), matches!(kind, VarDeclKind::Const)))
-                .collect(),
+            } => {
+                let is_lexical = !matches!(kind, VarDeclKind::Var);
+                bindings
+                    .iter()
+                    .map(|(_, target_name)| (target_name.clone(), is_lexical))
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }
 
     fn validate_const_redeclarations(stmts: &[Stmt]) -> Result<()> {
-        let mut declared = HashSet::new();
-        let mut declared_const = HashSet::new();
+        let mut lexical = HashSet::new();
+        let mut var_like = HashSet::new();
         for stmt in stmts {
-            for (name, is_const) in Self::direct_decl_names_and_const_flag(stmt) {
-                if is_const {
-                    if declared.contains(&name) {
+            for (name, is_lexical) in Self::direct_decl_binding_kinds(stmt) {
+                if is_lexical {
+                    if lexical.contains(&name) || var_like.contains(&name) {
                         return Err(Error::ScriptRuntime(format!(
                             "Identifier '{name}' has already been declared"
                         )));
                     }
-                    declared.insert(name.clone());
-                    declared_const.insert(name);
+                    lexical.insert(name);
                 } else {
-                    if declared_const.contains(&name) {
+                    if lexical.contains(&name) {
                         return Err(Error::ScriptRuntime(format!(
                             "Identifier '{name}' has already been declared"
                         )));
                     }
-                    declared.insert(name);
+                    var_like.insert(name);
                 }
             }
         }
@@ -128,6 +154,22 @@ impl Harness {
         let mut previous = Vec::new();
         for stmt in stmts {
             let names: Vec<&str> = match stmt {
+                Stmt::ImportDecl {
+                    default_binding,
+                    namespace_binding,
+                    named_bindings,
+                    ..
+                } => {
+                    let mut names = Vec::new();
+                    if let Some(name) = default_binding {
+                        names.push(name.as_str());
+                    }
+                    if let Some(name) = namespace_binding {
+                        names.push(name.as_str());
+                    }
+                    names.extend(named_bindings.iter().map(|binding| binding.local.as_str()));
+                    names
+                }
                 Stmt::VarDecl { name, kind, .. } => {
                     if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
                         vec![name.as_str()]
@@ -136,6 +178,41 @@ impl Harness {
                     }
                 }
                 Stmt::ClassDecl { name, .. } => vec![name.as_str()],
+                Stmt::FunctionDecl { name, .. } => vec![name.as_str()],
+                Stmt::ExportDecl { declaration, .. } => match declaration.as_ref() {
+                    Stmt::VarDecl { name, kind, .. } => {
+                        if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                            vec![name.as_str()]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    Stmt::ClassDecl { name, .. } => vec![name.as_str()],
+                    Stmt::FunctionDecl { name, .. } => vec![name.as_str()],
+                    Stmt::ArrayDestructureAssign {
+                        targets,
+                        decl_kind: Some(kind),
+                        ..
+                    } => {
+                        if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                            targets.iter().flatten().map(String::as_str).collect()
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    Stmt::ObjectDestructureAssign {
+                        bindings,
+                        decl_kind: Some(kind),
+                        ..
+                    } => {
+                        if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                            bindings.iter().map(|(_, target)| target.as_str()).collect()
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    _ => Vec::new(),
+                },
                 Stmt::ArrayDestructureAssign {
                     targets,
                     decl_kind: Some(kind),
@@ -210,9 +287,234 @@ impl Harness {
             Stmt::For { .. }
                 | Stmt::ForIn { .. }
                 | Stmt::ForOf { .. }
+                | Stmt::ForAwaitOf { .. }
                 | Stmt::While { .. }
                 | Stmt::DoWhile { .. }
         )
+    }
+
+    fn await_value_in_for_await(&self, value: Value) -> Result<Value> {
+        let Value::Promise(promise) = value else {
+            return Ok(value);
+        };
+        let settled = {
+            let promise = promise.borrow();
+            match &promise.state {
+                PromiseState::Pending => None,
+                PromiseState::Fulfilled(value) => Some(Ok(value.clone())),
+                PromiseState::Rejected(reason) => Some(Err(reason.clone())),
+            }
+        };
+        match settled {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(reason)) => Err(Error::ScriptRuntime(format!(
+                "await rejected Promise: {}",
+                reason.as_string()
+            ))),
+            None => Ok(Value::Undefined),
+        }
+    }
+
+    fn for_in_integer_key(key: &str) -> Option<u64> {
+        if key.is_empty() || !key.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let value = key.parse::<u64>().ok()?;
+        if value.to_string() == key {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn ordered_for_in_own_string_keys(entries: &ObjectValue) -> Vec<String> {
+        let mut integer_keys: Vec<(u64, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+        for (key, _) in entries.iter() {
+            if Self::is_internal_object_key(key) {
+                continue;
+            }
+            if let Some(index) = Self::for_in_integer_key(key) {
+                integer_keys.push((index, key.clone()));
+            } else {
+                string_keys.push(key.clone());
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = Vec::with_capacity(integer_keys.len() + string_keys.len());
+        out.extend(integer_keys.into_iter().map(|(_, key)| key));
+        out.extend(string_keys);
+        out
+    }
+
+    fn collect_for_in_object_chain_keys(&self, object: &Rc<RefCell<ObjectValue>>) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut out = Vec::new();
+        let mut current = Some(object.clone());
+        while let Some(target) = current {
+            let (keys, next) = {
+                let entries = target.borrow();
+                let keys = Self::ordered_for_in_own_string_keys(&entries);
+                let next = match Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY) {
+                    Some(Value::Object(next)) => Some(next),
+                    _ => None,
+                };
+                (keys, next)
+            };
+            for key in keys {
+                if visited.insert(key.clone()) {
+                    out.push(key);
+                }
+            }
+            current = next;
+        }
+        out
+    }
+
+    fn collect_for_in_array_keys(&self, array: &Rc<RefCell<ArrayValue>>) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut out = Vec::new();
+        let (length, own_props, prototype) = {
+            let array = array.borrow();
+            let own_props = Self::ordered_for_in_own_string_keys(&array.properties);
+            let prototype =
+                match Self::object_get_entry(&array.properties, INTERNAL_OBJECT_PROTOTYPE_KEY) {
+                    Some(Value::Object(next)) => Some(next),
+                    _ => None,
+                };
+            (array.elements.len(), own_props, prototype)
+        };
+        for index in 0..length {
+            let key = index.to_string();
+            if visited.insert(key.clone()) {
+                out.push(key);
+            }
+        }
+        for key in own_props {
+            if visited.insert(key.clone()) {
+                out.push(key);
+            }
+        }
+        let mut current = prototype;
+        while let Some(target) = current {
+            let (keys, next) = {
+                let entries = target.borrow();
+                let keys = Self::ordered_for_in_own_string_keys(&entries);
+                let next = match Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY) {
+                    Some(Value::Object(next)) => Some(next),
+                    _ => None,
+                };
+                (keys, next)
+            };
+            for key in keys {
+                if visited.insert(key.clone()) {
+                    out.push(key);
+                }
+            }
+            current = next;
+        }
+        out
+    }
+
+    fn for_of_symbol_iterator_factory_result(
+        &mut self,
+        iterable: &Rc<RefCell<ObjectValue>>,
+        event: &EventState,
+    ) -> Result<Option<Rc<RefCell<ObjectValue>>>> {
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+        let iterable_value = Value::Object(iterable.clone());
+        let iterator_factory = self.object_property_from_value(&iterable_value, &iterator_key)?;
+        if matches!(iterator_factory, Value::Undefined | Value::Null) {
+            return Ok(None);
+        }
+        if !self.is_callable_value(&iterator_factory) {
+            return Err(Error::ScriptRuntime(
+                "for...of iterator factory is not callable".into(),
+            ));
+        }
+        let iterator_value = self.execute_callable_value_with_this_and_env(
+            &iterator_factory,
+            &[],
+            event,
+            None,
+            Some(iterable_value),
+        )?;
+        let Value::Object(iterator) = iterator_value else {
+            return Err(Error::ScriptRuntime(
+                "for...of iterator factory must return an object".into(),
+            ));
+        };
+        Ok(Some(iterator))
+    }
+
+    fn for_of_protocol_iterator_next(
+        &mut self,
+        iterator: &Rc<RefCell<ObjectValue>>,
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let iterator_value = Value::Object(iterator.clone());
+        let next_method = self.object_property_from_value(&iterator_value, "next")?;
+        if !self.is_callable_value(&next_method) {
+            return Err(Error::ScriptRuntime(
+                "for...of iterator next is not callable".into(),
+            ));
+        }
+        let result = self.execute_callable_value_with_this_and_env(
+            &next_method,
+            &[],
+            event,
+            None,
+            Some(iterator_value),
+        )?;
+        let Value::Object(result_obj) = result else {
+            return Err(Error::ScriptRuntime(
+                "for...of iterator.next must return an object".into(),
+            ));
+        };
+        let result_value = Value::Object(result_obj.clone());
+        let done = self
+            .object_property_from_value(&result_value, "done")?
+            .truthy();
+        if done {
+            return Ok(None);
+        }
+        let value = self.object_property_from_value(&result_value, "value")?;
+        Ok(Some(value))
+    }
+
+    fn for_of_protocol_iterator_close(
+        &mut self,
+        iterator: &Rc<RefCell<ObjectValue>>,
+        event: &EventState,
+    ) -> Result<()> {
+        let iterator_value = Value::Object(iterator.clone());
+        let return_method = self.object_property_from_value(&iterator_value, "return")?;
+        if matches!(return_method, Value::Undefined | Value::Null) {
+            return Ok(());
+        }
+        if !self.is_callable_value(&return_method) {
+            return Err(Error::ScriptRuntime(
+                "for...of iterator.return is not callable".into(),
+            ));
+        }
+        let _ = self.execute_callable_value_with_this_and_env(
+            &return_method,
+            &[],
+            event,
+            None,
+            Some(iterator_value),
+        )?;
+        Ok(())
+    }
+
+    fn for_of_internal_iterator_close_if_needed(
+        &mut self,
+        iterator: &Rc<RefCell<ObjectValue>>,
+        event: &EventState,
+    ) -> Result<()> {
+        let _ = self.eval_iterator_member_call(iterator, "return", &[], event)?;
+        Ok(())
     }
 
     fn take_pending_loop_labels(&mut self) -> Vec<String> {
@@ -281,6 +583,84 @@ impl Harness {
         result
     }
 
+    fn current_module_referrer(&self) -> String {
+        self.script_runtime
+            .module_referrer_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.document_url.clone())
+    }
+
+    fn bind_hoisted_import_decls(
+        &mut self,
+        stmts: &[Stmt],
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        for stmt in stmts {
+            let Stmt::ImportDecl {
+                specifier,
+                default_binding,
+                namespace_binding,
+                named_bindings,
+                attribute_type,
+            } = stmt
+            else {
+                continue;
+            };
+
+            let referrer = self.current_module_referrer();
+            let exports =
+                self.load_module_exports(specifier, attribute_type.as_deref(), &referrer)?;
+
+            if let Some(local) = default_binding {
+                let value = exports.get("default").cloned().unwrap_or(Value::Undefined);
+                env.insert(local.clone(), value);
+                self.set_const_binding(env, local, true);
+            }
+
+            if let Some(local) = namespace_binding {
+                let mut entries = exports
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                env.insert(local.clone(), Self::new_object_value(entries));
+                self.set_const_binding(env, local, true);
+            }
+
+            for binding in named_bindings {
+                let value = exports.get(&binding.imported).cloned().ok_or_else(|| {
+                    Error::ScriptRuntime(format!(
+                        "module '{}' does not provide an export named '{}'",
+                        specifier, binding.imported
+                    ))
+                })?;
+                env.insert(binding.local.clone(), value);
+                self.set_const_binding(env, &binding.local, true);
+            }
+        }
+        Ok(())
+    }
+
+    fn register_module_named_exports(&mut self, bindings: &[(String, String)]) {
+        let Some(exports) = self.script_runtime.module_export_stack.last() else {
+            return;
+        };
+        let mut exports = exports.borrow_mut();
+        for (local, exported) in bindings {
+            exports.insert(exported.clone(), ModuleExportBinding::Local(local.clone()));
+        }
+    }
+
+    fn register_module_default_export_value(&mut self, value: Value) {
+        let Some(exports) = self.script_runtime.module_export_stack.last() else {
+            return;
+        };
+        exports
+            .borrow_mut()
+            .insert("default".to_string(), ModuleExportBinding::Value(value));
+    }
+
     fn execute_stmts_impl(
         &mut self,
         stmts: &[Stmt],
@@ -296,16 +676,22 @@ impl Harness {
 
         let result = (|| -> Result<ExecFlow> {
             Self::validate_const_redeclarations(stmts)?;
+            self.bind_hoisted_import_decls(stmts, env)?;
+            let mut initialized_var_bindings = HashSet::new();
             for stmt in stmts {
                 self.apply_pending_listener_capture_env_updates(env);
                 self.sync_top_level_env_from_runtime(env);
                 self.sync_listener_capture_env_if_shared(env);
                 match stmt {
+                    Stmt::ImportDecl { .. } => {}
                     Stmt::VarDecl { name, expr, kind } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         env.insert(name.clone(), value.clone());
                         self.set_const_binding(env, name, matches!(kind, VarDeclKind::Const));
                         self.bind_timer_id_to_task_env(name, expr, &value);
+                        if matches!(kind, VarDeclKind::Var) && !matches!(expr, Expr::Undefined) {
+                            initialized_var_bindings.insert(name.clone());
+                        }
                     }
                     Stmt::FunctionDecl {
                         name,
@@ -313,6 +699,10 @@ impl Harness {
                         is_async,
                         is_generator,
                     } => {
+                        // Keep prior initialized `var` binding values in place.
+                        if initialized_var_bindings.contains(name) {
+                            continue;
+                        }
                         let function = self.make_function_value(
                             handler.clone(),
                             env,
@@ -329,27 +719,27 @@ impl Harness {
                         constructor,
                         methods,
                     } => {
-                        let (super_constructor, super_prototype) =
-                            if let Some(super_class_expr) = super_class {
-                                let evaluated_super =
-                                    self.eval_expr(super_class_expr, env, event_param, event)?;
-                                if !self.is_callable_value(&evaluated_super) {
-                                    return Err(Error::ScriptRuntime(
-                                        "class extends value is not a constructor".into(),
-                                    ));
-                                }
-                                let super_prototype = self
-                                    .object_property_from_value(&evaluated_super, "prototype")?;
-                                let Value::Object(super_prototype) = super_prototype else {
-                                    return Err(Error::ScriptRuntime(
-                                        "class extends value does not have a valid prototype"
-                                            .into(),
-                                    ));
-                                };
-                                (Some(evaluated_super), Some(super_prototype))
-                            } else {
-                                (None, None)
+                        let (super_constructor, super_prototype) = if let Some(super_class_expr) =
+                            super_class
+                        {
+                            let evaluated_super =
+                                self.eval_expr(super_class_expr, env, event_param, event)?;
+                            if !self.is_callable_value(&evaluated_super) {
+                                return Err(Error::ScriptRuntime(
+                                    "class extends value is not a constructor".into(),
+                                ));
+                            }
+                            let super_prototype =
+                                self.object_property_from_value(&evaluated_super, "prototype")?;
+                            let Value::Object(super_prototype) = super_prototype else {
+                                return Err(Error::ScriptRuntime(
+                                    "class extends value does not have a valid prototype".into(),
+                                ));
                             };
+                            (Some(evaluated_super), Some(super_prototype))
+                        } else {
+                            (None, None)
+                        };
 
                         let constructor_handler = if let Some(handler) = constructor.clone() {
                             handler
@@ -409,6 +799,28 @@ impl Harness {
 
                         env.insert(name.clone(), class_constructor);
                         self.set_const_binding(env, name, false);
+                    }
+                    Stmt::ExportDecl {
+                        declaration,
+                        bindings,
+                    } => {
+                        match self.execute_stmts(
+                            std::slice::from_ref(declaration.as_ref()),
+                            event_param,
+                            event,
+                            env,
+                        )? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
+                        }
+                        self.register_module_named_exports(bindings);
+                    }
+                    Stmt::ExportNamed { bindings } => {
+                        self.register_module_named_exports(bindings);
+                    }
+                    Stmt::ExportDefaultExpr { expr } => {
+                        let value = self.eval_expr(expr, env, event_param, event)?;
+                        self.register_module_default_export_value(value);
                     }
                     Stmt::Block { stmts } => {
                         let previous = self.collect_direct_block_lexical_bindings(stmts, env);
@@ -1586,11 +1998,14 @@ impl Harness {
                                         if self.loop_should_consume_continue(&label) {
                                             if !post.is_empty() {
                                                 match self.execute_stmts(
-                                                    post, event_param, event, env,
+                                                    post,
+                                                    event_param,
+                                                    event,
+                                                    env,
                                                 )? {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::Return => {
-                                                        return Ok(ExecFlow::Return)
+                                                        return Ok(ExecFlow::Return);
                                                     }
                                                     ExecFlow::Break(_)
                                                     | ExecFlow::ContinueLoop(_) => {
@@ -1645,19 +2060,17 @@ impl Harness {
                             let iterable = self.eval_expr(iterable, env, event_param, event)?;
                             let items = match iterable {
                                 Value::NodeList(nodes) => (0..nodes.len())
-                                    .map(|idx| Value::Number(idx as i64))
+                                    .map(|idx| Value::String(idx.to_string()))
                                     .collect::<Vec<_>>(),
-                                Value::Array(values) => {
-                                    let values = values.borrow();
-                                    (0..values.len())
-                                        .map(|idx| Value::Number(idx as i64))
-                                        .collect::<Vec<_>>()
-                                }
-                                Value::Object(entries) => entries
-                                    .borrow()
-                                    .iter()
-                                    .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                    .map(|(key, _)| Value::String(key.clone()))
+                                Value::Array(values) => self
+                                    .collect_for_in_array_keys(&values)
+                                    .into_iter()
+                                    .map(Value::String)
+                                    .collect::<Vec<_>>(),
+                                Value::Object(entries) => self
+                                    .collect_for_in_object_chain_keys(&entries)
+                                    .into_iter()
+                                    .map(Value::String)
                                     .collect::<Vec<_>>(),
                                 Value::Null | Value::Undefined => Vec::new(),
                                 _ => {
@@ -1711,8 +2124,246 @@ impl Harness {
                         let loop_labels = self.take_pending_loop_labels();
                         self.push_loop_label_scope(loop_labels);
                         let for_of_result = (|| -> Result<ExecFlow> {
+                            enum ForOfSource {
+                                Values(Vec<Value>),
+                                InternalIterator(Rc<RefCell<ObjectValue>>),
+                                ProtocolIterator(Rc<RefCell<ObjectValue>>),
+                            }
+
                             let iterable = self.eval_expr(iterable, env, event_param, event)?;
-                            let nodes = match iterable {
+                            let source = match iterable {
+                                Value::NodeList(nodes) => ForOfSource::Values(
+                                    nodes.into_iter().map(Value::Node).collect::<Vec<_>>(),
+                                ),
+                                Value::Array(values) => {
+                                    ForOfSource::Values(values.borrow().clone())
+                                }
+                                Value::String(text) => ForOfSource::Values(
+                                    text.chars()
+                                        .map(|ch| Value::String(ch.to_string()))
+                                        .collect::<Vec<_>>(),
+                                ),
+                                Value::TypedArray(values) => {
+                                    ForOfSource::Values(self.typed_array_snapshot(&values)?)
+                                }
+                                Value::Map(map) => {
+                                    ForOfSource::Values(self.map_entries_array(&map))
+                                }
+                                Value::Set(set) => ForOfSource::Values(set.borrow().values.clone()),
+                                Value::Object(entries) => {
+                                    if Self::is_iterator_object(&entries.borrow()) {
+                                        ForOfSource::InternalIterator(entries)
+                                    } else if Self::is_url_search_params_object(&entries.borrow()) {
+                                        ForOfSource::Values(
+                                            Self::url_search_params_pairs_from_object_entries(
+                                                &entries.borrow(),
+                                            )
+                                            .into_iter()
+                                            .map(|(key, value)| {
+                                                Self::new_array_value(vec![
+                                                    Value::String(key),
+                                                    Value::String(value),
+                                                ])
+                                            })
+                                            .collect::<Vec<_>>(),
+                                        )
+                                    } else if let Some(iterator) =
+                                        self.for_of_symbol_iterator_factory_result(&entries, event)?
+                                    {
+                                        if Self::is_iterator_object(&iterator.borrow()) {
+                                            ForOfSource::InternalIterator(iterator)
+                                        } else {
+                                            ForOfSource::ProtocolIterator(iterator)
+                                        }
+                                    } else {
+                                        return Err(Error::ScriptRuntime(
+                                        "for...of iterable must be an Iterator, NodeList, Array, String, TypedArray, Map, Set, or URLSearchParams"
+                                            .into(),
+                                    ));
+                                    }
+                                }
+                                Value::Null | Value::Undefined => {
+                                    return Err(Error::ScriptRuntime(
+                                        "for...of iterable must be an Iterator, NodeList, Array, String, TypedArray, Map, Set, or URLSearchParams".into(),
+                                    ));
+                                }
+                                _ => {
+                                    return Err(Error::ScriptRuntime(
+                                    "for...of iterable must be an Iterator, NodeList, Array, String, TypedArray, Map, Set, or URLSearchParams"
+                                        .into(),
+                                ));
+                                }
+                            };
+
+                            let prev_item = env.get(item_var).cloned();
+                            let loop_result = (|| -> Result<ExecFlow> {
+                                match source {
+                                    ForOfSource::Values(items) => {
+                                        for item in items {
+                                            env.insert(item_var.clone(), item.clone());
+                                            self.sync_global_binding_if_needed(
+                                                env, item_var, &item,
+                                            );
+                                            match self.execute_stmts(
+                                                body,
+                                                event_param,
+                                                event,
+                                                env,
+                                            )? {
+                                                ExecFlow::Continue => {}
+                                                ExecFlow::ContinueLoop(label) => {
+                                                    if self.loop_should_consume_continue(&label) {
+                                                        continue;
+                                                    }
+                                                    return Ok(ExecFlow::ContinueLoop(label));
+                                                }
+                                                ExecFlow::Break(label) => {
+                                                    if self.loop_should_consume_break(&label) {
+                                                        break;
+                                                    }
+                                                    return Ok(ExecFlow::Break(label));
+                                                }
+                                                ExecFlow::Return => return Ok(ExecFlow::Return),
+                                            }
+                                        }
+                                        Ok(ExecFlow::Continue)
+                                    }
+                                    ForOfSource::InternalIterator(iterator) => {
+                                        loop {
+                                            let Some(item) =
+                                                self.iterator_next_value_from_object(&iterator)?
+                                            else {
+                                                break;
+                                            };
+                                            env.insert(item_var.clone(), item.clone());
+                                            self.sync_global_binding_if_needed(
+                                                env, item_var, &item,
+                                            );
+                                            let flow = match self.execute_stmts(
+                                                body,
+                                                event_param,
+                                                event,
+                                                env,
+                                            ) {
+                                                Ok(flow) => flow,
+                                                Err(err) => {
+                                                    self.for_of_internal_iterator_close_if_needed(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Err(err);
+                                                }
+                                            };
+                                            match flow {
+                                                ExecFlow::Continue => {}
+                                                ExecFlow::ContinueLoop(label) => {
+                                                    if self.loop_should_consume_continue(&label) {
+                                                        continue;
+                                                    }
+                                                    self.for_of_internal_iterator_close_if_needed(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Ok(ExecFlow::ContinueLoop(label));
+                                                }
+                                                ExecFlow::Break(label) => {
+                                                    self.for_of_internal_iterator_close_if_needed(
+                                                        &iterator, event,
+                                                    )?;
+                                                    if self.loop_should_consume_break(&label) {
+                                                        break;
+                                                    }
+                                                    return Ok(ExecFlow::Break(label));
+                                                }
+                                                ExecFlow::Return => {
+                                                    self.for_of_internal_iterator_close_if_needed(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Ok(ExecFlow::Return);
+                                                }
+                                            }
+                                        }
+                                        Ok(ExecFlow::Continue)
+                                    }
+                                    ForOfSource::ProtocolIterator(iterator) => {
+                                        loop {
+                                            let Some(item) = self
+                                                .for_of_protocol_iterator_next(&iterator, event)?
+                                            else {
+                                                break;
+                                            };
+                                            env.insert(item_var.clone(), item.clone());
+                                            self.sync_global_binding_if_needed(
+                                                env, item_var, &item,
+                                            );
+                                            let flow = match self.execute_stmts(
+                                                body,
+                                                event_param,
+                                                event,
+                                                env,
+                                            ) {
+                                                Ok(flow) => flow,
+                                                Err(err) => {
+                                                    self.for_of_protocol_iterator_close(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Err(err);
+                                                }
+                                            };
+                                            match flow {
+                                                ExecFlow::Continue => {}
+                                                ExecFlow::ContinueLoop(label) => {
+                                                    if self.loop_should_consume_continue(&label) {
+                                                        continue;
+                                                    }
+                                                    self.for_of_protocol_iterator_close(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Ok(ExecFlow::ContinueLoop(label));
+                                                }
+                                                ExecFlow::Break(label) => {
+                                                    self.for_of_protocol_iterator_close(
+                                                        &iterator, event,
+                                                    )?;
+                                                    if self.loop_should_consume_break(&label) {
+                                                        break;
+                                                    }
+                                                    return Ok(ExecFlow::Break(label));
+                                                }
+                                                ExecFlow::Return => {
+                                                    self.for_of_protocol_iterator_close(
+                                                        &iterator, event,
+                                                    )?;
+                                                    return Ok(ExecFlow::Return);
+                                                }
+                                            }
+                                        }
+                                        Ok(ExecFlow::Continue)
+                                    }
+                                }
+                            })();
+                            if let Some(prev) = prev_item {
+                                env.insert(item_var.clone(), prev.clone());
+                                self.sync_global_binding_if_needed(env, item_var, &prev);
+                            } else {
+                                env.remove(item_var);
+                            }
+                            loop_result
+                        })();
+                        self.pop_loop_label_scope();
+                        match for_of_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
+                        }
+                    }
+                    Stmt::ForAwaitOf {
+                        item_var,
+                        iterable,
+                        body,
+                    } => {
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let for_await_result = (|| -> Result<ExecFlow> {
+                            let iterable = self.eval_expr(iterable, env, event_param, event)?;
+                            let values = match iterable {
                                 Value::NodeList(nodes) => {
                                     nodes.into_iter().map(Value::Node).collect::<Vec<_>>()
                                 }
@@ -1720,38 +2371,96 @@ impl Harness {
                                 Value::Map(map) => self.map_entries_array(&map),
                                 Value::Set(set) => set.borrow().values.clone(),
                                 Value::Object(entries) => {
-                                    if Self::is_iterator_object(&entries.borrow()) {
-                                        self.iterator_collect_remaining_values(&entries)?
-                                    } else if Self::is_url_search_params_object(&entries.borrow()) {
-                                        Self::url_search_params_pairs_from_object_entries(
-                                            &entries.borrow(),
-                                        )
-                                        .into_iter()
-                                        .map(|(key, value)| {
-                                            Self::new_array_value(vec![
-                                                Value::String(key),
-                                                Value::String(value),
-                                            ])
-                                        })
-                                        .collect::<Vec<_>>()
+                                    if Self::is_async_iterator_object(&entries.borrow()) {
+                                        let mut out = Vec::new();
+                                        while let Some(value) =
+                                            self.async_iterator_next_value_from_object(&entries)?
+                                        {
+                                            out.push(value);
+                                        }
+                                        out
                                     } else {
-                                        return Err(Error::ScriptRuntime(
-                                        "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
-                                            .into(),
-                                    ));
+                                        let async_iterator_symbol = self
+                                            .eval_symbol_static_property(
+                                                SymbolStaticProperty::AsyncIterator,
+                                            );
+                                        let async_iterator_key = self
+                                            .property_key_to_storage_key(&async_iterator_symbol);
+                                        let async_iterator_factory = {
+                                            let entries_ref = entries.borrow();
+                                            Self::object_get_entry(
+                                                &entries_ref,
+                                                async_iterator_key.as_str(),
+                                            )
+                                        };
+
+                                        if let Some(factory) = async_iterator_factory {
+                                            if !self.is_callable_value(&factory) {
+                                                return Err(Error::ScriptRuntime(
+                                                    "for await...of async iterator factory is not callable"
+                                                        .into(),
+                                                ));
+                                            }
+                                            let iterator_value =
+                                                self.execute_callable_value(&factory, &[], event)?;
+                                            let Value::Object(async_iterator) = iterator_value
+                                            else {
+                                                return Err(Error::ScriptRuntime(
+                                                    "for await...of async iterator factory must return an object"
+                                                        .into(),
+                                                ));
+                                            };
+                                            if !Self::is_async_iterator_object(
+                                                &async_iterator.borrow(),
+                                            ) {
+                                                return Err(Error::ScriptRuntime(
+                                                    "for await...of async iterator factory returned a non-async iterator"
+                                                        .into(),
+                                                ));
+                                            }
+                                            let mut out = Vec::new();
+                                            while let Some(value) = self
+                                                .async_iterator_next_value_from_object(
+                                                    &async_iterator,
+                                                )?
+                                            {
+                                                out.push(value);
+                                            }
+                                            out
+                                        } else if Self::is_iterator_object(&entries.borrow()) {
+                                            self.iterator_collect_remaining_values(&entries)?
+                                        } else if Self::is_url_search_params_object(
+                                            &entries.borrow(),
+                                        ) {
+                                            Self::url_search_params_pairs_from_object_entries(
+                                                &entries.borrow(),
+                                            )
+                                            .into_iter()
+                                            .map(|(key, value)| {
+                                                Self::new_array_value(vec![
+                                                    Value::String(key),
+                                                    Value::String(value),
+                                                ])
+                                            })
+                                            .collect::<Vec<_>>()
+                                        } else {
+                                            return Err(Error::ScriptRuntime(
+                                                "for await...of iterable must be an AsyncIterator, Iterator, NodeList, Array, Map, Set, or URLSearchParams".into(),
+                                            ));
+                                        }
                                     }
                                 }
                                 Value::Null | Value::Undefined => Vec::new(),
                                 _ => {
                                     return Err(Error::ScriptRuntime(
-                                    "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
-                                        .into(),
-                                ));
+                                        "for await...of iterable must be an AsyncIterator, Iterator, NodeList, Array, Map, Set, or URLSearchParams".into(),
+                                    ));
                                 }
                             };
 
                             let prev_item = env.get(item_var).cloned();
-                            for item in nodes {
+                            for value in values {
+                                let item = self.await_value_in_for_await(value)?;
                                 env.insert(item_var.clone(), item.clone());
                                 self.sync_global_binding_if_needed(env, item_var, &item);
                                 match self.execute_stmts(body, event_param, event, env)? {
@@ -1780,7 +2489,7 @@ impl Harness {
                             Ok(ExecFlow::Continue)
                         })();
                         self.pop_loop_label_scope();
-                        match for_of_result? {
+                        match for_await_result? {
                             ExecFlow::Continue => {}
                             flow => return Ok(flow),
                         }

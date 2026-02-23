@@ -163,15 +163,147 @@ impl Harness {
             } else {
                 parse_block_statements(script)?
             };
-            self.with_script_env(|this, env| {
+            if is_module {
+                self.script_runtime
+                    .module_referrer_stack
+                    .push(self.document_url.clone());
+            }
+            let result = self.with_script_env(|this, env| {
                 let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
                 this.run_in_task_context(|inner| {
                     inner
                         .execute_stmts(&stmts, &None, &mut event, env)
                         .map(|_| ())
                 })
-            })?;
+            });
+            if is_module {
+                let _ = self.script_runtime.module_referrer_stack.pop();
+            }
+            result?;
             Ok(())
         })
+    }
+
+    pub(crate) fn resolve_module_specifier_key(&self, specifier: &str, referrer: &str) -> String {
+        let specifier = specifier.trim();
+        if specifier.starts_with("data:") {
+            return specifier.to_string();
+        }
+        Self::resolve_url_string(specifier, Some(referrer)).unwrap_or_else(|| specifier.to_string())
+    }
+
+    pub(crate) fn parse_data_module_source(specifier: &str) -> Result<(String, String)> {
+        let Some(rest) = specifier.strip_prefix("data:") else {
+            return Err(Error::ScriptRuntime(format!(
+                "invalid data module specifier: {specifier}"
+            )));
+        };
+        let Some((meta, payload)) = rest.split_once(',') else {
+            return Err(Error::ScriptRuntime(format!(
+                "invalid data module specifier: {specifier}"
+            )));
+        };
+        let media_type = meta
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if meta
+            .split(';')
+            .skip(1)
+            .any(|part| part.trim().eq_ignore_ascii_case("base64"))
+        {
+            return Err(Error::ScriptRuntime(
+                "base64 data URL modules are not supported yet".into(),
+            ));
+        }
+        let source = decode_uri_like(payload, true)?;
+        Ok((media_type, source))
+    }
+
+    pub(crate) fn load_module_exports(
+        &mut self,
+        specifier: &str,
+        attribute_type: Option<&str>,
+        referrer: &str,
+    ) -> Result<HashMap<String, Value>> {
+        let cache_key = self.resolve_module_specifier_key(specifier, referrer);
+        if let Some(cached) = self.script_runtime.module_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+        if !self.script_runtime.loading_modules.insert(cache_key.clone()) {
+            return Err(Error::ScriptRuntime(format!(
+                "circular module import is not supported: {cache_key}"
+            )));
+        }
+
+        let result = (|| -> Result<HashMap<String, Value>> {
+            let (media_type, source) = if cache_key.starts_with("data:") {
+                Self::parse_data_module_source(&cache_key)?
+            } else {
+                let source = self
+                    .platform_mocks
+                    .fetch_mocks
+                    .get(&cache_key)
+                    .cloned()
+                    .or_else(|| self.platform_mocks.fetch_mocks.get(specifier).cloned())
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!(
+                            "module source mock not found for import: {specifier}"
+                        ))
+                    })?;
+                ("text/javascript".to_string(), source)
+            };
+
+            let is_json_module = attribute_type.is_some_and(|ty| ty == "json")
+                || media_type.contains("application/json");
+            if is_json_module {
+                let value = Self::parse_json_text(&source)?;
+                return Ok(HashMap::from([("default".to_string(), value)]));
+            }
+
+            let stmts = parse_module_block_statements(&source)?;
+            let export_collector = Rc::new(RefCell::new(HashMap::new()));
+            self.script_runtime
+                .module_export_stack
+                .push(export_collector.clone());
+            self.script_runtime
+                .module_referrer_stack
+                .push(cache_key.clone());
+            let exec_result = self.with_script_env(|this, env| {
+                let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
+                this.run_in_task_context(|inner| {
+                    inner
+                        .execute_stmts(&stmts, &None, &mut event, env)
+                        .map(|_| ())
+                })
+            });
+            let _ = self.script_runtime.module_referrer_stack.pop();
+            let _ = self.script_runtime.module_export_stack.pop();
+            exec_result?;
+
+            let env_snapshot = self.script_runtime.env.to_map();
+            let mut exports = HashMap::new();
+            for (exported, binding) in export_collector.borrow().iter() {
+                let value = match binding {
+                    ModuleExportBinding::Local(local) => env_snapshot
+                        .get(local)
+                        .cloned()
+                        .or_else(|| self.resolve_pending_function_decl(local, &env_snapshot))
+                        .unwrap_or(Value::Undefined),
+                    ModuleExportBinding::Value(value) => value.clone(),
+                };
+                exports.insert(exported.clone(), value);
+            }
+            Ok(exports)
+        })();
+
+        self.script_runtime.loading_modules.remove(&cache_key);
+        let exports = result?;
+        self.script_runtime
+            .module_cache
+            .insert(cache_key.clone(), exports.clone());
+        Ok(exports)
     }
 }

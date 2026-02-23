@@ -17,9 +17,7 @@ impl Harness {
         env.get(INTERNAL_CLASS_SUPER_PROTOTYPE_KEY)
             .cloned()
             .ok_or_else(|| {
-                Error::ScriptRuntime(
-                    "super property access is only valid in a class method".into(),
-                )
+                Error::ScriptRuntime("super property access is only valid in a class method".into())
             })
     }
 

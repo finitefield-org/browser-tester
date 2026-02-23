@@ -31,6 +31,9 @@ impl Harness {
 
     pub(crate) fn is_internal_object_key(key: &str) -> bool {
         Self::is_symbol_storage_key(key)
+            || key == INTERNAL_OBJECT_PROTOTYPE_KEY
+            || key == INTERNAL_CLASS_SUPER_PROTOTYPE_KEY
+            || key == INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)

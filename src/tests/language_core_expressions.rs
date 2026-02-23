@@ -49,10 +49,10 @@ fn for_in_loop_supports_break_and_continue() -> Result<()> {
           document.getElementById('btn').addEventListener('click', () => {
             let out = '';
             for (let index in document.querySelectorAll('.item')) {
-              if (index === 1) {
+              if (index === '1') {
                 continue;
               }
-              if (index === 3) {
+              if (index === '3') {
                 break;
               }
               out = out + index;
@@ -65,6 +65,110 @@ fn for_in_loop_supports_break_and_continue() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "02")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_iterates_object_string_keys_and_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const object = { a: 1, b: 2, c: 3 };
+            let out = '';
+            for (const property in object) {
+              out = out + property + ':' + object[property] + '|';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a:1|b:2|c:3|")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_includes_inherited_properties_and_skips_shadowed_keys() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function Base() {}
+          Base.prototype.a = 1;
+          Base.prototype.b = 2;
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = new Base();
+            obj.b = 20;
+            obj.c = 3;
+            let out = '';
+            for (const key in obj) {
+              out = out + key + ',';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "b,c,a,")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_orders_integer_keys_before_other_strings() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = {};
+            obj.foo = 'x';
+            obj[2] = 'b';
+            obj[1] = 'a';
+            obj.bar = 'y';
+            let out = '';
+            for (const key in obj) {
+              out = out + key + ',';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1,2,foo,bar,")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_ignores_symbol_keys() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const token = Symbol.for('token');
+            const obj = { a: 1 };
+            obj[token] = 2;
+            let out = '';
+            for (const key in obj) {
+              out = out + key;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "a")?;
     Ok(())
 }
 
@@ -100,6 +204,192 @@ fn for_of_loop_supports_break_and_continue() -> Result<()> {
     h.click("#btn")?;
     h.assert_text("#result", "AC")?;
     Ok(())
+}
+
+#[test]
+fn for_of_loop_supports_string_and_typed_array_iterables() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let text = '';
+            for (const ch of 'abc') {
+              text = text + ch;
+            }
+
+            let bytes = '';
+            for (const value of new Uint8Array([7, 8])) {
+              bytes = bytes + String(value) + ',';
+            }
+
+            document.getElementById('result').textContent = text + ':' + bytes;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "abc:7,8,")?;
+    Ok(())
+}
+
+#[test]
+fn for_of_loop_uses_symbol_iterator_factory_and_closes_on_break() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let closed = 'no';
+            const iterable = {};
+            iterable[Symbol.iterator] = () => {
+              let i = 0;
+              const iterator = {};
+              iterator.next = () => {
+                const result = {};
+                if (i < 3) {
+                  result.value = i;
+                  i += 1;
+                  result.done = false;
+                  return result;
+                }
+                result.done = true;
+                return result;
+              };
+              iterator['return'] = () => {
+                closed = 'yes';
+                const result = {};
+                result.done = true;
+                return result;
+              };
+              return iterator;
+            };
+
+            let out = '';
+            for (const value of iterable) {
+              out = out + String(value);
+              if (value === 1) {
+                break;
+              }
+            }
+            document.getElementById('result').textContent = out + ':' + closed;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "01:yes")?;
+    Ok(())
+}
+
+#[test]
+fn for_of_loop_rejects_non_iterable_objects() {
+    let err = Harness::from_html("<script>for (const x of { a: 1 }) { }</script>")
+        .expect_err("for...of on plain object should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("for...of iterable must be")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn for_of_loop_rejects_async_as_loop_variable_name() {
+    let err = Harness::from_html("<script>for (async of [1, 2, 3]) { }</script>")
+        .expect_err("for...of with async binding should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("for-of loop may not be 'async'") || msg.contains("'async'"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn for_await_of_consumes_async_generator_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          async function* values() {
+            yield Promise.resolve('a');
+            yield Promise.resolve('b');
+            yield 'c';
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            for await (const item of values()) {
+              out = out + item;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn for_await_of_consumes_sync_iterable_and_awaits_promises() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = [Promise.resolve('x'), 'y', Promise.resolve('z')];
+            let out = '';
+            for await (const item of source) {
+              out = out + item;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "xyz")?;
+    Ok(())
+}
+
+#[test]
+fn for_await_of_uses_symbol_async_iterator_from_iterable_object() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const stream = new Blob(['AB']).stream();
+            let out = '';
+            for await (const chunk of stream) {
+              out = out + chunk.join(',');
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "65,66")?;
+    Ok(())
+}
+
+#[test]
+fn for_await_of_rejects_for_in_form() {
+    let err = Harness::from_html("<script>for await (const key in { a: 1 }) { }</script>")
+        .expect_err("for await...in should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("only supports of") || msg.contains("of-clause"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -330,6 +620,128 @@ fn labeled_empty_statement_is_accepted() -> Result<()> {
     h.click("#btn")?;
     h.assert_text("#result", "ok!")?;
     Ok(())
+}
+
+#[test]
+fn labeled_continue_with_nested_for_loops_targets_outer_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            loop1: for (let i = 0; i < 3; i++) {
+              loop2: for (let j = 0; j < 3; j++) {
+                if (i === 1 && j === 1) {
+                  continue loop1;
+                }
+                out = out + String(i) + String(j) + ',';
+              }
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "00,01,02,10,20,21,22,")?;
+    Ok(())
+}
+
+#[test]
+fn labeled_break_with_nested_for_loops_exits_outer_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            loop1: for (let i = 0; i < 3; i++) {
+              loop2: for (let j = 0; j < 3; j++) {
+                if (i === 1 && j === 1) {
+                  break loop1;
+                }
+                out = out + String(i) + String(j) + ',';
+              }
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "00,01,02,10,")?;
+    Ok(())
+}
+
+#[test]
+fn multiple_labels_on_same_loop_are_equivalent() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            let i = 0;
+            top: inner: while (i < 4) {
+              i += 1;
+              if (i === 2) {
+                continue top;
+              }
+              if (i === 3) {
+                break inner;
+              }
+              out = out + String(i);
+            }
+            out = out + 'x';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1x")?;
+    Ok(())
+}
+
+#[test]
+fn reserved_word_cannot_be_used_as_label() {
+    let err = Harness::from_html("<script>default: ;</script>")
+        .expect_err("reserved word label should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("reserved word")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn lexical_declaration_cannot_be_labeled() {
+    let err = Harness::from_html("<script>label: const x = 1;</script>")
+        .expect_err("labeled lexical declaration should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("lexical declaration cannot be labeled")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn labeled_async_or_generator_function_declaration_is_rejected() {
+    let err = Harness::from_html("<script>label: async function f() {}</script>")
+        .expect_err("labeled async function declaration should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("non-async")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>label: function* g() {}</script>")
+        .expect_err("labeled generator function declaration should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("non-generator") || msg.contains("non-async")),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -677,14 +1089,114 @@ fn expression_statement_allows_parenthesized_object_literal() -> Result<()> {
 
 #[test]
 fn function_declaration_invocation_syntax_is_rejected() {
-    let err = Harness::from_html(
-        "<script>function foo() { console.log('foo'); }();</script>",
-    )
-    .expect_err("function declaration invocation form should fail");
+    let err = Harness::from_html("<script>function foo() { console.log('foo'); }();</script>")
+        .expect_err("function declaration invocation form should fail");
     match err {
         Error::ScriptParse(msg) => assert!(!msg.is_empty()),
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn function_declaration_is_hoisted_and_callable_before_declaration() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const value = calcRectArea(5, 6);
+            function calcRectArea(width, height) {
+              return width * height;
+            }
+            document.getElementById('result').textContent = String(value);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "30")?;
+    Ok(())
+}
+
+#[test]
+fn function_declaration_returns_undefined_without_return_statement() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function noReturn() {}
+            document.getElementById('result').textContent = typeof noReturn();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined")?;
+    Ok(())
+}
+
+#[test]
+fn function_and_var_redeclaration_uses_var_initializer_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            var a = 1;
+            function a() { return 2; }
+
+            function b() { return 3; }
+            var b = 4;
+
+            document.getElementById('result').textContent =
+              String(a) + ':' + String(b);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:4")?;
+    Ok(())
+}
+
+#[test]
+fn function_declaration_cannot_share_name_with_let_in_same_scope() {
+    let err = Harness::from_html("<script>let value = 1; function value() { return 2; }</script>")
+        .expect_err("function and let redeclaration should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("already been declared"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn block_function_declaration_is_scoped_to_the_block() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            {
+              function inside() {
+                return 'ok';
+              }
+              inside();
+            }
+            document.getElementById('result').textContent = typeof inside;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined")?;
+    Ok(())
 }
 
 #[test]
@@ -808,12 +1320,146 @@ fn export_is_rejected_in_classic_script() {
 
 #[test]
 fn export_from_is_not_supported_yet() {
-    let err = Harness::from_html("<script type='module'>export { value } from './mod.js';</script>")
-        .expect_err("export-from should fail");
+    let err =
+        Harness::from_html("<script type='module'>export { value } from './mod.js';</script>")
+            .expect_err("export-from should fail");
     match err {
         Error::ScriptParse(msg) => {
             assert!(msg.contains("not supported") || msg.contains("unsupported"))
         }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn module_import_forms_and_hoisting_work() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          window.hoistedValue = String(triple(3));
+          import defaultValue, { named as renamed, default as alsoDefault } from "data:text/javascript,export%20const%20named%20%3D%207%3B%20export%20default%205%3B";
+          import * as ns from "data:text/javascript,export%20const%20value%20%3D%2011%3B%20export%20default%20%22ns%22%3B";
+          import { triple } from "data:text/javascript,export%20function%20triple(value)%20%7B%20return%20value%20*%203%3B%20%7D";
+          window.moduleImportResult =
+            window.hoistedValue + ':' +
+            String(defaultValue) + ':' +
+            String(renamed) + ':' +
+            String(alsoDefault) + ':' +
+            String(ns.value) + ':' +
+            String(ns.default);
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.moduleImportResult;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "9:5:7:5:11:ns")?;
+    Ok(())
+}
+
+#[test]
+fn module_side_effect_import_runs() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          import "data:text/javascript,window.sideEffectRan%20%3D%20%22yes%22%3B";
+          window.sideEffectImportResult = String(window.sideEffectRan);
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.sideEffectImportResult;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "yes")?;
+    Ok(())
+}
+
+#[test]
+fn module_import_json_with_attribute_works() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          import data from "data:application/json,%7B%22answer%22%3A42%7D" with { type: "json" };
+          window.importedJsonValue = String(data.answer);
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.importedJsonValue;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "42")?;
+    Ok(())
+}
+
+#[test]
+fn import_is_rejected_in_classic_script() {
+    let err = Harness::from_html("<script>import value from './dep.js';</script>")
+        .expect_err("import in classic script should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("top level") || msg.contains("module")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn import_inside_block_is_rejected_in_module_script() {
+    let err = Harness::from_html(
+        "<script type='module'>{ import value from \"data:text/javascript,export%20default%201%3B\"; }</script>",
+    )
+    .expect_err("nested import should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("top level")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn imported_binding_cannot_be_reassigned() {
+    let err = Harness::from_html(
+        "<script type='module'>import value from \"data:text/javascript,export%20default%201%3B\"; value = 2;</script>",
+    )
+    .expect_err("reassigning import should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("constant variable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn import_named_binding_requires_existing_export() {
+    let err = Harness::from_html(
+        "<script type='module'>import { missing } from \"data:text/javascript,export%20const%20present%20%3D%201%3B\";</script>",
+    )
+    .expect_err("missing named export should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("does not provide an export named")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn unsupported_import_attribute_is_rejected() {
+    let err = Harness::from_html(
+        "<script type='module'>import data from \"data:application/json,%7B%7D\" with { mode: \"json\" };</script>",
+    )
+    .expect_err("unsupported import attribute should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("unsupported import attribute")),
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -875,6 +1521,57 @@ fn if_without_braces_with_else_on_next_statement_works() -> Result<()> {
     h.set_checked("#agree", true)?;
     h.click("#btn")?;
     h.assert_text("#result", "yes")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_if_chain_runs_first_matching_branch() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const x = 20;
+            let out = '';
+            if (x > 50) {
+              out = 'large';
+            } else if (x > 5) {
+              out = 'middle';
+            } else {
+              out = 'small';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "middle")?;
+    Ok(())
+}
+
+#[test]
+fn dangling_else_binds_to_the_closest_if_statement() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let out = 'none';
+            if (1 === 1)
+              if (3 === 2)
+                out = 'a is 1 and b is 2';
+              else
+                out = 'a is not 1';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "a is not 1")?;
     Ok(())
 }
 
@@ -2504,10 +3201,9 @@ fn class_extends_default_constructor_forwards_all_arguments() -> Result<()> {
 
 #[test]
 fn class_extends_requires_constructor_superclass() {
-    let err = Harness::from_html(
-        "<script>const parent = {}; class Child extends parent {}</script>",
-    )
-    .expect_err("class extends non-constructor should fail");
+    let err =
+        Harness::from_html("<script>const parent = {}; class Child extends parent {}</script>")
+            .expect_err("class extends non-constructor should fail");
     match err {
         Error::ScriptRuntime(msg) => assert!(msg.contains("not a constructor")),
         other => panic!("unexpected error: {other:?}"),
