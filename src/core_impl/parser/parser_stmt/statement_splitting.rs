@@ -39,7 +39,17 @@ pub(crate) fn split_top_level_statements(body: &str) -> Vec<String> {
             }
             b';' => {
                 if paren_before == 0 && bracket_before == 0 && brace_before == 0 {
-                    if let Some(part) = body.get(start..current) {
+                    let head = body.get(start..current).unwrap_or_default();
+                    let tail = body.get(i..).unwrap_or_default().trim_start();
+                    if is_do_statement_prefix(head) && is_keyword_prefix(tail, "while") {
+                        continue;
+                    }
+                    let end = if should_keep_semicolon_with_head(head) {
+                        i
+                    } else {
+                        current
+                    };
+                    if let Some(part) = body.get(start..end) {
                         out.push(part.to_string());
                     }
                     start = i;
@@ -90,6 +100,63 @@ pub(crate) fn should_split_after_closing_brace(
         return false;
     }
     true
+}
+
+pub(crate) fn is_do_statement_prefix(src: &str) -> bool {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws_and_comments();
+    loop {
+        let before_label = cursor.pos();
+        let Some(_) = cursor.parse_identifier() else {
+            break;
+        };
+        cursor.skip_ws();
+        if cursor.consume_byte(b':') {
+            cursor.skip_ws_and_comments();
+            continue;
+        }
+        cursor.set_pos(before_label);
+        break;
+    }
+    consume_keyword(&mut cursor, "do")
+}
+
+pub(crate) fn should_keep_semicolon_with_head(head: &str) -> bool {
+    let mut cursor = Cursor::new(head);
+    cursor.skip_ws_and_comments();
+
+    loop {
+        let before_label = cursor.pos();
+        let Some(_) = cursor.parse_identifier() else {
+            break;
+        };
+        cursor.skip_ws();
+        if cursor.consume_byte(b':') {
+            cursor.skip_ws_and_comments();
+            continue;
+        }
+        cursor.set_pos(before_label);
+        break;
+    }
+
+    if cursor.eof() {
+        // `label: ;`
+        return true;
+    }
+
+    for keyword in ["if", "while", "for"] {
+        let saved = cursor.pos();
+        if consume_keyword(&mut cursor, keyword) {
+            cursor.skip_ws_and_comments();
+            if cursor.peek() == Some(b'(') && cursor.read_balanced_block(b'(', b')').is_ok() {
+                cursor.skip_ws_and_comments();
+                return cursor.eof();
+            }
+        }
+        cursor.set_pos(saved);
+    }
+
+    false
 }
 
 pub(crate) fn is_do_block_prefix(body: &str, block_open: usize) -> bool {

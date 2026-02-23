@@ -128,6 +128,282 @@ fn while_loop_break_exits_loop() -> Result<()> {
 }
 
 #[test]
+fn for_loop_allows_empty_statement_body() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            for (; i < 5; i++);
+            document.getElementById('result').textContent = String(i);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_with_in_operator_in_condition_is_not_misparsed_as_for_in() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { a: 1 };
+            let count = 0;
+            for (let key = 'a'; key in obj; key = 'missing') {
+              count += 1;
+            }
+            document.getElementById('result').textContent = String(count);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_supports_multiple_counters_in_init_and_post() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [1, 2, 3, 4, 5, 6];
+            let out = '';
+            for (let l = 0, r = arr.length - 1; l < r; l++, r--) {
+              out = out + String(arr[l]) + String(arr[r]);
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "162534")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_with_omitted_condition_uses_break_to_terminate() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            let out = '';
+            for (; ; i++) {
+              if (i > 3) {
+                break;
+              }
+              out = out + String(i);
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0123")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_with_all_clauses_omitted_runs_until_break() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            let out = '';
+            for (;;) {
+              if (i > 2) {
+                break;
+              }
+              out = out + String(i);
+              i += 1;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "012")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_let_initializer_is_scoped_to_the_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'ok';
+            for (let i = 0; i < 1; i++) {
+              out = out + '!';
+            }
+            out = out + ':' + typeof i;
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok!:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn for_loop_var_initializer_is_not_scoped_to_the_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            for (var i = 0; i < 1; i++) {}
+            document.getElementById('result').textContent = typeof i + ':' + String(i);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "number:1")?;
+    Ok(())
+}
+
+#[test]
+fn if_allows_empty_statement_body() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            if (true);
+            out += 'a';
+            if (false);
+            out += 'b';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ab")?;
+    Ok(())
+}
+
+#[test]
+fn labeled_empty_statement_is_accepted() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'ok';
+            marker: ;
+            out += '!';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok!")?;
+    Ok(())
+}
+
+#[test]
+fn do_while_executes_body_at_least_once() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 10;
+            do {
+              i += 1;
+            } while (i < 5);
+            document.getElementById('result').textContent = String(i);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "11")?;
+    Ok(())
+}
+
+#[test]
+fn do_while_supports_single_statement_body() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let result = '';
+            let i = 0;
+            do i += 1; while (i < 5);
+            result += String(i);
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5")?;
+    Ok(())
+}
+
+#[test]
+fn do_while_continue_rechecks_condition() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            let i = 0;
+            do {
+              i += 1;
+              if (i === 3) {
+                continue;
+              }
+              out = out + String(i);
+            } while (i < 5);
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1245")?;
+    Ok(())
+}
+
+#[test]
 fn labeled_break_exits_target_block() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -319,6 +595,227 @@ fn continue_inside_nested_function_reports_outside_loop_error() -> Result<()> {
         other => panic!("unexpected error: {other:?}"),
     }
     Ok(())
+}
+
+#[test]
+fn debugger_statement_is_noop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            debugger;
+            out += 'a';
+            debugger;
+            out += 'b';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ab")?;
+    Ok(())
+}
+
+#[test]
+fn debugger_statement_rejects_trailing_tokens() {
+    let err = Harness::from_html("<script>debugger extra;</script>")
+        .expect_err("debugger statement with trailing tokens should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("unsupported debugger statement")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn expression_statement_runs_side_effects_and_discards_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let value = 1;
+            value + 100;
+            value = value + 1;
+            (function () {
+              value = value + 2;
+            })();
+            document.getElementById('result').textContent = String(value);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "4")?;
+    Ok(())
+}
+
+#[test]
+fn expression_statement_allows_parenthesized_object_literal() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'A';
+            ({ foo: 1, bar: 2 });
+            out = out + 'B';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "AB")?;
+    Ok(())
+}
+
+#[test]
+fn function_declaration_invocation_syntax_is_rejected() {
+    let err = Harness::from_html(
+        "<script>function foo() { console.log('foo'); }();</script>",
+    )
+    .expect_err("function declaration invocation form should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(!msg.is_empty()),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn class_expression_statement_without_name_is_rejected() {
+    let err = Harness::from_html("<script>class {};</script>")
+        .expect_err("unnamed class statement should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("class declaration requires a class name"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn let_bracket_statement_is_rejected() {
+    let err = Harness::from_html("<script>var let = [1, 2, 3]; let[0] = 4;</script>")
+        .expect_err("let[ should be rejected as a declaration parse");
+    match err {
+        Error::ScriptParse(msg) => assert!(!msg.is_empty()),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn module_export_declarations_and_lists_are_accepted() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          export const base = 2;
+          export function double(value) {
+            return value * base;
+          }
+          export class Box {
+            constructor(value) {
+              this.value = value;
+            }
+          }
+          export { base as "base-name", double as doubled };
+          export {};
+
+          function markDefault() {
+            window.defaultEval = 'ok';
+            return 1;
+          }
+          export default markDefault();
+
+          window.moduleExportResult =
+            String(double(3)) + ':' +
+            String(new Box(7).value) + ':' +
+            window.defaultEval;
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.moduleExportResult;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "6:7:ok")?;
+    Ok(())
+}
+
+#[test]
+fn module_export_list_can_reference_later_declarations() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          export { laterValue };
+          const laterValue = 9;
+          window.laterExportValue = String(laterValue);
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.laterExportValue;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "9")?;
+    Ok(())
+}
+
+#[test]
+fn module_export_default_anonymous_function_is_accepted() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          export default function () { return 42; };
+          window.defaultAnonAccepted = 'yes';
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.defaultAnonAccepted;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "yes")?;
+    Ok(())
+}
+
+#[test]
+fn export_is_rejected_in_classic_script() {
+    let err = Harness::from_html("<script>export const value = 1;</script>")
+        .expect_err("export in classic script should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("module scripts")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn export_from_is_not_supported_yet() {
+    let err = Harness::from_html("<script type='module'>export { value } from './mod.js';</script>")
+        .expect_err("export-from should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("not supported") || msg.contains("unsupported"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

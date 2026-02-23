@@ -829,7 +829,7 @@ fn script_extractor_handles_regex_literals_with_quotes_for_end_tag_scan() -> Res
 
     let parsed = parse_html(html)?;
     assert_eq!(parsed.scripts.len(), 1);
-    assert!(parsed.scripts[0].contains(r#"/["]/g"#));
+    assert!(parsed.scripts[0].code.contains(r#"/["]/g"#));
     Ok(())
 }
 
@@ -848,7 +848,7 @@ fn script_extractor_falls_back_to_raw_end_tag_scan_when_js_lexer_gets_stuck() ->
 
     let parsed = parse_html(html)?;
     assert_eq!(parsed.scripts.len(), 1);
-    assert!(parsed.scripts[0].contains(r#"replace(/[&<>"']/g"#));
+    assert!(parsed.scripts[0].code.contains(r#"replace(/[&<>"']/g"#));
     Ok(())
 }
 
@@ -863,7 +863,7 @@ fn script_extractor_handles_nested_template_literals_for_end_tag_scan() -> Resul
 
     let parsed = parse_html(html)?;
     assert_eq!(parsed.scripts.len(), 1);
-    assert!(parsed.scripts[0].contains("class=\"chip\""));
+    assert!(parsed.scripts[0].code.contains("class=\"chip\""));
     Ok(())
 }
 

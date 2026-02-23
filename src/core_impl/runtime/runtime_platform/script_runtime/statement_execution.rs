@@ -1552,16 +1552,13 @@ impl Harness {
                         post,
                         body,
                     } => {
+                        let previous_init_lexical =
+                            self.collect_direct_block_lexical_bindings(init, env);
                         let loop_labels = self.take_pending_loop_labels();
                         self.push_loop_label_scope(loop_labels);
                         let for_result = (|| -> Result<ExecFlow> {
-                            if let Some(init) = init.as_deref() {
-                                match self.execute_stmts(
-                                    std::slice::from_ref(init),
-                                    event_param,
-                                    event,
-                                    env,
-                                )? {
+                            if !init.is_empty() {
+                                match self.execute_stmts(init, event_param, event, env)? {
                                     ExecFlow::Continue => {}
                                     ExecFlow::Return => return Ok(ExecFlow::Return),
                                     ExecFlow::Break(label) => {
@@ -1587,12 +1584,9 @@ impl Harness {
                                     ExecFlow::Continue => {}
                                     ExecFlow::ContinueLoop(label) => {
                                         if self.loop_should_consume_continue(&label) {
-                                            if let Some(post) = post.as_deref() {
+                                            if !post.is_empty() {
                                                 match self.execute_stmts(
-                                                    std::slice::from_ref(post),
-                                                    event_param,
-                                                    event,
-                                                    env,
+                                                    post, event_param, event, env,
                                                 )? {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::Return => {
@@ -1619,13 +1613,8 @@ impl Harness {
                                     }
                                     ExecFlow::Return => return Ok(ExecFlow::Return),
                                 }
-                                if let Some(post) = post.as_deref() {
-                                    match self.execute_stmts(
-                                        std::slice::from_ref(post),
-                                        event_param,
-                                        event,
-                                        env,
-                                    )? {
+                                if !post.is_empty() {
+                                    match self.execute_stmts(post, event_param, event, env)? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::Return => return Ok(ExecFlow::Return),
                                         ExecFlow::Break(_) | ExecFlow::ContinueLoop(_) => {
@@ -1638,6 +1627,7 @@ impl Harness {
                             }
                             Ok(ExecFlow::Continue)
                         })();
+                        self.restore_block_lexical_bindings(previous_init_lexical, env);
                         self.pop_loop_label_scope();
                         match for_result? {
                             ExecFlow::Continue => {}
@@ -1927,6 +1917,8 @@ impl Harness {
                         env.insert(INTERNAL_RETURN_SLOT.to_string(), return_value);
                         return Ok(ExecFlow::Return);
                     }
+                    Stmt::Empty => {}
+                    Stmt::Debugger => {}
                     Stmt::Break { label } => {
                         return Ok(ExecFlow::Break(label.clone()));
                     }

@@ -25,6 +25,10 @@ pub(super) mod api {
         super::parser_stmt::control_flow_statements::parse_block_statements(body)
     }
 
+    pub(crate) fn parse_module_block_statements(body: &str) -> Result<Vec<Stmt>> {
+        super::parser_stmt::control_flow_statements::parse_module_block_statements(body)
+    }
+
     #[cfg(test)]
     pub(crate) fn parse_for_each_callback(
         src: &str,

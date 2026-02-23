@@ -1142,9 +1142,9 @@ pub(crate) enum Stmt {
         callback: ScriptHandler,
     },
     For {
-        init: Option<Box<Stmt>>,
+        init: Vec<Stmt>,
         cond: Option<Expr>,
-        post: Option<Box<Stmt>>,
+        post: Vec<Stmt>,
         body: Vec<Stmt>,
     },
     ForIn {
@@ -1161,6 +1161,8 @@ pub(crate) enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    Empty,
+    Debugger,
     Break {
         label: Option<String>,
     },

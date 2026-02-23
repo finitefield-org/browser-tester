@@ -32,7 +32,7 @@ impl Harness {
         let ParseOutput { mut dom, scripts } = parse_html(html)?;
         if scripts
             .iter()
-            .any(|script| script.contains("document.body"))
+            .any(|script| script.code.contains("document.body"))
         {
             let _ = dom.ensure_document_body_element()?;
         }
@@ -56,7 +56,7 @@ impl Harness {
         harness.seed_initial_local_storage(initial_local_storage);
 
         for script in scripts {
-            harness.compile_and_register_script(&script)?;
+            harness.compile_and_register_script(&script.code, script.is_module)?;
         }
 
         Ok(harness)

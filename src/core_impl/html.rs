@@ -279,6 +279,9 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
             let executable_script = tag.eq_ignore_ascii_case("script")
                 && !inside_template
                 && is_executable_script_type(attrs.get("type").map(String::as_str));
+            let module_script = tag.eq_ignore_ascii_case("script")
+                && !inside_template
+                && is_module_script_type(attrs.get("type").map(String::as_str));
             close_optional_description_item_start_tag(&dom, &mut stack, &tag);
             close_optional_list_item_start_tag(&dom, &mut stack, &tag);
             close_optional_option_start_tag(&dom, &mut stack, &tag);
@@ -307,7 +310,10 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
                         if executable_script {
-                            scripts.push(script_body.to_string());
+                            scripts.push(ScriptSource {
+                                code: script_body.to_string(),
+                                is_module: module_script,
+                            });
                         }
                     }
                 }
@@ -639,6 +645,20 @@ fn is_executable_script_type(raw_type: Option<&str>) -> bool {
             | "text/ecmascript"
             | "module"
     )
+}
+
+fn is_module_script_type(raw_type: Option<&str>) -> bool {
+    let Some(raw_type) = raw_type else {
+        return false;
+    };
+
+    let media_type = raw_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    media_type == "module"
 }
 
 fn parse_start_tag(

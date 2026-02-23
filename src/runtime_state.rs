@@ -447,9 +447,15 @@ impl EventState {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ScriptSource {
+    pub(crate) code: String,
+    pub(crate) is_module: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ParseOutput {
     pub(crate) dom: Dom,
-    pub(crate) scripts: Vec<String>,
+    pub(crate) scripts: Vec<ScriptSource>,
 }
 
 #[derive(Debug, Clone)]

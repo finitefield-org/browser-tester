@@ -5,7 +5,7 @@ impl Harness {
         let ParseOutput { mut dom, scripts } = parse_html(html)?;
         if scripts
             .iter()
-            .any(|script| script.contains("document.body"))
+            .any(|script| script.code.contains("document.body"))
         {
             let _ = dom.ensure_document_body_element()?;
         }
@@ -26,7 +26,7 @@ impl Harness {
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();
         for script in scripts {
-            self.compile_and_register_script(&script)?;
+            self.compile_and_register_script(&script.code, script.is_module)?;
         }
         Ok(())
     }

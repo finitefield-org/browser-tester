@@ -152,9 +152,17 @@ impl Harness {
         ));
     }
 
-    pub(crate) fn compile_and_register_script(&mut self, script: &str) -> Result<()> {
+    pub(crate) fn compile_and_register_script(
+        &mut self,
+        script: &str,
+        is_module: bool,
+    ) -> Result<()> {
         stacker::grow(32 * 1024 * 1024, || -> Result<()> {
-            let stmts = parse_block_statements(script)?;
+            let stmts = if is_module {
+                parse_module_block_statements(script)?
+            } else {
+                parse_block_statements(script)?
+            };
             self.with_script_env(|this, env| {
                 let mut event = EventState::new("script", this.dom.root, this.scheduler.now_ms);
                 this.run_in_task_context(|inner| {

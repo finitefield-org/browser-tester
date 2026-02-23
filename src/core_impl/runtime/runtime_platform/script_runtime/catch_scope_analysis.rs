@@ -201,7 +201,7 @@ impl Harness {
                 Self::collect_scope_bindings_from_stmts(body, out);
             }
             Stmt::For { init, body, .. } => {
-                if let Some(init) = init {
+                for init in init {
                     Self::collect_scope_bindings_from_stmt(init, out);
                 }
                 Self::collect_scope_bindings_from_stmts(body, out);

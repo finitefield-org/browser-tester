@@ -1,6 +1,17 @@
 use super::*;
 
 pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
+    parse_block_statements_with_export_flag(body, false)
+}
+
+pub(crate) fn parse_module_block_statements(body: &str) -> Result<Vec<Stmt>> {
+    parse_block_statements_with_export_flag(body, true)
+}
+
+pub(crate) fn parse_block_statements_with_export_flag(
+    body: &str,
+    allow_top_level_export: bool,
+) -> Result<Vec<Stmt>> {
     let sanitized = strip_js_comments(body);
     let raw_stmts = split_top_level_statements(sanitized.as_str());
     let mut stmts = Vec::new();
@@ -27,7 +38,7 @@ pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
                     )));
                 }
 
-                let parsed = parse_single_statement(stmt)?;
+                let parsed = parse_single_statement_with_export_flag(stmt, allow_top_level_export)?;
                 stmts.push(parsed);
             }
         }
@@ -143,7 +154,28 @@ pub(crate) fn attach_else_branch_to_if_chain(stmt: &mut Stmt, else_branch: Vec<S
 }
 
 pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
+    parse_single_statement_with_export_flag(stmt, false)
+}
+
+pub(crate) fn parse_single_statement_with_export_flag(
+    stmt: &str,
+    allow_top_level_export: bool,
+) -> Result<Stmt> {
     let stmt = stmt.trim();
+
+    if let Some(parsed) = parse_empty_stmt(stmt) {
+        return Ok(parsed);
+    }
+
+    if allow_top_level_export {
+        if let Some(parsed) = parse_export_stmt(stmt)? {
+            return Ok(parsed);
+        }
+    } else if starts_with_keyword(stmt, "export") {
+        return Err(Error::ScriptParse(
+            "export declarations may only appear in module scripts".into(),
+        ));
+    }
 
     if let Some(parsed) = parse_if_stmt(stmt)? {
         return Ok(parsed);
@@ -178,6 +210,10 @@ pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_throw_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_debugger_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -301,6 +337,171 @@ pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     Ok(Stmt::Expr(expr))
 }
 
+pub(crate) fn parse_export_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "export") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if cursor.eof() {
+        return Err(Error::ScriptParse(
+            "export statement requires a declaration".into(),
+        ));
+    }
+
+    if cursor.peek() == Some(b'*') {
+        return Err(Error::ScriptParse(
+            "export-from declarations are not supported yet".into(),
+        ));
+    }
+
+    if consume_keyword(&mut cursor, "default") {
+        cursor.skip_ws();
+        let remainder = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+        if remainder.is_empty() {
+            return Err(Error::ScriptParse(
+                "export default requires a value".into(),
+            ));
+        }
+
+        if starts_with_keyword(remainder, "function") || starts_with_keyword(remainder, "async") {
+            if let Ok(Some(parsed)) = parse_function_decl_stmt(remainder) {
+                return Ok(Some(parsed));
+            }
+        }
+        if starts_with_keyword(remainder, "class") {
+            if let Ok(Some(parsed)) = parse_class_decl_stmt(remainder) {
+                return Ok(Some(parsed));
+            }
+        }
+
+        let expr_src = trim_optional_trailing_semicolon(remainder);
+        if expr_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "export default requires a value".into(),
+            ));
+        }
+        return Ok(Some(Stmt::Expr(parse_expr(expr_src)?)));
+    }
+
+    if cursor.peek() == Some(b'{') {
+        let specifier_src = cursor.read_balanced_block(b'{', b'}')?;
+        parse_export_specifier_list(&specifier_src)?;
+        cursor.skip_ws();
+        if consume_keyword(&mut cursor, "from") {
+            return Err(Error::ScriptParse(
+                "export-from declarations are not supported yet".into(),
+            ));
+        }
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported export statement tail: {stmt}"
+            )));
+        }
+        return Ok(Some(Stmt::Empty));
+    }
+
+    let remainder = cursor.src.get(cursor.i..).unwrap_or_default().trim();
+    if remainder.is_empty() {
+        return Err(Error::ScriptParse(
+            "export statement requires a declaration".into(),
+        ));
+    }
+
+    let decl_chunks = split_var_decl_list_statements(remainder);
+    if decl_chunks.len() > 1 {
+        let mut stmts = Vec::with_capacity(decl_chunks.len());
+        for chunk in decl_chunks {
+            let parsed = parse_single_statement_with_export_flag(chunk.trim(), false)?;
+            if !is_exportable_declaration_stmt(&parsed) {
+                return Err(Error::ScriptParse(format!(
+                    "unsupported export declaration: {stmt}"
+                )));
+            }
+            stmts.push(parsed);
+        }
+        return Ok(Some(Stmt::Block { stmts }));
+    }
+
+    let parsed = parse_single_statement_with_export_flag(remainder, false)?;
+    if !is_exportable_declaration_stmt(&parsed) {
+        return Err(Error::ScriptParse(format!(
+            "unsupported export declaration: {stmt}"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
+pub(crate) fn parse_export_specifier_list(src: &str) -> Result<()> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = split_top_level_by_char(src, b',');
+    if parts.len() > 1 && parts.last().is_some_and(|part| part.trim().is_empty()) {
+        parts.pop();
+    }
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(Error::ScriptParse(
+                "export specifier cannot be empty".into(),
+            ));
+        }
+        let mut cursor = Cursor::new(part);
+        cursor.skip_ws();
+        parse_export_specifier_name(&mut cursor, false)?;
+        cursor.skip_ws();
+        if consume_keyword(&mut cursor, "as") {
+            cursor.skip_ws();
+            parse_export_specifier_name(&mut cursor, true)?;
+            cursor.skip_ws();
+        }
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported export specifier: {part}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_export_specifier_name(
+    cursor: &mut Cursor<'_>,
+    allow_string_literal: bool,
+) -> Result<()> {
+    if allow_string_literal && matches!(cursor.peek(), Some(b'"' | b'\'')) {
+        let _ = cursor.parse_string_literal()?;
+        return Ok(());
+    }
+
+    if cursor.parse_identifier().is_none() {
+        return Err(Error::ScriptParse("invalid export specifier name".into()));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_exportable_declaration_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::VarDecl { .. }
+            | Stmt::FunctionDecl { .. }
+            | Stmt::ClassDecl { .. }
+            | Stmt::ArrayDestructureAssign {
+                decl_kind: Some(_),
+                ..
+            }
+            | Stmt::ObjectDestructureAssign {
+                decl_kind: Some(_),
+                ..
+            }
+    )
+}
+
 pub(crate) fn parse_labeled_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -390,7 +591,7 @@ pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
 
     let single = trim_optional_trailing_semicolon(src);
     if single.is_empty() {
-        return Err(Error::ScriptParse("empty single statement branch".into()));
+        return Ok(vec![Stmt::Empty]);
     }
     let parsed = parse_single_statement(single)?;
     if matches!(
@@ -405,6 +606,21 @@ pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
         ));
     }
     Ok(vec![parsed])
+}
+
+pub(crate) fn parse_empty_stmt(stmt: &str) -> Option<Stmt> {
+    let stmt = stmt.trim();
+    if stmt == ";" {
+        Some(Stmt::Empty)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn starts_with_keyword(src: &str, keyword: &str) -> bool {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    consume_keyword(&mut cursor, keyword)
 }
 
 pub(crate) fn trim_optional_trailing_semicolon(src: &str) -> &str {
@@ -562,39 +778,73 @@ pub(crate) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     cursor.skip_ws();
-    let body_src = cursor.read_balanced_block(b'{', b'}')?;
-    let body = vec![Stmt::Block {
-        stmts: parse_block_statements(&body_src)?,
-    }];
-
-    cursor.skip_ws();
-    if !cursor.consume_ascii("while") {
-        return Err(Error::ScriptParse(format!(
-            "unsupported do statement: {stmt}"
-        )));
-    }
-    if let Some(next) = cursor.peek() {
-        if is_ident_char(next) {
-            return Err(Error::ScriptParse(format!(
-                "unsupported do statement: {stmt}"
-            )));
+    let remainder = cursor.src.get(cursor.i..).unwrap_or_default();
+    let while_positions = find_top_level_keyword_positions(remainder, "while");
+    for while_pos in while_positions {
+        let Some(body_src) = remainder.get(..while_pos) else {
+            continue;
+        };
+        let body_src = body_src.trim();
+        if body_src.is_empty() {
+            continue;
         }
+        let Ok(body) = parse_if_branch(body_src) else {
+            continue;
+        };
+
+        let Some(while_src) = remainder.get(while_pos..) else {
+            continue;
+        };
+        let mut while_cursor = Cursor::new(while_src);
+        while_cursor.skip_ws();
+        if !consume_keyword(&mut while_cursor, "while") {
+            continue;
+        }
+        while_cursor.skip_ws();
+        let Ok(cond_src) = while_cursor.read_balanced_block(b'(', b')') else {
+            continue;
+        };
+        let Ok(cond) = parse_expr(cond_src.trim()) else {
+            continue;
+        };
+        while_cursor.skip_ws();
+        while_cursor.consume_byte(b';');
+        while_cursor.skip_ws();
+        if !while_cursor.eof() {
+            continue;
+        }
+        return Ok(Some(Stmt::DoWhile { cond, body }));
     }
 
-    cursor.skip_ws();
-    let cond_src = cursor.read_balanced_block(b'(', b')')?;
-    let cond = parse_expr(cond_src.trim())?;
+    Err(Error::ScriptParse(format!(
+        "unsupported do statement: {stmt}"
+    )))
+}
 
-    cursor.skip_ws();
-    cursor.consume_byte(b';');
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported do while statement tail: {stmt}"
-        )));
+pub(crate) fn find_top_level_keyword_positions(src: &str, keyword: &str) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let bytes = src.as_bytes();
+    let keyword_bytes = keyword.as_bytes();
+    if keyword_bytes.is_empty() || bytes.len() < keyword_bytes.len() {
+        return positions;
     }
 
-    Ok(Some(Stmt::DoWhile { cond, body }))
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+    while i < bytes.len() {
+        if scanner.is_top_level()
+            && bytes[i] == keyword_bytes[0]
+            && i + keyword_bytes.len() <= bytes.len()
+            && &bytes[i..i + keyword_bytes.len()] == keyword_bytes
+            && (i == 0 || !is_ident_char(bytes[i - 1]))
+            && (i + keyword_bytes.len() == bytes.len()
+                || !is_ident_char(bytes[i + keyword_bytes.len()]))
+        {
+            positions.push(i);
+        }
+        i = scanner.advance(bytes, i);
+    }
+    positions
 }
 
 pub(crate) fn consume_keyword(cursor: &mut Cursor<'_>, keyword: &str) -> bool {
@@ -744,6 +994,25 @@ pub(crate) fn parse_return_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Return { value: Some(value) }))
 }
 
+pub(crate) fn parse_debugger_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "debugger") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported debugger statement: {stmt}"
+        )));
+    }
+
+    Ok(Some(Stmt::Debugger))
+}
+
 pub(crate) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
@@ -825,46 +1094,48 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     let header_src = cursor.read_balanced_block(b'(', b')')?;
-    if let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(&header_src)? {
-        let iterable = parse_expr(iterable_src.trim())?;
-        cursor.skip_ws();
-        let body_raw = cursor.src.get(cursor.i..).unwrap_or_default().trim();
-        if body_raw.is_empty() {
-            return Err(Error::ScriptParse(format!(
-                "for statement has no body: {stmt}"
-            )));
-        }
-        let body = parse_if_branch(body_raw)?;
+    let header_src = header_src.trim();
+    let header_parts = split_top_level_by_char(header_src, b';');
 
-        let stmt = match kind {
+    let parsed_for = if header_parts.len() == 3 {
+        let init = parse_for_clause_stmts(header_parts[0])?;
+        let cond = if header_parts[1].trim().is_empty() {
+            None
+        } else {
+            Some(parse_expr(header_parts[1].trim())?)
+        };
+        let post = parse_for_clause_stmts(header_parts[2])?;
+
+        Stmt::For {
+            init,
+            cond,
+            post,
+            body: Vec::new(),
+        }
+    } else if header_parts.len() == 1 {
+        let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
+            return Err(Error::ScriptParse(format!(
+                "unsupported for statement: {stmt}"
+            )));
+        };
+        let iterable = parse_expr(iterable_src.trim())?;
+        match kind {
             ForInOfKind::In => Stmt::ForIn {
                 item_var,
                 iterable,
-                body,
+                body: Vec::new(),
             },
             ForInOfKind::Of => Stmt::ForOf {
                 item_var,
                 iterable,
-                body,
+                body: Vec::new(),
             },
-        };
-        return Ok(Some(stmt));
-    }
-
-    let header_parts = split_top_level_by_char(header_src.trim(), b';');
-    if header_parts.len() != 3 {
+        }
+    } else {
         return Err(Error::ScriptParse(format!(
             "unsupported for statement: {stmt}"
         )));
-    }
-
-    let init = parse_for_clause_stmt(header_parts[0])?;
-    let cond = if header_parts[1].trim().is_empty() {
-        None
-    } else {
-        Some(parse_expr(header_parts[1].trim())?)
     };
-    let post = parse_for_clause_stmt(header_parts[2])?;
 
     cursor.skip_ws();
     let body_raw = cursor.src.get(cursor.i..).unwrap_or_default().trim();
@@ -875,12 +1146,32 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
     let body = parse_if_branch(body_raw)?;
 
-    Ok(Some(Stmt::For {
-        init,
-        cond,
-        post,
-        body,
-    }))
+    let stmt = match parsed_for {
+        Stmt::For {
+            init, cond, post, ..
+        } => Stmt::For {
+            init,
+            cond,
+            post,
+            body,
+        },
+        Stmt::ForIn {
+            item_var, iterable, ..
+        } => Stmt::ForIn {
+            item_var,
+            iterable,
+            body,
+        },
+        Stmt::ForOf {
+            item_var, iterable, ..
+        } => Stmt::ForOf {
+            item_var,
+            iterable,
+            body,
+        },
+        _ => unreachable!(),
+    };
+    Ok(Some(stmt))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -976,27 +1267,72 @@ pub(crate) fn parse_for_in_of_var(raw: &str) -> Result<String> {
     Ok(name)
 }
 
-pub(crate) fn parse_for_clause_stmt(src: &str) -> Result<Option<Box<Stmt>>> {
+pub(crate) fn parse_for_clause_stmts(src: &str) -> Result<Vec<Stmt>> {
     let src = src.trim();
     if src.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
-    if let Some(parsed) = parse_var_decl(src)? {
-        return Ok(Some(Box::new(parsed)));
+    for keyword in ["const", "let", "var"] {
+        let Some(after) = src.strip_prefix(keyword) else {
+            continue;
+        };
+        if after.as_bytes().first().is_some_and(|b| is_ident_char(*b)) {
+            continue;
+        }
+        let rest = after.trim_start();
+        if rest.is_empty() {
+            return Err(Error::ScriptParse(format!(
+                "unsupported for-loop clause: {src}"
+            )));
+        }
+        let parts = split_top_level_by_char(rest, b',');
+        if parts.iter().any(|part| part.trim().is_empty()) {
+            return Err(Error::ScriptParse(format!(
+                "unsupported for-loop clause: {src}"
+            )));
+        }
+
+        let mut out = Vec::with_capacity(parts.len());
+        for part in parts {
+            let decl_src = format!("{keyword} {}", part.trim());
+            let Some(parsed) = parse_var_decl(&decl_src)? else {
+                return Err(Error::ScriptParse(format!(
+                    "unsupported for-loop clause: {src}"
+                )));
+            };
+            out.push(parsed);
+        }
+        return Ok(out);
     }
 
-    if let Some(parsed) = parse_var_assign(src)? {
-        return Ok(Some(Box::new(parsed)));
+    let parts = split_top_level_by_char(src, b',');
+    if parts.iter().any(|part| part.trim().is_empty()) {
+        return Err(Error::ScriptParse(format!(
+            "unsupported for-loop clause: {src}"
+        )));
     }
 
-    if let Some(parsed) = parse_for_update_stmt(src) {
-        return Ok(Some(Box::new(parsed)));
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        let part = part.trim();
+
+        if let Some(parsed) = parse_var_assign(part)? {
+            out.push(parsed);
+            continue;
+        }
+
+        if let Some(parsed) = parse_for_update_stmt(part) {
+            out.push(parsed);
+            continue;
+        }
+
+        let expr = parse_expr(part)
+            .map_err(|_| Error::ScriptParse(format!("unsupported for-loop clause: {src}")))?;
+        out.push(Stmt::Expr(expr));
     }
 
-    let expr = parse_expr(src)
-        .map_err(|_| Error::ScriptParse(format!("unsupported for-loop clause: {src}")))?;
-    Ok(Some(Box::new(Stmt::Expr(expr))))
+    Ok(out)
 }
 
 pub(crate) fn parse_for_update_stmt(src: &str) -> Option<Stmt> {
