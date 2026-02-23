@@ -1,6 +1,74 @@
 use super::*;
 
 impl Harness {
+    fn direct_decl_names_for_catch_conflict(stmt: &Stmt) -> Vec<(String, bool)> {
+        match stmt {
+            Stmt::ImportDecl {
+                default_binding,
+                namespace_binding,
+                named_bindings,
+                ..
+            } => {
+                let mut out = Vec::new();
+                if let Some(name) = default_binding {
+                    out.push((name.clone(), false));
+                }
+                if let Some(name) = namespace_binding {
+                    out.push((name.clone(), false));
+                }
+                out.extend(
+                    named_bindings
+                        .iter()
+                        .map(|binding| (binding.local.clone(), false)),
+                );
+                out
+            }
+            Stmt::VarDecl { name, kind, .. } => {
+                vec![(name.clone(), matches!(kind, VarDeclKind::Var))]
+            }
+            Stmt::FunctionDecl { name, .. } => vec![(name.clone(), false)],
+            Stmt::ClassDecl { name, .. } => vec![(name.clone(), false)],
+            Stmt::ExportDecl { declaration, .. } => {
+                Self::direct_decl_names_for_catch_conflict(declaration)
+            }
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(kind),
+                ..
+            } => {
+                let is_var = matches!(kind, VarDeclKind::Var);
+                targets
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .map(|name| (name, is_var))
+                    .collect()
+            }
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(kind),
+                ..
+            } => {
+                let is_var = matches!(kind, VarDeclKind::Var);
+                bindings
+                    .iter()
+                    .map(|(_, target)| (target.clone(), is_var))
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn catch_binding_names(binding: &CatchBinding) -> HashSet<String> {
+        match binding {
+            CatchBinding::Identifier(name) => HashSet::from([name.clone()]),
+            CatchBinding::ArrayPattern(pattern) => pattern.iter().flatten().cloned().collect(),
+            CatchBinding::ObjectPattern(pattern) => {
+                pattern.iter().map(|(_, target)| target.clone()).collect()
+            }
+        }
+    }
+
     pub(crate) fn error_to_catch_value(err: Error) -> std::result::Result<Value, Error> {
         match err {
             Error::ScriptThrown(value) => Ok(value.into_value()),
@@ -90,6 +158,34 @@ impl Harness {
         } else {
             Vec::new()
         };
+        if let Some(binding) = catch_binding {
+            let direct_scope_stmts = match catch_stmts {
+                [Stmt::Block { stmts }] => stmts.as_slice(),
+                _ => catch_stmts,
+            };
+            let occupied_names = Self::catch_binding_names(binding);
+            let allow_var_shadow_for_simple_identifier =
+                matches!(binding, CatchBinding::Identifier(_));
+            let simple_identifier_name = match binding {
+                CatchBinding::Identifier(name) => Some(name.as_str()),
+                _ => None,
+            };
+            for stmt in direct_scope_stmts {
+                for (name, is_var_decl) in Self::direct_decl_names_for_catch_conflict(stmt) {
+                    if allow_var_shadow_for_simple_identifier
+                        && is_var_decl
+                        && Some(name.as_str()) == simple_identifier_name
+                    {
+                        continue;
+                    }
+                    if occupied_names.contains(&name) {
+                        return Err(Error::ScriptRuntime(format!(
+                            "Identifier '{name}' has already been declared"
+                        )));
+                    }
+                }
+            }
+        }
         let result = self.execute_stmts(catch_stmts, event_param, event, env);
         self.restore_catch_binding(previous, env);
         result
@@ -246,6 +342,11 @@ impl Harness {
             }
             Stmt::DoWhile { body, .. } | Stmt::While { body, .. } => {
                 Self::collect_scope_bindings_from_stmts(body, out);
+            }
+            Stmt::Switch { clauses, .. } => {
+                for clause in clauses {
+                    Self::collect_scope_bindings_from_stmts(&clause.stmts, out);
+                }
             }
             Stmt::Try {
                 try_stmts,

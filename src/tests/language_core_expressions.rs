@@ -418,6 +418,121 @@ fn while_loop_break_exits_loop() -> Result<()> {
 }
 
 #[test]
+fn while_loop_basic_accumulation_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 0;
+            let x = 0;
+            while (n < 3) {
+              n += 1;
+              x += n;
+            }
+            document.getElementById('result').textContent = String(n) + ':' + String(x);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3:6")?;
+    Ok(())
+}
+
+#[test]
+fn while_loop_continue_rechecks_condition() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            let n = 0;
+            while (i < 5) {
+              i += 1;
+              if (i === 3) {
+                continue;
+              }
+              n += i;
+            }
+            document.getElementById('result').textContent = String(n);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "12")?;
+    Ok(())
+}
+
+#[test]
+fn while_loop_supports_single_statement_body_without_block() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let n = 0;
+            while (n < 3) n += 1;
+            document.getElementById('result').textContent = String(n);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn while_loop_supports_empty_statement_body() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            function next() {
+              i += 1;
+              return i < 4;
+            }
+            while (next());
+            document.getElementById('result').textContent = String(i);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "4")?;
+    Ok(())
+}
+
+#[test]
+fn while_statement_requires_a_body() {
+    match Harness::from_html("<script>while (true)</script>") {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("while statement has no body")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("while without body should fail"),
+    }
+}
+
+#[test]
+fn while_single_statement_lexical_declaration_is_rejected() {
+    match Harness::from_html("<script>while (false) let x = 1;</script>") {
+        Err(Error::ScriptParse(msg)) => {
+            assert!(msg.contains("lexical declaration cannot appear in a single-statement context"))
+        }
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("while with lexical declaration single body should fail"),
+    }
+}
+
+#[test]
 fn for_loop_allows_empty_statement_body() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -816,6 +931,222 @@ fn do_while_continue_rechecks_condition() -> Result<()> {
 }
 
 #[test]
+fn switch_matches_case_and_supports_grouped_labels() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const expr = 'Papayas';
+            let out = '';
+            switch (expr) {
+              case 'Oranges':
+                out = 'oranges';
+                break;
+              case 'Mangoes':
+              case 'Papayas':
+                out = 'tropical';
+                break;
+              default:
+                out = 'default';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "tropical")?;
+    Ok(())
+}
+
+#[test]
+fn switch_fallthrough_and_default_in_middle_follow_js_order() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let first = '';
+            switch (0) {
+              case -1:
+                first += 'n';
+                break;
+              case 0:
+                first += '0';
+              case 1:
+                first += '1';
+                break;
+              default:
+                first += 'd';
+            }
+
+            let second = '';
+            switch (5) {
+              case 2:
+                second += '2';
+                break;
+              default:
+                second += 'd';
+              case 1:
+                second += '1';
+            }
+
+            document.getElementById('result').textContent = first + ':' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "01:d1")?;
+    Ok(())
+}
+
+#[test]
+fn switch_evaluates_case_expressions_lazily_after_match() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            result.setAttribute('data-log', '');
+
+            switch (undefined) {
+              case result.setAttribute('data-log', result.getAttribute('data-log') + '1'):
+                result.setAttribute('data-log', result.getAttribute('data-log') + 'm');
+                break;
+              case result.setAttribute('data-log', result.getAttribute('data-log') + '2'):
+                result.setAttribute('data-log', result.getAttribute('data-log') + 'n');
+                break;
+              default:
+                result.setAttribute('data-log', result.getAttribute('data-log') + 'd');
+            }
+
+            result.textContent = result.getAttribute('data-log');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1m")?;
+    Ok(())
+}
+
+#[test]
+fn switch_uses_strict_equality_for_case_matching() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            switch (1) {
+              case '1':
+                out = 'string';
+                break;
+              case 1:
+                out = 'number';
+                break;
+              default:
+                out = 'default';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "number")?;
+    Ok(())
+}
+
+#[test]
+fn switch_break_and_continue_interact_with_enclosing_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            for (let i = 0; i < 3; i++) {
+              switch (i) {
+                case 1:
+                  continue;
+                case 2:
+                  break;
+                default:
+                  out += String(i);
+              }
+              out += 'x';
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0xx")?;
+    Ok(())
+}
+
+#[test]
+fn switch_labeled_break_exits_labeled_statement() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            outer: switch (1) {
+              case 1:
+                out += 'a';
+                break outer;
+              default:
+                out += 'b';
+            }
+            out += 'c';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ac")?;
+    Ok(())
+}
+
+#[test]
+fn switch_rejects_multiple_default_clauses() {
+    let err = Harness::from_html(
+        "<script>switch (1) { default: break; case 1: break; default: break; }</script>",
+    )
+    .expect_err("switch with duplicate default should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("multiple default")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn switch_case_lexical_declarations_share_one_scope() {
+    let err = Harness::from_html(
+        "<script>switch (1) { case 1: let message = 'hello'; break; case 2: let message = 'hi'; break; }</script>",
+    )
+    .expect_err("switch case lexical declarations should share one scope");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("already been declared")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn labeled_break_exits_target_block() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1136,6 +1467,47 @@ fn function_declaration_returns_undefined_without_return_statement() -> Result<(
     h.click("#btn")?;
     h.assert_text("#result", "undefined")?;
     Ok(())
+}
+
+#[test]
+fn return_statement_with_line_terminator_uses_asi() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function viaAsi() {
+              return
+              123;
+            }
+            document.getElementById('result').textContent =
+              typeof viaAsi() + ':' + String(viaAsi() === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:true")?;
+    Ok(())
+}
+
+#[test]
+fn return_statement_at_script_top_level_is_rejected() {
+    match Harness::from_html("<script>return 1;</script>") {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("Illegal return statement")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("top-level return should be rejected"),
+    }
+}
+
+#[test]
+fn return_statement_nested_in_top_level_block_is_rejected() {
+    match Harness::from_html("<script>if (true) { return 1; }</script>") {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("Illegal return statement")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("nested top-level return should be rejected"),
+    }
 }
 
 #[test]
@@ -1737,6 +2109,91 @@ fn var_declared_inside_block_updates_containing_scope() -> Result<()> {
 }
 
 #[test]
+fn var_is_hoisted_and_reads_as_undefined_before_initializer() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function readBeforeInit() {
+              const beforeType = typeof bar;
+              const beforeIsUndefined = String(bar === undefined);
+              var bar = 111;
+              return beforeType + ':' + beforeIsUndefined + ':' + String(bar);
+            }
+            document.getElementById('result').textContent = readBeforeInit();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:true:111")?;
+    Ok(())
+}
+
+#[test]
+fn var_redeclaration_without_initializer_preserves_existing_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            var a = 2;
+            var a;
+            document.getElementById('result').textContent = String(a);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn var_in_unexecuted_branch_is_still_hoisted() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            if (false) {
+              var hidden = 1;
+            }
+            document.getElementById('result').textContent =
+              typeof hidden + ':' + String(hidden === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:true")?;
+    Ok(())
+}
+
+#[test]
+fn var_initializer_can_read_later_var_as_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            var x = y, y = 'A';
+            document.getElementById('result').textContent = String(x) + ':' + y;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:A")?;
+    Ok(())
+}
+
+#[test]
 fn let_declared_inside_block_does_not_override_outer_binding() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1935,6 +2392,117 @@ fn catch_without_binding_and_pattern_binding_work() -> Result<()> {
 }
 
 #[test]
+fn catch_binding_is_writable_and_does_not_leak_outside_catch_scope() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let error = 'outer';
+            let out = '';
+            try {
+              throw 'inner';
+            } catch (error) {
+              error = error + '!';
+              out = error;
+            }
+            document.getElementById('result').textContent = out + ':' + error;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "inner!:outer")?;
+    Ok(())
+}
+
+#[test]
+fn catch_binding_name_conflicts_with_var_and_const_declarations() {
+    match Harness::from_html(
+        "<script>try { throw {name:'x'}; } catch ({ name }) { var name = 'y'; }</script>",
+    ) {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("already been declared")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("catch binding conflict with var should fail"),
+    }
+
+    match Harness::from_html(
+        "<script>try { throw {name:'x'}; } catch ({ name }) { const name = 'y'; }</script>",
+    ) {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("already been declared")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("catch binding conflict with const should fail"),
+    }
+}
+
+#[test]
+fn var_can_share_name_with_simple_catch_identifier_binding() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            try {
+              throw 'boom';
+            } catch (e) {
+              var e = 2;
+            }
+            document.getElementById('result').textContent =
+              typeof e + ':' + String(e === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:true")?;
+    Ok(())
+}
+
+#[test]
+fn try_requires_block_body_and_catch_or_finally() {
+    match Harness::from_html("<script>try doSomething(); catch (e) {}</script>") {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("expected '{'")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("try without block body should fail"),
+    }
+
+    match Harness::from_html("<script>try {}</script>") {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("requires catch or finally")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("try without catch/finally should fail"),
+    }
+}
+
+#[test]
+fn finally_return_masks_throw_from_catch() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function doIt() {
+            try {
+              throw 'boom';
+            } catch (e) {
+              throw e;
+            } finally {
+              return 'masked';
+            }
+          }
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = doIt();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "masked")?;
+    Ok(())
+}
+
+#[test]
 fn throw_new_error_is_supported() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1954,6 +2522,64 @@ fn throw_new_error_is_supported() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
+    h.assert_text("#result", "boom")?;
+    Ok(())
+}
+
+#[test]
+fn throw_statement_with_line_terminator_is_rejected() {
+    let html = r#"
+        <script>
+          function fail() {
+            throw
+            new Error('boom');
+          }
+          fail();
+        </script>
+        "#;
+
+    match Harness::from_html(html) {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("throw statement requires an operand")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("throw with newline should be rejected"),
+    }
+}
+
+#[test]
+fn throw_statement_with_line_comment_then_line_terminator_is_rejected() {
+    let html = r#"
+        <script>
+          function fail() {
+            throw // force ASI
+            new Error('boom');
+          }
+          fail();
+        </script>
+        "#;
+
+    match Harness::from_html(html) {
+        Err(Error::ScriptParse(msg)) => assert!(msg.contains("throw statement requires an operand")),
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("throw with line-comment terminator should be rejected"),
+    }
+}
+
+#[test]
+fn throw_statement_allows_parenthesized_expression() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          try {
+            throw (
+              new Error('boom')
+            );
+          } catch (e) {
+            document.getElementById('result').textContent = String(e);
+          }
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
     h.assert_text("#result", "boom")?;
     Ok(())
 }
@@ -3327,4 +3953,91 @@ fn const_object_destructuring_respects_block_scope() -> Result<()> {
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "1")?;
     Ok(())
+}
+
+#[test]
+fn let_declaration_list_supports_initializer_dependencies() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a = 1, b = a + 1, c = b + 1;
+          document.getElementById('result').textContent = `${a}:${b}:${c}`;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:2:3")?;
+    Ok(())
+}
+
+#[test]
+fn let_reassignment_is_allowed() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let value = 1;
+          value = value + 2;
+          document.getElementById('result').textContent = String(value);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn let_redeclaration_in_same_scope_is_rejected() {
+    match Harness::from_html("<script>let value = 1; let value = 2;</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("already been declared")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("let redeclaration should fail"),
+    }
+}
+
+#[test]
+fn let_in_tdz_throws_before_initialization() {
+    match Harness::from_html("<script>{ foo; let foo = 2; }</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("accessing let before initialization should fail"),
+    }
+}
+
+#[test]
+fn typeof_let_in_tdz_throws() {
+    match Harness::from_html("<script>{ typeof i; let i = 10; }</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("typeof in TDZ should fail"),
+    }
+}
+
+#[test]
+fn let_initializer_cannot_reference_shadowed_outer_binding() {
+    match Harness::from_html(
+        "<script>function test(){ var foo = 33; if (foo) { let foo = foo + 55; } } test();</script>",
+    ) {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("let initializer should not read shadowed outer binding"),
+    }
+}
+
+#[test]
+fn let_declaration_cannot_share_name_with_function_parameter() {
+    match Harness::from_html("<script>function foo(a){ let a = 1; } foo(2);</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("already been declared")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("let declaration and parameter name collision should fail"),
+    }
+}
+
+#[test]
+fn let_declaration_cannot_share_name_with_catch_binding() {
+    match Harness::from_html("<script>try { throw 1; } catch (e) { let e = 2; }</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("already been declared")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("let declaration and catch binding collision should fail"),
+    }
 }

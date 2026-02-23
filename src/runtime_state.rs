@@ -594,6 +594,12 @@ pub(crate) enum ModuleExportBinding {
     Value(Value),
 }
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TdzScopeFrame {
+    pub(crate) declared: HashSet<String>,
+    pub(crate) pending: HashSet<String>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ScriptRuntimeState {
     pub(crate) env: ScriptEnv,
@@ -602,6 +608,7 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) generator_yield_stack: Vec<Rc<RefCell<Vec<Value>>>>,
     pub(crate) pending_loop_labels: Vec<Vec<String>>,
     pub(crate) loop_label_stack: Vec<HashSet<String>>,
+    pub(crate) tdz_scope_stack: Vec<TdzScopeFrame>,
     pub(crate) module_export_stack: Vec<Rc<RefCell<HashMap<String, ModuleExportBinding>>>>,
     pub(crate) module_referrer_stack: Vec<String>,
     pub(crate) module_cache: HashMap<String, HashMap<String, Value>>,

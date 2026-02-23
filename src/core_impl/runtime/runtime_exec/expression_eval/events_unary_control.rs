@@ -129,12 +129,13 @@ impl Harness {
             },
             Expr::TypeOf(inner) => {
                 let js_type = match inner.as_ref() {
-                    Expr::Var(name) => env
-                        .get(name)
-                        .cloned()
-                        .or_else(|| self.resolve_pending_function_decl(name, env))
-                        .as_ref()
-                        .map_or("undefined", |value| match value {
+                    Expr::Var(name) => {
+                        self.ensure_binding_initialized(env, name)?;
+                        env.get(name)
+                            .cloned()
+                            .or_else(|| self.resolve_pending_function_decl(name, env))
+                            .as_ref()
+                            .map_or("undefined", |value| match value {
                             Value::Null => "object",
                             Value::Bool(_) => "boolean",
                             Value::Number(_) | Value::Float(_) => "number",
@@ -171,7 +172,8 @@ impl Harness {
                             | Value::TypedArray(_)
                             | Value::RegExp(_)
                             | Value::Date(_) => "object",
-                        }),
+                        })
+                    }
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
                         match value {

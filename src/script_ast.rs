@@ -1007,6 +1007,12 @@ pub(crate) struct ClassMethodDecl {
     pub(crate) is_generator: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SwitchClause {
+    pub(crate) test: Option<Expr>,
+    pub(crate) stmts: Vec<Stmt>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportBinding {
     pub(crate) imported: String,
@@ -1188,6 +1194,10 @@ pub(crate) enum Stmt {
     DoWhile {
         cond: Expr,
         body: Vec<Stmt>,
+    },
+    Switch {
+        expr: Expr,
+        clauses: Vec<SwitchClause>,
     },
     Empty,
     Debugger,

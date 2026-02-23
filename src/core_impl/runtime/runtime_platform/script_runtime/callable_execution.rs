@@ -656,6 +656,13 @@ impl Harness {
                         &event_param,
                         &call_event,
                     )?;
+                    let param_names = function
+                        .handler
+                        .params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect::<HashSet<_>>();
+                    this.ensure_no_direct_let_redeclarations(&function.handler.stmts, &param_names)?;
                     let yield_collector = if function.is_generator {
                         Some(Rc::new(RefCell::new(Vec::new())))
                     } else {

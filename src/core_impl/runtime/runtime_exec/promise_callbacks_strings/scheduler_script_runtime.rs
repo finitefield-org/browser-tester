@@ -1,6 +1,68 @@
 use super::*;
 
 impl Harness {
+    fn stmt_has_illegal_top_level_return(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Return { .. } => true,
+            Stmt::ExportDecl { declaration, .. } => {
+                Self::stmt_has_illegal_top_level_return(declaration.as_ref())
+            }
+            Stmt::Label { stmt, .. } => Self::stmt_has_illegal_top_level_return(stmt.as_ref()),
+            Stmt::Block { stmts } => Self::has_illegal_top_level_return(stmts),
+            Stmt::For { init, post, body, .. } => {
+                Self::has_illegal_top_level_return(init)
+                    || Self::has_illegal_top_level_return(post)
+                    || Self::has_illegal_top_level_return(body)
+            }
+            Stmt::ForEach { body, .. }
+            | Stmt::ClassListForEach { body, .. }
+            | Stmt::ForIn { body, .. }
+            | Stmt::ForOf { body, .. }
+            | Stmt::ForAwaitOf { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::While { body, .. } => Self::has_illegal_top_level_return(body),
+            Stmt::Switch { clauses, .. } => clauses
+                .iter()
+                .any(|clause| Self::has_illegal_top_level_return(&clause.stmts)),
+            Stmt::Try {
+                try_stmts,
+                catch_stmts,
+                finally_stmts,
+                ..
+            } => {
+                Self::has_illegal_top_level_return(try_stmts)
+                    || catch_stmts
+                        .as_ref()
+                        .is_some_and(|stmts| Self::has_illegal_top_level_return(stmts))
+                    || finally_stmts
+                        .as_ref()
+                        .is_some_and(|stmts| Self::has_illegal_top_level_return(stmts))
+            }
+            Stmt::If {
+                then_stmts,
+                else_stmts,
+                ..
+            } => {
+                Self::has_illegal_top_level_return(then_stmts)
+                    || Self::has_illegal_top_level_return(else_stmts)
+            }
+            _ => false,
+        }
+    }
+
+    fn has_illegal_top_level_return(stmts: &[Stmt]) -> bool {
+        stmts
+            .iter()
+            .any(|stmt| Self::stmt_has_illegal_top_level_return(stmt))
+    }
+
+    fn ensure_no_illegal_top_level_return(stmts: &[Stmt]) -> Result<()> {
+        if Self::has_illegal_top_level_return(stmts) {
+            return Err(Error::ScriptParse("Illegal return statement".into()));
+        }
+        Ok(())
+    }
+
     pub(crate) fn value_to_i64(value: &Value) -> i64 {
         match value {
             Value::Number(v) => *v,
@@ -163,6 +225,7 @@ impl Harness {
             } else {
                 parse_block_statements(script)?
             };
+            Self::ensure_no_illegal_top_level_return(&stmts)?;
             if is_module {
                 self.script_runtime
                     .module_referrer_stack
@@ -264,6 +327,7 @@ impl Harness {
             }
 
             let stmts = parse_module_block_statements(&source)?;
+            Self::ensure_no_illegal_top_level_return(&stmts)?;
             let export_collector = Rc::new(RefCell::new(HashMap::new()));
             self.script_runtime
                 .module_export_stack

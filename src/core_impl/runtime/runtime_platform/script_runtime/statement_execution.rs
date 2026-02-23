@@ -74,6 +74,208 @@ impl Harness {
         }
     }
 
+    fn direct_tdz_binding_names(stmt: &Stmt) -> Vec<String> {
+        match stmt {
+            Stmt::VarDecl {
+                name,
+                kind: VarDeclKind::Let | VarDeclKind::Const,
+                ..
+            } => vec![name.clone()],
+            Stmt::ClassDecl { name, .. } => vec![name.clone()],
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(VarDeclKind::Let | VarDeclKind::Const),
+                ..
+            } => targets.iter().flatten().cloned().collect(),
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(VarDeclKind::Let | VarDeclKind::Const),
+                ..
+            } => bindings.iter().map(|(_, target)| target.clone()).collect(),
+            Stmt::ExportDecl { declaration, .. } => Self::direct_tdz_binding_names(declaration),
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_direct_tdz_binding_names(stmts: &[Stmt]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for stmt in stmts {
+            out.extend(Self::direct_tdz_binding_names(stmt));
+        }
+        out
+    }
+
+    fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for stmt in stmts {
+            Self::collect_var_declared_names_from_stmt(stmt, &mut out);
+        }
+        out
+    }
+
+    fn collect_var_declared_names_from_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+        match stmt {
+            Stmt::VarDecl {
+                name,
+                kind: VarDeclKind::Var,
+                ..
+            } => {
+                out.insert(name.clone());
+            }
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(VarDeclKind::Var),
+                ..
+            } => {
+                for name in targets.iter().flatten() {
+                    out.insert(name.clone());
+                }
+            }
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(VarDeclKind::Var),
+                ..
+            } => {
+                for (_, target) in bindings {
+                    out.insert(target.clone());
+                }
+            }
+            Stmt::ExportDecl { declaration, .. } => {
+                Self::collect_var_declared_names_from_stmt(declaration, out);
+            }
+            Stmt::Label { stmt, .. } => {
+                Self::collect_var_declared_names_from_stmt(stmt, out);
+            }
+            Stmt::Block { stmts } => {
+                for stmt in stmts {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+            }
+            Stmt::For {
+                init, post, body, ..
+            } => {
+                for stmt in init {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+                for stmt in post {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+                for stmt in body {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+            }
+            Stmt::ForEach { body, .. }
+            | Stmt::ClassListForEach { body, .. }
+            | Stmt::ForIn { body, .. }
+            | Stmt::ForOf { body, .. }
+            | Stmt::ForAwaitOf { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::While { body, .. } => {
+                for stmt in body {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+            }
+            Stmt::Switch { clauses, .. } => {
+                for clause in clauses {
+                    for stmt in &clause.stmts {
+                        Self::collect_var_declared_names_from_stmt(stmt, out);
+                    }
+                }
+            }
+            Stmt::Try {
+                try_stmts,
+                catch_stmts,
+                finally_stmts,
+                ..
+            } => {
+                for stmt in try_stmts {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+                if let Some(catch_stmts) = catch_stmts {
+                    for stmt in catch_stmts {
+                        Self::collect_var_declared_names_from_stmt(stmt, out);
+                    }
+                }
+                if let Some(finally_stmts) = finally_stmts {
+                    for stmt in finally_stmts {
+                        Self::collect_var_declared_names_from_stmt(stmt, out);
+                    }
+                }
+            }
+            Stmt::If {
+                then_stmts,
+                else_stmts,
+                ..
+            } => {
+                for stmt in then_stmts {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+                for stmt in else_stmts {
+                    Self::collect_var_declared_names_from_stmt(stmt, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn hoist_var_declarations(
+        &mut self,
+        stmts: &[Stmt],
+        env: &mut HashMap<String, Value>,
+    ) {
+        let mut names = Self::collect_var_declared_names(stmts)
+            .into_iter()
+            .collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            if env.contains_key(&name) {
+                continue;
+            }
+            env.insert(name.clone(), Value::Undefined);
+            self.set_const_binding(env, &name, false);
+            self.sync_global_binding_if_needed(env, &name, &Value::Undefined);
+        }
+    }
+
+    fn direct_let_decl_names(stmt: &Stmt) -> Vec<String> {
+        match stmt {
+            Stmt::VarDecl {
+                name,
+                kind: VarDeclKind::Let,
+                ..
+            } => vec![name.clone()],
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(VarDeclKind::Let),
+                ..
+            } => targets.iter().flatten().cloned().collect(),
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(VarDeclKind::Let),
+                ..
+            } => bindings.iter().map(|(_, target)| target.clone()).collect(),
+            Stmt::ExportDecl { declaration, .. } => Self::direct_let_decl_names(declaration),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(crate) fn ensure_no_direct_let_redeclarations(
+        &self,
+        stmts: &[Stmt],
+        occupied_names: &HashSet<String>,
+    ) -> Result<()> {
+        for stmt in stmts {
+            for name in Self::direct_let_decl_names(stmt) {
+                if occupied_names.contains(&name) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "Identifier '{name}' has already been declared"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_const_redeclarations(stmts: &[Stmt]) -> Result<()> {
         let mut lexical = HashSet::new();
         let mut var_like = HashSet::new();
@@ -136,7 +338,53 @@ impl Harness {
         );
     }
 
+    fn push_tdz_scope_frame(&mut self, declared: HashSet<String>) {
+        self.script_runtime.tdz_scope_stack.push(TdzScopeFrame {
+            pending: declared.clone(),
+            declared,
+        });
+    }
+
+    fn pop_tdz_scope_frame(&mut self) {
+        self.script_runtime.tdz_scope_stack.pop();
+    }
+
+    fn mark_tdz_initialized(
+        &mut self,
+        pending_tdz_bindings: &mut HashSet<String>,
+        name: &str,
+    ) {
+        if pending_tdz_bindings.remove(name) {
+            if let Some(frame) = self.script_runtime.tdz_scope_stack.last_mut() {
+                frame.pending.remove(name);
+            }
+        }
+    }
+
+    pub(crate) fn is_binding_in_tdz(&self, _env: &HashMap<String, Value>, name: &str) -> bool {
+        for frame in self.script_runtime.tdz_scope_stack.iter().rev() {
+            if frame.declared.contains(name) {
+                return frame.pending.contains(name);
+            }
+        }
+        false
+    }
+
+    pub(crate) fn ensure_binding_initialized(
+        &self,
+        env: &HashMap<String, Value>,
+        name: &str,
+    ) -> Result<()> {
+        if self.is_binding_in_tdz(env, name) {
+            return Err(Error::ScriptRuntime(format!(
+                "Cannot access '{name}' before initialization"
+            )));
+        }
+        Ok(())
+    }
+
     fn ensure_binding_is_mutable(&self, env: &HashMap<String, Value>, name: &str) -> Result<()> {
+        self.ensure_binding_initialized(env, name)?;
         if self.is_const_binding(env, name) {
             return Err(Error::ScriptRuntime(
                 "Assignment to constant variable".into(),
@@ -677,17 +925,32 @@ impl Harness {
         let result = (|| -> Result<ExecFlow> {
             Self::validate_const_redeclarations(stmts)?;
             self.bind_hoisted_import_decls(stmts, env)?;
+            self.hoist_var_declarations(stmts, env);
+            let mut pending_tdz_bindings = Self::collect_direct_tdz_binding_names(stmts);
+            self.push_tdz_scope_frame(pending_tdz_bindings.clone());
             let mut initialized_var_bindings = HashSet::new();
-            for stmt in stmts {
-                self.apply_pending_listener_capture_env_updates(env);
-                self.sync_top_level_env_from_runtime(env);
-                self.sync_listener_capture_env_if_shared(env);
-                match stmt {
+            let flow_result = (|| -> Result<ExecFlow> {
+                for stmt in stmts {
+                    self.apply_pending_listener_capture_env_updates(env);
+                    self.sync_top_level_env_from_runtime(env);
+                    self.sync_listener_capture_env_if_shared(env);
+                    match stmt {
                     Stmt::ImportDecl { .. } => {}
                     Stmt::VarDecl { name, expr, kind } => {
+                        if matches!(kind, VarDeclKind::Var) && matches!(expr, Expr::Undefined) {
+                            if !env.contains_key(name) {
+                                env.insert(name.clone(), Value::Undefined);
+                                self.set_const_binding(env, name, false);
+                                self.sync_global_binding_if_needed(env, name, &Value::Undefined);
+                            }
+                            continue;
+                        }
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         env.insert(name.clone(), value.clone());
                         self.set_const_binding(env, name, matches!(kind, VarDeclKind::Const));
+                        if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                            self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
+                        }
                         self.bind_timer_id_to_task_env(name, expr, &value);
                         if matches!(kind, VarDeclKind::Var) && !matches!(expr, Expr::Undefined) {
                             initialized_var_bindings.insert(name.clone());
@@ -799,6 +1062,7 @@ impl Harness {
 
                         env.insert(name.clone(), class_constructor);
                         self.set_const_binding(env, name, false);
+                        self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
                     }
                     Stmt::ExportDecl {
                         declaration,
@@ -812,6 +1076,9 @@ impl Harness {
                         )? {
                             ExecFlow::Continue => {}
                             flow => return Ok(flow),
+                        }
+                        for local in Self::direct_tdz_binding_names(declaration) {
+                            self.mark_tdz_initialized(&mut pending_tdz_bindings, &local);
                         }
                         self.register_module_named_exports(bindings);
                     }
@@ -876,6 +1143,7 @@ impl Harness {
                         }
                     }
                     Stmt::VarAssign { name, op, expr } => {
+                        self.ensure_binding_initialized(env, name)?;
                         let previous = env.get(name).cloned().ok_or_else(|| {
                             Error::ScriptRuntime(format!("unknown variable: {name}"))
                         })?;
@@ -958,6 +1226,7 @@ impl Harness {
                         self.bind_timer_id_to_task_env(name, expr, &next);
                     }
                     Stmt::VarUpdate { name, delta } => {
+                        self.ensure_binding_initialized(env, name)?;
                         let previous = env.get(name).cloned().ok_or_else(|| {
                             Error::ScriptRuntime(format!("unknown variable: {name}"))
                         })?;
@@ -995,6 +1264,9 @@ impl Harness {
                             let Some(target_name) = target_name else {
                                 continue;
                             };
+                            if !is_declaration {
+                                self.ensure_binding_initialized(env, target_name)?;
+                            }
                             if !is_declaration && env.contains_key(target_name) {
                                 self.ensure_binding_is_mutable(env, target_name)?;
                             }
@@ -1002,6 +1274,14 @@ impl Harness {
                             env.insert(target_name.clone(), next.clone());
                             if is_declaration {
                                 self.set_const_binding(env, target_name, is_const_decl);
+                                if decl_kind
+                                    .is_some_and(|kind| matches!(kind, VarDeclKind::Let | VarDeclKind::Const))
+                                {
+                                    self.mark_tdz_initialized(
+                                        &mut pending_tdz_bindings,
+                                        target_name,
+                                    );
+                                }
                             }
                             self.sync_global_binding_if_needed(env, target_name, &next);
                         }
@@ -1021,6 +1301,9 @@ impl Harness {
                         let is_declaration = decl_kind.is_some();
                         let is_const_decl = matches!(decl_kind, Some(VarDeclKind::Const));
                         for (source_key, target_name) in bindings {
+                            if !is_declaration {
+                                self.ensure_binding_initialized(env, target_name)?;
+                            }
                             if !is_declaration && env.contains_key(target_name) {
                                 self.ensure_binding_is_mutable(env, target_name)?;
                             }
@@ -1029,6 +1312,14 @@ impl Harness {
                             env.insert(target_name.clone(), next.clone());
                             if is_declaration {
                                 self.set_const_binding(env, target_name, is_const_decl);
+                                if decl_kind
+                                    .is_some_and(|kind| matches!(kind, VarDeclKind::Let | VarDeclKind::Const))
+                                {
+                                    self.mark_tdz_initialized(
+                                        &mut pending_tdz_bindings,
+                                        target_name,
+                                    );
+                                }
                             }
                             self.sync_global_binding_if_needed(env, target_name, &next);
                         }
@@ -2557,6 +2848,64 @@ impl Harness {
                             flow => return Ok(flow),
                         }
                     }
+                    Stmt::Switch { expr, clauses } => {
+                        let switch_value = self.eval_expr(expr, env, event_param, event)?;
+                        let all_clause_stmts = clauses
+                            .iter()
+                            .flat_map(|clause| clause.stmts.iter().cloned())
+                            .collect::<Vec<_>>();
+                        Self::validate_const_redeclarations(&all_clause_stmts)?;
+                        let previous = self.collect_direct_block_lexical_bindings(&all_clause_stmts, env);
+
+                        let switch_result = (|| -> Result<ExecFlow> {
+                            let pending_switch_tdz_bindings =
+                                Self::collect_direct_tdz_binding_names(&all_clause_stmts);
+                            self.push_tdz_scope_frame(pending_switch_tdz_bindings);
+
+                            let mut default_index = None;
+                            let mut matched_index = None;
+
+                            for (index, clause) in clauses.iter().enumerate() {
+                                if let Some(test) = &clause.test {
+                                    let case_value =
+                                        self.eval_expr(test, env, event_param, event)?;
+                                    if self.strict_equal(&switch_value, &case_value) {
+                                        matched_index = Some(index);
+                                        break;
+                                    }
+                                } else if default_index.is_none() {
+                                    default_index = Some(index);
+                                }
+                            }
+
+                            if let Some(start_index) = matched_index.or(default_index) {
+                                let mut selected_stmts = Vec::new();
+                                for clause in clauses.iter().skip(start_index) {
+                                    selected_stmts.extend(clause.stmts.iter().cloned());
+                                }
+                                match self.execute_stmts(&selected_stmts, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::Break(label) => {
+                                        if label.is_none() {
+                                        } else {
+                                            return Ok(ExecFlow::Break(label));
+                                        }
+                                    }
+                                    flow => return Ok(flow),
+                                }
+                            }
+
+                            Ok(ExecFlow::Continue)
+                        })();
+
+                        self.pop_tdz_scope_frame();
+                        self.restore_block_lexical_bindings(previous, env);
+
+                        match switch_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
+                        }
+                    }
                     Stmt::If {
                         cond,
                         then_stmts,
@@ -2731,10 +3080,14 @@ impl Harness {
                         let _ = self.eval_expr(expr, env, event_param, event)?;
                     }
                 }
-            }
+                }
 
-            self.apply_pending_listener_capture_env_updates(env);
-            Ok(ExecFlow::Continue)
+                self.apply_pending_listener_capture_env_updates(env);
+                Ok(ExecFlow::Continue)
+            })();
+
+            self.pop_tdz_scope_frame();
+            flow_result
         })();
 
         self.script_runtime.listener_capture_env_stack.pop();

@@ -53,6 +53,7 @@ impl Harness {
                             Some(this_value),
                         );
                     }
+                    self.ensure_binding_initialized(env, target)?;
                     let callee = if let Some(callee) = env.get(target).cloned() {
                         callee
                     } else if let Some(callee) = self.resolve_pending_function_decl(target, env) {
@@ -453,6 +454,7 @@ impl Harness {
                     self.object_property_from_value(&receiver, &key)
                 }
                 Expr::Var(name) => {
+                    self.ensure_binding_initialized(env, name)?;
                     if let Some(value) = env.get(name).cloned() {
                         Ok(value)
                     } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
