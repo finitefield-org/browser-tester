@@ -433,6 +433,7 @@ impl PartialEq for RegexValue {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FunctionValue {
+    pub(crate) function_id: usize,
     pub(crate) handler: ScriptHandler,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
     pub(crate) captured_pending_function_decls:

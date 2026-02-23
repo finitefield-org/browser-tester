@@ -45,13 +45,19 @@ impl Harness {
                         let this_value = Self::super_this_from_env(env)?;
                         let evaluated_args =
                             self.eval_call_args_with_spread(args, env, event_param, event)?;
-                        return self.execute_constructor_value_with_this_and_env(
+                        let super_result = self.execute_constructor_value_with_this_and_env(
                             &super_constructor,
                             &evaluated_args,
                             event,
                             Some(env),
                             Some(this_value),
-                        );
+                        )?;
+                        self.initialize_current_constructor_instance_fields(
+                            env,
+                            event_param,
+                            event,
+                        )?;
+                        return Ok(super_result);
                     }
                     self.ensure_binding_initialized(env, target)?;
                     let callee = if let Some(callee) = env.get(target).cloned() {
@@ -412,7 +418,17 @@ impl Harness {
                             Error::ScriptRuntime(format!("'{}' is not a function", member))
                         }
                         other => other,
-                    })
+                        })
+                }
+                Expr::PrivateMemberCall {
+                    target,
+                    member,
+                    args,
+                } => {
+                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    let evaluated_args =
+                        self.eval_call_args_with_spread(args, env, event_param, event)?;
+                    self.private_call_member(member, &receiver, &evaluated_args, env, event)
                 }
                 Expr::MemberGet {
                     target,
@@ -428,6 +444,14 @@ impl Harness {
                         return Ok(Value::Undefined);
                     }
                     self.object_property_from_value(&receiver, member)
+                }
+                Expr::PrivateMemberGet { target, member } => {
+                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    self.private_get_member(member, &receiver, env, event)
+                }
+                Expr::PrivateIn { member, target } => {
+                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    Ok(Value::Bool(self.private_has_member(member, &receiver)?))
                 }
                 Expr::IndexGet {
                     target,

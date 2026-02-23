@@ -302,6 +302,10 @@ pub(crate) fn parse_single_statement_with_flags(
         return Ok(parsed);
     }
 
+    if let Some(parsed) = parse_private_assign(stmt)? {
+        return Ok(parsed);
+    }
+
     if let Some(parsed) = parse_object_assign(stmt)? {
         return Ok(parsed);
     }

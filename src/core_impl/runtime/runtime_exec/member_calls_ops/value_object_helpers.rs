@@ -1364,7 +1364,19 @@ impl Harness {
                 Ok(value)
             }
             Value::Function(function) => {
-                let value = match key {
+                if let Some(entries) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    .cloned()
+                {
+                    if let Some(custom_value) =
+                        self.object_property_from_entries_with_getter(value, &entries, key)?
+                    {
+                        return Ok(custom_value);
+                    }
+                }
+                let own_value = match key {
                     "constructor" => {
                         if function.is_generator {
                             if function.is_async {
@@ -1395,7 +1407,18 @@ impl Harness {
                     }
                     _ => Value::Undefined,
                 };
-                Ok(value)
+                if !matches!(own_value, Value::Undefined) {
+                    return Ok(own_value);
+                }
+                if let Some(super_constructor) = function.class_super_constructor.clone() {
+                    if !matches!(super_constructor, Value::Null) {
+                        let inherited = self.object_property_from_value(&super_constructor, key)?;
+                        if !matches!(inherited, Value::Undefined) {
+                            return Ok(inherited);
+                        }
+                    }
+                }
+                Ok(Value::Undefined)
             }
             Value::UrlConstructor => {
                 if let Some(value) = Self::object_get_entry(

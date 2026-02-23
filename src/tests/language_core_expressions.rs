@@ -4579,6 +4579,83 @@ fn class_extends_default_constructor_forwards_all_arguments() -> Result<()> {
 }
 
 #[test]
+fn class_extends_old_style_constructor_function_and_prototype_methods() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function OldStyleClass() {
+            this.someProperty = 1;
+          }
+          OldStyleClass.prototype.someMethod = function () {
+            return this.someProperty + 1;
+          };
+
+          class ChildClass extends OldStyleClass {}
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const child = new ChildClass();
+            document.getElementById('result').textContent = String(child.someMethod());
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_accepts_expression_superclass() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function pick(base) {
+            return base;
+          }
+
+          class Animal {
+            constructor(name) {
+              this.name = name;
+            }
+            label() {
+              return this.name;
+            }
+          }
+
+          class Dog extends pick(Animal) {}
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const dog = new Dog('pochi');
+            document.getElementById('result').textContent = dog.label();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "pochi")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_rejects_non_constructible_superclasses() {
+    for source in [
+        "<script>const parent = () => {}; class Child extends parent {}</script>",
+        "<script>function* parent() {}; class Child extends parent {}</script>",
+    ] {
+        let err = Harness::from_html(source)
+            .expect_err("class extends non-constructible callable should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("not a constructor")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn class_extends_requires_constructor_superclass() {
     let err =
         Harness::from_html("<script>const parent = {}; class Child extends parent {}</script>")
@@ -4587,6 +4664,52 @@ fn class_extends_requires_constructor_superclass() {
         Error::ScriptRuntime(msg) => assert!(msg.contains("not a constructor")),
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn class_extends_null_default_constructor_throws_on_instantiation() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class NullBase extends null {}
+
+          document.getElementById('btn').addEventListener('click', () => {
+            new NullBase();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("extends null default constructor should fail at runtime");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("not a constructor")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn class_extends_null_allows_custom_constructor_return_object() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class NullClass extends null {
+            constructor() {
+              return { tag: 'ok' };
+            }
+          }
+
+          const value = new NullClass();
+          document.getElementById('result').textContent =
+            String(value.tag) + ':' + String(value instanceof NullClass);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok:false")?;
+    Ok(())
 }
 
 #[test]
@@ -4614,6 +4737,132 @@ fn super_call_without_derived_superclass_reports_error() -> Result<()> {
         Error::ScriptRuntime(msg) => assert!(msg.contains("derived class constructor")),
         other => panic!("unexpected error: {other:?}"),
     }
+    Ok(())
+}
+
+#[test]
+fn class_constructor_rejects_multiple_definitions() {
+    let err = Harness::from_html(
+        "<script>class C { constructor() {} constructor(value) {} }</script>",
+    )
+    .expect_err("multiple class constructors should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("multiple constructors")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn class_constructor_rejects_async_generator_and_accessor_forms() {
+    for source in [
+        "<script>class C { async constructor() {} }</script>",
+        "<script>class C { *constructor() {} }</script>",
+        "<script>class C { get constructor() { return 1; } }</script>",
+        "<script>class C { set constructor(value) {} }</script>",
+    ] {
+        let err =
+            Harness::from_html(source).expect_err("invalid constructor forms should fail");
+        match err {
+            Error::ScriptParse(msg) => assert!(msg.contains("constructor")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn class_constructor_supports_default_parameters() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Person {
+            constructor(name = 'Anonymous') {
+              this.name = name;
+            }
+          }
+
+          const anonymous = new Person();
+          const otto = new Person('Otto');
+          document.getElementById('result').textContent = anonymous.name + ':' + otto.name;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "Anonymous:Otto")?;
+    Ok(())
+}
+
+#[test]
+fn base_class_constructor_ignores_primitive_return_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class ParentClass {
+            constructor() {
+              this.name = 'ParentClass';
+              return 1;
+            }
+          }
+
+          const instance = new ParentClass();
+          document.getElementById('result').textContent = instance.name;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ParentClass")?;
+    Ok(())
+}
+
+#[test]
+fn derived_class_constructor_rejects_non_undefined_primitive_return_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class ParentClass {}
+
+          class ChildClass extends ParentClass {
+            constructor() {
+              return 1;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            new ChildClass();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("derived constructor primitive return should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("only return object or undefined")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn derived_class_constructor_allows_object_return_value() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class ParentClass {}
+
+          class ChildClass extends ParentClass {
+            constructor() {
+              return { name: 'override' };
+            }
+          }
+
+          const value = new ChildClass();
+          document.getElementById('result').textContent = value.name;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "override")?;
     Ok(())
 }
 
@@ -4793,4 +5042,567 @@ fn let_declaration_cannot_share_name_with_catch_binding() {
         Err(_) => panic!("unexpected error kind"),
         Ok(_) => panic!("let declaration and catch binding collision should fail"),
     }
+}
+
+#[test]
+fn private_instance_fields_methods_and_assignment_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Counter {
+            #count = 1;
+
+            increment() {
+              this.#count = this.#count + 1;
+            }
+
+            value() {
+              return this.#count;
+            }
+          }
+
+          const counter = new Counter();
+          counter.increment();
+          counter.increment();
+          document.getElementById('result').textContent = String(counter.value());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn private_in_operator_checks_class_brand() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            #x = 1;
+
+            hasX(obj) {
+              return #x in obj;
+            }
+          }
+
+          const c = new C();
+          document.getElementById('result').textContent =
+            String(c.hasX(c)) + ':' + String(c.hasX({}));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:false")?;
+    Ok(())
+}
+
+#[test]
+fn private_accessors_support_get_and_set() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Box {
+            #value = 0;
+
+            get #decorated() {
+              return this.#value;
+            }
+
+            set #decorated(v) {
+              this.#value = v;
+            }
+
+            setValue(v) {
+              this.#decorated = v;
+            }
+
+            getValue() {
+              return this.#decorated;
+            }
+          }
+
+          const box = new Box();
+          box.setValue(7);
+          document.getElementById('result').textContent = String(box.getValue());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
+fn private_static_field_and_method_work_via_constructor_brand() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Token {
+            static #seed = 40;
+            static #bump() {
+              return 2;
+            }
+
+            read() {
+              return this.constructor.#seed + this.constructor.#bump();
+            }
+          }
+
+          const token = new Token();
+          document.getElementById('result').textContent = String(token.read());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "42")?;
+    Ok(())
+}
+
+#[test]
+fn private_member_access_rejects_unbranded_receiver() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class C {
+            #x = 1;
+
+            read(obj) {
+              return obj.#x;
+            }
+          }
+
+          const c = new C();
+          document.getElementById('btn').addEventListener('click', () => {
+            c.read({});
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("private member access on unbranded receiver should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Cannot read private member #x")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn delete_private_member_is_syntax_error() {
+    let err = Harness::from_html(
+        "<script>class C { #x = 1; drop(){ delete this.#x; } } new C().drop();</script>",
+    )
+    .expect_err("deleting private members should fail at parse time");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("private elements cannot be deleted")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn public_class_fields_define_instance_and_static_properties() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class ClassWithField {
+            instanceField;
+            instanceFieldWithInitializer = 'instance field';
+            static staticField;
+            static staticFieldWithInitializer = 'static field';
+          }
+
+          const instance = new ClassWithField();
+          document.getElementById('result').textContent =
+            String(instance.instanceField) + ':' +
+            String(instance.instanceFieldWithInitializer) + ':' +
+            String(ClassWithField.staticField) + ':' +
+            String(ClassWithField.staticFieldWithInitializer);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:instance field:undefined:static field")?;
+    Ok(())
+}
+
+#[test]
+fn public_instance_fields_initialize_before_base_constructor_and_after_super() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Base {
+            baseField = 1;
+
+            constructor() {
+              this.log = 'base:' + String(this.baseField) + ':' + String(this.derivedField);
+            }
+          }
+
+          class Derived extends Base {
+            derivedField = this.baseField + 1;
+
+            constructor() {
+              super();
+              this.log = this.log + '|derived:' + String(this.derivedField);
+            }
+          }
+
+          const instance = new Derived();
+          document.getElementById('result').textContent = instance.log;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "base:1:undefined|derived:2")?;
+    Ok(())
+}
+
+#[test]
+fn public_instance_fields_initialize_in_declaration_order() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            a = 1;
+            b = this.c;
+            c = this.a + 1;
+            d = this.c + 1;
+          }
+
+          const instance = new C();
+          document.getElementById('result').textContent =
+            String(instance.d) + ':' + String(instance.b);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn public_fields_define_own_properties_without_triggering_base_setter() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Base {
+            set field(value) {
+              this.setterCalled = true;
+            }
+          }
+
+          class DerivedWithField extends Base {
+            field = 1;
+          }
+
+          const instance = new DerivedWithField();
+          document.getElementById('result').textContent =
+            String(instance.field) + ':' + String(instance.setterCalled);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn public_class_fields_reject_constructor_field_name() {
+    let err = Harness::from_html("<script>class C { constructor = 1; }</script>")
+        .expect_err("field name constructor should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("field name cannot be constructor")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn public_class_fields_reject_static_prototype_name() {
+    for source in [
+        "<script>class C { static prototype = 1; }</script>",
+        "<script>class C { static prototype() {} }</script>",
+        "<script>class C { static get prototype() { return 1; } }</script>",
+        "<script>class C { static set prototype(value) {} }</script>",
+    ] {
+        let err = Harness::from_html(source)
+            .expect_err("static property named prototype should fail");
+        match err {
+            Error::ScriptParse(msg) => {
+                assert!(msg.contains("static class property name cannot be prototype"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn public_static_fields_are_writable_after_class_definition() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            static value = 1;
+          }
+
+          C.value = C.value + 4;
+          document.getElementById('result').textContent = String(C.value);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "5")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_inherits_static_methods_via_constructor_chain() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Base {
+            static label() {
+              return 'base';
+            }
+          }
+
+          class Child extends Base {}
+          document.getElementById('result').textContent = Child.label();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "base")?;
+    Ok(())
+}
+
+#[test]
+fn public_class_fields_support_computed_names_evaluated_once() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let counter = 0;
+          function nextKey() {
+            counter = counter + 1;
+            return 'f' + String(counter);
+          }
+
+          class C {
+            [nextKey()] = 1;
+          }
+
+          document.getElementById('result').textContent =
+            String(counter) + ':' +
+            String(new C().f1) + ':' +
+            String(new C().f1) + ':' +
+            String(new C().f2);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:1:1:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn public_static_field_initializer_can_read_this_constructor() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            static base = 4;
+            static doubled = this.base * 2;
+          }
+
+          document.getElementById('result').textContent = String(C.doubled);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "8")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_block_runs_once_at_class_evaluation_time() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let count = 0;
+          class C {
+            static {
+              count = count + 1;
+            }
+          }
+
+          new C();
+          new C();
+          document.getElementById('result').textContent = String(count);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_fields_and_blocks_run_in_declaration_order() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            static trace = 'a';
+            static {
+              this.trace = this.trace + 'b';
+            }
+            static trace2 = C.trace + 'c';
+            static {
+              this.trace2 = this.trace2 + 'd';
+            }
+          }
+
+          document.getElementById('result').textContent = C.trace2;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "abcd")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_block_can_call_super_static_method() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Base {
+            static value() {
+              return 'base';
+            }
+          }
+
+          class Child extends Base {
+            static label;
+            static {
+              this.label = super.value() + '-child';
+            }
+          }
+
+          document.getElementById('result').textContent = Child.label;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "base-child")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_block_var_scope_is_local_and_does_not_leak() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          var y = 'Outer y';
+          let before;
+
+          class A {
+            static field = 'Inner y';
+            static {
+              before = String(y);
+              var y = this.field;
+            }
+          }
+
+          document.getElementById('result').textContent = before + ':' + y;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:Outer y")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_block_initializes_superclass_before_subclass() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class A {
+            static trace = 'A1';
+            static {
+              this.trace = this.trace + ':A2';
+            }
+          }
+
+          class B extends A {
+            static trace = 'B1';
+            static {
+              this.trace = A.trace + ':' + this.trace + ':B2';
+            }
+          }
+
+          document.getElementById('result').textContent = B.trace;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "A1:A2:B1:B2")?;
+    Ok(())
+}
+
+#[test]
+fn class_static_block_rejects_super_call() {
+    let err = Harness::from_html(
+        "<script>class A {} class B extends A { static { super(); } }</script>",
+    )
+    .expect_err("super() in static block should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("super() is not allowed in class static initialization block"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn class_static_block_rejects_arguments_object() {
+    let err = Harness::from_html("<script>class C { static { arguments; } }</script>")
+        .expect_err("arguments in static block should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(
+            msg.contains("arguments is not allowed in class static initialization block")
+        ),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn class_static_block_can_share_private_member_access() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let getValue;
+
+          class D {
+            #privateField;
+
+            constructor(v) {
+              this.#privateField = v;
+            }
+
+            static {
+              getValue = (d) => d.#privateField;
+            }
+          }
+
+          document.getElementById('result').textContent = getValue(new D('private'));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "private")?;
+    Ok(())
 }

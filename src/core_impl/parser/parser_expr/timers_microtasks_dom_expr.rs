@@ -162,18 +162,17 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
     }
     cursor.skip_ws();
 
-    let head = cursor
-        .parse_identifier()
-        .ok_or_else(|| Error::ScriptParse(format!("expected property name in: {src}")))?;
+    let Some(head) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
 
     cursor.skip_ws();
     let nested = if cursor.consume_byte(b'.') {
         cursor.skip_ws();
-        Some(
-            cursor
-                .parse_identifier()
-                .ok_or_else(|| Error::ScriptParse(format!("expected nested property in: {src}")))?,
-        )
+        let Some(nested) = cursor.parse_identifier() else {
+            return Ok(None);
+        };
+        Some(nested)
     } else {
         None
     };

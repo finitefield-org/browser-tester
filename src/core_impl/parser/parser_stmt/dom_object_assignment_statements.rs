@@ -1,4 +1,5 @@
 use super::*;
+use crate::core_impl::parser::parser_expr::collect_top_level_char_positions;
 
 pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
@@ -292,4 +293,47 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
         }
     };
     Ok(Some(Stmt::ObjectAssign { target, path, expr }))
+}
+
+pub(crate) fn parse_private_assign(stmt: &str) -> Result<Option<Stmt>> {
+    let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
+        return Ok(None);
+    };
+    if op_len != 1 {
+        return Ok(None);
+    }
+
+    let lhs = stmt[..eq_pos].trim();
+    let rhs = stmt[eq_pos + op_len..].trim();
+    if lhs.is_empty() || rhs.is_empty() {
+        return Ok(None);
+    }
+
+    let dots = collect_top_level_char_positions(lhs, b'.');
+    for dot in dots.into_iter().rev() {
+        let Some(base_src) = lhs.get(..dot) else {
+            continue;
+        };
+        let base_src = base_src.trim();
+        if base_src.is_empty() {
+            continue;
+        }
+        let Some(tail) = lhs.get(dot + 1..) else {
+            continue;
+        };
+        let tail = tail.trim();
+        let Some(private_name) = tail.strip_prefix('#') else {
+            continue;
+        };
+        if !is_ident(private_name) {
+            continue;
+        }
+        return Ok(Some(Stmt::PrivateAssign {
+            target: parse_expr(base_src)?,
+            member: private_name.to_string(),
+            expr: parse_expr(rhs)?,
+        }));
+    }
+
+    Ok(None)
 }

@@ -13,9 +13,9 @@ pub(crate) fn parse_query_selector_all_foreach_stmt(stmt: &str) -> Result<Option
         return Ok(None);
     }
     cursor.skip_ws();
-    let method = cursor
-        .parse_identifier()
-        .ok_or_else(|| Error::ScriptParse(format!("invalid forEach statement: {stmt}")))?;
+    let Some(method) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
 
     let (target, selector) = match method.as_str() {
         "forEach" => {

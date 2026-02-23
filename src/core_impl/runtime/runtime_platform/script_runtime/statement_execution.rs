@@ -529,6 +529,493 @@ impl Harness {
         }
     }
 
+    fn is_valid_extends_constructor_candidate(value: &Value) -> bool {
+        match value {
+            Value::Function(function) => {
+                !(function.is_generator || function.is_arrow || function.is_method)
+            }
+            Value::PromiseCapability(_) => false,
+            Value::Null => true,
+            other => Self::is_callable_kind_constructor(other),
+        }
+    }
+
+    fn is_callable_kind_constructor(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::StringConstructor
+                | Value::UrlConstructor
+                | Value::ArrayBufferConstructor
+                | Value::TypedArrayConstructor(_)
+                | Value::BlobConstructor
+                | Value::PromiseConstructor
+                | Value::MapConstructor
+                | Value::WeakMapConstructor
+                | Value::SetConstructor
+                | Value::WeakSetConstructor
+                | Value::RegExpConstructor
+        )
+    }
+
+    fn private_accessor_get_key() -> &'static str {
+        "\u{0}\u{0}bt_private_accessor:get"
+    }
+
+    fn private_accessor_set_key() -> &'static str {
+        "\u{0}\u{0}bt_private_accessor:set"
+    }
+
+    fn private_accessor_value(getter: Value, setter: Value) -> Value {
+        Self::new_object_value(vec![
+            (Self::private_accessor_get_key().to_string(), getter),
+            (Self::private_accessor_set_key().to_string(), setter),
+        ])
+    }
+
+    fn private_accessor_parts(value: &Value) -> (Value, Value) {
+        let Value::Object(entries) = value else {
+            return (Value::Undefined, Value::Undefined);
+        };
+        let entries = entries.borrow();
+        (
+            Self::object_get_entry(&entries, Self::private_accessor_get_key())
+                .unwrap_or(Value::Undefined),
+            Self::object_get_entry(&entries, Self::private_accessor_set_key())
+                .unwrap_or(Value::Undefined),
+        )
+    }
+
+    fn private_instance_key(value: &Value) -> Option<usize> {
+        match value {
+            Value::Object(object) => Some(Rc::as_ptr(object) as usize),
+            _ => None,
+        }
+    }
+
+    fn private_static_key(value: &Value) -> Option<usize> {
+        match value {
+            Value::Function(function) => Some(function.function_id),
+            _ => None,
+        }
+    }
+
+    fn private_read_brand_error(name: &str) -> Error {
+        Error::ScriptRuntime(format!(
+            "Cannot read private member #{name} from an object whose class did not declare it"
+        ))
+    }
+
+    fn private_write_brand_error(name: &str) -> Error {
+        Error::ScriptRuntime(format!(
+            "Cannot write private member #{name} to an object whose class did not declare it"
+        ))
+    }
+
+    pub(crate) fn resolve_private_binding(&self, name: &str) -> Result<PrivateBindingRuntime> {
+        for bindings in self.script_runtime.private_binding_stack.iter().rev() {
+            if let Some(binding) = bindings.get(name) {
+                return Ok(binding.clone());
+            }
+        }
+        Err(Error::ScriptRuntime(format!(
+            "private identifier '#{name}' is not declared"
+        )))
+    }
+
+    fn private_slot_exists(&self, binding: &PrivateBindingRuntime, receiver: &Value) -> bool {
+        if binding.is_static {
+            let Some(class_id) = Self::private_static_key(receiver) else {
+                return false;
+            };
+            return self
+                .script_runtime
+                .private_static_slots
+                .get(&class_id)
+                .is_some_and(|slots| slots.contains_key(&binding.slot_id));
+        }
+        let Some(instance_id) = Self::private_instance_key(receiver) else {
+            return false;
+        };
+        self.script_runtime
+            .private_instance_slots
+            .get(&instance_id)
+            .is_some_and(|slots| slots.contains_key(&binding.slot_id))
+    }
+
+    fn private_slot_read(&self, binding: &PrivateBindingRuntime, receiver: &Value) -> Option<Value> {
+        if binding.is_static {
+            let class_id = Self::private_static_key(receiver)?;
+            return self
+                .script_runtime
+                .private_static_slots
+                .get(&class_id)
+                .and_then(|slots| slots.get(&binding.slot_id).cloned());
+        }
+        let instance_id = Self::private_instance_key(receiver)?;
+        self.script_runtime
+            .private_instance_slots
+            .get(&instance_id)
+            .and_then(|slots| slots.get(&binding.slot_id).cloned())
+    }
+
+    fn private_slot_initialize_value(
+        &mut self,
+        binding: &PrivateBindingRuntime,
+        receiver: &Value,
+        value: Value,
+    ) -> Result<()> {
+        if binding.is_static {
+            let Some(class_id) = Self::private_static_key(receiver) else {
+                return Err(Self::private_write_brand_error(&binding.name));
+            };
+            let slots = self
+                .script_runtime
+                .private_static_slots
+                .entry(class_id)
+                .or_default();
+            if slots.contains_key(&binding.slot_id) {
+                return Err(Error::ScriptRuntime(
+                    "Initializing an object twice is an error with private fields".into(),
+                ));
+            }
+            slots.insert(binding.slot_id, value);
+            return Ok(());
+        }
+
+        let Some(instance_id) = Self::private_instance_key(receiver) else {
+            return Err(Self::private_write_brand_error(&binding.name));
+        };
+        let slots = self
+            .script_runtime
+            .private_instance_slots
+            .entry(instance_id)
+            .or_default();
+        if slots.contains_key(&binding.slot_id) {
+            return Err(Error::ScriptRuntime(
+                "Initializing an object twice is an error with private fields".into(),
+            ));
+        }
+        slots.insert(binding.slot_id, value);
+        Ok(())
+    }
+
+    fn private_slot_initialize_accessor(
+        &mut self,
+        binding: &PrivateBindingRuntime,
+        receiver: &Value,
+        getter: Option<Value>,
+        setter: Option<Value>,
+    ) -> Result<()> {
+        let slot_map = if binding.is_static {
+            let Some(class_id) = Self::private_static_key(receiver) else {
+                return Err(Self::private_write_brand_error(&binding.name));
+            };
+            self.script_runtime
+                .private_static_slots
+                .entry(class_id)
+                .or_default()
+        } else {
+            let Some(instance_id) = Self::private_instance_key(receiver) else {
+                return Err(Self::private_write_brand_error(&binding.name));
+            };
+            self.script_runtime
+                .private_instance_slots
+                .entry(instance_id)
+                .or_default()
+        };
+
+        if let Some(existing) = slot_map.get(&binding.slot_id).cloned() {
+            let (mut current_getter, mut current_setter) = Self::private_accessor_parts(&existing);
+            if let Some(next_getter) = getter {
+                if !matches!(&current_getter, Value::Undefined) {
+                    return Err(Error::ScriptRuntime(
+                        "Initializing an object twice is an error with private fields".into(),
+                    ));
+                }
+                current_getter = next_getter;
+            }
+            if let Some(next_setter) = setter {
+                if !matches!(&current_setter, Value::Undefined) {
+                    return Err(Error::ScriptRuntime(
+                        "Initializing an object twice is an error with private fields".into(),
+                    ));
+                }
+                current_setter = next_setter;
+            }
+            slot_map.insert(
+                binding.slot_id,
+                Self::private_accessor_value(current_getter, current_setter),
+            );
+            return Ok(());
+        }
+
+        slot_map.insert(
+            binding.slot_id,
+            Self::private_accessor_value(
+                getter.unwrap_or(Value::Undefined),
+                setter.unwrap_or(Value::Undefined),
+            ),
+        );
+        Ok(())
+    }
+
+    fn private_slot_write(
+        &mut self,
+        binding: &PrivateBindingRuntime,
+        receiver: &Value,
+        value: Value,
+    ) -> Result<()> {
+        if binding.is_static {
+            let Some(class_id) = Self::private_static_key(receiver) else {
+                return Err(Self::private_write_brand_error(&binding.name));
+            };
+            let Some(slots) = self.script_runtime.private_static_slots.get_mut(&class_id) else {
+                return Err(Self::private_write_brand_error(&binding.name));
+            };
+            if !slots.contains_key(&binding.slot_id) {
+                return Err(Self::private_write_brand_error(&binding.name));
+            }
+            slots.insert(binding.slot_id, value);
+            return Ok(());
+        }
+
+        let Some(instance_id) = Self::private_instance_key(receiver) else {
+            return Err(Self::private_write_brand_error(&binding.name));
+        };
+        let Some(slots) = self.script_runtime.private_instance_slots.get_mut(&instance_id) else {
+            return Err(Self::private_write_brand_error(&binding.name));
+        };
+        if !slots.contains_key(&binding.slot_id) {
+            return Err(Self::private_write_brand_error(&binding.name));
+        }
+        slots.insert(binding.slot_id, value);
+        Ok(())
+    }
+
+    pub(crate) fn apply_private_initializer_to_receiver(
+        &mut self,
+        initializer: &PrivateInitializerRuntime,
+        receiver: &Value,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        match initializer.binding.kind {
+            PrivateBindingKind::Field => {
+                let value = if let Some(expr) = initializer.initializer.as_ref() {
+                    self.eval_expr(expr, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                self.private_slot_initialize_value(&initializer.binding, receiver, value)
+            }
+            PrivateBindingKind::Method => {
+                let value = initializer.value.clone().unwrap_or(Value::Undefined);
+                self.private_slot_initialize_value(&initializer.binding, receiver, value)
+            }
+            PrivateBindingKind::Accessor => self.private_slot_initialize_accessor(
+                &initializer.binding,
+                receiver,
+                initializer.value.clone(),
+                initializer.setter_value.clone(),
+            ),
+        }
+    }
+
+    fn define_public_field_on_receiver(
+        &mut self,
+        receiver: &Value,
+        name: &str,
+        value: Value,
+    ) -> Result<()> {
+        match receiver {
+            Value::Object(object) => {
+                Self::object_set_entry(&mut object.borrow_mut(), name.to_string(), value);
+                Ok(())
+            }
+            Value::Array(array) => {
+                Self::set_array_property(array, name.to_string(), value);
+                Ok(())
+            }
+            Value::Function(function) => {
+                let entries = self
+                    .script_runtime
+                    .function_public_properties
+                    .entry(function.function_id)
+                    .or_default();
+                Self::object_set_entry(entries, name.to_string(), value);
+                Ok(())
+            }
+            Value::Map(map) => {
+                Self::object_set_entry(&mut map.borrow_mut().properties, name.to_string(), value);
+                Ok(())
+            }
+            Value::WeakMap(weak_map) => {
+                Self::object_set_entry(
+                    &mut weak_map.borrow_mut().properties,
+                    name.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+            Value::Set(set) => {
+                Self::object_set_entry(&mut set.borrow_mut().properties, name.to_string(), value);
+                Ok(())
+            }
+            Value::WeakSet(weak_set) => {
+                Self::object_set_entry(
+                    &mut weak_set.borrow_mut().properties,
+                    name.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+            Value::RegExp(regex) => {
+                Self::object_set_entry(
+                    &mut regex.borrow_mut().properties,
+                    name.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+            _ => Err(Error::ScriptRuntime(
+                "class field target must be an object".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn apply_constructor_instance_initializer_to_receiver(
+        &mut self,
+        initializer: &ConstructorInstanceInitializerRuntime,
+        receiver: &Value,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        match initializer {
+            ConstructorInstanceInitializerRuntime::Private(private) => {
+                self.apply_private_initializer_to_receiver(private, receiver, env, event_param, event)
+            }
+            ConstructorInstanceInitializerRuntime::Public(public) => {
+                let value = if let Some(expr) = public.initializer.as_ref() {
+                    self.eval_expr(expr, env, event_param, event)?
+                } else {
+                    Value::Undefined
+                };
+                self.define_public_field_on_receiver(receiver, &public.name, value)
+            }
+        }
+    }
+
+    pub(crate) fn private_has_member(&self, member: &str, receiver: &Value) -> Result<bool> {
+        if Self::is_primitive_value(receiver) {
+            return Err(Error::ScriptRuntime(
+                "right-hand side of private in must be an object".into(),
+            ));
+        }
+        let binding = self.resolve_private_binding(member)?;
+        Ok(self.private_slot_exists(&binding, receiver))
+    }
+
+    pub(crate) fn private_get_member(
+        &mut self,
+        member: &str,
+        receiver: &Value,
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let binding = self.resolve_private_binding(member)?;
+        let Some(slot_value) = self.private_slot_read(&binding, receiver) else {
+            return Err(Self::private_read_brand_error(member));
+        };
+        match binding.kind {
+            PrivateBindingKind::Accessor => {
+                let (getter, _) = Self::private_accessor_parts(&slot_value);
+                if matches!(getter, Value::Null | Value::Undefined) {
+                    return Ok(Value::Undefined);
+                }
+                if !self.is_callable_value(&getter) {
+                    return Err(Error::ScriptRuntime(
+                        "private accessor getter is not callable".into(),
+                    ));
+                }
+                self.execute_callable_value_with_this_and_env(
+                    &getter,
+                    &[],
+                    event,
+                    Some(env),
+                    Some(receiver.clone()),
+                )
+            }
+            _ => Ok(slot_value),
+        }
+    }
+
+    pub(crate) fn private_call_member(
+        &mut self,
+        member: &str,
+        receiver: &Value,
+        args: &[Value],
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let callee = self.private_get_member(member, receiver, env, event)?;
+        self.execute_callable_value_with_this_and_env(
+            &callee,
+            args,
+            event,
+            Some(env),
+            Some(receiver.clone()),
+        )
+        .map_err(|err| match err {
+            Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                Error::ScriptRuntime(format!("'{}' is not a function", member))
+            }
+            other => other,
+        })
+    }
+
+    pub(crate) fn private_set_member(
+        &mut self,
+        member: &str,
+        receiver: &Value,
+        value: Value,
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<()> {
+        let binding = self.resolve_private_binding(member)?;
+        let Some(slot_value) = self.private_slot_read(&binding, receiver) else {
+            return Err(Self::private_write_brand_error(member));
+        };
+        match binding.kind {
+            PrivateBindingKind::Field => self.private_slot_write(&binding, receiver, value),
+            PrivateBindingKind::Method => Err(Error::ScriptRuntime(format!(
+                "Cannot write to private method #{member}"
+            ))),
+            PrivateBindingKind::Accessor => {
+                let (_, setter) = Self::private_accessor_parts(&slot_value);
+                if matches!(setter, Value::Null | Value::Undefined) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "Cannot set private member #{member} without a setter"
+                    )));
+                }
+                if !self.is_callable_value(&setter) {
+                    return Err(Error::ScriptRuntime(
+                        "private accessor setter is not callable".into(),
+                    ));
+                }
+                let _ = self.execute_callable_value_with_this_and_env(
+                    &setter,
+                    &[value],
+                    event,
+                    Some(env),
+                    Some(receiver.clone()),
+                )?;
+                Ok(())
+            }
+        }
+    }
+
     fn is_iteration_stmt(stmt: &Stmt) -> bool {
         matches!(
             stmt,
@@ -982,26 +1469,33 @@ impl Harness {
                         name,
                         super_class,
                         constructor,
+                        fields,
                         methods,
+                        static_initializers,
                     } => {
                         let (super_constructor, super_prototype) = if let Some(super_class_expr) =
                             super_class
                         {
                             let evaluated_super =
                                 self.eval_expr(super_class_expr, env, event_param, event)?;
-                            if !self.is_callable_value(&evaluated_super) {
+                            if !Self::is_valid_extends_constructor_candidate(&evaluated_super) {
                                 return Err(Error::ScriptRuntime(
                                     "class extends value is not a constructor".into(),
                                 ));
                             }
-                            let super_prototype =
-                                self.object_property_from_value(&evaluated_super, "prototype")?;
-                            let Value::Object(super_prototype) = super_prototype else {
-                                return Err(Error::ScriptRuntime(
-                                    "class extends value does not have a valid prototype".into(),
-                                ));
-                            };
-                            (Some(evaluated_super), Some(super_prototype))
+                            if matches!(evaluated_super, Value::Null) {
+                                (Some(evaluated_super), Some(Value::Null))
+                            } else {
+                                let super_prototype =
+                                    self.object_property_from_value(&evaluated_super, "prototype")?;
+                                if !matches!(super_prototype, Value::Object(_) | Value::Null) {
+                                    return Err(Error::ScriptRuntime(
+                                        "class extends value does not have a valid prototype"
+                                            .into(),
+                                    ));
+                                }
+                                (Some(evaluated_super), Some(super_prototype))
+                            }
                         } else {
                             (None, None)
                         };
@@ -1022,13 +1516,101 @@ impl Harness {
                             env,
                             false,
                             super_constructor.clone(),
-                            super_prototype.clone().map(Value::Object),
+                            super_prototype.clone(),
                         );
                         let Value::Function(class_function) = &class_constructor else {
                             return Err(Error::ScriptRuntime(
                                 "class constructor is not callable".into(),
                             ));
                         };
+                        let class_constructor_id = class_function.function_id;
+
+                        let mut private_bindings = HashMap::new();
+                        for method in methods.iter().filter(|method| method.is_private) {
+                            match method.kind {
+                                ClassMethodKind::Method => {
+                                    if private_bindings.contains_key(&method.name) {
+                                        return Err(Error::ScriptRuntime(format!(
+                                            "duplicate private identifier '#{}'",
+                                            method.name
+                                        )));
+                                    }
+                                    private_bindings.insert(
+                                        method.name.clone(),
+                                        PrivateBindingRuntime {
+                                            name: method.name.clone(),
+                                            slot_id: self.script_runtime.allocate_private_slot_id(),
+                                            is_static: method.is_static,
+                                            kind: PrivateBindingKind::Method,
+                                            has_getter: false,
+                                            has_setter: false,
+                                        },
+                                    );
+                                }
+                                ClassMethodKind::Getter | ClassMethodKind::Setter => {
+                                    if let Some(binding) = private_bindings.get_mut(&method.name) {
+                                        if binding.kind != PrivateBindingKind::Accessor
+                                            || binding.is_static != method.is_static
+                                        {
+                                            return Err(Error::ScriptRuntime(format!(
+                                                "duplicate private identifier '#{}'",
+                                                method.name
+                                            )));
+                                        }
+                                        if matches!(method.kind, ClassMethodKind::Getter) {
+                                            binding.has_getter = true;
+                                        } else {
+                                            binding.has_setter = true;
+                                        }
+                                    } else {
+                                        private_bindings.insert(
+                                            method.name.clone(),
+                                            PrivateBindingRuntime {
+                                                name: method.name.clone(),
+                                                slot_id: self
+                                                    .script_runtime
+                                                    .allocate_private_slot_id(),
+                                                is_static: method.is_static,
+                                                kind: PrivateBindingKind::Accessor,
+                                                has_getter: matches!(
+                                                    method.kind,
+                                                    ClassMethodKind::Getter
+                                                ),
+                                                has_setter: matches!(
+                                                    method.kind,
+                                                    ClassMethodKind::Setter
+                                                ),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        for field in fields.iter().filter(|field| field.is_private) {
+                            if private_bindings.contains_key(&field.name) {
+                                return Err(Error::ScriptRuntime(format!(
+                                    "duplicate private identifier '#{}'",
+                                    field.name
+                                )));
+                            }
+                            private_bindings.insert(
+                                field.name.clone(),
+                                PrivateBindingRuntime {
+                                    name: field.name.clone(),
+                                    slot_id: self.script_runtime.allocate_private_slot_id(),
+                                    is_static: field.is_static,
+                                    kind: PrivateBindingKind::Field,
+                                    has_getter: false,
+                                    has_setter: false,
+                                },
+                            );
+                        }
+
+                        let mut class_function_ids = vec![class_constructor_id];
+                        let mut static_private_method_initializers = Vec::new();
+                        let mut instance_private_method_initializers = Vec::new();
+                        let mut static_field_initializers_by_index = HashMap::new();
+                        let mut instance_field_initializers = Vec::new();
 
                         {
                             let mut prototype = class_function.prototype_object.borrow_mut();
@@ -1036,7 +1618,7 @@ impl Harness {
                                 Self::object_set_entry(
                                     &mut *prototype,
                                     INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
-                                    Value::Object(super_prototype),
+                                    super_prototype,
                                 );
                             }
                             Self::object_set_entry(
@@ -1044,68 +1626,299 @@ impl Harness {
                                 "constructor".to_string(),
                                 class_constructor.clone(),
                             );
-                            for method in methods {
+                        }
+
+                        for method in methods {
+                            let method_value = self.make_function_value_with_super(
+                                method.handler.clone(),
+                                env,
+                                false,
+                                method.is_async,
+                                method.is_generator,
+                                false,
+                                true,
+                                super_constructor.clone(),
+                                super_prototype.clone(),
+                            );
+                            if let Value::Function(function) = &method_value {
+                                class_function_ids.push(function.function_id);
+                            }
+
+                            if method.is_private {
+                                let binding =
+                                    private_bindings.get(&method.name).cloned().ok_or_else(|| {
+                                        Error::ScriptRuntime(format!(
+                                            "private identifier '#{}' is not declared",
+                                            method.name
+                                        ))
+                                    })?;
+                                let mut initializer = PrivateInitializerRuntime {
+                                    binding,
+                                    initializer: None,
+                                    value: None,
+                                    setter_value: None,
+                                };
+                                match method.kind {
+                                    ClassMethodKind::Method | ClassMethodKind::Getter => {
+                                        initializer.value = Some(method_value);
+                                    }
+                                    ClassMethodKind::Setter => {
+                                        initializer.setter_value = Some(method_value);
+                                    }
+                                }
+                                if method.is_static {
+                                    static_private_method_initializers.push(initializer);
+                                } else {
+                                    instance_private_method_initializers.push(initializer);
+                                }
+                                continue;
+                            }
+
+                            if method.is_static {
+                                let properties = self
+                                    .script_runtime
+                                    .function_public_properties
+                                    .entry(class_constructor_id)
+                                    .or_default();
                                 match method.kind {
                                     ClassMethodKind::Method => {
-                                        let method_value = self.make_function_value_with_super(
-                                            method.handler.clone(),
-                                            env,
-                                            false,
-                                            method.is_async,
-                                            method.is_generator,
-                                            false,
-                                            true,
-                                            super_constructor.clone(),
-                                            super_prototype.clone().map(Value::Object),
-                                        );
                                         Self::object_set_entry(
-                                            &mut *prototype,
+                                            properties,
                                             method.name.clone(),
                                             method_value,
                                         );
                                     }
                                     ClassMethodKind::Getter => {
-                                        let getter_value = self.make_function_value_with_super(
-                                            method.handler.clone(),
-                                            env,
-                                            false,
-                                            false,
-                                            false,
-                                            false,
-                                            true,
-                                            super_constructor.clone(),
-                                            super_prototype.clone().map(Value::Object),
-                                        );
                                         let getter_key =
                                             Self::object_getter_storage_key(&method.name);
-                                        Self::object_set_entry(
-                                            &mut *prototype,
-                                            getter_key,
-                                            getter_value,
-                                        );
+                                        Self::object_set_entry(properties, getter_key, method_value);
                                     }
                                     ClassMethodKind::Setter => {
-                                        let setter_value = self.make_function_value_with_super(
-                                            method.handler.clone(),
-                                            env,
-                                            false,
-                                            false,
-                                            false,
-                                            false,
-                                            true,
-                                            super_constructor.clone(),
-                                            super_prototype.clone().map(Value::Object),
-                                        );
                                         let setter_key =
                                             Self::object_setter_storage_key(&method.name);
-                                        Self::object_set_entry(
-                                            &mut *prototype,
-                                            setter_key,
-                                            setter_value,
-                                        );
+                                        Self::object_set_entry(properties, setter_key, method_value);
                                     }
                                 }
+                                continue;
                             }
+
+                            let mut prototype = class_function.prototype_object.borrow_mut();
+                            match method.kind {
+                                ClassMethodKind::Method => {
+                                    Self::object_set_entry(
+                                        &mut *prototype,
+                                        method.name.clone(),
+                                        method_value,
+                                    );
+                                }
+                                ClassMethodKind::Getter => {
+                                    let getter_key = Self::object_getter_storage_key(&method.name);
+                                    Self::object_set_entry(&mut *prototype, getter_key, method_value);
+                                }
+                                ClassMethodKind::Setter => {
+                                    let setter_key = Self::object_setter_storage_key(&method.name);
+                                    Self::object_set_entry(&mut *prototype, setter_key, method_value);
+                                }
+                            }
+                        }
+
+                        for (field_index, field) in fields.iter().enumerate() {
+                            let initializer = if field.is_private {
+                                let binding =
+                                    private_bindings.get(&field.name).cloned().ok_or_else(|| {
+                                        Error::ScriptRuntime(format!(
+                                            "private identifier '#{}' is not declared",
+                                            field.name
+                                        ))
+                                    })?;
+                                ConstructorInstanceInitializerRuntime::Private(
+                                    PrivateInitializerRuntime {
+                                        binding,
+                                        initializer: field.initializer.clone(),
+                                        value: None,
+                                        setter_value: None,
+                                    },
+                                )
+                            } else {
+                                let field_name = if let Some(name_expr) = field.computed_name.as_ref()
+                                {
+                                    let key_value =
+                                        self.eval_expr(name_expr, env, event_param, event)?;
+                                    self.property_key_to_storage_key(&key_value)
+                                } else {
+                                    field.name.clone()
+                                };
+                                ConstructorInstanceInitializerRuntime::Public(
+                                    PublicFieldInitializerRuntime {
+                                        name: field_name,
+                                        initializer: field.initializer.clone(),
+                                    },
+                                )
+                            };
+                            if field.is_static {
+                                static_field_initializers_by_index.insert(field_index, initializer);
+                            } else {
+                                instance_field_initializers.push(initializer);
+                            }
+                        }
+
+                        if !private_bindings.is_empty() {
+                            for function_id in class_function_ids {
+                                self.script_runtime
+                                    .function_private_bindings
+                                    .insert(function_id, private_bindings.clone());
+                            }
+                        }
+
+                        enum RuntimeStaticInitializer {
+                            Member(ConstructorInstanceInitializerRuntime),
+                            Block(ScriptHandler),
+                        }
+
+                        let mut static_runtime_initializers = Vec::new();
+                        static_runtime_initializers.extend(
+                            static_private_method_initializers
+                                .into_iter()
+                                .map(|initializer| {
+                                    RuntimeStaticInitializer::Member(
+                                        ConstructorInstanceInitializerRuntime::Private(initializer),
+                                    )
+                                }),
+                        );
+                        for entry in static_initializers {
+                            match entry {
+                                ClassStaticInitializerDecl::Field(field_index) => {
+                                    let initializer = static_field_initializers_by_index
+                                        .remove(field_index)
+                                        .ok_or_else(|| {
+                                            Error::ScriptRuntime(
+                                                "class static field initializer is missing".into(),
+                                            )
+                                        })?;
+                                    static_runtime_initializers
+                                        .push(RuntimeStaticInitializer::Member(initializer));
+                                }
+                                ClassStaticInitializerDecl::Block(handler) => {
+                                    static_runtime_initializers
+                                        .push(RuntimeStaticInitializer::Block(handler.clone()));
+                                }
+                            }
+                        }
+
+                        if !static_runtime_initializers.is_empty() {
+                            let outer_sync_names = env
+                                .keys()
+                                .filter(|key| {
+                                    let key = key.as_str();
+                                    !Self::is_internal_env_key(key)
+                                        && key != "this"
+                                        && key != name.as_str()
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            let mut static_env = env.clone();
+                            static_env.insert("this".to_string(), class_constructor.clone());
+                            static_env.insert(name.clone(), class_constructor.clone());
+                            if let Some(super_constructor) = super_constructor.clone() {
+                                static_env.insert(
+                                    INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(),
+                                    super_constructor,
+                                );
+                            }
+                            self.script_runtime
+                                .private_binding_stack
+                                .push(private_bindings.clone());
+                            let static_result = (|| -> Result<()> {
+                                for initializer in &static_runtime_initializers {
+                                    match initializer {
+                                        RuntimeStaticInitializer::Member(initializer) => {
+                                            self.apply_constructor_instance_initializer_to_receiver(
+                                                initializer,
+                                                &class_constructor,
+                                                &static_env,
+                                                event_param,
+                                                event,
+                                            )?;
+                                        }
+                                        RuntimeStaticInitializer::Block(handler) => {
+                                            let mut block_env = static_env.clone();
+                                            let mut local_var_names = Self::collect_var_declared_names(
+                                                &handler.stmts,
+                                            )
+                                            .into_iter()
+                                            .collect::<Vec<_>>();
+                                            local_var_names.sort();
+                                            for local_name in &local_var_names {
+                                                block_env
+                                                    .insert(local_name.clone(), Value::Undefined);
+                                                self.set_const_binding(
+                                                    &mut block_env,
+                                                    local_name,
+                                                    false,
+                                                );
+                                            }
+                                            let mut local_declared_names = local_var_names
+                                                .into_iter()
+                                                .collect::<HashSet<_>>();
+                                            for stmt in &handler.stmts {
+                                                for (name, _) in
+                                                    Self::direct_decl_binding_kinds(stmt)
+                                                {
+                                                    local_declared_names.insert(name);
+                                                }
+                                            }
+                                            match self.execute_stmts(
+                                                &handler.stmts,
+                                                event_param,
+                                                event,
+                                                &mut block_env,
+                                            )? {
+                                                ExecFlow::Continue => {}
+                                                ExecFlow::Break(_)
+                                                | ExecFlow::ContinueLoop(_)
+                                                | ExecFlow::Return => {
+                                                    return Err(Error::ScriptRuntime(
+                                                        "invalid control flow in class static initialization block".into(),
+                                                    ));
+                                                }
+                                            }
+                                            for sync_name in &outer_sync_names {
+                                                if local_declared_names.contains(sync_name) {
+                                                    continue;
+                                                }
+                                                if let Some(next) = block_env.get(sync_name).cloned()
+                                                {
+                                                    static_env
+                                                        .insert(sync_name.clone(), next.clone());
+                                                    env.insert(sync_name.clone(), next);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            })();
+                            self.script_runtime.private_binding_stack.pop();
+                            static_result?;
+                        }
+
+                        let mut instance_initializers = Vec::new();
+                        instance_initializers.extend(
+                            instance_private_method_initializers
+                                .into_iter()
+                                .map(ConstructorInstanceInitializerRuntime::Private),
+                        );
+                        instance_initializers.extend(instance_field_initializers);
+
+                        if instance_initializers.is_empty() {
+                            self.script_runtime
+                                .constructor_instance_initializers
+                                .remove(&class_constructor_id);
+                        } else {
+                            self.script_runtime.constructor_instance_initializers.insert(
+                                class_constructor_id,
+                                instance_initializers,
+                            );
                         }
 
                         env.insert(name.clone(), class_constructor);
@@ -1274,6 +2087,11 @@ impl Harness {
                         self.sync_global_binding_if_needed(env, name, &next);
                         self.bind_timer_id_to_task_env(name, expr, &next);
                     }
+                    Stmt::PrivateAssign { target, member, expr } => {
+                        let receiver = self.eval_expr(target, env, event_param, event)?;
+                        let value = self.eval_expr(expr, env, event_param, event)?;
+                        self.private_set_member(member, &receiver, value, env, event)?;
+                    }
                     Stmt::VarUpdate { name, delta } => {
                         self.ensure_binding_initialized(env, name)?;
                         let previous = env.get(name).cloned().ok_or_else(|| {
@@ -1434,13 +2252,22 @@ impl Harness {
                     Stmt::DomAssign { target, prop, expr } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         if let DomQuery::Var(name) = target {
-                            if let Some(Value::Object(entries)) = env.get(name) {
-                                if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                            if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                                if let Some(Value::Object(entries)) = env.get(name) {
                                     Self::object_set_entry(
                                         &mut entries.borrow_mut(),
                                         key.to_string(),
-                                        value,
+                                        value.clone(),
                                     );
+                                    continue;
+                                }
+                                if let Some(Value::Function(function)) = env.get(name) {
+                                    let entries = self
+                                        .script_runtime
+                                        .function_public_properties
+                                        .entry(function.function_id)
+                                        .or_default();
+                                    Self::object_set_entry(entries, key.to_string(), value.clone());
                                     continue;
                                 }
                             }

@@ -50,7 +50,20 @@ impl Harness {
             }
         }
         drop(captured_env_snapshot);
+        let function_id = self.script_runtime.allocate_function_id();
+        if !self.script_runtime.private_binding_stack.is_empty() {
+            let mut captured_private_bindings = HashMap::new();
+            for bindings in &self.script_runtime.private_binding_stack {
+                for (name, binding) in bindings {
+                    captured_private_bindings.insert(name.clone(), binding.clone());
+                }
+            }
+            self.script_runtime
+                .function_private_bindings
+                .insert(function_id, captured_private_bindings);
+        }
         Value::Function(Rc::new(FunctionValue {
+            function_id,
             handler,
             captured_env,
             captured_pending_function_decls,
@@ -179,6 +192,8 @@ impl Harness {
                 if function.is_generator || function.is_arrow || function.is_method {
                     return Err(Error::ScriptRuntime("value is not a constructor".into()));
                 }
+                let is_derived_class_constructor =
+                    function.is_class_constructor && function.class_super_constructor.is_some();
                 let instance = if let Some(instance) = this_arg {
                     if Self::is_primitive_value(&instance) {
                         return Err(Error::ScriptRuntime(
@@ -200,6 +215,11 @@ impl Harness {
                     Some(instance.clone()),
                 )?;
                 if Self::is_primitive_value(&result) {
+                    if is_derived_class_constructor && !matches!(result, Value::Undefined) {
+                        return Err(Error::ScriptRuntime(
+                            "Derived constructors may only return object or undefined".into(),
+                        ));
+                    }
                     Ok(instance)
                 } else {
                     Ok(result)
@@ -544,6 +564,68 @@ impl Harness {
         )
     }
 
+    pub(crate) fn apply_constructor_instance_initializers_by_id(
+        &mut self,
+        constructor_id: usize,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        let Some(initializers) = self
+            .script_runtime
+            .constructor_instance_initializers
+            .get(&constructor_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+
+        let this_value = env.get("this").cloned().unwrap_or(Value::Undefined);
+        for initializer in &initializers {
+            self.apply_constructor_instance_initializer_to_receiver(
+                initializer,
+                &this_value,
+                env,
+                event_param,
+                event,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn initialize_current_constructor_instance_fields(
+        &mut self,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<()> {
+        let Some(constructor_id) = self.script_runtime.constructor_call_stack.last().copied() else {
+            return Ok(());
+        };
+        let Some(already_initialized) = self
+            .script_runtime
+            .constructor_instance_initialized_stack
+            .last()
+            .copied()
+        else {
+            return Ok(());
+        };
+        if already_initialized {
+            return Err(Error::ScriptRuntime(
+                "super() has already been called for this constructor".into(),
+            ));
+        }
+        self.apply_constructor_instance_initializers_by_id(constructor_id, env, event_param, event)?;
+        if let Some(last) = self
+            .script_runtime
+            .constructor_instance_initialized_stack
+            .last_mut()
+        {
+            *last = true;
+        }
+        Ok(())
+    }
+
     pub(crate) fn bind_handler_params(
         &mut self,
         handler: &ScriptHandler,
@@ -594,6 +676,26 @@ impl Harness {
          -> Result<Value> {
             let pending_scope_start =
                 this.push_pending_function_decl_scopes(&function.captured_pending_function_decls);
+
+            let private_bindings = this
+                .script_runtime
+                .function_private_bindings
+                .get(&function.function_id)
+                .cloned();
+            if let Some(bindings) = private_bindings.clone() {
+                this.script_runtime.private_binding_stack.push(bindings);
+            }
+
+            let is_constructor_call = function.is_class_constructor;
+            if is_constructor_call {
+                this.script_runtime
+                    .constructor_call_stack
+                    .push(function.function_id);
+                let initialized = function.class_super_constructor.is_none();
+                this.script_runtime
+                    .constructor_instance_initialized_stack
+                    .push(initialized);
+            }
 
             let result = this.with_isolated_loop_control_scope(|this| {
                 (|| -> Result<Value> {
@@ -711,6 +813,14 @@ impl Harness {
                         &event_param,
                         &call_event,
                     )?;
+                    if function.is_class_constructor && function.class_super_constructor.is_none() {
+                        this.apply_constructor_instance_initializers_by_id(
+                            function.function_id,
+                            &call_env,
+                            &event_param,
+                            &call_event,
+                        )?;
+                    }
                     let mut body_env = call_env.clone();
                     let param_names = function
                         .handler
@@ -824,6 +934,13 @@ impl Harness {
                 })()
             });
 
+            if private_bindings.is_some() {
+                this.script_runtime.private_binding_stack.pop();
+            }
+            if is_constructor_call {
+                this.script_runtime.constructor_call_stack.pop();
+                this.script_runtime.constructor_instance_initialized_stack.pop();
+            }
             this.restore_pending_function_decl_scopes(pending_scope_start);
             result
         };

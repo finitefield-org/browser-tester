@@ -584,10 +584,23 @@ pub(crate) enum Expr {
         args: Vec<Expr>,
         optional: bool,
     },
+    PrivateMemberCall {
+        target: Box<Expr>,
+        member: String,
+        args: Vec<Expr>,
+    },
     MemberGet {
         target: Box<Expr>,
         member: String,
         optional: bool,
+    },
+    PrivateMemberGet {
+        target: Box<Expr>,
+        member: String,
+    },
+    PrivateIn {
+        member: String,
+        target: Box<Expr>,
     },
     IndexGet {
         target: Box<Expr>,
@@ -1013,10 +1026,27 @@ pub(crate) enum ClassMethodKind {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassMethodDecl {
     pub(crate) name: String,
+    pub(crate) is_private: bool,
+    pub(crate) is_static: bool,
     pub(crate) handler: ScriptHandler,
     pub(crate) is_async: bool,
     pub(crate) is_generator: bool,
     pub(crate) kind: ClassMethodKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClassFieldDecl {
+    pub(crate) name: String,
+    pub(crate) computed_name: Option<Expr>,
+    pub(crate) is_private: bool,
+    pub(crate) is_static: bool,
+    pub(crate) initializer: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ClassStaticInitializerDecl {
+    Field(usize),
+    Block(ScriptHandler),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1065,7 +1095,14 @@ pub(crate) enum Stmt {
         name: String,
         super_class: Option<Expr>,
         constructor: Option<ScriptHandler>,
+        fields: Vec<ClassFieldDecl>,
         methods: Vec<ClassMethodDecl>,
+        static_initializers: Vec<ClassStaticInitializerDecl>,
+    },
+    PrivateAssign {
+        target: Expr,
+        member: String,
+        expr: Expr,
     },
     Label {
         name: String,

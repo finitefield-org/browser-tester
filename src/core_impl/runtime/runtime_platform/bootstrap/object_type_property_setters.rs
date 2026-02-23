@@ -694,6 +694,122 @@ impl Harness {
                 Self::object_set_entry(&mut object.borrow_mut(), key, value);
                 Ok(())
             }
+            Value::Function(function) => {
+                let key = self.property_key_to_storage_key(key_value);
+                let (own_setter, own_getter, own_data) = {
+                    if let Some(entries) = self
+                        .script_runtime
+                        .function_public_properties
+                        .get(&function.function_id)
+                    {
+                        (
+                            Self::object_setter_from_entries(entries, &key),
+                            Self::object_getter_from_entries(entries, &key).is_some(),
+                            Self::object_get_entry(entries, &key).is_some(),
+                        )
+                    } else {
+                        (None, false, false)
+                    }
+                };
+                if let Some(setter) = own_setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        event,
+                        None,
+                        Some(container.clone()),
+                    )?;
+                    return Ok(());
+                }
+                if own_getter {
+                    return Ok(());
+                }
+                if !own_data {
+                    let mut prototype = function.class_super_constructor.clone();
+                    while let Some(current) = prototype {
+                        match current {
+                            Value::Function(proto_function) => {
+                                let (setter, getter, next) = if let Some(entries) = self
+                                    .script_runtime
+                                    .function_public_properties
+                                    .get(&proto_function.function_id)
+                                {
+                                    (
+                                        Self::object_setter_from_entries(entries, &key),
+                                        Self::object_getter_from_entries(entries, &key).is_some(),
+                                        proto_function.class_super_constructor.clone(),
+                                    )
+                                } else {
+                                    (None, false, proto_function.class_super_constructor.clone())
+                                };
+                                if let Some(setter) = setter {
+                                    if !self.is_callable_value(&setter) {
+                                        return Err(Error::ScriptRuntime(
+                                            "object setter is not callable".into(),
+                                        ));
+                                    }
+                                    self.execute_callable_value_with_this_and_env(
+                                        &setter,
+                                        &[value],
+                                        event,
+                                        None,
+                                        Some(container.clone()),
+                                    )?;
+                                    return Ok(());
+                                }
+                                if getter {
+                                    return Ok(());
+                                }
+                                prototype = next;
+                            }
+                            Value::Object(proto_object) => {
+                                let (setter, getter, next) = {
+                                    let proto_ref = proto_object.borrow();
+                                    (
+                                        Self::object_setter_from_entries(&proto_ref, &key),
+                                        Self::object_getter_from_entries(&proto_ref, &key)
+                                            .is_some(),
+                                        Self::object_get_entry(
+                                            &proto_ref,
+                                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                        ),
+                                    )
+                                };
+                                if let Some(setter) = setter {
+                                    if !self.is_callable_value(&setter) {
+                                        return Err(Error::ScriptRuntime(
+                                            "object setter is not callable".into(),
+                                        ));
+                                    }
+                                    self.execute_callable_value_with_this_and_env(
+                                        &setter,
+                                        &[value],
+                                        event,
+                                        None,
+                                        Some(container.clone()),
+                                    )?;
+                                    return Ok(());
+                                }
+                                if getter {
+                                    return Ok(());
+                                }
+                                prototype = next;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                let entries = self
+                    .script_runtime
+                    .function_public_properties
+                    .entry(function.function_id)
+                    .or_default();
+                Self::object_set_entry(entries, key, value);
+                Ok(())
+            }
             Value::UrlConstructor => {
                 let key = self.property_key_to_storage_key(key_value);
                 self.set_url_constructor_property(&key, value);

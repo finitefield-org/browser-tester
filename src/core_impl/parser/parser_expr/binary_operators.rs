@@ -387,6 +387,9 @@ pub(crate) fn parse_relational_expr(src: &str) -> Result<Expr> {
     if src.len() != trimmed.len() {
         return parse_expr(src);
     }
+    if let Some(expr) = parse_private_in_expr(src)? {
+        return Ok(expr);
+    }
     let (parts, ops) = split_top_level_by_ops(src, &["<=", ">=", "<", ">", "instanceof", "in"]);
     if ops.is_empty() {
         return parse_shift_expr(src);
@@ -400,6 +403,32 @@ pub(crate) fn parse_relational_expr(src: &str) -> Result<Expr> {
         "in" => BinaryOp::In,
         _ => unreachable!(),
     })
+}
+
+fn parse_private_in_expr(src: &str) -> Result<Option<Expr>> {
+    let (parts, ops) = split_top_level_by_ops(src, &["in"]);
+    if ops.len() != 1 || parts.len() != 2 || ops[0] != "in" {
+        return Ok(None);
+    }
+    let left = parts[0].trim();
+    let Some(name) = left.strip_prefix('#') else {
+        return Ok(None);
+    };
+    if !is_ident(name) {
+        return Err(Error::ScriptParse(format!(
+            "invalid private identifier in in-expression: {left}"
+        )));
+    }
+    let right = parts[1].trim();
+    if right.is_empty() {
+        return Err(Error::ScriptParse(
+            "private in-expression requires a right-hand operand".into(),
+        ));
+    }
+    Ok(Some(Expr::PrivateIn {
+        member: name.to_string(),
+        target: Box::new(parse_expr(right)?),
+    }))
 }
 
 pub(crate) fn parse_shift_expr(src: &str) -> Result<Expr> {

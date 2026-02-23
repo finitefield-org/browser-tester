@@ -146,6 +146,11 @@ pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
     }
     if let Some(rest) = strip_keyword_operator(src, "delete") {
         let inner = parse_unary_expr(rest)?;
+        if matches!(inner, Expr::PrivateMemberGet { .. }) {
+            return Err(Error::ScriptParse(
+                "private elements cannot be deleted".into(),
+            ));
+        }
         return Ok(Expr::Delete(Box::new(inner)));
     }
     if let Some(rest) = src.strip_prefix('+') {

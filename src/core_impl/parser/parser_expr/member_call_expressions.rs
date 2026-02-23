@@ -1,4 +1,14 @@
 use super::*;
+
+fn parse_member_name(cursor: &mut Cursor<'_>) -> Option<(String, bool)> {
+    if cursor.consume_byte(b'#') {
+        let name = cursor.parse_identifier()?;
+        return Some((name, true));
+    }
+    let name = cursor.parse_identifier()?;
+    Some((name, false))
+}
+
 pub(crate) fn parse_call_args<'a>(
     args_src: &'a str,
     empty_err: &'static str,
@@ -55,12 +65,17 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
         };
         let tail_src = tail_src.trim();
         let mut cursor = Cursor::new(tail_src);
-        let Some(member) = cursor.parse_identifier() else {
+        let Some((member, is_private)) = parse_member_name(&mut cursor) else {
             continue;
         };
         cursor.skip_ws();
         if cursor.peek() != Some(b'(') {
             continue;
+        }
+        if is_private && optional {
+            return Err(Error::ScriptParse(
+                "optional chaining is not supported for private members".into(),
+            ));
         }
 
         let args_src = cursor.read_balanced_block(b'(', b')')?;
@@ -76,6 +91,13 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             parsed_args.push(parse_call_arg_expr(arg)?);
         }
 
+        if is_private {
+            return Ok(Some(Expr::PrivateMemberCall {
+                target: Box::new(parse_expr(base_src)?),
+                member,
+                args: parsed_args,
+            }));
+        }
         return Ok(Some(Expr::MemberCall {
             target: Box::new(parse_expr(base_src)?),
             member,
@@ -102,7 +124,7 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
         }
 
         let mut cursor = Cursor::new(tail_src);
-        let Some(member) = cursor.parse_identifier() else {
+        let Some((member, is_private)) = parse_member_name(&mut cursor) else {
             continue;
         };
         cursor.skip_ws();
@@ -115,6 +137,11 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
         if let Some(stripped) = base_src.strip_suffix('?') {
             optional = true;
             base_src = stripped.trim_end();
+        }
+        if is_private && optional {
+            return Err(Error::ScriptParse(
+                "optional chaining is not supported for private members".into(),
+            ));
         }
         if base_src.is_empty() {
             continue;
@@ -133,6 +160,12 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
             }
         }
 
+        if is_private {
+            return Ok(Some(Expr::PrivateMemberGet {
+                target: Box::new(parse_expr(base_src)?),
+                member,
+            }));
+        }
         return Ok(Some(Expr::MemberGet {
             target: Box::new(parse_expr(base_src)?),
             member,

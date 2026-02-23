@@ -600,6 +600,43 @@ pub(crate) struct TdzScopeFrame {
     pub(crate) pending: HashSet<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrivateBindingKind {
+    Field,
+    Method,
+    Accessor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PrivateBindingRuntime {
+    pub(crate) name: String,
+    pub(crate) slot_id: usize,
+    pub(crate) is_static: bool,
+    pub(crate) kind: PrivateBindingKind,
+    pub(crate) has_getter: bool,
+    pub(crate) has_setter: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PrivateInitializerRuntime {
+    pub(crate) binding: PrivateBindingRuntime,
+    pub(crate) initializer: Option<Expr>,
+    pub(crate) value: Option<Value>,
+    pub(crate) setter_value: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PublicFieldInitializerRuntime {
+    pub(crate) name: String,
+    pub(crate) initializer: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ConstructorInstanceInitializerRuntime {
+    Private(PrivateInitializerRuntime),
+    Public(PublicFieldInitializerRuntime),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ScriptRuntimeState {
     pub(crate) env: ScriptEnv,
@@ -613,6 +650,31 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) module_referrer_stack: Vec<String>,
     pub(crate) module_cache: HashMap<String, HashMap<String, Value>>,
     pub(crate) loading_modules: HashSet<String>,
+    pub(crate) next_function_id: usize,
+    pub(crate) next_private_slot_id: usize,
+    pub(crate) function_private_bindings: HashMap<usize, HashMap<String, PrivateBindingRuntime>>,
+    pub(crate) function_public_properties: HashMap<usize, ObjectValue>,
+    pub(crate) constructor_instance_initializers:
+        HashMap<usize, Vec<ConstructorInstanceInitializerRuntime>>,
+    pub(crate) constructor_call_stack: Vec<usize>,
+    pub(crate) constructor_instance_initialized_stack: Vec<bool>,
+    pub(crate) private_binding_stack: Vec<HashMap<String, PrivateBindingRuntime>>,
+    pub(crate) private_instance_slots: HashMap<usize, HashMap<usize, Value>>,
+    pub(crate) private_static_slots: HashMap<usize, HashMap<usize, Value>>,
+}
+
+impl ScriptRuntimeState {
+    pub(crate) fn allocate_function_id(&mut self) -> usize {
+        let id = self.next_function_id;
+        self.next_function_id = self.next_function_id.saturating_add(1);
+        id
+    }
+
+    pub(crate) fn allocate_private_slot_id(&mut self) -> usize {
+        let id = self.next_private_slot_id;
+        self.next_private_slot_id = self.next_private_slot_id.saturating_add(1);
+        id
+    }
 }
 
 #[derive(Debug)]
