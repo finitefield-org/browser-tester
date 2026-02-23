@@ -978,6 +978,87 @@ fn async_function_errors_reject_promise_instead_of_throwing_synchronously() -> R
 }
 
 #[test]
+fn async_function_declaration_is_hoisted_within_scope() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            const promise = declaredLater();
+            result.textContent = typeof promise;
+            promise.then((value) => {
+              result.textContent = result.textContent + ':' + value;
+            });
+
+            async function declaredLater() {
+              return 'ready';
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "object:ready")?;
+    Ok(())
+}
+
+#[test]
+fn async_function_without_await_runs_body_before_returning() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          async function noAwait() {
+            document.getElementById('result').textContent += 'A';
+            return 1;
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = 'B';
+            const promise = noAwait();
+            document.getElementById('result').textContent += 'C';
+            promise.then(() => {
+              document.getElementById('result').textContent += ':done';
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "BAC:done")?;
+    Ok(())
+}
+
+#[test]
+fn line_break_between_async_and_function_is_parsed_with_asi() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const async = 'marker';
+            async
+            function declaredWithLineBreak() {
+              return 'ok';
+            }
+
+            const value = declaredWithLineBreak();
+            document.getElementById('result').textContent =
+              typeof value + ':' + value + ':' + async;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "string:ok:marker")?;
+    Ok(())
+}
+
+#[test]
 fn nullish_coalescing_operator_works() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

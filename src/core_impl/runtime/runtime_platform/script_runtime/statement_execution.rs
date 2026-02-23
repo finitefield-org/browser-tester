@@ -18,6 +18,50 @@ impl Harness {
         )
     }
 
+    fn collect_direct_block_lexical_bindings(
+        &self,
+        stmts: &[Stmt],
+        env: &HashMap<String, Value>,
+    ) -> Vec<(String, Option<Value>)> {
+        let mut seen = HashSet::new();
+        let mut previous = Vec::new();
+        for stmt in stmts {
+            let Stmt::VarDecl { name, kind, .. } = stmt else {
+                continue;
+            };
+            if !matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                continue;
+            }
+            if seen.insert(name.clone()) {
+                previous.push((name.clone(), env.get(name).cloned()));
+            }
+        }
+        previous
+    }
+
+    fn restore_block_lexical_bindings(
+        &mut self,
+        previous: Vec<(String, Option<Value>)>,
+        env: &mut HashMap<String, Value>,
+    ) {
+        for (name, value) in previous {
+            if let Some(value) = value {
+                env.insert(name.clone(), value.clone());
+                self.sync_global_binding_if_needed(env, &name, &value);
+            } else {
+                env.remove(&name);
+            }
+        }
+    }
+
+    pub(crate) fn break_flow_error(label: &Option<String>) -> Error {
+        if let Some(label) = label {
+            Error::ScriptRuntime(format!("label not found: {label}"))
+        } else {
+            Error::ScriptRuntime("break statement outside of loop".into())
+        }
+    }
+
     fn execute_stmts_impl(
         &mut self,
         stmts: &[Stmt],
@@ -37,7 +81,7 @@ impl Harness {
                 self.sync_top_level_env_from_runtime(env);
                 self.sync_listener_capture_env_if_shared(env);
                 match stmt {
-                    Stmt::VarDecl { name, expr } => {
+                    Stmt::VarDecl { name, expr, .. } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         env.insert(name.clone(), value.clone());
                         self.bind_timer_id_to_task_env(name, expr, &value);
@@ -46,10 +90,39 @@ impl Harness {
                         name,
                         handler,
                         is_async,
+                        is_generator,
                     } => {
-                        let function =
-                            self.make_function_value(handler.clone(), env, false, *is_async, false);
+                        let function = self.make_function_value(
+                            handler.clone(),
+                            env,
+                            false,
+                            *is_async,
+                            *is_generator,
+                        );
                         env.insert(name.clone(), function);
+                    }
+                    Stmt::Block { stmts } => {
+                        let previous = self.collect_direct_block_lexical_bindings(stmts, env);
+                        let flow = self.execute_stmts(stmts, event_param, event, env);
+                        self.restore_block_lexical_bindings(previous, env);
+                        match flow? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
+                            ExecFlow::ContinueLoop => return Ok(ExecFlow::ContinueLoop),
+                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                        }
+                    }
+                    Stmt::Label { name, stmt } => {
+                        match self.execute_stmts(
+                            std::slice::from_ref(stmt.as_ref()),
+                            event_param,
+                            event,
+                            env,
+                        )? {
+                            ExecFlow::Continue => {}
+                            ExecFlow::Break(Some(label)) if label == *name => {}
+                            flow => return Ok(flow),
+                        }
                     }
                     Stmt::VarAssign { name, op, expr } => {
                         let previous = env.get(name).cloned().ok_or_else(|| {
@@ -802,7 +875,8 @@ impl Harness {
                             }
                             match self.execute_stmts(body, event_param, event, env)? {
                                 ExecFlow::Continue => {}
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::ContinueLoop => continue,
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
@@ -1037,7 +1111,8 @@ impl Harness {
                             }
                             match self.execute_stmts(body, event_param, event, env)? {
                                 ExecFlow::Continue => {}
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::ContinueLoop => continue,
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
@@ -1095,10 +1170,8 @@ impl Harness {
                             )? {
                                 ExecFlow::Continue => {}
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
-                                ExecFlow::Break => {
-                                    return Err(Error::ScriptRuntime(
-                                        "break statement outside of loop".into(),
-                                    ));
+                                ExecFlow::Break(label) => {
+                                    return Err(Self::break_flow_error(&label));
                                 }
                                 ExecFlow::ContinueLoop => {
                                     return Err(Error::ScriptRuntime(
@@ -1130,7 +1203,7 @@ impl Harness {
                                         )? {
                                             ExecFlow::Continue => {}
                                             ExecFlow::Return => return Ok(ExecFlow::Return),
-                                            ExecFlow::Break | ExecFlow::ContinueLoop => {
+                                            ExecFlow::Break(_) | ExecFlow::ContinueLoop => {
                                                 return Err(Error::ScriptRuntime(
                                                     "invalid loop control in post expression"
                                                         .into(),
@@ -1140,7 +1213,8 @@ impl Harness {
                                     }
                                     continue;
                                 }
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                             if let Some(post) = post.as_deref() {
@@ -1152,7 +1226,7 @@ impl Harness {
                                 )? {
                                     ExecFlow::Continue => {}
                                     ExecFlow::Return => return Ok(ExecFlow::Return),
-                                    ExecFlow::Break | ExecFlow::ContinueLoop => {
+                                    ExecFlow::Break(_) | ExecFlow::ContinueLoop => {
                                         return Err(Error::ScriptRuntime(
                                             "invalid loop control in post expression".into(),
                                         ));
@@ -1198,7 +1272,8 @@ impl Harness {
                             match self.execute_stmts(body, event_param, event, env)? {
                                 ExecFlow::Continue => {}
                                 ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                         }
@@ -1260,7 +1335,8 @@ impl Harness {
                             match self.execute_stmts(body, event_param, event, env)? {
                                 ExecFlow::Continue => {}
                                 ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                         }
@@ -1276,7 +1352,8 @@ impl Harness {
                             match self.execute_stmts(body, event_param, event, env)? {
                                 ExecFlow::Continue => {}
                                 ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break => break,
+                                ExecFlow::Break(None) => break,
+                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                         }
@@ -1285,7 +1362,8 @@ impl Harness {
                         match self.execute_stmts(body, event_param, event, env)? {
                             ExecFlow::Continue => {}
                             ExecFlow::ContinueLoop => {}
-                            ExecFlow::Break => break,
+                            ExecFlow::Break(None) => break,
+                            ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
                             ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                         if !self.eval_expr(cond, env, event_param, event)?.truthy() {
@@ -1361,8 +1439,8 @@ impl Harness {
                         env.insert(INTERNAL_RETURN_SLOT.to_string(), return_value);
                         return Ok(ExecFlow::Return);
                     }
-                    Stmt::Break => {
-                        return Ok(ExecFlow::Break);
+                    Stmt::Break { label } => {
+                        return Ok(ExecFlow::Break(label.clone()));
                     }
                     Stmt::Continue => {
                         return Ok(ExecFlow::ContinueLoop);

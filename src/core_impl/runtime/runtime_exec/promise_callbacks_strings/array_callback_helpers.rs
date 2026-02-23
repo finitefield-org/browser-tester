@@ -26,11 +26,7 @@ impl Harness {
             &mut callback_env,
         )? {
             ExecFlow::Continue | ExecFlow::Return => {}
-            ExecFlow::Break => {
-                return Err(Error::ScriptRuntime(
-                    "break statement outside of loop".into(),
-                ));
-            }
+            ExecFlow::Break(label) => return Err(Self::break_flow_error(&label)),
             ExecFlow::ContinueLoop => {
                 return Err(Error::ScriptRuntime(
                     "continue statement outside of loop".into(),
@@ -71,9 +67,7 @@ impl Harness {
 
         match result? {
             ExecFlow::Continue | ExecFlow::Return => Ok(()),
-            ExecFlow::Break => Err(Error::ScriptRuntime(
-                "break statement outside of loop".into(),
-            )),
+            ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
             ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
                 "continue statement outside of loop".into(),
             )),

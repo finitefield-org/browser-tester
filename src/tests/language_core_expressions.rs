@@ -103,6 +103,111 @@ fn for_of_loop_supports_break_and_continue() -> Result<()> {
 }
 
 #[test]
+fn while_loop_break_exits_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            while (i < 6) {
+              if (i === 3) {
+                break;
+              }
+              i += 1;
+            }
+            document.getElementById('result').textContent = String(i);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn labeled_break_exits_target_block() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            outerBlock: {
+              innerBlock: {
+                out = out + '1';
+                break outerBlock;
+                out = out + 'X';
+              }
+              out = out + '2';
+            }
+            out = out + '3';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "13")?;
+    Ok(())
+}
+
+#[test]
+fn break_with_unknown_label_reports_runtime_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            break missingLabel;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("break with unknown label should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("label not found: missingLabel")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn break_inside_nested_function_reports_outside_loop_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            while (i < 4) {
+              if (i === 1) {
+                (() => {
+                  break;
+                })();
+              }
+              i += 1;
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("break inside nested function should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("break statement outside of loop")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn foreach_supports_nested_if_else_and_event_variable() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -253,6 +358,119 @@ fn if_block_and_following_statement_without_space_are_split() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "AB")?;
+    Ok(())
+}
+
+#[test]
+fn standalone_block_statement_groups_multiple_statements() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'A';
+            {
+              out = out + 'B';
+              out = out + 'C';
+            }
+            out = out + 'D';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ABCD")?;
+    Ok(())
+}
+
+#[test]
+fn empty_block_statement_is_a_noop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = 'A';
+            {}
+            out = out + 'B';
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "AB")?;
+    Ok(())
+}
+
+#[test]
+fn var_declared_inside_block_updates_containing_scope() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            var x = 1;
+            {
+              var x = 2;
+            }
+            document.getElementById('result').textContent = String(x);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn let_declared_inside_block_does_not_override_outer_binding() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            var x = 1;
+            let y = 1;
+            if (true) {
+              var x = 2;
+              let y = 2;
+            }
+            document.getElementById('result').textContent = x + ':' + y;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:1")?;
+    Ok(())
+}
+
+#[test]
+fn const_declared_inside_block_does_not_override_outer_binding() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const c = 1;
+            {
+              const c = 2;
+            }
+            document.getElementById('result').textContent = String(c);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1")?;
     Ok(())
 }
 

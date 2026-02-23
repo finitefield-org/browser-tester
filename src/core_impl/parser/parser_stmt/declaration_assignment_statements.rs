@@ -18,6 +18,10 @@ pub(crate) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
         false
     };
     cursor.skip_ws();
+    let is_generator = cursor.consume_byte(b'*');
+    if is_generator {
+        cursor.skip_ws();
+    }
 
     let Some(name) = cursor.parse_identifier() else {
         return Err(Error::ScriptParse(
@@ -51,6 +55,7 @@ pub(crate) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
             stmts: body_stmts,
         },
         is_async,
+        is_generator,
     }))
 }
 
@@ -72,6 +77,11 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     };
     let decl_kind = decl_kind.unwrap_or("let");
+    let kind = match decl_kind {
+        "var" => VarDeclKind::Var,
+        "const" => VarDeclKind::Const,
+        _ => VarDeclKind::Let,
+    };
 
     let Some((eq_pos, op_len)) = find_top_level_assignment(rest) else {
         if decl_kind == "const" {
@@ -92,6 +102,7 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
         }
         return Ok(Some(Stmt::VarDecl {
             name: name.to_string(),
+            kind,
             expr: Expr::Undefined,
         }));
     };
@@ -129,6 +140,7 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let expr = parse_expr(expr_src)?;
     Ok(Some(Stmt::VarDecl {
         name: name.to_string(),
+        kind,
         expr,
     }))
 }

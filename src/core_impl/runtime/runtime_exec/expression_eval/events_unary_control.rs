@@ -129,44 +129,49 @@ impl Harness {
             },
             Expr::TypeOf(inner) => {
                 let js_type = match inner.as_ref() {
-                    Expr::Var(name) => env.get(name).map_or("undefined", |value| match value {
-                        Value::Null => "object",
-                        Value::Bool(_) => "boolean",
-                        Value::Number(_) | Value::Float(_) => "number",
-                        Value::BigInt(_) => "bigint",
-                        Value::Symbol(_) => "symbol",
-                        Value::Undefined => "undefined",
-                        Value::String(_) => "string",
-                        Value::StringConstructor => "function",
-                        Value::TypedArrayConstructor(_)
-                        | Value::BlobConstructor
-                        | Value::UrlConstructor
-                        | Value::ArrayBufferConstructor
-                        | Value::PromiseConstructor
-                        | Value::MapConstructor
-                        | Value::WeakMapConstructor
-                        | Value::SetConstructor
-                        | Value::WeakSetConstructor
-                        | Value::SymbolConstructor
-                        | Value::RegExpConstructor
-                        | Value::PromiseCapability(_) => "function",
-                        Value::Function(_) => "function",
-                        Value::Node(_)
-                        | Value::NodeList(_)
-                        | Value::FormData(_)
-                        | Value::Array(_)
-                        | Value::Object(_)
-                        | Value::Map(_)
-                        | Value::WeakMap(_)
-                        | Value::Set(_)
-                        | Value::WeakSet(_)
-                        | Value::Blob(_)
-                        | Value::Promise(_)
-                        | Value::ArrayBuffer(_)
-                        | Value::TypedArray(_)
-                        | Value::RegExp(_)
-                        | Value::Date(_) => "object",
-                    }),
+                    Expr::Var(name) => env
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.resolve_pending_function_decl(name, env))
+                        .as_ref()
+                        .map_or("undefined", |value| match value {
+                            Value::Null => "object",
+                            Value::Bool(_) => "boolean",
+                            Value::Number(_) | Value::Float(_) => "number",
+                            Value::BigInt(_) => "bigint",
+                            Value::Symbol(_) => "symbol",
+                            Value::Undefined => "undefined",
+                            Value::String(_) => "string",
+                            Value::StringConstructor => "function",
+                            Value::TypedArrayConstructor(_)
+                            | Value::BlobConstructor
+                            | Value::UrlConstructor
+                            | Value::ArrayBufferConstructor
+                            | Value::PromiseConstructor
+                            | Value::MapConstructor
+                            | Value::WeakMapConstructor
+                            | Value::SetConstructor
+                            | Value::WeakSetConstructor
+                            | Value::SymbolConstructor
+                            | Value::RegExpConstructor
+                            | Value::PromiseCapability(_) => "function",
+                            Value::Function(_) => "function",
+                            Value::Node(_)
+                            | Value::NodeList(_)
+                            | Value::FormData(_)
+                            | Value::Array(_)
+                            | Value::Object(_)
+                            | Value::Map(_)
+                            | Value::WeakMap(_)
+                            | Value::Set(_)
+                            | Value::WeakSet(_)
+                            | Value::Blob(_)
+                            | Value::Promise(_)
+                            | Value::ArrayBuffer(_)
+                            | Value::TypedArray(_)
+                            | Value::RegExp(_)
+                            | Value::Date(_) => "object",
+                        }),
                     _ => {
                         let value = self.eval_expr(inner, env, event_param, event)?;
                         match value {

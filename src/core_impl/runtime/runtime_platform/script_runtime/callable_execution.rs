@@ -568,9 +568,7 @@ impl Harness {
                 }
                 match flow {
                     ExecFlow::Continue => Ok(Value::Undefined),
-                    ExecFlow::Break => Err(Error::ScriptRuntime(
-                        "break statement outside of loop".into(),
-                    )),
+                    ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
                     ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
                         "continue statement outside of loop".into(),
                     )),

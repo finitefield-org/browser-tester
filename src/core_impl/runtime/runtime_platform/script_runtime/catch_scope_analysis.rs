@@ -110,16 +110,19 @@ impl Harness {
         Ok(params)
     }
 
-    pub(crate) fn collect_function_decls(stmts: &[Stmt]) -> HashMap<String, (ScriptHandler, bool)> {
+    pub(crate) fn collect_function_decls(
+        stmts: &[Stmt],
+    ) -> HashMap<String, (ScriptHandler, bool, bool)> {
         let mut out = HashMap::new();
         for stmt in stmts {
             if let Stmt::FunctionDecl {
                 name,
                 handler,
                 is_async,
+                is_generator,
             } = stmt
             {
-                out.insert(name.clone(), (handler.clone(), *is_async));
+                out.insert(name.clone(), (handler.clone(), *is_async, *is_generator));
             }
         }
         out
@@ -147,6 +150,12 @@ impl Harness {
             }
             Stmt::FunctionDecl { name, .. } => {
                 out.insert(name.clone());
+            }
+            Stmt::Label { stmt, .. } => {
+                Self::collect_scope_bindings_from_stmt(stmt, out);
+            }
+            Stmt::Block { stmts } => {
+                Self::collect_scope_bindings_from_stmts(stmts, out);
             }
             Stmt::ForEach {
                 item_var,
@@ -236,14 +245,14 @@ impl Harness {
     ) -> Option<Value> {
         let mut resolved = None;
         for scope in self.script_runtime.pending_function_decls.iter().rev() {
-            let Some((handler, is_async)) = scope.get(name) else {
+            let Some((handler, is_async, is_generator)) = scope.get(name) else {
                 continue;
             };
-            resolved = Some((handler.clone(), *is_async));
+            resolved = Some((handler.clone(), *is_async, *is_generator));
             break;
         }
-        let (handler, is_async) = resolved?;
-        Some(self.make_function_value(handler, env, false, is_async, false))
+        let (handler, is_async, is_generator) = resolved?;
+        Some(self.make_function_value(handler, env, false, is_async, is_generator))
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {

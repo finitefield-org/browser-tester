@@ -318,7 +318,8 @@ pub(crate) struct Listener {
     pub(crate) capture: bool,
     pub(crate) handler: ScriptHandler,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
-    pub(crate) captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    pub(crate) captured_pending_function_decls:
+        Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -584,7 +585,7 @@ pub(crate) struct ListenerCaptureFrame {
 #[derive(Debug, Default)]
 pub(crate) struct ScriptRuntimeState {
     pub(crate) env: ScriptEnv,
-    pub(crate) pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    pub(crate) pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
     pub(crate) listener_capture_env_stack: Vec<ListenerCaptureFrame>,
     pub(crate) generator_yield_stack: Vec<Rc<RefCell<Vec<Value>>>>,
 }

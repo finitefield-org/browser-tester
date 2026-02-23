@@ -6,30 +6,89 @@ pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
     let mut stmts = Vec::new();
 
     for raw in raw_stmts {
-        let stmt = raw.trim();
-        if stmt.is_empty() {
-            continue;
-        }
+        for stmt in split_async_function_asi_statements(raw.trim()) {
+            let stmt = stmt.trim();
+            if stmt.is_empty() {
+                continue;
+            }
 
-        if let Some(else_branch) = parse_else_fragment(stmt)? {
-            if let Some(last_stmt) = stmts.last_mut() {
-                if attach_else_branch_to_if_chain(last_stmt, else_branch) {
-                    continue;
+            if let Some(else_branch) = parse_else_fragment(stmt)? {
+                if let Some(last_stmt) = stmts.last_mut() {
+                    if attach_else_branch_to_if_chain(last_stmt, else_branch) {
+                        continue;
+                    }
+                    return Err(Error::ScriptParse(format!(
+                        "duplicate else branch in: {stmt}"
+                    )));
                 }
                 return Err(Error::ScriptParse(format!(
-                    "duplicate else branch in: {stmt}"
+                    "unexpected else without matching if: {stmt}"
                 )));
             }
-            return Err(Error::ScriptParse(format!(
-                "unexpected else without matching if: {stmt}"
-            )));
-        }
 
-        let parsed = parse_single_statement(stmt)?;
-        stmts.push(parsed);
+            let parsed = parse_single_statement(stmt)?;
+            stmts.push(parsed);
+        }
     }
 
     Ok(stmts)
+}
+
+pub(crate) fn split_async_function_asi_statements(stmt: &str) -> Vec<&str> {
+    let stmt = stmt.trim();
+    if stmt.is_empty() {
+        return vec![stmt];
+    }
+    let bytes = stmt.as_bytes();
+    if !stmt.starts_with("async") {
+        return vec![stmt];
+    }
+    if bytes.get("async".len()).is_some_and(|b| is_ident_char(*b)) {
+        return vec![stmt];
+    }
+
+    let mut i = "async".len();
+    let mut saw_line_terminator = false;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b' ' | b'\t' | 0x0B | 0x0C => {
+                i += 1;
+            }
+            b'\n' | b'\r' => {
+                saw_line_terminator = true;
+                i += 1;
+                if b == b'\r' && bytes.get(i) == Some(&b'\n') {
+                    i += 1;
+                }
+                break;
+            }
+            _ => return vec![stmt],
+        }
+    }
+    if !saw_line_terminator {
+        return vec![stmt];
+    }
+
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b' ' | b'\t' | 0x0B | 0x0C => i += 1,
+            b'\n' | b'\r' => i += 1,
+            _ => break,
+        }
+    }
+    let function_stmt = stmt.get(i..).unwrap_or_default();
+    if !function_stmt.starts_with("function") {
+        return vec![stmt];
+    }
+    if function_stmt
+        .as_bytes()
+        .get("function".len())
+        .is_some_and(|b| is_ident_char(*b))
+    {
+        return vec![stmt];
+    }
+
+    vec!["async", function_stmt]
 }
 
 pub(crate) fn attach_else_branch_to_if_chain(stmt: &mut Stmt, else_branch: Vec<Stmt>) -> bool {
@@ -69,6 +128,14 @@ pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_try_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_block_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_labeled_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -196,6 +263,50 @@ pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     Ok(Stmt::Expr(expr))
 }
 
+pub(crate) fn parse_labeled_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    let Some(name) = cursor.parse_identifier() else {
+        return Ok(None);
+    };
+    cursor.skip_ws();
+    if !cursor.consume_byte(b':') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    if cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "labeled statement requires a body: {stmt}"
+        )));
+    }
+    let rest = cursor.src.get(cursor.i..).unwrap_or_default();
+    let parsed = parse_single_statement(rest)?;
+    Ok(Some(Stmt::Label {
+        name,
+        stmt: Box::new(parsed),
+    }))
+}
+
+pub(crate) fn parse_block_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'{') {
+        return Ok(None);
+    }
+
+    let body = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Stmt::Block {
+        stmts: parse_block_statements(&body)?,
+    }))
+}
+
 pub(crate) fn parse_else_fragment(stmt: &str) -> Result<Option<Vec<Stmt>>> {
     let trimmed = stmt.trim_start();
     let Some(rest) = strip_else_prefix(trimmed) else {
@@ -234,7 +345,9 @@ pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
                 "unsupported trailing tokens in branch: {src}"
             )));
         }
-        return parse_block_statements(&body);
+        return Ok(vec![Stmt::Block {
+            stmts: parse_block_statements(&body)?,
+        }]);
     }
 
     let single = trim_optional_trailing_semicolon(src);
@@ -400,7 +513,9 @@ pub(crate) fn parse_do_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     let body_src = cursor.read_balanced_block(b'{', b'}')?;
-    let body = parse_block_statements(&body_src)?;
+    let body = vec![Stmt::Block {
+        stmts: parse_block_statements(&body_src)?,
+    }];
 
     cursor.skip_ws();
     if !cursor.consume_ascii("while") {
@@ -474,7 +589,9 @@ pub(crate) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     let try_src = cursor.read_balanced_block(b'{', b'}')?;
-    let try_stmts = parse_block_statements(&try_src)?;
+    let try_stmts = vec![Stmt::Block {
+        stmts: parse_block_statements(&try_src)?,
+    }];
 
     cursor.skip_ws();
     let mut catch_binding = None;
@@ -489,14 +606,18 @@ pub(crate) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
             cursor.skip_ws();
         }
         let catch_src = cursor.read_balanced_block(b'{', b'}')?;
-        catch_stmts = Some(parse_block_statements(&catch_src)?);
+        catch_stmts = Some(vec![Stmt::Block {
+            stmts: parse_block_statements(&catch_src)?,
+        }]);
         cursor.skip_ws();
     }
 
     if consume_keyword(&mut cursor, "finally") {
         cursor.skip_ws();
         let finally_src = cursor.read_balanced_block(b'{', b'}')?;
-        finally_stmts = Some(parse_block_statements(&finally_src)?);
+        finally_stmts = Some(vec![Stmt::Block {
+            stmts: parse_block_statements(&finally_src)?,
+        }]);
         cursor.skip_ws();
     }
 
@@ -585,6 +706,17 @@ pub(crate) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
         }
     }
     cursor.skip_ws();
+    let label = if cursor.peek() == Some(b';') || cursor.eof() {
+        None
+    } else {
+        let Some(label) = cursor.parse_identifier() else {
+            return Err(Error::ScriptParse(format!(
+                "unsupported break statement: {stmt}"
+            )));
+        };
+        cursor.skip_ws();
+        Some(label)
+    };
     cursor.consume_byte(b';');
     cursor.skip_ws();
     if !cursor.eof() {
@@ -592,7 +724,7 @@ pub(crate) fn parse_break_stmt(stmt: &str) -> Result<Option<Stmt>> {
             "unsupported break statement: {stmt}"
         )));
     }
-    Ok(Some(Stmt::Break))
+    Ok(Some(Stmt::Break { label }))
 }
 
 pub(crate) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {

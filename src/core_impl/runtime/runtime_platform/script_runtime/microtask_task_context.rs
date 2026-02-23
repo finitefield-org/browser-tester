@@ -95,9 +95,7 @@ impl Harness {
             callback_env.remove(INTERNAL_RETURN_SLOT);
             match flow {
                 ExecFlow::Continue => Ok(()),
-                ExecFlow::Break => Err(Error::ScriptRuntime(
-                    "break statement outside of loop".into(),
-                )),
+                ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
                 ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
                     "continue statement outside of loop".into(),
                 )),
@@ -180,9 +178,7 @@ impl Harness {
             callback_env.remove(INTERNAL_RETURN_SLOT);
             match flow {
                 ExecFlow::Continue => Ok(()),
-                ExecFlow::Break => Err(Error::ScriptRuntime(
-                    "break statement outside of loop".into(),
-                )),
+                ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
                 ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
                     "continue statement outside of loop".into(),
                 )),
@@ -296,7 +292,7 @@ impl Harness {
 
     pub(crate) fn push_pending_function_decl_scope(
         &mut self,
-        scope: HashMap<String, (ScriptHandler, bool)>,
+        scope: HashMap<String, (ScriptHandler, bool, bool)>,
     ) -> usize {
         let start_len = self.script_runtime.pending_function_decls.len();
         if !scope.is_empty() {
@@ -309,7 +305,7 @@ impl Harness {
 
     pub(crate) fn push_pending_function_decl_scopes(
         &mut self,
-        scopes: &[Arc<HashMap<String, (ScriptHandler, bool)>>],
+        scopes: &[Arc<HashMap<String, (ScriptHandler, bool, bool)>>],
     ) -> usize {
         let start_len = self.script_runtime.pending_function_decls.len();
         self.script_runtime

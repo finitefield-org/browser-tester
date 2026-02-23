@@ -435,7 +435,8 @@ impl PartialEq for RegexValue {
 pub(crate) struct FunctionValue {
     pub(crate) handler: ScriptHandler,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
-    pub(crate) captured_pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool)>>>,
+    pub(crate) captured_pending_function_decls:
+        Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
     pub(crate) captured_global_names: HashSet<String>,
     pub(crate) local_bindings: HashSet<String>,
     pub(crate) prototype_object: Rc<RefCell<ObjectValue>>,

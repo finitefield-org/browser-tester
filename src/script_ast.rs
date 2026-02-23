@@ -992,16 +992,32 @@ pub(crate) enum ListenerRegistrationOp {
     Remove,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VarDeclKind {
+    Var,
+    Let,
+    Const,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt {
     VarDecl {
         name: String,
+        kind: VarDeclKind,
         expr: Expr,
     },
     FunctionDecl {
         name: String,
         handler: ScriptHandler,
         is_async: bool,
+        is_generator: bool,
+    },
+    Label {
+        name: String,
+        stmt: Box<Stmt>,
+    },
+    Block {
+        stmts: Vec<Stmt>,
     },
     VarAssign {
         name: String,
@@ -1129,7 +1145,9 @@ pub(crate) enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
-    Break,
+    Break {
+        label: Option<String>,
+    },
     Continue,
     While {
         cond: Expr,
@@ -1182,10 +1200,10 @@ pub(crate) enum CatchBinding {
     ObjectPattern(Vec<(String, String)>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExecFlow {
     Continue,
-    Break,
+    Break(Option<String>),
     ContinueLoop,
     Return,
 }
