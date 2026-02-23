@@ -244,6 +244,8 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                     },
                     is_async: false,
                     is_generator: true,
+                    is_arrow: false,
+                    is_method: false,
                 }));
             }
         }
@@ -285,6 +287,8 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                     },
                     is_async: true,
                     is_generator: true,
+                    is_arrow: false,
+                    is_method: false,
                 }));
             }
         }
@@ -311,6 +315,8 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                 handler: ScriptHandler { params, stmts },
                 is_async: true,
                 is_generator: false,
+                is_arrow: false,
+                is_method: false,
             }));
         }
     }
@@ -335,6 +341,8 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                         handler: ScriptHandler { params, stmts },
                         is_async: true,
                         is_generator: false,
+                        is_arrow: true,
+                        is_method: false,
                     }));
                 }
             }
@@ -373,6 +381,8 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
         handler: ScriptHandler { params, stmts },
         is_async: false,
         is_generator: false,
+        is_arrow: !src.starts_with("function"),
+        is_method: false,
     }))
 }
 

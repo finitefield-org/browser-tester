@@ -412,7 +412,15 @@ impl Harness {
             break;
         }
         let (handler, is_async, is_generator) = resolved?;
-        Some(self.make_function_value(handler, env, false, is_async, is_generator))
+        Some(self.make_function_value(
+            handler,
+            env,
+            false,
+            is_async,
+            is_generator,
+            false,
+            false,
+        ))
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {

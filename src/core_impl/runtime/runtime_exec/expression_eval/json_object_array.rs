@@ -54,7 +54,62 @@ impl Harness {
                     for entry in entries {
                         match entry {
                             ObjectLiteralEntry::Pair(key, value) => {
-                                let value = self.eval_expr(value, env, event_param, event)?;
+                                let (key, proto_mutator) = match key {
+                                    ObjectLiteralKey::Static(key) => {
+                                        (key.clone(), key == "__proto__")
+                                    }
+                                    ObjectLiteralKey::Computed(expr) => {
+                                        let key = self.eval_expr(expr, env, event_param, event)?;
+                                        (self.property_key_to_storage_key(&key), false)
+                                    }
+                                };
+
+                                let value = match value {
+                                    Expr::Function {
+                                        handler,
+                                        is_async,
+                                        is_generator,
+                                        is_arrow,
+                                        is_method,
+                                    } if *is_method => {
+                                        let super_prototype =
+                                            match Self::object_get_entry(
+                                                &object_entries,
+                                                INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                            ) {
+                                                Some(Value::Object(proto)) => {
+                                                    Some(Value::Object(proto))
+                                                }
+                                                _ => None,
+                                            };
+                                        self.make_function_value_with_super(
+                                            handler.clone(),
+                                            env,
+                                            false,
+                                            *is_async,
+                                            *is_generator,
+                                            *is_arrow,
+                                            *is_method,
+                                            None,
+                                            super_prototype,
+                                        )
+                                    }
+                                    _ => self.eval_expr(value, env, event_param, event)?,
+                                };
+
+                                if proto_mutator {
+                                    if matches!(value, Value::Object(_) | Value::Null) {
+                                        Self::object_set_entry(
+                                            &mut object_entries,
+                                            INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                                            value,
+                                        );
+                                    }
+                                    continue;
+                                }
+                                Self::object_set_entry(&mut object_entries, key, value);
+                            }
+                            ObjectLiteralEntry::Getter(key, handler) => {
                                 let key = match key {
                                     ObjectLiteralKey::Static(key) => key.clone(),
                                     ObjectLiteralKey::Computed(expr) => {
@@ -62,21 +117,67 @@ impl Harness {
                                         self.property_key_to_storage_key(&key)
                                     }
                                 };
-                                Self::object_set_entry(&mut object_entries, key, value);
+                                let getter = self.make_function_value(
+                                    handler.clone(),
+                                    env,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                    true,
+                                );
+                                let getter_key = Self::object_getter_storage_key(&key);
+                                Self::object_set_entry(&mut object_entries, getter_key, getter);
+                                Self::object_set_entry(
+                                    &mut object_entries,
+                                    key,
+                                    Value::Undefined,
+                                );
+                            }
+                            ObjectLiteralEntry::Setter(key, handler) => {
+                                let key = match key {
+                                    ObjectLiteralKey::Static(key) => key.clone(),
+                                    ObjectLiteralKey::Computed(expr) => {
+                                        let key = self.eval_expr(expr, env, event_param, event)?;
+                                        self.property_key_to_storage_key(&key)
+                                    }
+                                };
+                                let setter = self.make_function_value(
+                                    handler.clone(),
+                                    env,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                    true,
+                                );
+                                let setter_key = Self::object_setter_storage_key(&key);
+                                Self::object_set_entry(&mut object_entries, setter_key, setter);
+                                Self::object_set_entry(
+                                    &mut object_entries,
+                                    key,
+                                    Value::Undefined,
+                                );
                             }
                             ObjectLiteralEntry::Spread(expr) => {
                                 let spread_value = self.eval_expr(expr, env, event_param, event)?;
                                 match spread_value {
                                     Value::Null | Value::Undefined => {}
                                     Value::Object(entries) => {
-                                        for (key, value) in entries.borrow().iter() {
-                                            if Self::is_internal_object_key(key) {
-                                                continue;
-                                            }
+                                        let source = Value::Object(entries.clone());
+                                        let keys = entries
+                                            .borrow()
+                                            .iter()
+                                            .filter(|(key, _)| !Self::is_internal_object_key(key))
+                                            .map(|(key, _)| key.clone())
+                                            .collect::<Vec<_>>();
+                                        for key in keys {
+                                            let value =
+                                                self.object_property_from_value(&source, &key)?;
                                             Self::object_set_entry(
                                                 &mut object_entries,
-                                                key.clone(),
-                                                value.clone(),
+                                                key,
+                                                value,
                                             );
                                         }
                                     }
@@ -177,12 +278,17 @@ impl Harness {
                     let object = self.eval_expr(object, env, event_param, event)?;
                     match object {
                         Value::Object(entries) => {
-                            let values = entries
+                            let source = Value::Object(entries.clone());
+                            let keys = entries
                                 .borrow()
                                 .iter()
                                 .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(_, value)| value.clone())
+                                .map(|(key, _)| key.clone())
                                 .collect::<Vec<_>>();
+                            let mut values = Vec::with_capacity(keys.len());
+                            for key in keys {
+                                values.push(self.object_property_from_value(&source, &key)?);
+                            }
                             Ok(Self::new_array_value(values))
                         }
                         _ => Err(Error::ScriptRuntime(
@@ -194,17 +300,18 @@ impl Harness {
                     let object = self.eval_expr(object, env, event_param, event)?;
                     match object {
                         Value::Object(entries) => {
-                            let values = entries
+                            let source = Value::Object(entries.clone());
+                            let keys = entries
                                 .borrow()
                                 .iter()
                                 .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(key, value)| {
-                                    Self::new_array_value(vec![
-                                        Value::String(key.clone()),
-                                        value.clone(),
-                                    ])
-                                })
+                                .map(|(key, _)| key.clone())
                                 .collect::<Vec<_>>();
+                            let mut values = Vec::with_capacity(keys.len());
+                            for key in keys {
+                                let value = self.object_property_from_value(&source, &key)?;
+                                values.push(Self::new_array_value(vec![Value::String(key), value]));
+                            }
                             Ok(Self::new_array_value(values))
                         }
                         _ => Err(Error::ScriptRuntime(
@@ -326,6 +433,16 @@ impl Harness {
                     }
                     Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
+                    Some(Value::Function(function)) => {
+                        let mut length = 0_i64;
+                        for param in &function.handler.params {
+                            if param.is_rest || param.default.is_some() {
+                                break;
+                            }
+                            length += 1;
+                        }
+                        Ok(Value::Number(length))
+                    }
                     Some(Value::Object(entries)) => {
                         let entries = entries.borrow();
                         if Self::is_history_object(&entries) {

@@ -193,6 +193,10 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(Some(Expr::ArrayLength(target)));
     }
 
+    if target == "arguments" {
+        return Ok(None);
+    }
+
     if cursor.peek() != Some(b'(') {
         return Ok(None);
     }

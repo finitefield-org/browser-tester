@@ -76,7 +76,7 @@ impl Harness {
     }
 
     pub(crate) fn resolve_dom_query_var_path_value(
-        &self,
+        &mut self,
         base: &str,
         path: &[String],
         env: &HashMap<String, Value>,

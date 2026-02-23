@@ -613,6 +613,8 @@ pub(crate) enum Expr {
         handler: ScriptHandler,
         is_async: bool,
         is_generator: bool,
+        is_arrow: bool,
+        is_method: bool,
     },
     QueueMicrotask {
         handler: ScriptHandler,
@@ -742,6 +744,8 @@ pub(crate) enum ObjectLiteralKey {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ObjectLiteralEntry {
     Pair(ObjectLiteralKey, Expr),
+    Getter(ObjectLiteralKey, ScriptHandler),
+    Setter(ObjectLiteralKey, ScriptHandler),
     Spread(Expr),
 }
 
@@ -999,12 +1003,20 @@ pub(crate) enum VarDeclKind {
     Const,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClassMethodKind {
+    Method,
+    Getter,
+    Setter,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassMethodDecl {
     pub(crate) name: String,
     pub(crate) handler: ScriptHandler,
     pub(crate) is_async: bool,
     pub(crate) is_generator: bool,
+    pub(crate) kind: ClassMethodKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]

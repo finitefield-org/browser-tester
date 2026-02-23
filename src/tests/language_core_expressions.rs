@@ -2992,6 +2992,412 @@ fn default_function_parameters_are_evaluated_left_to_right_at_call_time() -> Res
 }
 
 #[test]
+fn default_parameter_initializers_can_read_this_and_arguments() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function withDefaults(a, b = this.value, c = arguments[0], d = this.value + ':' + arguments.length) {
+            return [String(a), String(b), String(c), d].join('|');
+          }
+
+          const holder = {
+            value: 'ctx',
+            withDefaults,
+          };
+
+          document.getElementById('result').textContent =
+            holder.withDefaults('x') + ';' +
+            holder.withDefaults(undefined, 'y');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "x|ctx|x|ctx:1;undefined|y|undefined|ctx:2")?;
+    Ok(())
+}
+
+#[test]
+fn default_parameter_scope_is_separate_from_function_body_var_scope() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function f(a, b = () => String(a)) {
+            var a = 1;
+            return b();
+          }
+
+          document.getElementById('result').textContent = f() + ':' + f(5);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:5")?;
+    Ok(())
+}
+
+#[test]
+fn default_parameter_initializer_cannot_access_function_body_var_bindings() {
+    let err = Harness::from_html(
+        "<script>function f(a = seed) { var seed = 3; return a; } f();</script>",
+    )
+    .expect_err("default parameter initializer should not see function body var bindings");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("unknown variable: seed")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn object_literal_getter_reads_latest_value_and_assignment_does_not_override_it() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = {
+            log: ['a', 'b', 'c'],
+            get latest() {
+              return this.log[this.log.length - 1];
+            },
+          };
+
+          const before = obj.latest;
+          obj.latest = 'ignored';
+          obj.log.push('d');
+          document.getElementById('result').textContent = before + ':' + obj.latest;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "c:d")?;
+    Ok(())
+}
+
+#[test]
+fn object_literal_computed_getter_is_used_by_values_and_entries() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let calls = 0;
+          const key = 'foo';
+          const obj = {
+            get [key]() {
+              calls += 1;
+              return 'bar';
+            },
+          };
+
+          const direct = obj.foo;
+          const keys = Object.keys(obj).join(',');
+          const values = Object.values(obj).join(',');
+          const entries = Object.entries(obj).map((entry) => entry[0] + '=' + entry[1]).join(',');
+          document.getElementById('result').textContent =
+            direct + '|' + keys + '|' + values + '|' + entries + '|' + String(calls);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "bar|foo|bar|foo=bar|3")?;
+    Ok(())
+}
+
+#[test]
+fn class_getter_reads_instance_state_and_assignment_is_ignored_without_setter() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Bucket {
+            constructor() {
+              this.items = ['x', 'y'];
+            }
+            get latest() {
+              return this.items[this.items.length - 1];
+            }
+          }
+
+          const bucket = new Bucket();
+          const before = bucket.latest;
+          bucket.latest = 'ignored';
+          bucket.items.push('z');
+          document.getElementById('result').textContent = before + ':' + bucket.latest;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "y:z")?;
+    Ok(())
+}
+
+#[test]
+fn getter_syntax_rejects_parameters() {
+    let err = Harness::from_html("<script>const obj = { get value(x) { return x; } };</script>")
+        .expect_err("object literal getter with parameters should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("getter") && msg.contains("parameters")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = Harness::from_html("<script>class C { get value(x) { return x; } }</script>")
+        .expect_err("class getter with parameters should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("getter") && msg.contains("parameters")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn object_literal_setter_updates_log_and_property_read_is_undefined() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const language = {
+            set current(name) {
+              this.log.push(name);
+            },
+            log: [],
+          };
+
+          language.current = 'EN';
+          language.current = 'FA';
+
+          document.getElementById('result').textContent =
+            String(language.current) + '|' + language.log.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined|EN,FA")?;
+    Ok(())
+}
+
+#[test]
+fn object_literal_computed_setter_updates_target_value() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const expr = 'foo';
+          const obj = {
+            baz: 'bar',
+            set [expr](v) {
+              this.baz = v;
+            },
+          };
+
+          obj.foo = 'baz';
+          document.getElementById('result').textContent =
+            obj.baz + ':' + String(obj.foo);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "baz:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn class_setter_and_getter_update_instance_state() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class ClassWithGetSet {
+            constructor() {
+              this._msg = 'hello world';
+            }
+            get msg() {
+              return this._msg;
+            }
+            set msg(x) {
+              this._msg = `hello ${x}`;
+            }
+          }
+
+          const instance = new ClassWithGetSet();
+          const before = instance.msg;
+          instance.msg = 'cake';
+          const after = instance.msg;
+          document.getElementById('result').textContent = before + ':' + after;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "hello world:hello cake")?;
+    Ok(())
+}
+
+#[test]
+fn setter_syntax_rejects_invalid_parameter_counts() {
+    for source in [
+        "<script>const obj = { set value() {} };</script>",
+        "<script>const obj = { set value(a, b) {} };</script>",
+        "<script>const obj = { set value(...rest) {} };</script>",
+        "<script>class C { set value() {} }</script>",
+        "<script>class C { set value(a, b) {} }</script>",
+        "<script>class C { set value(...rest) {} }</script>",
+    ] {
+        let err = Harness::from_html(source).expect_err("invalid setter parameter arity should fail");
+        match err {
+            Error::ScriptParse(msg) => assert!(msg.contains("setter")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn object_method_definition_supports_this_and_computed_names() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const methodName = 'FOO';
+          const obj = {
+            a: 'bar',
+            b() {
+              return this.a;
+            },
+            [methodName]() {
+              return 2;
+            },
+          };
+          document.getElementById('result').textContent = obj.b() + ':' + String(obj.FOO());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "bar:2")?;
+    Ok(())
+}
+
+#[test]
+fn object_method_definition_variants_generator_async_and_async_generator_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = {
+              *g() {
+                yield 1;
+                yield 2;
+              },
+              async f() {
+                return 3;
+              },
+              async *ag() {
+                yield 4;
+                yield 5;
+              },
+            };
+
+            const it = obj.g();
+            const ait = obj.ag();
+            let out = String(it.next().value) + ',' + String(it.next().value);
+            obj.f()
+              .then((v) => {
+                out = out + '|' + String(v);
+                return ait.next();
+              })
+              .then((step) => {
+                out = out + '|' + String(step.value);
+                return ait.next();
+              })
+              .then((step) => {
+                document.getElementById('result').textContent = out + ',' + String(step.value);
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.flush()?;
+    h.assert_text("#result", "1,2|3|4,5")?;
+    Ok(())
+}
+
+#[test]
+fn method_definitions_are_not_constructable_and_do_not_expose_prototype() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = {
+            method() {},
+            regular: function () {},
+          };
+          const methodRef = obj.method;
+          const regularRef = obj.regular;
+          let blocked = false;
+          try {
+            new methodRef();
+          } catch (error) {
+            blocked = String(error).includes('not a constructor');
+          }
+          document.getElementById('result').textContent =
+            String(blocked) + ':' + typeof methodRef.prototype + ':' + typeof regularRef.prototype;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:undefined:object")?;
+    Ok(())
+}
+
+#[test]
+fn class_method_definitions_are_not_constructable_and_do_not_expose_prototype() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            method() {
+              return 'ok';
+            }
+          }
+
+          const c = new C();
+          const methodRef = c.method;
+          let blocked = false;
+          try {
+            new methodRef();
+          } catch (error) {
+            blocked = String(error).includes('not a constructor');
+          }
+          document.getElementById('result').textContent =
+            c.method() + ':' + String(blocked) + ':' + typeof methodRef.prototype;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok:true:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn default_parameters_support_destructured_binding_defaults() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function preFilledArray([x = 1, y = 2] = []) {
+            return x + y;
+          }
+
+          function preFilledObject({ z = 3 } = {}) {
+            return z;
+          }
+
+          document.getElementById('result').textContent = [
+            preFilledArray(),
+            preFilledArray([]),
+            preFilledArray([2]),
+            preFilledArray([2, 3]),
+            preFilledObject(),
+            preFilledObject({}),
+            preFilledObject({ z: 2 }),
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3:3:4:5:3:3:2")?;
+    Ok(())
+}
+
+#[test]
 fn arrow_function_parameters_support_rest_and_destructuring() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -3009,6 +3415,260 @@ fn arrow_function_parameters_support_rest_and_destructuring() -> Result<()> {
 
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "10|A:B|9:8|5:6")?;
+    Ok(())
+}
+
+#[test]
+fn rest_parameters_collect_extra_arguments_and_keep_arguments_full() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function myFun(a, b, ...manyMoreArgs) {
+            return a + ':' + b + ':' + manyMoreArgs.join(',');
+          }
+
+          function inspect(a, b, ...rest) {
+            a = 'changed';
+            return [
+              arguments.length,
+              rest.length,
+              rest[0],
+              rest[1],
+              arguments[0],
+              arguments[2],
+            ].join(',');
+          }
+
+          document.getElementById('result').textContent =
+            myFun('one', 'two', 'three', 'four', 'five', 'six') + '|' +
+            myFun('one', 'two', 'three') + '|' +
+            myFun('one', 'two') + '|' +
+            myFun('one') + '|' +
+            inspect('A', 'B', 'C', 'D');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "one:two:three,four,five,six|one:two:three|one:two:|one:undefined:|4,2,C,D,A,C",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn rest_parameters_support_destructuring_patterns() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function ignoreFirst(...[, b, c]) {
+            return b + c;
+          }
+
+          function restObjectLength(...{ length }) {
+            return length;
+          }
+
+          const firstTwo = (...[first, second]) => first + ':' + second;
+
+          document.getElementById('result').textContent =
+            String(ignoreFirst(1, 2, 3, 4)) + '|' +
+            String(restObjectLength('x', 'y', 'z')) + '|' +
+            firstTwo('a', 'b', 'c');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "5|3|a:b")?;
+    Ok(())
+}
+
+#[test]
+fn rest_parameter_length_property_ignores_rest_and_default_tail() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function withRest(a, b, ...rest) {}
+          function withDefault(a, b = 1, c) {}
+          function onlyRest(...args) {}
+          const arrow = (x, ...tail) => x;
+
+          document.getElementById('result').textContent =
+            [withRest.length, withDefault.length, onlyRest.length, arrow.length].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "2:1:0:1")?;
+    Ok(())
+}
+
+#[test]
+fn rest_parameter_syntax_restrictions_are_enforced() {
+    for source in [
+        "<script>function wrong1(...one, ...wrong) {}</script>",
+        "<script>function wrong2(...wrong, arg2, arg3) {}</script>",
+        "<script>function wrong3(...wrong,) {}</script>",
+        "<script>function wrong4(...wrong = []) {}</script>",
+    ] {
+        let err = Harness::from_html(source).expect_err("invalid rest syntax should fail");
+        match err {
+            Error::ScriptParse(msg) => {
+                assert!(msg.contains("unsupported function parameters"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn arguments_object_exposes_values_length_and_type() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function func1(a, b, c) {
+            return [
+              arguments[0],
+              arguments[1],
+              arguments[2],
+              arguments.length,
+              typeof arguments,
+            ].join(':');
+          }
+
+          document.getElementById('result').textContent = func1(1, 2, 3);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:2:3:3:object")?;
+    Ok(())
+}
+
+#[test]
+fn arguments_object_syncs_with_simple_parameters() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function sync(a) {
+            const args = arguments;
+            args[0] = 88;
+            a = 77;
+            return [a, args[0], arguments[0]].join(':');
+          }
+
+          document.getElementById('result').textContent = sync(10);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "77:77:77")?;
+    Ok(())
+}
+
+#[test]
+fn arguments_object_does_not_sync_for_complex_parameters() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function withDefault(a = 55) {
+            arguments[0] = 99;
+            const first = a;
+            a = 12;
+            return first + ':' + String(arguments[0]);
+          }
+
+          function withRest(a, ...rest) {
+            a = 42;
+            return String(arguments[0]) + ':' + String(rest.length);
+          }
+
+          function withDestructure([x]) {
+            x = 8;
+            return String(arguments[0][0]);
+          }
+
+          document.getElementById('result').textContent =
+            withDefault(10) + '|' +
+            withRest(5, 6, 7) + '|' +
+            withDestructure([3]);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "10:99|5:2|3")?;
+    Ok(())
+}
+
+#[test]
+fn arguments_object_is_iterable_and_arrow_uses_outer_arguments_binding() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function sum() {
+            let total = 0;
+            for (const arg of arguments) {
+              total += arg;
+            }
+            return total;
+          }
+
+          function outer(n) {
+            const f = () => arguments[0] + n;
+            return f();
+          }
+
+          document.getElementById('result').textContent =
+            String(sum(1, 2, 3, 4)) + '|' + String(outer(3));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "10|6")?;
+    Ok(())
+}
+
+#[test]
+fn arguments_object_callee_references_current_function() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function factorial(n) {
+            if (n <= 1) {
+              return 1;
+            }
+            return n * arguments.callee(n - 1);
+          }
+
+          document.getElementById('result').textContent = String(factorial(4));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "24")?;
+    Ok(())
+}
+
+#[test]
+fn arguments_object_does_not_expose_array_methods() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function check() {
+            try {
+              arguments.sort();
+              return 'no-error';
+            } catch (e) {
+              return 'threw';
+            }
+          }
+
+          document.getElementById('result').textContent = check(3, 1, 2);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "threw")?;
     Ok(())
 }
 
@@ -3171,6 +3831,99 @@ fn arrow_function_line_break_before_arrow_is_rejected() {
         Error::ScriptParse(msg) => assert!(msg.contains("=>") || msg.contains("unsupported")),
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn arrow_function_uses_lexical_this_even_when_called_with_other_receiver() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Box {
+            constructor(value) {
+              this.value = value;
+            }
+            makeReader() {
+              return () => this.value;
+            }
+          }
+
+          const box = new Box(7);
+          const reader = box.makeReader();
+          const wrapper = { value: 99, reader: reader };
+          document.getElementById('result').textContent = String(wrapper.reader());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
+fn normal_function_expression_keeps_dynamic_this_binding() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Box {
+            constructor(value) {
+              this.value = value;
+            }
+            makeReader() {
+              return function() {
+                return this.value;
+              };
+            }
+          }
+
+          const box = new Box(7);
+          const reader = box.makeReader();
+          const wrapper = { value: 99, reader: reader };
+          document.getElementById('result').textContent = String(wrapper.reader());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "99")?;
+    Ok(())
+}
+
+#[test]
+fn arrow_function_cannot_be_used_as_constructor() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const Arrow = () => {};
+          let out = '';
+          try {
+            new Arrow();
+            out = 'constructed';
+          } catch (error) {
+            out = String(error).includes('not a constructor') ? 'not-constructable' : String(error);
+          }
+          document.getElementById('result').textContent = out;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "not-constructable")?;
+    Ok(())
+}
+
+#[test]
+fn arrow_function_has_no_prototype_property() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const Arrow = () => {};
+          const Fn = function() {};
+          document.getElementById('result').textContent =
+            typeof Fn.prototype + ':' + typeof Arrow.prototype;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "object:undefined")?;
+    Ok(())
 }
 
 #[test]

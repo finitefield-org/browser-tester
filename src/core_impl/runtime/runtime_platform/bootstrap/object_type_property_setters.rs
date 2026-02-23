@@ -1,6 +1,70 @@
 use super::*;
 
 impl Harness {
+    fn arguments_param_name_for_index(env: &HashMap<String, Value>, index: usize) -> Option<String> {
+        let Some(Value::Array(bindings)) = env.get(INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY) else {
+            return None;
+        };
+        match bindings.borrow().get(index) {
+            Some(Value::String(name)) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    fn arguments_param_indexes_for_name(env: &HashMap<String, Value>, name: &str) -> Vec<usize> {
+        let Some(Value::Array(bindings)) = env.get(INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY) else {
+            return Vec::new();
+        };
+        bindings
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(entry, Value::String(param) if param == name).then_some(index)
+            })
+            .collect()
+    }
+
+    pub(crate) fn sync_arguments_after_param_write(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        let indexes = Self::arguments_param_indexes_for_name(env, name);
+        if indexes.is_empty() {
+            return;
+        }
+        let Some(Value::Array(arguments)) = env.get("arguments").cloned() else {
+            return;
+        };
+        let mut args_ref = arguments.borrow_mut();
+        for index in indexes {
+            if index < args_ref.len() {
+                args_ref[index] = value.clone();
+            }
+        }
+    }
+
+    fn sync_param_after_arguments_write(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+        arguments_array: &Rc<RefCell<ArrayValue>>,
+        index: usize,
+        value: &Value,
+    ) {
+        let Some(Value::Array(arguments)) = env.get("arguments").cloned() else {
+            return;
+        };
+        if !Rc::ptr_eq(&arguments, arguments_array) {
+            return;
+        }
+        let Some(param_name) = Self::arguments_param_name_for_index(env, index) else {
+            return;
+        };
+        env.insert(param_name, value.clone());
+    }
+
     pub(crate) fn is_history_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_HISTORY_OBJECT_KEY),
@@ -492,7 +556,7 @@ impl Harness {
     }
 
     pub(crate) fn read_object_assignment_property(
-        &self,
+        &mut self,
         container: &Value,
         key_value: &Value,
         target: &str,
@@ -530,6 +594,8 @@ impl Harness {
         key_value: &Value,
         value: Value,
         target: &str,
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
     ) -> Result<()> {
         match container {
             Value::Object(object) => {
@@ -569,6 +635,62 @@ impl Harness {
                     self.set_storage_object_property(object, &key, value)?;
                     return Ok(());
                 }
+                let (own_setter, own_getter, own_data, mut prototype) = {
+                    let entries = object.borrow();
+                    (
+                        Self::object_setter_from_entries(&entries, &key),
+                        Self::object_getter_from_entries(&entries, &key).is_some(),
+                        Self::object_get_entry(&entries, &key).is_some(),
+                        Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
+                    )
+                };
+                if let Some(setter) = own_setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        event,
+                        None,
+                        Some(container.clone()),
+                    )?;
+                    return Ok(());
+                }
+                if own_getter {
+                    return Ok(());
+                }
+                if !own_data {
+                    while let Some(Value::Object(proto)) = prototype {
+                        let (setter, getter, next) = {
+                            let proto_ref = proto.borrow();
+                            (
+                                Self::object_setter_from_entries(&proto_ref, &key),
+                                Self::object_getter_from_entries(&proto_ref, &key).is_some(),
+                                Self::object_get_entry(&proto_ref, INTERNAL_OBJECT_PROTOTYPE_KEY),
+                            )
+                        };
+                        if let Some(setter) = setter {
+                            if !self.is_callable_value(&setter) {
+                                return Err(Error::ScriptRuntime(
+                                    "object setter is not callable".into(),
+                                ));
+                            }
+                            self.execute_callable_value_with_this_and_env(
+                                &setter,
+                                &[value],
+                                event,
+                                None,
+                                Some(container.clone()),
+                            )?;
+                            return Ok(());
+                        }
+                        if getter {
+                            return Ok(());
+                        }
+                        prototype = next;
+                    }
+                }
                 Self::object_set_entry(&mut object.borrow_mut(), key, value);
                 Ok(())
             }
@@ -577,18 +699,27 @@ impl Harness {
                 self.set_url_constructor_property(&key, value);
                 Ok(())
             }
-            Value::Array(values) => {
+            Value::Array(array_values) => {
                 if let Some(index) = self.value_as_index(key_value) {
-                    let mut values = values.borrow_mut();
-                    if index >= values.len() {
-                        values.resize(index + 1, Value::Undefined);
+                    let value_for_sync = value.clone();
+                    {
+                        let mut elements = array_values.borrow_mut();
+                        if index >= elements.len() {
+                            elements.resize(index + 1, Value::Undefined);
+                        }
+                        elements[index] = value;
                     }
-                    values[index] = value;
+                    self.sync_param_after_arguments_write(
+                        env,
+                        array_values,
+                        index,
+                        &value_for_sync,
+                    );
                     return Ok(());
                 }
                 let key = self.property_key_to_storage_key(key_value);
                 if key == "length" {
-                    let mut values = values.borrow_mut();
+                    let mut values = array_values.borrow_mut();
                     let next = Self::value_to_i64(&value);
                     let next = if next <= 0 { 0usize } else { next as usize };
                     if next < values.len() {
@@ -598,7 +729,7 @@ impl Harness {
                     }
                     return Ok(());
                 }
-                Self::set_array_property(values, key, value);
+                Self::set_array_property(array_values, key, value);
                 Ok(())
             }
             Value::TypedArray(values) => {
@@ -694,7 +825,14 @@ impl Harness {
             false
         };
 
-        self.set_object_assignment_property(&container, final_key, value.clone(), target)?;
+        self.set_object_assignment_property(
+            &container,
+            final_key,
+            value.clone(),
+            target,
+            env,
+            event,
+        )?;
         if assigns_window_local_storage {
             env.insert("localStorage".to_string(), value.clone());
             self.sync_global_binding_if_needed(env, "localStorage", &value);

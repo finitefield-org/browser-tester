@@ -1,4 +1,7 @@
 use super::*;
+use crate::core_impl::parser::parser_stmt::{
+    consume_keyword, parse_callback_parameter_list, prepend_callback_param_prologue_stmts,
+};
 pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLiteralEntry>>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -37,6 +40,21 @@ pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
                 ));
             }
             out.push(ObjectLiteralEntry::Spread(parse_expr(rest)?));
+            continue;
+        }
+
+        if let Some((key, handler)) = parse_object_literal_getter_entry(entry)? {
+            out.push(ObjectLiteralEntry::Getter(key, handler));
+            continue;
+        }
+
+        if let Some((key, handler)) = parse_object_literal_setter_entry(entry)? {
+            out.push(ObjectLiteralEntry::Setter(key, handler));
+            continue;
+        }
+
+        if let Some((key, value)) = parse_object_literal_method_entry(entry)? {
+            out.push(ObjectLiteralEntry::Pair(key, value));
             continue;
         }
 
@@ -85,6 +103,221 @@ pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
     }
 
     Ok(Some(out))
+}
+
+fn parse_object_literal_getter_entry(entry: &str) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
+    let mut cursor = Cursor::new(entry);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "get") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if cursor.eof() || cursor.peek() == Some(b':') {
+        return Ok(None);
+    }
+
+    let key = if cursor.peek() == Some(b'[') {
+        let computed_src = cursor.read_balanced_block(b'[', b']')?;
+        let computed_src = computed_src.trim();
+        if computed_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "object literal getter computed key cannot be empty".into(),
+            ));
+        }
+        ObjectLiteralKey::Computed(Box::new(parse_expr(computed_src)?))
+    } else if cursor.peek().is_some_and(|b| b == b'\'' || b == b'"') {
+        let key = cursor.parse_string_literal()?;
+        ObjectLiteralKey::Static(key)
+    } else if let Some(name) = cursor.parse_identifier() {
+        ObjectLiteralKey::Static(name)
+    } else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let params_src = cursor.read_balanced_block(b'(', b')')?;
+    if !params_src.trim().is_empty() {
+        return Err(Error::ScriptParse(
+            "object literal getter must not have parameters".into(),
+        ));
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() != Some(b'{') {
+        return Err(Error::ScriptParse(
+            "object literal getter requires a body".into(),
+        ));
+    }
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(
+            "unsupported object literal getter syntax".into(),
+        ));
+    }
+
+    Ok(Some((
+        key,
+        ScriptHandler {
+            params: Vec::new(),
+            stmts: parse_block_statements(&body_src)?,
+        },
+    )))
+}
+
+fn parse_object_literal_setter_entry(entry: &str) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
+    let mut cursor = Cursor::new(entry);
+    cursor.skip_ws();
+    if !consume_keyword(&mut cursor, "set") {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if cursor.eof() || cursor.peek() == Some(b':') {
+        return Ok(None);
+    }
+
+    let key = if cursor.peek() == Some(b'[') {
+        let computed_src = cursor.read_balanced_block(b'[', b']')?;
+        let computed_src = computed_src.trim();
+        if computed_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "object literal setter computed key cannot be empty".into(),
+            ));
+        }
+        ObjectLiteralKey::Computed(Box::new(parse_expr(computed_src)?))
+    } else if cursor.peek().is_some_and(|b| b == b'\'' || b == b'"') {
+        let key = cursor.parse_string_literal()?;
+        ObjectLiteralKey::Static(key)
+    } else if let Some(name) = cursor.parse_identifier() {
+        ObjectLiteralKey::Static(name)
+    } else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let params_src = cursor.read_balanced_block(b'(', b')')?;
+    let parsed_params =
+        parse_callback_parameter_list(&params_src, 1, "object literal setter parameters")?;
+    if parsed_params.params.len() != 1 || parsed_params.params[0].is_rest {
+        return Err(Error::ScriptParse(
+            "object literal setter must have exactly one parameter".into(),
+        ));
+    }
+    cursor.skip_ws();
+
+    if cursor.peek() != Some(b'{') {
+        return Err(Error::ScriptParse(
+            "object literal setter requires a body".into(),
+        ));
+    }
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(
+            "unsupported object literal setter syntax".into(),
+        ));
+    }
+
+    let stmts = prepend_callback_param_prologue_stmts(
+        parse_block_statements(&body_src)?,
+        &parsed_params.prologue,
+    )?;
+
+    Ok(Some((
+        key,
+        ScriptHandler {
+            params: parsed_params.params,
+            stmts,
+        },
+    )))
+}
+
+fn parse_object_literal_method_entry(entry: &str) -> Result<Option<(ObjectLiteralKey, Expr)>> {
+    let mut cursor = Cursor::new(entry);
+    cursor.skip_ws();
+    let start = cursor.pos();
+
+    let mut is_async = false;
+    if consume_keyword(&mut cursor, "async") {
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'(') && cursor.peek() != Some(b':') {
+            is_async = true;
+        } else {
+            cursor.set_pos(start);
+        }
+    }
+
+    cursor.skip_ws();
+    let is_generator = cursor.consume_byte(b'*');
+    if is_generator {
+        cursor.skip_ws();
+    }
+
+    let key = if cursor.peek() == Some(b'[') {
+        let computed_src = cursor.read_balanced_block(b'[', b']')?;
+        let computed_src = computed_src.trim();
+        if computed_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "object literal computed method key cannot be empty".into(),
+            ));
+        }
+        ObjectLiteralKey::Computed(Box::new(parse_expr(computed_src)?))
+    } else if cursor.peek().is_some_and(|b| b == b'\'' || b == b'"') {
+        ObjectLiteralKey::Static(cursor.parse_string_literal()?)
+    } else if let Some(name) = cursor.parse_identifier() {
+        ObjectLiteralKey::Static(name)
+    } else {
+        return Ok(None);
+    };
+
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let params_src = cursor.read_balanced_block(b'(', b')')?;
+    let parsed_params =
+        parse_callback_parameter_list(&params_src, usize::MAX, "object method parameters")?;
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'{') {
+        return Err(Error::ScriptParse(
+            "object method definition requires a body".into(),
+        ));
+    }
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(
+            "unsupported object method syntax".into(),
+        ));
+    }
+
+    let stmts = prepend_callback_param_prologue_stmts(
+        parse_block_statements(&body_src)?,
+        &parsed_params.prologue,
+    )?;
+
+    Ok(Some((
+        key,
+        Expr::Function {
+            handler: ScriptHandler {
+                params: parsed_params.params,
+                stmts,
+            },
+            is_async,
+            is_generator,
+            is_arrow: false,
+            is_method: true,
+        },
+    )))
 }
 
 pub(crate) fn find_first_top_level_colon(src: &str) -> Option<usize> {

@@ -2,12 +2,12 @@ use super::*;
 
 impl Harness {
     pub(crate) fn eval_event_prop_fallback(
-        &self,
+        &mut self,
         event_var: &str,
         value: &Value,
         prop: EventExprProp,
     ) -> Result<Value> {
-        let read =
+        let mut read =
             |value: &Value, key: &str| self.object_property_from_named_value(event_var, value, key);
         match prop {
             EventExprProp::Type => read(value, "type"),

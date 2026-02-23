@@ -822,6 +822,8 @@ impl Harness {
                         true,
                         false,
                         false,
+                        false,
+                        false,
                     ))
                 }
                 _ => Err(Error::ScriptRuntime(UNHANDLED_EXPR_CHUNK.into())),

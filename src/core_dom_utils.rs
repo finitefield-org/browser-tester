@@ -7,6 +7,10 @@ pub(crate) const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
 pub(crate) const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 pub(crate) const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
 pub(crate) const INTERNAL_OBJECT_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_object:prototype";
+pub(crate) const INTERNAL_OBJECT_GETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:getter:";
+pub(crate) const INTERNAL_OBJECT_SETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:setter:";
+pub(crate) const INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY: &str =
+    "\u{0}\u{0}bt_arguments:param_bindings";
 pub(crate) const INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY: &str =
     "\u{0}\u{0}bt_class:super_constructor";
 pub(crate) const INTERNAL_CLASS_SUPER_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_class:super_prototype";

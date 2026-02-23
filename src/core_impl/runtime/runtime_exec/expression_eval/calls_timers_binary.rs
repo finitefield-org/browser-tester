@@ -490,12 +490,16 @@ impl Harness {
                     handler,
                     is_async,
                     is_generator,
+                    is_arrow,
+                    is_method,
                 } => Ok(self.make_function_value(
                     handler.clone(),
                     env,
                     false,
                     *is_async,
                     *is_generator,
+                    *is_arrow,
+                    *is_method,
                 )),
 
                 Expr::SetTimeout { handler, delay_ms } => {

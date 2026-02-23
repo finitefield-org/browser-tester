@@ -295,6 +295,8 @@ impl Harness {
             global_scope: true,
             is_async: false,
             is_generator: false,
+            is_arrow: false,
+            is_method: false,
             is_class_constructor: false,
             class_super_constructor: None,
             class_super_prototype: None,

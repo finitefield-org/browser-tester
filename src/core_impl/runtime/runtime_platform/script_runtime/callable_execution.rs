@@ -1,6 +1,14 @@
 use super::*;
 
 impl Harness {
+    fn has_simple_parameter_list(handler: &ScriptHandler) -> bool {
+        handler.params.iter().all(|param| {
+            !param.is_rest
+                && param.default.is_none()
+                && !param.name.starts_with("__bt_callback_arg_")
+        })
+    }
+
     fn make_function_value_with_kind(
         &mut self,
         handler: ScriptHandler,
@@ -8,6 +16,8 @@ impl Harness {
         global_scope: bool,
         is_async: bool,
         is_generator: bool,
+        is_arrow: bool,
+        is_method: bool,
         is_class_constructor: bool,
         class_super_constructor: Option<Value>,
         class_super_prototype: Option<Value>,
@@ -50,6 +60,8 @@ impl Harness {
             global_scope,
             is_async,
             is_generator,
+            is_arrow,
+            is_method,
             is_class_constructor,
             class_super_constructor,
             class_super_prototype,
@@ -63,6 +75,8 @@ impl Harness {
         global_scope: bool,
         is_async: bool,
         is_generator: bool,
+        is_arrow: bool,
+        is_method: bool,
     ) -> Value {
         self.make_function_value_with_kind(
             handler,
@@ -70,6 +84,8 @@ impl Harness {
             global_scope,
             is_async,
             is_generator,
+            is_arrow,
+            is_method,
             false,
             None,
             None,
@@ -83,6 +99,8 @@ impl Harness {
         global_scope: bool,
         is_async: bool,
         is_generator: bool,
+        is_arrow: bool,
+        is_method: bool,
         class_super_constructor: Option<Value>,
         class_super_prototype: Option<Value>,
     ) -> Value {
@@ -92,6 +110,8 @@ impl Harness {
             global_scope,
             is_async,
             is_generator,
+            is_arrow,
+            is_method,
             false,
             class_super_constructor,
             class_super_prototype,
@@ -110,6 +130,8 @@ impl Harness {
             handler,
             env,
             global_scope,
+            false,
+            false,
             false,
             false,
             true,
@@ -154,7 +176,7 @@ impl Harness {
     ) -> Result<Value> {
         match constructor {
             Value::Function(function) => {
-                if function.is_generator {
+                if function.is_generator || function.is_arrow || function.is_method {
                     return Err(Error::ScriptRuntime("value is not a constructor".into()));
                 }
                 let instance = if let Some(instance) = this_arg {
@@ -591,8 +613,41 @@ impl Harness {
                         INTERNAL_SCOPE_DEPTH_KEY.to_string(),
                         Value::Number(scope_depth.saturating_add(1)),
                     );
-                    call_env.insert("this".to_string(), this_arg.unwrap_or(Value::Undefined));
-                    this.set_const_binding(&mut call_env, "this", false);
+                    if function.is_arrow {
+                        if !call_env.contains_key("this") {
+                            call_env.insert("this".to_string(), Value::Undefined);
+                            this.set_const_binding(&mut call_env, "this", false);
+                        }
+                    } else {
+                        call_env.insert("this".to_string(), this_arg.unwrap_or(Value::Undefined));
+                        this.set_const_binding(&mut call_env, "this", false);
+                        let arguments_value = Self::new_array_value(args.to_vec());
+                        if let Value::Array(arguments) = &arguments_value {
+                            Self::object_set_entry(
+                                &mut arguments.borrow_mut().properties,
+                                "callee".to_string(),
+                                Value::Function(Rc::new(function.clone())),
+                            );
+                        }
+                        call_env.insert("arguments".to_string(), arguments_value);
+                        this.set_const_binding(&mut call_env, "arguments", false);
+                        if Self::has_simple_parameter_list(&function.handler) {
+                            let mut bindings = Vec::with_capacity(args.len());
+                            for index in 0..args.len() {
+                                let binding = function
+                                    .handler
+                                    .params
+                                    .get(index)
+                                    .map(|param| Value::String(param.name.clone()))
+                                    .unwrap_or(Value::Undefined);
+                                bindings.push(binding);
+                            }
+                            call_env.insert(
+                                INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY.to_string(),
+                                Self::new_array_value(bindings),
+                            );
+                        }
+                    }
                     if let Some(super_constructor) = function.class_super_constructor.clone() {
                         call_env.insert(
                             INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY.to_string(),
@@ -656,6 +711,7 @@ impl Harness {
                         &event_param,
                         &call_event,
                     )?;
+                    let mut body_env = call_env.clone();
                     let param_names = function
                         .handler
                         .params
@@ -677,7 +733,7 @@ impl Harness {
                         &function.handler.stmts,
                         &event_param,
                         &mut call_event,
-                        &mut call_env,
+                        &mut body_env,
                     );
                     if yield_collector.is_some() {
                         let _ = this.script_runtime.generator_yield_stack.pop();
@@ -703,7 +759,7 @@ impl Harness {
                         }
                         let before = global_values_before_call.get(name);
                         let global_after = this.script_runtime.env.get(name).cloned();
-                        let call_after = call_env.get(name).cloned();
+                        let call_after = body_env.get(name).cloned();
                         let global_changed = match (before, global_after.as_ref()) {
                             (Some(prev), Some(next)) => !this.strict_equal(prev, next),
                             (None, Some(_)) => true,
@@ -732,7 +788,7 @@ impl Harness {
                                 continue;
                             }
                             let before = captured_env_before_call.get(name);
-                            let after = call_env.get(name);
+                            let after = body_env.get(name);
                             let changed = match (before, after) {
                                 (Some(prev), Some(next)) => !this.strict_equal(prev, next),
                                 (None, Some(_)) => true,
@@ -761,7 +817,7 @@ impl Harness {
                         ExecFlow::Continue => Ok(Value::Undefined),
                         ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
                         ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
-                        ExecFlow::Return => Ok(call_env
+                        ExecFlow::Return => Ok(body_env
                             .remove(INTERNAL_RETURN_SLOT)
                             .unwrap_or(Value::Undefined)),
                     }

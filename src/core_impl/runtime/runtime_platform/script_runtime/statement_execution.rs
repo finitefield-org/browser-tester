@@ -972,6 +972,8 @@ impl Harness {
                             false,
                             *is_async,
                             *is_generator,
+                            false,
+                            false,
                         );
                         env.insert(name.clone(), function);
                         self.set_const_binding(env, name, false);
@@ -1043,20 +1045,66 @@ impl Harness {
                                 class_constructor.clone(),
                             );
                             for method in methods {
-                                let method_value = self.make_function_value_with_super(
-                                    method.handler.clone(),
-                                    env,
-                                    false,
-                                    method.is_async,
-                                    method.is_generator,
-                                    super_constructor.clone(),
-                                    super_prototype.clone().map(Value::Object),
-                                );
-                                Self::object_set_entry(
-                                    &mut *prototype,
-                                    method.name.clone(),
-                                    method_value,
-                                );
+                                match method.kind {
+                                    ClassMethodKind::Method => {
+                                        let method_value = self.make_function_value_with_super(
+                                            method.handler.clone(),
+                                            env,
+                                            false,
+                                            method.is_async,
+                                            method.is_generator,
+                                            false,
+                                            true,
+                                            super_constructor.clone(),
+                                            super_prototype.clone().map(Value::Object),
+                                        );
+                                        Self::object_set_entry(
+                                            &mut *prototype,
+                                            method.name.clone(),
+                                            method_value,
+                                        );
+                                    }
+                                    ClassMethodKind::Getter => {
+                                        let getter_value = self.make_function_value_with_super(
+                                            method.handler.clone(),
+                                            env,
+                                            false,
+                                            false,
+                                            false,
+                                            false,
+                                            true,
+                                            super_constructor.clone(),
+                                            super_prototype.clone().map(Value::Object),
+                                        );
+                                        let getter_key =
+                                            Self::object_getter_storage_key(&method.name);
+                                        Self::object_set_entry(
+                                            &mut *prototype,
+                                            getter_key,
+                                            getter_value,
+                                        );
+                                    }
+                                    ClassMethodKind::Setter => {
+                                        let setter_value = self.make_function_value_with_super(
+                                            method.handler.clone(),
+                                            env,
+                                            false,
+                                            false,
+                                            false,
+                                            false,
+                                            true,
+                                            super_constructor.clone(),
+                                            super_prototype.clone().map(Value::Object),
+                                        );
+                                        let setter_key =
+                                            Self::object_setter_storage_key(&method.name);
+                                        Self::object_set_entry(
+                                            &mut *prototype,
+                                            setter_key,
+                                            setter_value,
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -1222,6 +1270,7 @@ impl Harness {
                             }
                         };
                         env.insert(name.clone(), next.clone());
+                        self.sync_arguments_after_param_write(env, name, &next);
                         self.sync_global_binding_if_needed(env, name, &next);
                         self.bind_timer_id_to_task_env(name, expr, &next);
                     }
@@ -1249,6 +1298,7 @@ impl Harness {
                             }
                         };
                         env.insert(name.clone(), next.clone());
+                        self.sync_arguments_after_param_write(env, name, &next);
                         self.sync_global_binding_if_needed(env, name, &next);
                     }
                     Stmt::ArrayDestructureAssign {
@@ -1272,6 +1322,7 @@ impl Harness {
                             }
                             let next = values.get(index).cloned().unwrap_or(Value::Undefined);
                             env.insert(target_name.clone(), next.clone());
+                            self.sync_arguments_after_param_write(env, target_name, &next);
                             if is_declaration {
                                 self.set_const_binding(env, target_name, is_const_decl);
                                 if decl_kind
@@ -1310,6 +1361,7 @@ impl Harness {
                             let next = Self::object_get_entry(&entries, source_key)
                                 .unwrap_or(Value::Undefined);
                             env.insert(target_name.clone(), next.clone());
+                            self.sync_arguments_after_param_write(env, target_name, &next);
                             if is_declaration {
                                 self.set_const_binding(env, target_name, is_const_decl);
                                 if decl_kind

@@ -627,6 +627,56 @@ impl Harness {
         entries.get_entry(key)
     }
 
+    pub(crate) fn object_getter_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_OBJECT_GETTER_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_setter_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_OBJECT_SETTER_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_getter_from_entries(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        property_key: &str,
+    ) -> Option<Value> {
+        let getter_key = Self::object_getter_storage_key(property_key);
+        Self::object_get_entry(entries, &getter_key)
+    }
+
+    pub(crate) fn object_setter_from_entries(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        property_key: &str,
+    ) -> Option<Value> {
+        let setter_key = Self::object_setter_storage_key(property_key);
+        Self::object_get_entry(entries, &setter_key)
+    }
+
+    fn invoke_object_getter(&mut self, getter: &Value, receiver: &Value) -> Result<Value> {
+        if !self.is_callable_value(getter) {
+            return Err(Error::ScriptRuntime("object getter is not callable".into()));
+        }
+        let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+        self.execute_callable_value_with_this_and_env(
+            getter,
+            &[],
+            &event,
+            None,
+            Some(receiver.clone()),
+        )
+    }
+
+    fn object_property_from_entries_with_getter(
+        &mut self,
+        receiver: &Value,
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> Result<Option<Value>> {
+        if let Some(getter) = Self::object_getter_from_entries(entries, key) {
+            return Ok(Some(self.invoke_object_getter(&getter, receiver)?));
+        }
+        Ok(Self::object_get_entry(entries, key))
+    }
+
     pub(crate) fn callable_kind_from_value(value: &Value) -> Option<&str> {
         let Value::Object(entries) = value else {
             return None;
@@ -697,7 +747,7 @@ impl Harness {
         entries
     }
 
-    pub(crate) fn object_property_from_value(&self, value: &Value, key: &str) -> Result<Value> {
+    pub(crate) fn object_property_from_value(&mut self, value: &Value, key: &str) -> Result<Value> {
         match value {
             Value::Node(node) => {
                 let is_select = self
@@ -1155,7 +1205,7 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                if let Some(value) = Self::object_get_entry(&entries, key) {
+                if let Some(value) = self.object_property_from_entries_with_getter(value, &entries, key)? {
                     return Ok(value);
                 }
 
@@ -1164,7 +1214,9 @@ impl Harness {
 
                 while let Some(Value::Object(object)) = prototype {
                     let object_ref = object.borrow();
-                    if let Some(value) = Self::object_get_entry(&object_ref, key) {
+                    if let Some(value) =
+                        self.object_property_from_entries_with_getter(value, &object_ref, key)?
+                    {
                         return Ok(value);
                     }
                     prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
@@ -1324,7 +1376,23 @@ impl Harness {
                             Value::Undefined
                         }
                     }
-                    "prototype" => Value::Object(function.prototype_object.clone()),
+                    "prototype" => {
+                        if function.is_arrow || function.is_method {
+                            Value::Undefined
+                        } else {
+                            Value::Object(function.prototype_object.clone())
+                        }
+                    }
+                    "length" => {
+                        let mut length = 0_i64;
+                        for param in &function.handler.params {
+                            if param.is_rest || param.default.is_some() {
+                                break;
+                            }
+                            length += 1;
+                        }
+                        Value::Number(length)
+                    }
                     _ => Value::Undefined,
                 };
                 Ok(value)
@@ -1347,7 +1415,7 @@ impl Harness {
     }
 
     pub(crate) fn object_property_from_named_value(
-        &self,
+        &mut self,
         variable_name: &str,
         value: &Value,
         key: &str,

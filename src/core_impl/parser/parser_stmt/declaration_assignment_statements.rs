@@ -163,6 +163,86 @@ pub(crate) fn parse_class_body(
                 "unsupported class element syntax".into(),
             ));
         };
+
+        if method_name == "get" && !is_async && !is_generator {
+            let getter_probe = cursor.pos();
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                let Some(getter_name) = cursor.parse_identifier() else {
+                    return Err(Error::ScriptParse(
+                        "class getter requires a property name".into(),
+                    ));
+                };
+                cursor.skip_ws();
+                let params_src = cursor.read_balanced_block(b'(', b')')?;
+                if !params_src.trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "class getter must not have parameters".into(),
+                    ));
+                }
+                cursor.skip_ws();
+
+                let method_body_src = cursor.read_balanced_block(b'{', b'}')?;
+                let handler = ScriptHandler {
+                    params: Vec::new(),
+                    stmts: parse_block_statements(&method_body_src)?,
+                };
+                methods.push(ClassMethodDecl {
+                    name: getter_name,
+                    handler,
+                    is_async: false,
+                    is_generator: false,
+                    kind: ClassMethodKind::Getter,
+                });
+                cursor.skip_ws();
+                cursor.consume_byte(b';');
+                continue;
+            }
+            cursor.set_pos(getter_probe);
+        }
+
+        if method_name == "set" && !is_async && !is_generator {
+            let setter_probe = cursor.pos();
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'(') {
+                let Some(setter_name) = cursor.parse_identifier() else {
+                    return Err(Error::ScriptParse(
+                        "class setter requires a property name".into(),
+                    ));
+                };
+                cursor.skip_ws();
+                let params_src = cursor.read_balanced_block(b'(', b')')?;
+                let parsed_params =
+                    parse_callback_parameter_list(&params_src, 1, "class setter parameters")?;
+                if parsed_params.params.len() != 1 || parsed_params.params[0].is_rest {
+                    return Err(Error::ScriptParse(
+                        "class setter must have exactly one parameter".into(),
+                    ));
+                }
+                cursor.skip_ws();
+
+                let method_body_src = cursor.read_balanced_block(b'{', b'}')?;
+                let method_stmts = prepend_callback_param_prologue_stmts(
+                    parse_block_statements(&method_body_src)?,
+                    &parsed_params.prologue,
+                )?;
+                let handler = ScriptHandler {
+                    params: parsed_params.params,
+                    stmts: method_stmts,
+                };
+                methods.push(ClassMethodDecl {
+                    name: setter_name,
+                    handler,
+                    is_async: false,
+                    is_generator: false,
+                    kind: ClassMethodKind::Setter,
+                });
+                cursor.skip_ws();
+                cursor.consume_byte(b';');
+                continue;
+            }
+            cursor.set_pos(setter_probe);
+        }
         cursor.skip_ws();
 
         let params_src = cursor.read_balanced_block(b'(', b')')?;
@@ -198,6 +278,7 @@ pub(crate) fn parse_class_body(
                 handler,
                 is_async,
                 is_generator,
+                kind: ClassMethodKind::Method,
             });
         }
 

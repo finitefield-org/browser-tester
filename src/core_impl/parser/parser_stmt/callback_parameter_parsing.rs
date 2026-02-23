@@ -4,6 +4,19 @@ pub(crate) struct ParsedCallbackParams {
     pub(crate) prologue: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ArrayPatternBinding {
+    name: String,
+    default_src: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectPatternBinding {
+    source: String,
+    target: String,
+    default_src: Option<String>,
+}
+
 pub(crate) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> String {
     let mut suffix = seed;
     loop {
@@ -13,36 +26,6 @@ pub(crate) fn next_callback_temp_name(params: &[FunctionParam], seed: usize) -> 
         }
         suffix += 1;
     }
-}
-
-pub(crate) fn format_array_destructure_pattern(pattern: &[Option<String>]) -> String {
-    let mut out = String::from("[");
-    for (idx, item) in pattern.iter().enumerate() {
-        if idx > 0 {
-            out.push_str(", ");
-        }
-        if let Some(name) = item {
-            out.push_str(name);
-        }
-    }
-    out.push(']');
-    out
-}
-
-pub(crate) fn format_object_destructure_pattern(pattern: &[(String, String)]) -> String {
-    let mut out = String::from("{");
-    for (index, (source, target)) in pattern.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(source);
-        if source != target {
-            out.push_str(": ");
-            out.push_str(target);
-        }
-    }
-    out.push('}');
-    out
 }
 
 pub(crate) fn inject_callback_param_prologue(
@@ -124,16 +107,57 @@ pub(crate) fn parse_callback_parameter_list(
 
         if let Some(rest_name) = param.strip_prefix("...") {
             let rest_name = rest_name.trim();
-            if index + 1 != part_count || !is_ident(rest_name) {
+            if index + 1 != part_count {
                 return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
             }
-            params.push(FunctionParam {
-                name: rest_name.to_string(),
-                default: None,
-                is_rest: true,
-            });
-            bound_names.push(rest_name.to_string());
-            continue;
+
+            if is_ident(rest_name) {
+                params.push(FunctionParam {
+                    name: rest_name.to_string(),
+                    default: None,
+                    is_rest: true,
+                });
+                bound_names.push(rest_name.to_string());
+                continue;
+            }
+
+            if rest_name.starts_with('[') && rest_name.ends_with(']') {
+                let pattern = parse_callback_array_destructure_pattern(rest_name)?;
+                let temp = next_callback_temp_name(&params, index);
+                append_array_destructure_param_prologue(
+                    &mut prologue,
+                    &pattern,
+                    &temp,
+                    &mut bound_names,
+                );
+                bound_names.push(temp.clone());
+                params.push(FunctionParam {
+                    name: temp,
+                    default: None,
+                    is_rest: true,
+                });
+                continue;
+            }
+
+            if rest_name.starts_with('{') && rest_name.ends_with('}') {
+                let pattern = parse_callback_object_destructure_pattern(rest_name)?;
+                let temp = next_callback_temp_name(&params, index);
+                append_object_destructure_param_prologue(
+                    &mut prologue,
+                    &pattern,
+                    &temp,
+                    &mut bound_names,
+                );
+                bound_names.push(temp.clone());
+                params.push(FunctionParam {
+                    name: temp,
+                    default: None,
+                    is_rest: true,
+                });
+                continue;
+            }
+
+            return Err(Error::ScriptParse(format!("unsupported {label}: {src}")));
         }
 
         if let Some((eq_pos, op_len)) = find_top_level_assignment(param) {
@@ -157,16 +181,14 @@ pub(crate) fn parse_callback_parameter_list(
             }
 
             if name.starts_with('[') && name.ends_with(']') {
-                let pattern = parse_array_destructure_pattern(name)?;
+                let pattern = parse_callback_array_destructure_pattern(name)?;
                 let temp = next_callback_temp_name(&params, index);
-                let pattern_src = format_array_destructure_pattern(&pattern);
-                for bound_name in pattern.iter().flatten() {
-                    if !bound_names.iter().any(|bound| bound == bound_name) {
-                        prologue.push(format!("let {bound_name} = undefined;"));
-                        bound_names.push(bound_name.clone());
-                    }
-                }
-                prologue.push(format!("{pattern_src} = {temp};"));
+                append_array_destructure_param_prologue(
+                    &mut prologue,
+                    &pattern,
+                    &temp,
+                    &mut bound_names,
+                );
                 bound_names.push(temp.clone());
                 params.push(FunctionParam {
                     name: temp,
@@ -177,16 +199,14 @@ pub(crate) fn parse_callback_parameter_list(
             }
 
             if name.starts_with('{') && name.ends_with('}') {
-                let pattern = parse_object_destructure_pattern(name)?;
+                let pattern = parse_callback_object_destructure_pattern(name)?;
                 let temp = next_callback_temp_name(&params, index);
-                let pattern_src = format_object_destructure_pattern(&pattern);
-                for (_, bound_name) in &pattern {
-                    if !bound_names.iter().any(|bound| bound == bound_name) {
-                        prologue.push(format!("let {bound_name} = undefined;"));
-                        bound_names.push(bound_name.clone());
-                    }
-                }
-                prologue.push(format!("{pattern_src} = {temp};"));
+                append_object_destructure_param_prologue(
+                    &mut prologue,
+                    &pattern,
+                    &temp,
+                    &mut bound_names,
+                );
                 bound_names.push(temp.clone());
                 params.push(FunctionParam {
                     name: temp,
@@ -210,16 +230,9 @@ pub(crate) fn parse_callback_parameter_list(
         }
 
         if param.starts_with('[') && param.ends_with(']') {
-            let pattern = parse_array_destructure_pattern(param)?;
+            let pattern = parse_callback_array_destructure_pattern(param)?;
             let temp = next_callback_temp_name(&params, index);
-            let pattern_src = format_array_destructure_pattern(&pattern);
-            for name in pattern.iter().flatten() {
-                if !bound_names.iter().any(|bound| bound == name) {
-                    prologue.push(format!("let {name} = undefined;"));
-                    bound_names.push(name.clone());
-                }
-            }
-            prologue.push(format!("{pattern_src} = {temp};"));
+            append_array_destructure_param_prologue(&mut prologue, &pattern, &temp, &mut bound_names);
             bound_names.push(temp.clone());
             params.push(FunctionParam {
                 name: temp,
@@ -230,16 +243,14 @@ pub(crate) fn parse_callback_parameter_list(
         }
 
         if param.starts_with('{') && param.ends_with('}') {
-            let pattern = parse_object_destructure_pattern(param)?;
+            let pattern = parse_callback_object_destructure_pattern(param)?;
             let temp = next_callback_temp_name(&params, index);
-            let pattern_src = format_object_destructure_pattern(&pattern);
-            for (_, name) in &pattern {
-                if !bound_names.iter().any(|bound| bound == name) {
-                    prologue.push(format!("let {name} = undefined;"));
-                    bound_names.push(name.clone());
-                }
-            }
-            prologue.push(format!("{pattern_src} = {temp};"));
+            append_object_destructure_param_prologue(
+                &mut prologue,
+                &pattern,
+                &temp,
+                &mut bound_names,
+            );
             bound_names.push(temp.clone());
             params.push(FunctionParam {
                 name: temp,
@@ -253,4 +264,209 @@ pub(crate) fn parse_callback_parameter_list(
     }
 
     Ok(ParsedCallbackParams { params, prologue })
+}
+
+fn parse_callback_array_destructure_pattern(
+    pattern: &str,
+) -> Result<Vec<Option<ArrayPatternBinding>>> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'[', b']')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid array destructuring pattern: {pattern}"
+        )));
+    }
+
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut bindings = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            bindings.push(None);
+            continue;
+        }
+
+        let (name, default_src) = if let Some((eq_pos, op_len)) = find_top_level_assignment(item) {
+            if op_len != 1 {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            let name = item[..eq_pos].trim();
+            let default_src = item[eq_pos + op_len..].trim();
+            if !is_ident(name) || default_src.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            (name.to_string(), Some(default_src.to_string()))
+        } else {
+            if !is_ident(item) {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            (item.to_string(), None)
+        };
+
+        bindings.push(Some(ArrayPatternBinding { name, default_src }));
+    }
+
+    Ok(bindings)
+}
+
+fn parse_callback_object_destructure_pattern(pattern: &str) -> Result<Vec<ObjectPatternBinding>> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid object destructuring pattern: {pattern}"
+        )));
+    }
+
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut bindings = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err(Error::ScriptParse(
+                "object destructuring pattern does not support empty entries".into(),
+            ));
+        }
+
+        if let Some(colon) = find_first_top_level_colon(item) {
+            let source = item[..colon].trim();
+            let target_src = item[colon + 1..].trim();
+            if !is_ident(source) {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+
+            let (target, default_src) =
+                if let Some((eq_pos, op_len)) = find_top_level_assignment(target_src) {
+                    if op_len != 1 {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    let target = target_src[..eq_pos].trim();
+                    let default_src = target_src[eq_pos + op_len..].trim();
+                    if !is_ident(target) || default_src.is_empty() {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    (target.to_string(), Some(default_src.to_string()))
+                } else {
+                    if !is_ident(target_src) {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    (target_src.to_string(), None)
+                };
+
+            bindings.push(ObjectPatternBinding {
+                source: source.to_string(),
+                target,
+                default_src,
+            });
+            continue;
+        }
+
+        let (name, default_src) = if let Some((eq_pos, op_len)) = find_top_level_assignment(item) {
+            if op_len != 1 {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+            let name = item[..eq_pos].trim();
+            let default_src = item[eq_pos + op_len..].trim();
+            if !is_ident(name) || default_src.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+            (name.to_string(), Some(default_src.to_string()))
+        } else {
+            if !is_ident(item) {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+            (item.to_string(), None)
+        };
+
+        bindings.push(ObjectPatternBinding {
+            source: name.clone(),
+            target: name,
+            default_src,
+        });
+    }
+
+    Ok(bindings)
+}
+
+fn append_array_destructure_param_prologue(
+    prologue: &mut Vec<String>,
+    pattern: &[Option<ArrayPatternBinding>],
+    temp: &str,
+    bound_names: &mut Vec<String>,
+) {
+    for (index, binding) in pattern.iter().enumerate() {
+        let Some(binding) = binding else {
+            continue;
+        };
+        if !bound_names.iter().any(|bound| bound == &binding.name) {
+            prologue.push(format!("let {} = undefined;", binding.name));
+            bound_names.push(binding.name.clone());
+        }
+        prologue.push(format!("{} = {}[{}];", binding.name, temp, index));
+        if let Some(default_src) = &binding.default_src {
+            prologue.push(format!(
+                "if ({} === undefined) {} = {};",
+                binding.name, binding.name, default_src
+            ));
+        }
+    }
+}
+
+fn append_object_destructure_param_prologue(
+    prologue: &mut Vec<String>,
+    pattern: &[ObjectPatternBinding],
+    temp: &str,
+    bound_names: &mut Vec<String>,
+) {
+    for binding in pattern {
+        if !bound_names.iter().any(|bound| bound == &binding.target) {
+            prologue.push(format!("let {} = undefined;", binding.target));
+            bound_names.push(binding.target.clone());
+        }
+        prologue.push(format!("{} = {}.{};", binding.target, temp, binding.source));
+        if let Some(default_src) = &binding.default_src {
+            prologue.push(format!(
+                "if ({} === undefined) {} = {};",
+                binding.target, binding.target, default_src
+            ));
+        }
+    }
 }

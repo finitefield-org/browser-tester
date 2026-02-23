@@ -87,6 +87,8 @@ impl Harness {
             true,
             true,
             true,
+            false,
+            false,
         ))
     }
 }
