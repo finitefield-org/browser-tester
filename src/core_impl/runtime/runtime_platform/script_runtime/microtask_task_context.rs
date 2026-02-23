@@ -90,17 +90,17 @@ impl Harness {
             Vec::new()
         };
         self.with_callback_scope_depth(env, |this, callback_env| {
-            this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
-            let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
-            callback_env.remove(INTERNAL_RETURN_SLOT);
-            match flow {
-                ExecFlow::Continue => Ok(()),
-                ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
-                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                    "continue statement outside of loop".into(),
-                )),
-                ExecFlow::Return => Ok(()),
-            }
+            this.with_isolated_loop_control_scope(|this| {
+                this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
+                let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+                callback_env.remove(INTERNAL_RETURN_SLOT);
+                match flow {
+                    ExecFlow::Continue => Ok(()),
+                    ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
+                    ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
+                    ExecFlow::Return => Ok(()),
+                }
+            })
         })
     }
 
@@ -173,17 +173,23 @@ impl Harness {
             .first_event_param()
             .map(|event_param| event_param.to_string());
         self.with_callback_scope_depth(env, |this, callback_env| {
-            this.bind_handler_params(&handler, callback_args, callback_env, &event_param, event)?;
-            let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
-            callback_env.remove(INTERNAL_RETURN_SLOT);
-            match flow {
-                ExecFlow::Continue => Ok(()),
-                ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
-                ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                    "continue statement outside of loop".into(),
-                )),
-                ExecFlow::Return => Ok(()),
-            }
+            this.with_isolated_loop_control_scope(|this| {
+                this.bind_handler_params(
+                    &handler,
+                    callback_args,
+                    callback_env,
+                    &event_param,
+                    event,
+                )?;
+                let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+                callback_env.remove(INTERNAL_RETURN_SLOT);
+                match flow {
+                    ExecFlow::Continue => Ok(()),
+                    ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
+                    ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
+                    ExecFlow::Return => Ok(()),
+                }
+            })
         })
     }
 
@@ -197,9 +203,12 @@ impl Harness {
             .first_event_param()
             .map(|event_param| event_param.to_string());
         self.with_callback_scope_depth(env, |this, callback_env| {
-            this.bind_handler_params(handler, &[], callback_env, &event_param, &event)?;
-            let run = this.execute_stmts(&handler.stmts, &event_param, &mut event, callback_env);
-            run.map(|_| ())
+            this.with_isolated_loop_control_scope(|this| {
+                this.bind_handler_params(handler, &[], callback_env, &event_param, &event)?;
+                let run =
+                    this.execute_stmts(&handler.stmts, &event_param, &mut event, callback_env);
+                run.map(|_| ())
+            })
         })
     }
 

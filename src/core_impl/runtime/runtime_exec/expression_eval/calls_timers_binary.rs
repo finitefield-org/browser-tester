@@ -1,6 +1,37 @@
 use super::*;
 
 impl Harness {
+    fn is_super_target_expr(expr: &Expr) -> bool {
+        matches!(expr, Expr::Var(name) if name == "super")
+    }
+
+    fn super_constructor_from_env(env: &HashMap<String, Value>) -> Result<Value> {
+        env.get(INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY)
+            .cloned()
+            .ok_or_else(|| {
+                Error::ScriptRuntime("super() is only valid in a derived class constructor".into())
+            })
+    }
+
+    fn super_prototype_from_env(env: &HashMap<String, Value>) -> Result<Value> {
+        env.get(INTERNAL_CLASS_SUPER_PROTOTYPE_KEY)
+            .cloned()
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "super property access is only valid in a class method".into(),
+                )
+            })
+    }
+
+    fn super_this_from_env(env: &HashMap<String, Value>) -> Result<Value> {
+        match env.get("this").cloned().unwrap_or(Value::Undefined) {
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
+                "super requires an initialized this value".into(),
+            )),
+            value => Ok(value),
+        }
+    }
+
     pub(crate) fn eval_expr_calls_timers_binary(
         &mut self,
         expr: &Expr,
@@ -11,6 +42,19 @@ impl Harness {
         let result = (|| -> Result<Value> {
             match expr {
                 Expr::FunctionCall { target, args } => {
+                    if target == "super" {
+                        let super_constructor = Self::super_constructor_from_env(env)?;
+                        let this_value = Self::super_this_from_env(env)?;
+                        let evaluated_args =
+                            self.eval_call_args_with_spread(args, env, event_param, event)?;
+                        return self.execute_constructor_value_with_this_and_env(
+                            &super_constructor,
+                            &evaluated_args,
+                            event,
+                            Some(env),
+                            Some(this_value),
+                        );
+                    }
                     let callee = if let Some(callee) = env.get(target).cloned() {
                         callee
                     } else if let Some(callee) = self.resolve_pending_function_decl(target, env) {
@@ -46,6 +90,30 @@ impl Harness {
                     args,
                     optional,
                 } => {
+                    if Self::is_super_target_expr(target) {
+                        let super_prototype = Self::super_prototype_from_env(env)?;
+                        let this_value = Self::super_this_from_env(env)?;
+                        let evaluated_args =
+                            self.eval_call_args_with_spread(args, env, event_param, event)?;
+                        let callee = self.object_property_from_value(&super_prototype, member)?;
+                        return self
+                            .execute_callable_value_with_this_and_env(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                                Some(this_value),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime(format!("'{}' is not a function", member))
+                                }
+                                other => other,
+                            });
+                    }
+
                     let receiver = self.eval_expr(target, env, event_param, event)?;
                     if *optional && matches!(receiver, Value::Null | Value::Undefined) {
                         return Ok(Value::Undefined);
@@ -333,19 +401,29 @@ impl Harness {
                             other => other,
                         },
                     )?;
-                    self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
-                        .map_err(|err| match err {
-                            Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
-                                Error::ScriptRuntime(format!("'{}' is not a function", member))
-                            }
-                            other => other,
-                        })
+                    self.execute_callable_value_with_this_and_env(
+                        &callee,
+                        &evaluated_args,
+                        event,
+                        Some(env),
+                        Some(receiver.clone()),
+                    )
+                    .map_err(|err| match err {
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime(format!("'{}' is not a function", member))
+                        }
+                        other => other,
+                    })
                 }
                 Expr::MemberGet {
                     target,
                     member,
                     optional,
                 } => {
+                    if Self::is_super_target_expr(target) {
+                        let super_prototype = Self::super_prototype_from_env(env)?;
+                        return self.object_property_from_value(&super_prototype, member);
+                    }
                     let receiver = self.eval_expr(target, env, event_param, event)?;
                     if *optional && matches!(receiver, Value::Null | Value::Undefined) {
                         return Ok(Value::Undefined);
@@ -357,7 +435,11 @@ impl Harness {
                     index,
                     optional,
                 } => {
-                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    let receiver = if Self::is_super_target_expr(target) {
+                        Self::super_prototype_from_env(env)?
+                    } else {
+                        self.eval_expr(target, env, event_param, event)?
+                    };
                     if *optional && matches!(receiver, Value::Null | Value::Undefined) {
                         return Ok(Value::Undefined);
                     }

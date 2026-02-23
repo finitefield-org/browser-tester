@@ -208,6 +208,120 @@ fn break_inside_nested_function_reports_outside_loop_error() -> Result<()> {
 }
 
 #[test]
+fn labeled_continue_targets_outer_loop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let out = '';
+            let i = 0;
+            outer: while (i < 3) {
+              let j = 0;
+              while (j < 3) {
+                j += 1;
+                if (j === 2) {
+                  i += 1;
+                  continue outer;
+                }
+                out = out + String(i) + String(j);
+              }
+              i += 1;
+            }
+            document.getElementById('result').textContent = out;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "011121")?;
+    Ok(())
+}
+
+#[test]
+fn continue_with_unknown_label_reports_runtime_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            while (true) {
+              continue missingLabel;
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("continue with unknown label should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("label not found: missingLabel")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn continue_with_non_iteration_label_reports_runtime_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            label: {
+              for (let i = 0; i < 1; i++) {
+                continue label;
+              }
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("continue to non-loop label should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("does not denote an iteration statement"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn continue_inside_nested_function_reports_outside_loop_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let i = 0;
+            while (i < 4) {
+              if (i === 1) {
+                (() => {
+                  continue;
+                })();
+              }
+              i += 1;
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("continue inside nested function should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("continue statement outside of loop")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn foreach_supports_nested_if_else_and_event_variable() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1675,5 +1789,349 @@ fn aria_element_reference_properties_resolve_id_refs() -> Result<()> {
         "#result",
         "opt2:2:panel1:panel2:desc:detail:err:next1:next2:lbl:2:owned2",
     )?;
+    Ok(())
+}
+
+#[test]
+fn class_declaration_supports_constructor_and_new() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Polygon {
+            constructor(height, width) {
+              this.area = height * width;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const polygon = new Polygon(4, 3);
+            document.getElementById('result').textContent = String(polygon.area);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "12")?;
+    Ok(())
+}
+
+#[test]
+fn class_methods_resolve_through_prototype_and_bind_this() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Rectangle {
+            constructor(height, width) {
+              this.height = height;
+              this.width = width;
+            }
+
+            area() {
+              return this.height * this.width;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const rectangle = new Rectangle(5, 2);
+            document.getElementById('result').textContent = String(rectangle.area());
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "10")?;
+    Ok(())
+}
+
+#[test]
+fn class_declaration_is_block_scoped() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Box {
+            constructor() {
+              this.value = 1;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const before = new Box().value;
+            let inside = 0;
+            {
+              class Box {
+                constructor() {
+                  this.value = 2;
+                }
+              }
+              inside = new Box().value;
+            }
+            const after = new Box().value;
+            document.getElementById('result').textContent = before + ':' + inside + ':' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:2:1")?;
+    Ok(())
+}
+
+#[test]
+fn class_constructor_cannot_be_called_without_new() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class Polygon {
+            constructor() {}
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            Polygon();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("class constructor call without new should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("without 'new'")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn class_extends_supports_super_constructor_and_inherited_methods() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Animal {
+            constructor(name) {
+              this.name = name;
+            }
+
+            speak() {
+              return 'base:' + this.name;
+            }
+          }
+
+          class Dog extends Animal {
+            constructor(name) {
+              super(name);
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const dog = new Dog('pochi');
+            document.getElementById('result').textContent = dog.speak();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "base:pochi")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_uses_default_super_constructor_and_super_method_calls() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Base {
+            constructor(name) {
+              this.name = name;
+            }
+
+            label() {
+              return this.name;
+            }
+          }
+
+          class Child extends Base {
+            label() {
+              return super.label() + ':child';
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const child = new Child('neo');
+            document.getElementById('result').textContent = child.label();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "neo:child")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_default_constructor_forwards_all_arguments() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Base {
+            constructor(a, b, c) {
+              this.total = a + b + c;
+            }
+          }
+
+          class Child extends Base {}
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const child = new Child(1, 2, 3);
+            document.getElementById('result').textContent = String(child.total);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "6")?;
+    Ok(())
+}
+
+#[test]
+fn class_extends_requires_constructor_superclass() {
+    let err = Harness::from_html(
+        "<script>const parent = {}; class Child extends parent {}</script>",
+    )
+    .expect_err("class extends non-constructor should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("not a constructor")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn super_call_without_derived_superclass_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class Base {
+            constructor() {
+              super();
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            new Base();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("super() outside derived class should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("derived class constructor")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn const_reassignment_throws_runtime_error() {
+    let err = Harness::from_html("<script>const number = 42; number = 99;</script>")
+        .expect_err("const reassignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Assignment to constant variable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn const_object_property_mutation_is_allowed() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = { key: 'value' };
+          obj.key = 'otherValue';
+          document.getElementById('result').textContent = obj.key;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "otherValue")?;
+    Ok(())
+}
+
+#[test]
+fn const_declaration_list_supports_initializer_dependencies() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const a = 1, b = a + 1, c = b + 1;
+          document.getElementById('result').textContent = `${a}:${b}:${c}`;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:2:3")?;
+    Ok(())
+}
+
+#[test]
+fn lexical_declaration_is_rejected_in_single_statement_if_context() {
+    let err = Harness::from_html("<script>if (true) const a = 1;</script>")
+        .expect_err("single-statement lexical declaration should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("lexical declaration cannot appear in a single-statement context"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn const_redeclaration_in_same_scope_is_rejected() {
+    let err = Harness::from_html("<script>const value = 1; const value = 2;</script>")
+        .expect_err("const redeclaration should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("already been declared")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn const_array_destructuring_binding_is_immutable() {
+    let err = Harness::from_html("<script>const [a] = [1]; a = 2;</script>")
+        .expect_err("const destructuring reassignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("Assignment to constant variable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn const_object_destructuring_respects_block_scope() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const value = 1;
+          {
+            const { value } = { value: 2 };
+          }
+          document.getElementById('result').textContent = String(value);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1")?;
     Ok(())
 }

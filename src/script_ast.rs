@@ -1000,6 +1000,14 @@ pub(crate) enum VarDeclKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClassMethodDecl {
+    pub(crate) name: String,
+    pub(crate) handler: ScriptHandler,
+    pub(crate) is_async: bool,
+    pub(crate) is_generator: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt {
     VarDecl {
         name: String,
@@ -1011,6 +1019,12 @@ pub(crate) enum Stmt {
         handler: ScriptHandler,
         is_async: bool,
         is_generator: bool,
+    },
+    ClassDecl {
+        name: String,
+        super_class: Option<Expr>,
+        constructor: Option<ScriptHandler>,
+        methods: Vec<ClassMethodDecl>,
     },
     Label {
         name: String,
@@ -1031,10 +1045,12 @@ pub(crate) enum Stmt {
     ArrayDestructureAssign {
         targets: Vec<Option<String>>,
         expr: Expr,
+        decl_kind: Option<VarDeclKind>,
     },
     ObjectDestructureAssign {
         bindings: Vec<(String, String)>,
         expr: Expr,
+        decl_kind: Option<VarDeclKind>,
     },
     ObjectAssign {
         target: String,
@@ -1148,7 +1164,9 @@ pub(crate) enum Stmt {
     Break {
         label: Option<String>,
     },
-    Continue,
+    Continue {
+        label: Option<String>,
+    },
     While {
         cond: Expr,
         body: Vec<Stmt>,
@@ -1204,7 +1222,7 @@ pub(crate) enum CatchBinding {
 pub(crate) enum ExecFlow {
     Continue,
     Break(Option<String>),
-    ContinueLoop,
+    ContinueLoop(Option<String>),
     Return,
 }
 

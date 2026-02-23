@@ -59,6 +59,155 @@ pub(crate) fn parse_function_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+pub(crate) fn parse_class_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
+    let stmt = stmt.trim();
+    let mut cursor = Cursor::new(stmt);
+    cursor.skip_ws();
+
+    if !consume_keyword(&mut cursor, "class") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let Some(name) = cursor.parse_identifier() else {
+        return Err(Error::ScriptParse(
+            "class declaration requires a class name".into(),
+        ));
+    };
+    cursor.skip_ws();
+
+    let mut super_class = None;
+    if consume_keyword(&mut cursor, "extends") {
+        cursor.skip_ws();
+        let extends_start = cursor.pos();
+        let bytes = cursor.bytes();
+        let mut scanner = JsLexScanner::new();
+        let mut body_open = None;
+        let mut i = extends_start;
+        while i < bytes.len() {
+            if scanner.is_top_level() && bytes[i] == b'{' {
+                body_open = Some(i);
+                break;
+            }
+            i = scanner.advance(bytes, i);
+        }
+        let Some(body_open) = body_open else {
+            return Err(Error::ScriptParse(
+                "class declaration requires a body".into(),
+            ));
+        };
+        let super_src = stmt
+            .get(extends_start..body_open)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if super_src.is_empty() {
+            return Err(Error::ScriptParse(
+                "class extends requires a superclass expression".into(),
+            ));
+        }
+        super_class = Some(parse_expr(&super_src)?);
+        cursor.set_pos(body_open);
+    }
+
+    cursor.skip_ws();
+    let body_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    cursor.consume_byte(b';');
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported class declaration tail: {stmt}"
+        )));
+    }
+
+    let (constructor, methods) = parse_class_body(&body_src)?;
+    Ok(Some(Stmt::ClassDecl {
+        name,
+        super_class,
+        constructor,
+        methods,
+    }))
+}
+
+pub(crate) fn parse_class_body(
+    body_src: &str,
+) -> Result<(Option<ScriptHandler>, Vec<ClassMethodDecl>)> {
+    let mut cursor = Cursor::new(body_src);
+    let mut constructor = None;
+    let mut methods = Vec::new();
+
+    while !cursor.eof() {
+        cursor.skip_ws();
+        while cursor.consume_byte(b';') {
+            cursor.skip_ws();
+        }
+        if cursor.eof() {
+            break;
+        }
+
+        let is_async = if consume_keyword(&mut cursor, "async") {
+            cursor.skip_ws();
+            true
+        } else {
+            false
+        };
+
+        let is_generator = cursor.consume_byte(b'*');
+        if is_generator {
+            cursor.skip_ws();
+        }
+
+        let Some(method_name) = cursor.parse_identifier() else {
+            return Err(Error::ScriptParse(
+                "unsupported class element syntax".into(),
+            ));
+        };
+        cursor.skip_ws();
+
+        let params_src = cursor.read_balanced_block(b'(', b')')?;
+        let parsed_params =
+            parse_callback_parameter_list(&params_src, usize::MAX, "class method parameters")?;
+        cursor.skip_ws();
+
+        let method_body_src = cursor.read_balanced_block(b'{', b'}')?;
+        let method_stmts = prepend_callback_param_prologue_stmts(
+            parse_block_statements(&method_body_src)?,
+            &parsed_params.prologue,
+        )?;
+        let handler = ScriptHandler {
+            params: parsed_params.params,
+            stmts: method_stmts,
+        };
+
+        if method_name == "constructor" {
+            if is_async || is_generator {
+                return Err(Error::ScriptParse(
+                    "class constructor cannot be async or generator".into(),
+                ));
+            }
+            if constructor.is_some() {
+                return Err(Error::ScriptParse(
+                    "class declaration has multiple constructors".into(),
+                ));
+            }
+            constructor = Some(handler);
+        } else {
+            methods.push(ClassMethodDecl {
+                name: method_name,
+                handler,
+                is_async,
+                is_generator,
+            });
+        }
+
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+    }
+
+    Ok((constructor, methods))
+}
+
 pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     let mut decl_kind = None;
     let mut rest = None;
@@ -123,12 +272,20 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     if name.starts_with('[') && name.ends_with(']') {
         let targets = parse_array_destructure_pattern(name)?;
         let expr = parse_expr(expr_src)?;
-        return Ok(Some(Stmt::ArrayDestructureAssign { targets, expr }));
+        return Ok(Some(Stmt::ArrayDestructureAssign {
+            targets,
+            expr,
+            decl_kind: Some(kind),
+        }));
     }
     if name.starts_with('{') && name.ends_with('}') {
         let bindings = parse_object_destructure_pattern(name)?;
         let expr = parse_expr(expr_src)?;
-        return Ok(Some(Stmt::ObjectDestructureAssign { bindings, expr }));
+        return Ok(Some(Stmt::ObjectDestructureAssign {
+            bindings,
+            expr,
+            decl_kind: Some(kind),
+        }));
     }
 
     if !is_ident(name) {
@@ -220,12 +377,20 @@ pub(crate) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     if lhs.starts_with('[') && lhs.ends_with(']') {
         let targets = parse_array_destructure_pattern(lhs)?;
         let expr = parse_expr(rhs)?;
-        return Ok(Some(Stmt::ArrayDestructureAssign { targets, expr }));
+        return Ok(Some(Stmt::ArrayDestructureAssign {
+            targets,
+            expr,
+            decl_kind: None,
+        }));
     }
     if lhs.starts_with('{') && lhs.ends_with('}') {
         let bindings = parse_object_destructure_pattern(lhs)?;
         let expr = parse_expr(rhs)?;
-        return Ok(Some(Stmt::ObjectDestructureAssign { bindings, expr }));
+        return Ok(Some(Stmt::ObjectDestructureAssign {
+            bindings,
+            expr,
+            decl_kind: None,
+        }));
     }
 
     Ok(None)

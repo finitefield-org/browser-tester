@@ -14,19 +14,20 @@ impl Harness {
         binding: &CatchBinding,
         caught: &Value,
         env: &mut HashMap<String, Value>,
-    ) -> Result<Vec<(String, Option<Value>)>> {
+    ) -> Result<Vec<(String, Option<Value>, bool)>> {
         let mut previous = Vec::new();
         let mut seen = HashSet::new();
-        let mut remember = |name: &str, env: &HashMap<String, Value>| {
+        let mut remember = |name: &str, env: &HashMap<String, Value>, is_const: bool| {
             if seen.insert(name.to_string()) {
-                previous.push((name.to_string(), env.get(name).cloned()));
+                previous.push((name.to_string(), env.get(name).cloned(), is_const));
             }
         };
 
         match binding {
             CatchBinding::Identifier(name) => {
-                remember(name, env);
+                remember(name, env, self.is_const_binding(env, name));
                 env.insert(name.clone(), caught.clone());
+                self.set_const_binding(env, name, false);
             }
             CatchBinding::ArrayPattern(pattern) => {
                 let values = self.array_like_values_from_value(caught)?;
@@ -34,9 +35,10 @@ impl Harness {
                     let Some(name) = name else {
                         continue;
                     };
-                    remember(name, env);
+                    remember(name, env, self.is_const_binding(env, name));
                     let value = values.get(index).cloned().unwrap_or(Value::Undefined);
                     env.insert(name.clone(), value);
+                    self.set_const_binding(env, name, false);
                 }
             }
             CatchBinding::ObjectPattern(pattern) => {
@@ -47,10 +49,11 @@ impl Harness {
                 };
                 let entries = entries.borrow();
                 for (source_key, target_name) in pattern {
-                    remember(target_name, env);
+                    remember(target_name, env, self.is_const_binding(env, target_name));
                     let value =
                         Self::object_get_entry(&entries, source_key).unwrap_or(Value::Undefined);
                     env.insert(target_name.clone(), value);
+                    self.set_const_binding(env, target_name, false);
                 }
             }
         }
@@ -60,15 +63,16 @@ impl Harness {
 
     pub(crate) fn restore_catch_binding(
         &self,
-        previous: Vec<(String, Option<Value>)>,
+        previous: Vec<(String, Option<Value>, bool)>,
         env: &mut HashMap<String, Value>,
     ) {
-        for (name, value) in previous {
+        for (name, value, was_const) in previous {
             if let Some(value) = value {
-                env.insert(name, value);
+                env.insert(name.clone(), value);
             } else {
                 env.remove(&name);
             }
+            self.set_const_binding(env, &name, was_const);
         }
     }
 
@@ -148,7 +152,28 @@ impl Harness {
             Stmt::VarDecl { name, .. } => {
                 out.insert(name.clone());
             }
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(_),
+                ..
+            } => {
+                for name in targets.iter().flatten() {
+                    out.insert(name.clone());
+                }
+            }
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(_),
+                ..
+            } => {
+                for (_, target) in bindings {
+                    out.insert(target.clone());
+                }
+            }
             Stmt::FunctionDecl { name, .. } => {
+                out.insert(name.clone());
+            }
+            Stmt::ClassDecl { name, .. } => {
                 out.insert(name.clone());
             }
             Stmt::Label { stmt, .. } => {

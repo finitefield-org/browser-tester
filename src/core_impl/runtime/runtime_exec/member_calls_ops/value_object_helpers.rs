@@ -1155,7 +1155,21 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                Ok(Self::object_get_entry(&entries, key).unwrap_or(Value::Undefined))
+                if let Some(value) = Self::object_get_entry(&entries, key) {
+                    return Ok(value);
+                }
+
+                let mut prototype = Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
+                drop(entries);
+
+                while let Some(Value::Object(object)) = prototype {
+                    let object_ref = object.borrow();
+                    if let Some(value) = Self::object_get_entry(&object_ref, key) {
+                        return Ok(value);
+                    }
+                    prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+                }
+                Ok(Value::Undefined)
             }
             Value::Promise(promise) => {
                 if key == "constructor" {

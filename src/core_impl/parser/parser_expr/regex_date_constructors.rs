@@ -147,7 +147,7 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
         let callee_src = cursor.read_balanced_block(b'(', b')')?;
         parse_expr(callee_src.trim())?
     } else if let Some(name) = cursor.parse_identifier() {
-        if name != "GeneratorFunction" && name != "AsyncGeneratorFunction" {
+        if is_reserved_new_constructor_name(name.as_str()) {
             return Ok(None);
         }
         Expr::Var(name)
@@ -181,6 +181,46 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
         args: parsed,
         called_with_new: true,
     }))
+}
+
+pub(crate) fn is_reserved_new_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Date"
+            | "RegExp"
+            | "Function"
+            | "Error"
+            | "String"
+            | "Number"
+            | "BigInt"
+            | "Boolean"
+            | "Object"
+            | "Blob"
+            | "URL"
+            | "URLSearchParams"
+            | "FormData"
+            | "Array"
+            | "ArrayBuffer"
+            | "Promise"
+            | "Map"
+            | "WeakMap"
+            | "Set"
+            | "WeakSet"
+            | "Symbol"
+            | "Intl"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "TypedArray"
+    )
 }
 
 pub(crate) fn parse_regex_literal_expr(src: &str) -> Result<Option<(String, String)>> {

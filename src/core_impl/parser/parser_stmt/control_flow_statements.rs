@@ -7,31 +7,65 @@ pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
 
     for raw in raw_stmts {
         for stmt in split_async_function_asi_statements(raw.trim()) {
-            let stmt = stmt.trim();
-            if stmt.is_empty() {
-                continue;
-            }
+            for stmt in split_var_decl_list_statements(stmt) {
+                let stmt = stmt.trim();
+                if stmt.is_empty() {
+                    continue;
+                }
 
-            if let Some(else_branch) = parse_else_fragment(stmt)? {
-                if let Some(last_stmt) = stmts.last_mut() {
-                    if attach_else_branch_to_if_chain(last_stmt, else_branch) {
-                        continue;
+                if let Some(else_branch) = parse_else_fragment(stmt)? {
+                    if let Some(last_stmt) = stmts.last_mut() {
+                        if attach_else_branch_to_if_chain(last_stmt, else_branch) {
+                            continue;
+                        }
+                        return Err(Error::ScriptParse(format!(
+                            "duplicate else branch in: {stmt}"
+                        )));
                     }
                     return Err(Error::ScriptParse(format!(
-                        "duplicate else branch in: {stmt}"
+                        "unexpected else without matching if: {stmt}"
                     )));
                 }
-                return Err(Error::ScriptParse(format!(
-                    "unexpected else without matching if: {stmt}"
-                )));
-            }
 
-            let parsed = parse_single_statement(stmt)?;
-            stmts.push(parsed);
+                let parsed = parse_single_statement(stmt)?;
+                stmts.push(parsed);
+            }
         }
     }
 
     Ok(stmts)
+}
+
+pub(crate) fn split_var_decl_list_statements(stmt: &str) -> Vec<String> {
+    let stmt = stmt.trim();
+    let mut declaration = None;
+    for kw in ["const", "let", "var"] {
+        if let Some(after) = stmt.strip_prefix(kw) {
+            if after.as_bytes().first().is_some_and(|b| is_ident_char(*b)) {
+                continue;
+            }
+            declaration = Some((kw, after.trim_start()));
+            break;
+        }
+    }
+
+    let Some((kw, rest)) = declaration else {
+        return vec![stmt.to_string()];
+    };
+    if rest.is_empty() {
+        return vec![stmt.to_string()];
+    }
+
+    let parts = split_top_level_by_char(rest, b',');
+    if parts.len() <= 1 {
+        return vec![stmt.to_string()];
+    }
+
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        out.push(format!("{kw} {}", part.trim()));
+    }
+    out
 }
 
 pub(crate) fn split_async_function_asi_statements(stmt: &str) -> Vec<&str> {
@@ -164,6 +198,10 @@ pub(crate) fn parse_single_statement(stmt: &str) -> Result<Stmt> {
     }
 
     if let Some(parsed) = parse_function_decl_stmt(stmt)? {
+        return Ok(parsed);
+    }
+
+    if let Some(parsed) = parse_class_decl_stmt(stmt)? {
         return Ok(parsed);
     }
 
@@ -354,7 +392,19 @@ pub(crate) fn parse_if_branch(src: &str) -> Result<Vec<Stmt>> {
     if single.is_empty() {
         return Err(Error::ScriptParse("empty single statement branch".into()));
     }
-    Ok(vec![parse_single_statement(single)?])
+    let parsed = parse_single_statement(single)?;
+    if matches!(
+        parsed,
+        Stmt::VarDecl {
+            kind: VarDeclKind::Let | VarDeclKind::Const,
+            ..
+        } | Stmt::ClassDecl { .. }
+    ) {
+        return Err(Error::ScriptParse(
+            "lexical declaration cannot appear in a single-statement context".into(),
+        ));
+    }
+    Ok(vec![parsed])
 }
 
 pub(crate) fn trim_optional_trailing_semicolon(src: &str) -> &str {
@@ -739,6 +789,17 @@ pub(crate) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
         }
     }
     cursor.skip_ws();
+    let label = if cursor.peek() == Some(b';') || cursor.eof() {
+        None
+    } else {
+        let Some(label) = cursor.parse_identifier() else {
+            return Err(Error::ScriptParse(format!(
+                "unsupported continue statement: {stmt}"
+            )));
+        };
+        cursor.skip_ws();
+        Some(label)
+    };
     cursor.consume_byte(b';');
     cursor.skip_ws();
     if !cursor.eof() {
@@ -746,7 +807,7 @@ pub(crate) fn parse_continue_stmt(stmt: &str) -> Result<Option<Stmt>> {
             "unsupported continue statement: {stmt}"
         )));
     }
-    Ok(Some(Stmt::Continue))
+    Ok(Some(Stmt::Continue { label }))
 }
 
 pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {

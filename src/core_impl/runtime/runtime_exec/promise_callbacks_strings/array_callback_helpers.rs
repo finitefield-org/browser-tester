@@ -12,27 +12,26 @@ impl Harness {
         callback_env.remove(INTERNAL_RETURN_SLOT);
         let mut callback_event = event.clone();
         let event_param = None;
-        self.bind_handler_params(
-            callback,
-            args,
-            &mut callback_env,
-            &event_param,
-            &callback_event,
-        )?;
-        match self.execute_stmts(
-            &callback.stmts,
-            &event_param,
-            &mut callback_event,
-            &mut callback_env,
-        )? {
-            ExecFlow::Continue | ExecFlow::Return => {}
-            ExecFlow::Break(label) => return Err(Self::break_flow_error(&label)),
-            ExecFlow::ContinueLoop => {
-                return Err(Error::ScriptRuntime(
-                    "continue statement outside of loop".into(),
-                ));
+        self.with_isolated_loop_control_scope(|this| {
+            this.bind_handler_params(
+                callback,
+                args,
+                &mut callback_env,
+                &event_param,
+                &callback_event,
+            )?;
+            match this.execute_stmts(
+                &callback.stmts,
+                &event_param,
+                &mut callback_event,
+                &mut callback_env,
+            )? {
+                ExecFlow::Continue | ExecFlow::Return => {}
+                ExecFlow::Break(label) => return Err(Self::break_flow_error(&label)),
+                ExecFlow::ContinueLoop(label) => return Err(Self::continue_flow_error(&label)),
             }
-        }
+            Ok(())
+        })?;
 
         Ok(callback_env
             .remove(INTERNAL_RETURN_SLOT)
@@ -53,8 +52,10 @@ impl Harness {
 
         let mut callback_event = event.clone();
         let event_param = None;
-        self.bind_handler_params(callback, args, env, &event_param, &callback_event)?;
-        let result = self.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env);
+        let result = self.with_isolated_loop_control_scope(|this| {
+            this.bind_handler_params(callback, args, env, &event_param, &callback_event)?;
+            this.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env)
+        });
         env.remove(INTERNAL_RETURN_SLOT);
 
         for (name, previous) in previous_values {
@@ -68,9 +69,7 @@ impl Harness {
         match result? {
             ExecFlow::Continue | ExecFlow::Return => Ok(()),
             ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
-            ExecFlow::ContinueLoop => Err(Error::ScriptRuntime(
-                "continue statement outside of loop".into(),
-            )),
+            ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
         }
     }
 

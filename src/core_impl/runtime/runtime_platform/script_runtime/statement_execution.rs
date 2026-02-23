@@ -18,22 +18,156 @@ impl Harness {
         )
     }
 
+    fn direct_decl_names_and_const_flag(stmt: &Stmt) -> Vec<(String, bool)> {
+        match stmt {
+            Stmt::VarDecl { name, kind, .. } => {
+                vec![(name.clone(), matches!(kind, VarDeclKind::Const))]
+            }
+            Stmt::FunctionDecl { name, .. } => vec![(name.clone(), false)],
+            Stmt::ClassDecl { name, .. } => vec![(name.clone(), false)],
+            Stmt::ArrayDestructureAssign {
+                targets,
+                decl_kind: Some(kind),
+                ..
+            } => targets
+                .iter()
+                .flatten()
+                .cloned()
+                .map(|name| (name, matches!(kind, VarDeclKind::Const)))
+                .collect(),
+            Stmt::ObjectDestructureAssign {
+                bindings,
+                decl_kind: Some(kind),
+                ..
+            } => bindings
+                .iter()
+                .map(|(_, target_name)| (target_name.clone(), matches!(kind, VarDeclKind::Const)))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn validate_const_redeclarations(stmts: &[Stmt]) -> Result<()> {
+        let mut declared = HashSet::new();
+        let mut declared_const = HashSet::new();
+        for stmt in stmts {
+            for (name, is_const) in Self::direct_decl_names_and_const_flag(stmt) {
+                if is_const {
+                    if declared.contains(&name) {
+                        return Err(Error::ScriptRuntime(format!(
+                            "Identifier '{name}' has already been declared"
+                        )));
+                    }
+                    declared.insert(name.clone());
+                    declared_const.insert(name);
+                } else {
+                    if declared_const.contains(&name) {
+                        return Err(Error::ScriptRuntime(format!(
+                            "Identifier '{name}' has already been declared"
+                        )));
+                    }
+                    declared.insert(name);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_const_binding(&self, env: &HashMap<String, Value>, name: &str) -> bool {
+        let Some(Value::Object(bindings)) = env.get(INTERNAL_CONST_BINDINGS_KEY) else {
+            return false;
+        };
+        matches!(
+            Self::object_get_entry(&bindings.borrow(), name),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn set_const_binding(
+        &self,
+        env: &mut HashMap<String, Value>,
+        name: &str,
+        is_const: bool,
+    ) {
+        if Self::is_internal_env_key(name) {
+            return;
+        }
+        let bindings = match env.get(INTERNAL_CONST_BINDINGS_KEY) {
+            Some(Value::Object(bindings)) => bindings.clone(),
+            _ => {
+                let entries = Rc::new(RefCell::new(ObjectValue::default()));
+                env.insert(
+                    INTERNAL_CONST_BINDINGS_KEY.to_string(),
+                    Value::Object(entries.clone()),
+                );
+                entries
+            }
+        };
+        Self::object_set_entry(
+            &mut bindings.borrow_mut(),
+            name.to_string(),
+            Value::Bool(is_const),
+        );
+    }
+
+    fn ensure_binding_is_mutable(&self, env: &HashMap<String, Value>, name: &str) -> Result<()> {
+        if self.is_const_binding(env, name) {
+            return Err(Error::ScriptRuntime(
+                "Assignment to constant variable".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn collect_direct_block_lexical_bindings(
         &self,
         stmts: &[Stmt],
         env: &HashMap<String, Value>,
-    ) -> Vec<(String, Option<Value>)> {
+    ) -> Vec<(String, Option<Value>, bool)> {
         let mut seen = HashSet::new();
         let mut previous = Vec::new();
         for stmt in stmts {
-            let Stmt::VarDecl { name, kind, .. } = stmt else {
-                continue;
+            let names: Vec<&str> = match stmt {
+                Stmt::VarDecl { name, kind, .. } => {
+                    if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                        vec![name.as_str()]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Stmt::ClassDecl { name, .. } => vec![name.as_str()],
+                Stmt::ArrayDestructureAssign {
+                    targets,
+                    decl_kind: Some(kind),
+                    ..
+                } => {
+                    if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                        targets.iter().flatten().map(String::as_str).collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Stmt::ObjectDestructureAssign {
+                    bindings,
+                    decl_kind: Some(kind),
+                    ..
+                } => {
+                    if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
+                        bindings.iter().map(|(_, target)| target.as_str()).collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                _ => Vec::new(),
             };
-            if !matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                continue;
-            }
-            if seen.insert(name.clone()) {
-                previous.push((name.clone(), env.get(name).cloned()));
+            for name in names {
+                if seen.insert(name.to_string()) {
+                    previous.push((
+                        name.to_string(),
+                        env.get(name).cloned(),
+                        self.is_const_binding(env, name),
+                    ));
+                }
             }
         }
         previous
@@ -41,16 +175,81 @@ impl Harness {
 
     fn restore_block_lexical_bindings(
         &mut self,
-        previous: Vec<(String, Option<Value>)>,
+        previous: Vec<(String, Option<Value>, bool)>,
         env: &mut HashMap<String, Value>,
     ) {
-        for (name, value) in previous {
+        for (name, value, was_const) in previous {
             if let Some(value) = value {
                 env.insert(name.clone(), value.clone());
                 self.sync_global_binding_if_needed(env, &name, &value);
             } else {
                 env.remove(&name);
             }
+            self.set_const_binding(env, &name, was_const);
+        }
+    }
+
+    fn default_derived_class_constructor_handler() -> ScriptHandler {
+        let args_name = "__bt_super_args".to_string();
+        ScriptHandler {
+            params: vec![FunctionParam {
+                name: args_name.clone(),
+                default: None,
+                is_rest: true,
+            }],
+            stmts: vec![Stmt::Expr(Expr::FunctionCall {
+                target: "super".to_string(),
+                args: vec![Expr::Spread(Box::new(Expr::Var(args_name)))],
+            })],
+        }
+    }
+
+    fn is_iteration_stmt(stmt: &Stmt) -> bool {
+        matches!(
+            stmt,
+            Stmt::For { .. }
+                | Stmt::ForIn { .. }
+                | Stmt::ForOf { .. }
+                | Stmt::While { .. }
+                | Stmt::DoWhile { .. }
+        )
+    }
+
+    fn take_pending_loop_labels(&mut self) -> Vec<String> {
+        self.script_runtime
+            .pending_loop_labels
+            .pop()
+            .unwrap_or_default()
+    }
+
+    fn push_loop_label_scope(&mut self, labels: Vec<String>) {
+        self.script_runtime
+            .loop_label_stack
+            .push(labels.into_iter().collect());
+    }
+
+    fn pop_loop_label_scope(&mut self) {
+        self.script_runtime.loop_label_stack.pop();
+    }
+
+    fn current_loop_has_label(&self, label: &str) -> bool {
+        self.script_runtime
+            .loop_label_stack
+            .last()
+            .is_some_and(|labels| labels.contains(label))
+    }
+
+    fn loop_should_consume_break(&self, label: &Option<String>) -> bool {
+        match label {
+            None => true,
+            Some(label) => self.current_loop_has_label(label),
+        }
+    }
+
+    fn loop_should_consume_continue(&self, label: &Option<String>) -> bool {
+        match label {
+            None => true,
+            Some(label) => self.current_loop_has_label(label),
         }
     }
 
@@ -60,6 +259,26 @@ impl Harness {
         } else {
             Error::ScriptRuntime("break statement outside of loop".into())
         }
+    }
+
+    pub(crate) fn continue_flow_error(label: &Option<String>) -> Error {
+        if let Some(label) = label {
+            Error::ScriptRuntime(format!("label not found: {label}"))
+        } else {
+            Error::ScriptRuntime("continue statement outside of loop".into())
+        }
+    }
+
+    pub(crate) fn with_isolated_loop_control_scope<T>(
+        &mut self,
+        run: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let previous_pending = std::mem::take(&mut self.script_runtime.pending_loop_labels);
+        let previous_labels = std::mem::take(&mut self.script_runtime.loop_label_stack);
+        let result = run(self);
+        self.script_runtime.pending_loop_labels = previous_pending;
+        self.script_runtime.loop_label_stack = previous_labels;
+        result
     }
 
     fn execute_stmts_impl(
@@ -76,14 +295,16 @@ impl Harness {
             .push(ListenerCaptureFrame::default());
 
         let result = (|| -> Result<ExecFlow> {
+            Self::validate_const_redeclarations(stmts)?;
             for stmt in stmts {
                 self.apply_pending_listener_capture_env_updates(env);
                 self.sync_top_level_env_from_runtime(env);
                 self.sync_listener_capture_env_if_shared(env);
                 match stmt {
-                    Stmt::VarDecl { name, expr, .. } => {
+                    Stmt::VarDecl { name, expr, kind } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         env.insert(name.clone(), value.clone());
+                        self.set_const_binding(env, name, matches!(kind, VarDeclKind::Const));
                         self.bind_timer_id_to_task_env(name, expr, &value);
                     }
                     Stmt::FunctionDecl {
@@ -100,6 +321,94 @@ impl Harness {
                             *is_generator,
                         );
                         env.insert(name.clone(), function);
+                        self.set_const_binding(env, name, false);
+                    }
+                    Stmt::ClassDecl {
+                        name,
+                        super_class,
+                        constructor,
+                        methods,
+                    } => {
+                        let (super_constructor, super_prototype) =
+                            if let Some(super_class_expr) = super_class {
+                                let evaluated_super =
+                                    self.eval_expr(super_class_expr, env, event_param, event)?;
+                                if !self.is_callable_value(&evaluated_super) {
+                                    return Err(Error::ScriptRuntime(
+                                        "class extends value is not a constructor".into(),
+                                    ));
+                                }
+                                let super_prototype = self
+                                    .object_property_from_value(&evaluated_super, "prototype")?;
+                                let Value::Object(super_prototype) = super_prototype else {
+                                    return Err(Error::ScriptRuntime(
+                                        "class extends value does not have a valid prototype"
+                                            .into(),
+                                    ));
+                                };
+                                (Some(evaluated_super), Some(super_prototype))
+                            } else {
+                                (None, None)
+                            };
+
+                        let constructor_handler = if let Some(handler) = constructor.clone() {
+                            handler
+                        } else if super_constructor.is_some() {
+                            Self::default_derived_class_constructor_handler()
+                        } else {
+                            ScriptHandler {
+                                params: Vec::new(),
+                                stmts: Vec::new(),
+                            }
+                        };
+
+                        let class_constructor = self.make_class_constructor_value_with_super(
+                            constructor_handler,
+                            env,
+                            false,
+                            super_constructor.clone(),
+                            super_prototype.clone().map(Value::Object),
+                        );
+                        let Value::Function(class_function) = &class_constructor else {
+                            return Err(Error::ScriptRuntime(
+                                "class constructor is not callable".into(),
+                            ));
+                        };
+
+                        {
+                            let mut prototype = class_function.prototype_object.borrow_mut();
+                            if let Some(super_prototype) = super_prototype.clone() {
+                                Self::object_set_entry(
+                                    &mut *prototype,
+                                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                                    Value::Object(super_prototype),
+                                );
+                            }
+                            Self::object_set_entry(
+                                &mut *prototype,
+                                "constructor".to_string(),
+                                class_constructor.clone(),
+                            );
+                            for method in methods {
+                                let method_value = self.make_function_value_with_super(
+                                    method.handler.clone(),
+                                    env,
+                                    false,
+                                    method.is_async,
+                                    method.is_generator,
+                                    super_constructor.clone(),
+                                    super_prototype.clone().map(Value::Object),
+                                );
+                                Self::object_set_entry(
+                                    &mut *prototype,
+                                    method.name.clone(),
+                                    method_value,
+                                );
+                            }
+                        }
+
+                        env.insert(name.clone(), class_constructor);
+                        self.set_const_binding(env, name, false);
                     }
                     Stmt::Block { stmts } => {
                         let previous = self.collect_direct_block_lexical_bindings(stmts, env);
@@ -108,26 +417,57 @@ impl Harness {
                         match flow? {
                             ExecFlow::Continue => {}
                             ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                            ExecFlow::ContinueLoop => return Ok(ExecFlow::ContinueLoop),
+                            ExecFlow::ContinueLoop(label) => {
+                                return Ok(ExecFlow::ContinueLoop(label));
+                            }
                             ExecFlow::Return => return Ok(ExecFlow::Return),
                         }
                     }
                     Stmt::Label { name, stmt } => {
-                        match self.execute_stmts(
-                            std::slice::from_ref(stmt.as_ref()),
-                            event_param,
-                            event,
-                            env,
-                        )? {
-                            ExecFlow::Continue => {}
-                            ExecFlow::Break(Some(label)) if label == *name => {}
-                            flow => return Ok(flow),
+                        let mut labels = vec![name.clone()];
+                        let mut target = stmt.as_ref();
+                        while let Stmt::Label { name, stmt } = target {
+                            labels.push(name.clone());
+                            target = stmt.as_ref();
+                        }
+
+                        if Self::is_iteration_stmt(target) {
+                            self.script_runtime.pending_loop_labels.push(labels);
+                            match self.execute_stmts(
+                                std::slice::from_ref(target),
+                                event_param,
+                                event,
+                                env,
+                            )? {
+                                ExecFlow::Continue => {}
+                                flow => return Ok(flow),
+                            }
+                        } else {
+                            match self.execute_stmts(
+                                std::slice::from_ref(target),
+                                event_param,
+                                event,
+                                env,
+                            )? {
+                                ExecFlow::Continue => {}
+                                ExecFlow::Break(Some(label))
+                                    if labels.iter().any(|candidate| candidate == &label) => {}
+                                ExecFlow::ContinueLoop(Some(label))
+                                    if labels.iter().any(|candidate| candidate == &label) =>
+                                {
+                                    return Err(Error::ScriptRuntime(format!(
+                                        "continue statement: '{label}' does not denote an iteration statement"
+                                    )));
+                                }
+                                flow => return Ok(flow),
+                            }
                         }
                     }
                     Stmt::VarAssign { name, op, expr } => {
                         let previous = env.get(name).cloned().ok_or_else(|| {
                             Error::ScriptRuntime(format!("unknown variable: {name}"))
                         })?;
+                        self.ensure_binding_is_mutable(env, name)?;
 
                         let next = match op {
                             VarAssignOp::Assign => self.eval_expr(expr, env, event_param, event)?,
@@ -209,6 +549,7 @@ impl Harness {
                         let previous = env.get(name).cloned().ok_or_else(|| {
                             Error::ScriptRuntime(format!("unknown variable: {name}"))
                         })?;
+                        self.ensure_binding_is_mutable(env, name)?;
                         let next = match previous {
                             Value::Number(value) => {
                                 if let Some(sum) = value.checked_add(i64::from(*delta)) {
@@ -229,19 +570,35 @@ impl Harness {
                         env.insert(name.clone(), next.clone());
                         self.sync_global_binding_if_needed(env, name, &next);
                     }
-                    Stmt::ArrayDestructureAssign { targets, expr } => {
+                    Stmt::ArrayDestructureAssign {
+                        targets,
+                        expr,
+                        decl_kind,
+                    } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         let values = self.array_like_values_from_value(&value)?;
+                        let is_declaration = decl_kind.is_some();
+                        let is_const_decl = matches!(decl_kind, Some(VarDeclKind::Const));
                         for (index, target_name) in targets.iter().enumerate() {
                             let Some(target_name) = target_name else {
                                 continue;
                             };
+                            if !is_declaration && env.contains_key(target_name) {
+                                self.ensure_binding_is_mutable(env, target_name)?;
+                            }
                             let next = values.get(index).cloned().unwrap_or(Value::Undefined);
                             env.insert(target_name.clone(), next.clone());
+                            if is_declaration {
+                                self.set_const_binding(env, target_name, is_const_decl);
+                            }
                             self.sync_global_binding_if_needed(env, target_name, &next);
                         }
                     }
-                    Stmt::ObjectDestructureAssign { bindings, expr } => {
+                    Stmt::ObjectDestructureAssign {
+                        bindings,
+                        expr,
+                        decl_kind,
+                    } => {
                         let value = self.eval_expr(expr, env, event_param, event)?;
                         let Value::Object(entries) = value else {
                             return Err(Error::ScriptRuntime(
@@ -249,10 +606,18 @@ impl Harness {
                             ));
                         };
                         let entries = entries.borrow();
+                        let is_declaration = decl_kind.is_some();
+                        let is_const_decl = matches!(decl_kind, Some(VarDeclKind::Const));
                         for (source_key, target_name) in bindings {
+                            if !is_declaration && env.contains_key(target_name) {
+                                self.ensure_binding_is_mutable(env, target_name)?;
+                            }
                             let next = Self::object_get_entry(&entries, source_key)
                                 .unwrap_or(Value::Undefined);
                             env.insert(target_name.clone(), next.clone());
+                            if is_declaration {
+                                self.set_const_binding(env, target_name, is_const_decl);
+                            }
                             self.sync_global_binding_if_needed(env, target_name, &next);
                         }
                     }
@@ -862,7 +1227,15 @@ impl Harness {
                         let node = self.resolve_dom_query_required_runtime(target, env)?;
                         let classes = class_tokens(self.dom.attr(node, "class").as_deref());
                         let prev_item = env.get(item_var).cloned();
+                        let prev_item_const = self.is_const_binding(env, item_var);
                         let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
+                        let prev_index_const = index_var
+                            .as_ref()
+                            .is_some_and(|name| self.is_const_binding(env, name));
+                        self.set_const_binding(env, item_var, false);
+                        if let Some(index_var) = index_var {
+                            self.set_const_binding(env, index_var, false);
+                        }
 
                         for (idx, class_name) in classes.iter().enumerate() {
                             let item_value = Value::String(class_name.clone());
@@ -877,7 +1250,10 @@ impl Harness {
                                 ExecFlow::Continue => {}
                                 ExecFlow::Break(None) => break,
                                 ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::ContinueLoop => continue,
+                                ExecFlow::ContinueLoop(None) => continue,
+                                ExecFlow::ContinueLoop(label) => {
+                                    return Ok(ExecFlow::ContinueLoop(label));
+                                }
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                         }
@@ -888,6 +1264,7 @@ impl Harness {
                         } else {
                             env.remove(item_var);
                         }
+                        self.set_const_binding(env, item_var, prev_item_const);
                         if let Some(index_var) = index_var {
                             if let Some(prev) = prev_index {
                                 env.insert(index_var.clone(), prev.clone());
@@ -895,6 +1272,7 @@ impl Harness {
                             } else {
                                 env.remove(index_var);
                             }
+                            self.set_const_binding(env, index_var, prev_index_const);
                         }
                     }
                     Stmt::DomSetAttribute {
@@ -1098,7 +1476,15 @@ impl Harness {
                             self.dom.query_selector_all(selector)?
                         };
                         let prev_item = env.get(item_var).cloned();
+                        let prev_item_const = self.is_const_binding(env, item_var);
                         let prev_index = index_var.as_ref().and_then(|v| env.get(v).cloned());
+                        let prev_index_const = index_var
+                            .as_ref()
+                            .is_some_and(|name| self.is_const_binding(env, name));
+                        self.set_const_binding(env, item_var, false);
+                        if let Some(index_var) = index_var {
+                            self.set_const_binding(env, index_var, false);
+                        }
 
                         for (idx, node) in items.iter().enumerate() {
                             let item_value = Value::Node(*node);
@@ -1113,7 +1499,10 @@ impl Harness {
                                 ExecFlow::Continue => {}
                                 ExecFlow::Break(None) => break,
                                 ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::ContinueLoop => continue,
+                                ExecFlow::ContinueLoop(None) => continue,
+                                ExecFlow::ContinueLoop(label) => {
+                                    return Ok(ExecFlow::ContinueLoop(label));
+                                }
                                 ExecFlow::Return => return Ok(ExecFlow::Return),
                             }
                         }
@@ -1124,6 +1513,7 @@ impl Harness {
                         } else {
                             env.remove(item_var);
                         }
+                        self.set_const_binding(env, item_var, prev_item_const);
                         if let Some(index_var) = index_var {
                             if let Some(prev) = prev_index {
                                 env.insert(index_var.clone(), prev.clone());
@@ -1131,6 +1521,7 @@ impl Harness {
                             } else {
                                 env.remove(index_var);
                             }
+                            self.set_const_binding(env, index_var, prev_index_const);
                         }
                     }
                     Stmt::ArrayForEach { target, callback } => {
@@ -1161,78 +1552,96 @@ impl Harness {
                         post,
                         body,
                     } => {
-                        if let Some(init) = init.as_deref() {
-                            match self.execute_stmts(
-                                std::slice::from_ref(init),
-                                event_param,
-                                event,
-                                env,
-                            )? {
-                                ExecFlow::Continue => {}
-                                ExecFlow::Return => return Ok(ExecFlow::Return),
-                                ExecFlow::Break(label) => {
-                                    return Err(Self::break_flow_error(&label));
-                                }
-                                ExecFlow::ContinueLoop => {
-                                    return Err(Error::ScriptRuntime(
-                                        "continue statement outside of loop".into(),
-                                    ));
-                                }
-                            }
-                        }
-
-                        loop {
-                            let should_run = if let Some(cond) = cond {
-                                self.eval_expr(cond, env, event_param, event)?.truthy()
-                            } else {
-                                true
-                            };
-                            if !should_run {
-                                break;
-                            }
-
-                            match self.execute_stmts(body, event_param, event, env)? {
-                                ExecFlow::Continue => {}
-                                ExecFlow::ContinueLoop => {
-                                    if let Some(post) = post.as_deref() {
-                                        match self.execute_stmts(
-                                            std::slice::from_ref(post),
-                                            event_param,
-                                            event,
-                                            env,
-                                        )? {
-                                            ExecFlow::Continue => {}
-                                            ExecFlow::Return => return Ok(ExecFlow::Return),
-                                            ExecFlow::Break(_) | ExecFlow::ContinueLoop => {
-                                                return Err(Error::ScriptRuntime(
-                                                    "invalid loop control in post expression"
-                                                        .into(),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    continue;
-                                }
-                                ExecFlow::Break(None) => break,
-                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::Return => return Ok(ExecFlow::Return),
-                            }
-                            if let Some(post) = post.as_deref() {
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let for_result = (|| -> Result<ExecFlow> {
+                            if let Some(init) = init.as_deref() {
                                 match self.execute_stmts(
-                                    std::slice::from_ref(post),
+                                    std::slice::from_ref(init),
                                     event_param,
                                     event,
                                     env,
                                 )? {
                                     ExecFlow::Continue => {}
                                     ExecFlow::Return => return Ok(ExecFlow::Return),
-                                    ExecFlow::Break(_) | ExecFlow::ContinueLoop => {
-                                        return Err(Error::ScriptRuntime(
-                                            "invalid loop control in post expression".into(),
-                                        ));
+                                    ExecFlow::Break(label) => {
+                                        return Err(Self::break_flow_error(&label));
+                                    }
+                                    ExecFlow::ContinueLoop(label) => {
+                                        return Err(Self::continue_flow_error(&label));
                                     }
                                 }
                             }
+
+                            loop {
+                                let should_run = if let Some(cond) = cond {
+                                    self.eval_expr(cond, env, event_param, event)?.truthy()
+                                } else {
+                                    true
+                                };
+                                if !should_run {
+                                    break;
+                                }
+
+                                match self.execute_stmts(body, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::ContinueLoop(label) => {
+                                        if self.loop_should_consume_continue(&label) {
+                                            if let Some(post) = post.as_deref() {
+                                                match self.execute_stmts(
+                                                    std::slice::from_ref(post),
+                                                    event_param,
+                                                    event,
+                                                    env,
+                                                )? {
+                                                    ExecFlow::Continue => {}
+                                                    ExecFlow::Return => {
+                                                        return Ok(ExecFlow::Return)
+                                                    }
+                                                    ExecFlow::Break(_)
+                                                    | ExecFlow::ContinueLoop(_) => {
+                                                        return Err(Error::ScriptRuntime(
+                                                            "invalid loop control in post expression"
+                                                                .into(),
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        return Ok(ExecFlow::ContinueLoop(label));
+                                    }
+                                    ExecFlow::Break(label) => {
+                                        if self.loop_should_consume_break(&label) {
+                                            break;
+                                        }
+                                        return Ok(ExecFlow::Break(label));
+                                    }
+                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                }
+                                if let Some(post) = post.as_deref() {
+                                    match self.execute_stmts(
+                                        std::slice::from_ref(post),
+                                        event_param,
+                                        event,
+                                        env,
+                                    )? {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return => return Ok(ExecFlow::Return),
+                                        ExecFlow::Break(_) | ExecFlow::ContinueLoop(_) => {
+                                            return Err(Error::ScriptRuntime(
+                                                "invalid loop control in post expression".into(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(ExecFlow::Continue)
+                        })();
+                        self.pop_loop_label_scope();
+                        match for_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     }
                     Stmt::ForIn {
@@ -1240,48 +1649,68 @@ impl Harness {
                         iterable,
                         body,
                     } => {
-                        let iterable = self.eval_expr(iterable, env, event_param, event)?;
-                        let items = match iterable {
-                            Value::NodeList(nodes) => (0..nodes.len())
-                                .map(|idx| Value::Number(idx as i64))
-                                .collect::<Vec<_>>(),
-                            Value::Array(values) => {
-                                let values = values.borrow();
-                                (0..values.len())
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let for_in_result = (|| -> Result<ExecFlow> {
+                            let iterable = self.eval_expr(iterable, env, event_param, event)?;
+                            let items = match iterable {
+                                Value::NodeList(nodes) => (0..nodes.len())
                                     .map(|idx| Value::Number(idx as i64))
-                                    .collect::<Vec<_>>()
-                            }
-                            Value::Object(entries) => entries
-                                .borrow()
-                                .iter()
-                                .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(key, _)| Value::String(key.clone()))
-                                .collect::<Vec<_>>(),
-                            Value::Null | Value::Undefined => Vec::new(),
-                            _ => {
-                                return Err(Error::ScriptRuntime(
-                                    "for...in iterable must be a NodeList, Array, or Object".into(),
-                                ));
-                            }
-                        };
+                                    .collect::<Vec<_>>(),
+                                Value::Array(values) => {
+                                    let values = values.borrow();
+                                    (0..values.len())
+                                        .map(|idx| Value::Number(idx as i64))
+                                        .collect::<Vec<_>>()
+                                }
+                                Value::Object(entries) => entries
+                                    .borrow()
+                                    .iter()
+                                    .filter(|(key, _)| !Self::is_internal_object_key(key))
+                                    .map(|(key, _)| Value::String(key.clone()))
+                                    .collect::<Vec<_>>(),
+                                Value::Null | Value::Undefined => Vec::new(),
+                                _ => {
+                                    return Err(Error::ScriptRuntime(
+                                        "for...in iterable must be a NodeList, Array, or Object"
+                                            .into(),
+                                    ));
+                                }
+                            };
 
-                        let prev_item = env.get(item_var).cloned();
-                        for item_value in items {
-                            env.insert(item_var.clone(), item_value.clone());
-                            self.sync_global_binding_if_needed(env, item_var, &item_value);
-                            match self.execute_stmts(body, event_param, event, env)? {
-                                ExecFlow::Continue => {}
-                                ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break(None) => break,
-                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::Return => return Ok(ExecFlow::Return),
+                            let prev_item = env.get(item_var).cloned();
+                            for item_value in items {
+                                env.insert(item_var.clone(), item_value.clone());
+                                self.sync_global_binding_if_needed(env, item_var, &item_value);
+                                match self.execute_stmts(body, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::ContinueLoop(label) => {
+                                        if self.loop_should_consume_continue(&label) {
+                                            continue;
+                                        }
+                                        return Ok(ExecFlow::ContinueLoop(label));
+                                    }
+                                    ExecFlow::Break(label) => {
+                                        if self.loop_should_consume_break(&label) {
+                                            break;
+                                        }
+                                        return Ok(ExecFlow::Break(label));
+                                    }
+                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                }
                             }
-                        }
-                        if let Some(prev) = prev_item {
-                            env.insert(item_var.clone(), prev.clone());
-                            self.sync_global_binding_if_needed(env, item_var, &prev);
-                        } else {
-                            env.remove(item_var);
+                            if let Some(prev) = prev_item {
+                                env.insert(item_var.clone(), prev.clone());
+                                self.sync_global_binding_if_needed(env, item_var, &prev);
+                            } else {
+                                env.remove(item_var);
+                            }
+                            Ok(ExecFlow::Continue)
+                        })();
+                        self.pop_loop_label_scope();
+                        match for_in_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     }
                     Stmt::ForOf {
@@ -1289,87 +1718,146 @@ impl Harness {
                         iterable,
                         body,
                     } => {
-                        let iterable = self.eval_expr(iterable, env, event_param, event)?;
-                        let nodes = match iterable {
-                            Value::NodeList(nodes) => {
-                                nodes.into_iter().map(Value::Node).collect::<Vec<_>>()
-                            }
-                            Value::Array(values) => values.borrow().clone(),
-                            Value::Map(map) => self.map_entries_array(&map),
-                            Value::Set(set) => set.borrow().values.clone(),
-                            Value::Object(entries) => {
-                                if Self::is_iterator_object(&entries.borrow()) {
-                                    self.iterator_collect_remaining_values(&entries)?
-                                } else if Self::is_url_search_params_object(&entries.borrow()) {
-                                    Self::url_search_params_pairs_from_object_entries(
-                                        &entries.borrow(),
-                                    )
-                                    .into_iter()
-                                    .map(|(key, value)| {
-                                        Self::new_array_value(vec![
-                                            Value::String(key),
-                                            Value::String(value),
-                                        ])
-                                    })
-                                    .collect::<Vec<_>>()
-                                } else {
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let for_of_result = (|| -> Result<ExecFlow> {
+                            let iterable = self.eval_expr(iterable, env, event_param, event)?;
+                            let nodes = match iterable {
+                                Value::NodeList(nodes) => {
+                                    nodes.into_iter().map(Value::Node).collect::<Vec<_>>()
+                                }
+                                Value::Array(values) => values.borrow().clone(),
+                                Value::Map(map) => self.map_entries_array(&map),
+                                Value::Set(set) => set.borrow().values.clone(),
+                                Value::Object(entries) => {
+                                    if Self::is_iterator_object(&entries.borrow()) {
+                                        self.iterator_collect_remaining_values(&entries)?
+                                    } else if Self::is_url_search_params_object(&entries.borrow()) {
+                                        Self::url_search_params_pairs_from_object_entries(
+                                            &entries.borrow(),
+                                        )
+                                        .into_iter()
+                                        .map(|(key, value)| {
+                                            Self::new_array_value(vec![
+                                                Value::String(key),
+                                                Value::String(value),
+                                            ])
+                                        })
+                                        .collect::<Vec<_>>()
+                                    } else {
+                                        return Err(Error::ScriptRuntime(
+                                        "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
+                                            .into(),
+                                    ));
+                                    }
+                                }
+                                Value::Null | Value::Undefined => Vec::new(),
+                                _ => {
                                     return Err(Error::ScriptRuntime(
                                     "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
                                         .into(),
                                 ));
                                 }
-                            }
-                            Value::Null | Value::Undefined => Vec::new(),
-                            _ => {
-                                return Err(Error::ScriptRuntime(
-                                "for...of iterable must be a NodeList, Array, Map, Set, or URLSearchParams"
-                                    .into(),
-                            ));
-                            }
-                        };
+                            };
 
-                        let prev_item = env.get(item_var).cloned();
-                        for item in nodes {
-                            env.insert(item_var.clone(), item.clone());
-                            self.sync_global_binding_if_needed(env, item_var, &item);
-                            match self.execute_stmts(body, event_param, event, env)? {
-                                ExecFlow::Continue => {}
-                                ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break(None) => break,
-                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::Return => return Ok(ExecFlow::Return),
+                            let prev_item = env.get(item_var).cloned();
+                            for item in nodes {
+                                env.insert(item_var.clone(), item.clone());
+                                self.sync_global_binding_if_needed(env, item_var, &item);
+                                match self.execute_stmts(body, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::ContinueLoop(label) => {
+                                        if self.loop_should_consume_continue(&label) {
+                                            continue;
+                                        }
+                                        return Ok(ExecFlow::ContinueLoop(label));
+                                    }
+                                    ExecFlow::Break(label) => {
+                                        if self.loop_should_consume_break(&label) {
+                                            break;
+                                        }
+                                        return Ok(ExecFlow::Break(label));
+                                    }
+                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                }
                             }
-                        }
-                        if let Some(prev) = prev_item {
-                            env.insert(item_var.clone(), prev.clone());
-                            self.sync_global_binding_if_needed(env, item_var, &prev);
-                        } else {
-                            env.remove(item_var);
+                            if let Some(prev) = prev_item {
+                                env.insert(item_var.clone(), prev.clone());
+                                self.sync_global_binding_if_needed(env, item_var, &prev);
+                            } else {
+                                env.remove(item_var);
+                            }
+                            Ok(ExecFlow::Continue)
+                        })();
+                        self.pop_loop_label_scope();
+                        match for_of_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     }
                     Stmt::While { cond, body } => {
-                        while self.eval_expr(cond, env, event_param, event)?.truthy() {
-                            match self.execute_stmts(body, event_param, event, env)? {
-                                ExecFlow::Continue => {}
-                                ExecFlow::ContinueLoop => continue,
-                                ExecFlow::Break(None) => break,
-                                ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                ExecFlow::Return => return Ok(ExecFlow::Return),
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let while_result = (|| -> Result<ExecFlow> {
+                            while self.eval_expr(cond, env, event_param, event)?.truthy() {
+                                match self.execute_stmts(body, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::ContinueLoop(label) => {
+                                        if self.loop_should_consume_continue(&label) {
+                                            continue;
+                                        }
+                                        return Ok(ExecFlow::ContinueLoop(label));
+                                    }
+                                    ExecFlow::Break(label) => {
+                                        if self.loop_should_consume_break(&label) {
+                                            break;
+                                        }
+                                        return Ok(ExecFlow::Break(label));
+                                    }
+                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                }
                             }
+                            Ok(ExecFlow::Continue)
+                        })();
+                        self.pop_loop_label_scope();
+                        match while_result? {
+                            ExecFlow::Continue => {}
+                            flow => return Ok(flow),
                         }
                     }
-                    Stmt::DoWhile { cond, body } => loop {
-                        match self.execute_stmts(body, event_param, event, env)? {
+                    Stmt::DoWhile { cond, body } => {
+                        let loop_labels = self.take_pending_loop_labels();
+                        self.push_loop_label_scope(loop_labels);
+                        let do_while_result = (|| -> Result<ExecFlow> {
+                            loop {
+                                match self.execute_stmts(body, event_param, event, env)? {
+                                    ExecFlow::Continue => {}
+                                    ExecFlow::ContinueLoop(label) => {
+                                        if self.loop_should_consume_continue(&label) {
+                                        } else {
+                                            return Ok(ExecFlow::ContinueLoop(label));
+                                        }
+                                    }
+                                    ExecFlow::Break(label) => {
+                                        if self.loop_should_consume_break(&label) {
+                                            break;
+                                        }
+                                        return Ok(ExecFlow::Break(label));
+                                    }
+                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                }
+                                if !self.eval_expr(cond, env, event_param, event)?.truthy() {
+                                    break;
+                                }
+                            }
+                            Ok(ExecFlow::Continue)
+                        })();
+                        self.pop_loop_label_scope();
+                        match do_while_result? {
                             ExecFlow::Continue => {}
-                            ExecFlow::ContinueLoop => {}
-                            ExecFlow::Break(None) => break,
-                            ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                            ExecFlow::Return => return Ok(ExecFlow::Return),
+                            flow => return Ok(flow),
                         }
-                        if !self.eval_expr(cond, env, event_param, event)?.truthy() {
-                            break;
-                        }
-                    },
+                    }
                     Stmt::If {
                         cond,
                         then_stmts,
@@ -1442,8 +1930,8 @@ impl Harness {
                     Stmt::Break { label } => {
                         return Ok(ExecFlow::Break(label.clone()));
                     }
-                    Stmt::Continue => {
-                        return Ok(ExecFlow::ContinueLoop);
+                    Stmt::Continue { label } => {
+                        return Ok(ExecFlow::ContinueLoop(label.clone()));
                     }
                     Stmt::EventCall { event_var, method } => {
                         if let Some(param) = event_param {

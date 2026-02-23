@@ -20,6 +20,8 @@ impl Harness {
         self.scheduler.running_timer_canceled = false;
         self.script_runtime.pending_function_decls.clear();
         self.script_runtime.listener_capture_env_stack.clear();
+        self.script_runtime.pending_loop_labels.clear();
+        self.script_runtime.loop_label_stack.clear();
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();

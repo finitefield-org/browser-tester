@@ -443,6 +443,9 @@ pub(crate) struct FunctionValue {
     pub(crate) global_scope: bool,
     pub(crate) is_async: bool,
     pub(crate) is_generator: bool,
+    pub(crate) is_class_constructor: bool,
+    pub(crate) class_super_constructor: Option<Value>,
+    pub(crate) class_super_prototype: Option<Value>,
 }
 
 impl PartialEq for FunctionValue {
@@ -451,6 +454,7 @@ impl PartialEq for FunctionValue {
             && self.global_scope == other.global_scope
             && self.is_async == other.is_async
             && self.is_generator == other.is_generator
+            && self.is_class_constructor == other.is_class_constructor
     }
 }
 

@@ -6,6 +6,11 @@ pub(crate) const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 pub(crate) const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
 pub(crate) const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 pub(crate) const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
+pub(crate) const INTERNAL_OBJECT_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_object:prototype";
+pub(crate) const INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY: &str =
+    "\u{0}\u{0}bt_class:super_constructor";
+pub(crate) const INTERNAL_CLASS_SUPER_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_class:super_prototype";
+pub(crate) const INTERNAL_CONST_BINDINGS_KEY: &str = "\u{0}\u{0}bt_const:bindings";
 pub(crate) const INTERNAL_INTL_KEY_PREFIX: &str = "\u{0}\u{0}bt_intl:";
 pub(crate) const INTERNAL_INTL_KIND_KEY: &str = "\u{0}\u{0}bt_intl:kind";
 pub(crate) const INTERNAL_INTL_LOCALE_KEY: &str = "\u{0}\u{0}bt_intl:locale";

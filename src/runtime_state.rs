@@ -588,6 +588,8 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) pending_function_decls: Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
     pub(crate) listener_capture_env_stack: Vec<ListenerCaptureFrame>,
     pub(crate) generator_yield_stack: Vec<Rc<RefCell<Vec<Value>>>>,
+    pub(crate) pending_loop_labels: Vec<Vec<String>>,
+    pub(crate) loop_label_stack: Vec<HashSet<String>>,
 }
 
 #[derive(Debug)]
