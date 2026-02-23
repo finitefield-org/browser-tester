@@ -4373,6 +4373,57 @@ fn aria_element_reference_properties_resolve_id_refs() -> Result<()> {
 }
 
 #[test]
+fn class_expression_supports_anonymous_class_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const Rectangle = class {
+            constructor(height, width) {
+              this.height = height;
+              this.width = width;
+            }
+
+            area() {
+              return this.height * this.width;
+            }
+          };
+
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = String(new Rectangle(5, 8).area());
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "40")?;
+    Ok(())
+}
+
+#[test]
+fn named_class_expression_name_is_local_to_class_body() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const Foo = class NamedFoo {
+            innerType() {
+              return typeof NamedFoo;
+            }
+          };
+
+          const first = new Foo();
+          document.getElementById('result').textContent =
+            first.innerType() + ':' + typeof NamedFoo;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:undefined")?;
+    Ok(())
+}
+
+#[test]
 fn class_declaration_supports_constructor_and_new() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

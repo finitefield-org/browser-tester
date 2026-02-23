@@ -1,8 +1,8 @@
-use super::*;
 use super::super::parser_stmt::{
     parse_destructure_assign, parse_dom_assignment, parse_object_assign, parse_private_assign,
     parse_var_assign,
 };
+use super::*;
 
 pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());

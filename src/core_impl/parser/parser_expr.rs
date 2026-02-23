@@ -1,5 +1,5 @@
 use super::super::html::can_start_regex_literal;
-use super::api::{parse_block_statements, parse_function_expr};
+use super::api::{parse_block_statements, parse_class_expr, parse_function_expr};
 use super::parser_stmt::{
     is_ident_char, parse_callback, parse_element_target, parse_form_elements_base,
     parse_set_interval_call, parse_set_timeout_call, parse_timer_callback,

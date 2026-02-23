@@ -285,6 +285,10 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(class_expr) = parse_class_expr(src)? {
+        return Ok(class_expr);
+    }
+
     if let Some(handler_expr) = parse_function_expr(src)? {
         return Ok(handler_expr);
     }

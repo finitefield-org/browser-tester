@@ -21,6 +21,10 @@ pub(super) mod api {
         super::parser_stmt::callback_expression_parsing::parse_function_expr(src)
     }
 
+    pub(crate) fn parse_class_expr(src: &str) -> Result<Option<Expr>> {
+        super::parser_stmt::declaration_assignment_statements::parse_class_expr(src)
+    }
+
     pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
         super::parser_stmt::control_flow_statements::parse_block_statements(body)
     }

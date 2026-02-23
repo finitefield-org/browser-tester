@@ -307,6 +307,50 @@ pub(crate) fn parse_class_decl_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }))
 }
 
+pub(crate) fn parse_class_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if !consume_keyword(&mut cursor, "class") {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+
+    let parsed_name = cursor.parse_identifier();
+    if parsed_name.is_some() {
+        cursor.skip_ws();
+    }
+
+    let (class_name, class_decl_src) = if let Some(name) = parsed_name {
+        (name, src.to_string())
+    } else {
+        let mut temp_index = 0usize;
+        let generated_name = loop {
+            let candidate = format!("__bt_class_expr_{temp_index}");
+            if !src.contains(&candidate) {
+                break candidate;
+            }
+            temp_index += 1;
+        };
+
+        let rest = src
+            .get(cursor.pos()..)
+            .ok_or_else(|| Error::ScriptParse("invalid class expression".into()))?;
+        (
+            generated_name.clone(),
+            format!("class {generated_name} {rest}"),
+        )
+    };
+
+    let Some(_) = parse_class_decl_stmt(&class_decl_src)? else {
+        return Ok(None);
+    };
+
+    let lowered = format!("(() => {{ {class_decl_src}; return {class_name}; }})()");
+    Ok(Some(parse_expr(&lowered)?))
+}
+
 pub(crate) fn parse_class_body(
     body_src: &str,
 ) -> Result<(
