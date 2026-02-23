@@ -624,6 +624,7 @@ pub(crate) enum Expr {
     },
     Function {
         handler: ScriptHandler,
+        name: Option<String>,
         is_async: bool,
         is_generator: bool,
         is_arrow: bool,

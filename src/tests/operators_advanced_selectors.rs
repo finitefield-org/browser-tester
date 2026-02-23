@@ -761,6 +761,264 @@ fn bitwise_compound_assignment_operators_work() -> Result<()> {
 }
 
 #[test]
+fn bitwise_and_coerces_and_truncates_number_operands() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const numberAnd = 14 & 9;
+            const boolAnd = true & 1;
+            const stringAnd = '0x10' & 15;
+            const truncated = 4294967297 & -1;
+            const highBitsDiscarded = 1099511627781 & 255;
+            document.getElementById('result').textContent =
+              numberAnd + ':' + boolAnd + ':' + stringAnd + ':' + truncated + ':' + highBitsDiscarded;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "8:1:0:1:5")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_and_supports_bigint_and_rejects_mixed_numeric_types() -> Result<()> {
+    let html = r#"
+        <button id='ok'>ok</button>
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('ok').addEventListener('click', () => {
+            document.getElementById('result').textContent = 14n & 9n;
+          });
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n & 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 & 1n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = '1' & 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    h.click("#ok")?;
+    h.assert_text("#result", "8")?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number in bitwise AND should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt in bitwise AND should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix3 = h
+        .click("#mix3")
+        .expect_err("String and BigInt in bitwise AND should fail");
+    match mix3 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn bitwise_or_coerces_and_truncates_number_operands() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const numberOr = 14 | 9;
+            const boolOr = true | 0;
+            const stringOr = '0x10' | 3;
+            const truncated = 4294967297 | 0;
+            const highBitsDiscarded = 1099511627781 | 255;
+            document.getElementById('result').textContent =
+              numberOr + ':' + boolOr + ':' + stringOr + ':' + truncated + ':' + highBitsDiscarded;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "15:1:19:1:255")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_or_supports_bigint_and_rejects_mixed_numeric_types() -> Result<()> {
+    let html = r#"
+        <button id='ok'>ok</button>
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('ok').addEventListener('click', () => {
+            document.getElementById('result').textContent = 14n | 9n;
+          });
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n | 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 | 1n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = '1' | 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    h.click("#ok")?;
+    h.assert_text("#result", "15")?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number in bitwise OR should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt in bitwise OR should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix3 = h
+        .click("#mix3")
+        .expect_err("String and BigInt in bitwise OR should fail");
+    match mix3 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn bitwise_xor_coerces_and_truncates_number_operands() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const numberXor = 14 ^ 9;
+            const boolXor = true ^ 0;
+            const stringXor = '0x10' ^ 3;
+            const truncated = 4294967297 ^ 0;
+            const highBitsDiscarded = 1099511627781 ^ 255;
+            document.getElementById('result').textContent =
+              numberXor + ':' + boolXor + ':' + stringXor + ':' + truncated + ':' + highBitsDiscarded;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "7:1:19:1:250")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_xor_supports_bigint_and_rejects_mixed_numeric_types() -> Result<()> {
+    let html = r#"
+        <button id='ok'>ok</button>
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('ok').addEventListener('click', () => {
+            document.getElementById('result').textContent = 14n ^ 9n;
+          });
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n ^ 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 ^ 1n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = '1' ^ 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    h.click("#ok")?;
+    h.assert_text("#result", "7")?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number in bitwise XOR should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt in bitwise XOR should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    let mix3 = h
+        .click("#mix3")
+        .expect_err("String and BigInt in bitwise XOR should fail");
+    match mix3 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected bitwise mixed-type error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn exponentiation_expression_and_compound_assignment_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -882,6 +1140,94 @@ fn await_operator_supports_values_and_fulfilled_promises() -> Result<()> {
 }
 
 #[test]
+fn await_operator_resolves_thenables_and_preserves_non_thenable_identity() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const plain = { tag: 'plain' };
+            const nonCallableThen = { then: 1, tag: 'x' };
+            const thenable = {
+              then(resolve) {
+                resolve('resolved!');
+              },
+            };
+            const fulfilled = await thenable;
+            const plainSame = (await plain) === plain;
+            const nonCallableSame = (await nonCallableThen) === nonCallableThen;
+            document.getElementById('result').textContent =
+              fulfilled + ':' + plainSame + ':' + nonCallableSame;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "resolved!:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn await_operator_throws_rejection_reason_for_promises_and_thenables() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let fromPromise = '';
+            let fromThenable = '';
+
+            try {
+              await Promise.reject('pboom');
+            } catch (e) {
+              fromPromise = String(e);
+            }
+
+            const thenable = {
+              then(_, reject) {
+                reject('tboom');
+              },
+            };
+            try {
+              await thenable;
+            } catch (e) {
+              fromThenable = String(e);
+            }
+
+            document.getElementById('result').textContent = fromPromise + ':' + fromThenable;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "pboom:tboom")?;
+    Ok(())
+}
+
+#[test]
+fn await_operator_supports_catch_chained_fallback_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const response = await Promise.reject('oops').catch((err) => {
+              return 'default:' + err;
+            });
+            document.getElementById('result').textContent = response;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "default:oops")?;
+    Ok(())
+}
+
+#[test]
 fn async_function_declaration_and_expression_return_promises() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -916,6 +1262,55 @@ fn async_function_declaration_and_expression_return_promises() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "object:AB:CD")?;
+    Ok(())
+}
+
+#[test]
+fn async_function_expression_iife_supports_await() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            (async function (x) {
+              const p1 = Promise.resolve(20);
+              const p2 = Promise.resolve(30);
+              return x + (await p1) + (await p2);
+            })(10).then((value) => {
+              result.textContent = String(value);
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "60")?;
+    Ok(())
+}
+
+#[test]
+fn named_async_function_expression_uses_local_name_binding() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const self = 'outer';
+            const fn = async function self() {
+              return typeof self + ':' + (self === fn);
+            };
+            fn().then((value) => {
+              document.getElementById('result').textContent = self + ':' + value;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "outer:function:true")?;
     Ok(())
 }
 
@@ -1056,6 +1451,21 @@ fn line_break_between_async_and_function_is_parsed_with_asi() -> Result<()> {
     h.click("#btn")?;
     h.assert_text("#result", "string:ok:marker")?;
     Ok(())
+}
+
+#[test]
+fn async_function_expression_statement_without_name_is_rejected() {
+    let err = Harness::from_html("<script>async function () { return 1; }</script>")
+        .expect_err("anonymous async function at statement start should parse as declaration");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(
+                msg.contains("function declaration requires a function name")
+                    || msg.contains("expected function name")
+            )
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

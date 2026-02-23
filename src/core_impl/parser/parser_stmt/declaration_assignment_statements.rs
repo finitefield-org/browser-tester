@@ -43,12 +43,14 @@ fn register_private_decl(
     is_static: bool,
     kind: PrivateElementDeclKind,
 ) -> Result<()> {
-    let state = declared.entry(name.to_string()).or_insert(PrivateElementDeclState {
-        is_static,
-        has_value: false,
-        has_getter: false,
-        has_setter: false,
-    });
+    let state = declared
+        .entry(name.to_string())
+        .or_insert(PrivateElementDeclState {
+            is_static,
+            has_value: false,
+            has_getter: false,
+            has_setter: false,
+        });
 
     if state.is_static != is_static {
         return Err(Error::ScriptParse(format!(
@@ -143,7 +145,10 @@ fn validate_static_block_source(block_src: &str) -> Result<()> {
     let mut scanner = JsLexScanner::new();
     let mut i = 0;
     while i < bytes.len() {
-        let in_code = matches!(scanner.mode, JsLexMode::Normal | JsLexMode::TemplateExpr { .. });
+        let in_code = matches!(
+            scanner.mode,
+            JsLexMode::Normal | JsLexMode::TemplateExpr { .. }
+        );
         if in_code && (bytes[i] == b'_' || bytes[i] == b'$' || bytes[i].is_ascii_alphabetic()) {
             let mut end = i + 1;
             while end < bytes.len() && is_ident_char(bytes[end]) {
@@ -384,7 +389,11 @@ pub(crate) fn parse_class_body(
             parse_class_element_name(&mut cursor, "unsupported class element syntax")?
         };
 
-        if computed_name.is_none() && is_static && !method_name_is_private && method_name == "prototype" {
+        if computed_name.is_none()
+            && is_static
+            && !method_name_is_private
+            && method_name == "prototype"
+        {
             return Err(Error::ScriptParse(
                 "static class property name cannot be prototype".into(),
             ));

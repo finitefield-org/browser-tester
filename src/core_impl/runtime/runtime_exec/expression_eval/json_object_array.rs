@@ -67,21 +67,21 @@ impl Harness {
                                 let value = match value {
                                     Expr::Function {
                                         handler,
+                                        name: _,
                                         is_async,
                                         is_generator,
                                         is_arrow,
                                         is_method,
                                     } if *is_method => {
-                                        let super_prototype =
-                                            match Self::object_get_entry(
-                                                &object_entries,
-                                                INTERNAL_OBJECT_PROTOTYPE_KEY,
-                                            ) {
-                                                Some(Value::Object(proto)) => {
-                                                    Some(Value::Object(proto))
-                                                }
-                                                _ => None,
-                                            };
+                                        let super_prototype = match Self::object_get_entry(
+                                            &object_entries,
+                                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                        ) {
+                                            Some(Value::Object(proto)) => {
+                                                Some(Value::Object(proto))
+                                            }
+                                            _ => None,
+                                        };
                                         self.make_function_value_with_super(
                                             handler.clone(),
                                             env,
@@ -128,11 +128,7 @@ impl Harness {
                                 );
                                 let getter_key = Self::object_getter_storage_key(&key);
                                 Self::object_set_entry(&mut object_entries, getter_key, getter);
-                                Self::object_set_entry(
-                                    &mut object_entries,
-                                    key,
-                                    Value::Undefined,
-                                );
+                                Self::object_set_entry(&mut object_entries, key, Value::Undefined);
                             }
                             ObjectLiteralEntry::Setter(key, handler) => {
                                 let key = match key {
@@ -153,11 +149,7 @@ impl Harness {
                                 );
                                 let setter_key = Self::object_setter_storage_key(&key);
                                 Self::object_set_entry(&mut object_entries, setter_key, setter);
-                                Self::object_set_entry(
-                                    &mut object_entries,
-                                    key,
-                                    Value::Undefined,
-                                );
+                                Self::object_set_entry(&mut object_entries, key, Value::Undefined);
                             }
                             ObjectLiteralEntry::Spread(expr) => {
                                 let spread_value = self.eval_expr(expr, env, event_param, event)?;
@@ -174,11 +166,7 @@ impl Harness {
                                         for key in keys {
                                             let value =
                                                 self.object_property_from_value(&source, &key)?;
-                                            Self::object_set_entry(
-                                                &mut object_entries,
-                                                key,
-                                                value,
-                                            );
+                                            Self::object_set_entry(&mut object_entries, key, value);
                                         }
                                     }
                                     Value::Array(values) => {

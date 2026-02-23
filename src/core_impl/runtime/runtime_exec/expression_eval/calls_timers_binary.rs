@@ -418,7 +418,7 @@ impl Harness {
                             Error::ScriptRuntime(format!("'{}' is not a function", member))
                         }
                         other => other,
-                        })
+                    })
                 }
                 Expr::PrivateMemberCall {
                     target,
@@ -512,19 +512,33 @@ impl Harness {
                 }
                 Expr::Function {
                     handler,
+                    name,
                     is_async,
                     is_generator,
                     is_arrow,
                     is_method,
-                } => Ok(self.make_function_value(
-                    handler.clone(),
-                    env,
-                    false,
-                    *is_async,
-                    *is_generator,
-                    *is_arrow,
-                    *is_method,
-                )),
+                } => {
+                    let value = self.make_function_value(
+                        handler.clone(),
+                        env,
+                        false,
+                        *is_async,
+                        *is_generator,
+                        *is_arrow,
+                        *is_method,
+                    );
+                    let Value::Function(function) = value else {
+                        return Ok(value);
+                    };
+                    if let Some(expression_name) = name {
+                        let mut named = function.as_ref().clone();
+                        named.expression_name = Some(expression_name.clone());
+                        named.local_bindings.insert(expression_name.clone());
+                        Ok(Value::Function(Rc::new(named)))
+                    } else {
+                        Ok(Value::Function(function))
+                    }
+                }
 
                 Expr::SetTimeout { handler, delay_ms } => {
                     let delay = self.eval_expr(delay_ms, env, event_param, event)?;

@@ -531,9 +531,7 @@ pub(crate) fn parse_import_stmt(stmt: &str) -> Result<Option<Stmt>> {
         cursor.consume_byte(b'*');
         cursor.skip_ws();
         if !consume_keyword(&mut cursor, "as") {
-            return Err(Error::ScriptParse(
-                "namespace import requires `as`".into(),
-            ));
+            return Err(Error::ScriptParse("namespace import requires `as`".into()));
         }
         cursor.skip_ws();
         namespace_binding = Some(
@@ -557,14 +555,13 @@ pub(crate) fn parse_import_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 cursor.consume_byte(b'*');
                 cursor.skip_ws();
                 if !consume_keyword(&mut cursor, "as") {
-                    return Err(Error::ScriptParse(
-                        "namespace import requires `as`".into(),
-                    ));
+                    return Err(Error::ScriptParse("namespace import requires `as`".into()));
                 }
                 cursor.skip_ws();
-                namespace_binding = Some(cursor.parse_identifier().ok_or_else(|| {
-                    Error::ScriptParse("invalid namespace import alias".into())
-                })?);
+                namespace_binding =
+                    Some(cursor.parse_identifier().ok_or_else(|| {
+                        Error::ScriptParse("invalid namespace import alias".into())
+                    })?);
             } else if cursor.peek() == Some(b'{') {
                 let specifier_src = cursor.read_balanced_block(b'{', b'}')?;
                 named_bindings = parse_import_specifier_list(&specifier_src)?;
@@ -578,9 +575,7 @@ pub(crate) fn parse_import_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "from") {
-        return Err(Error::ScriptParse(
-            "import clause requires `from`".into(),
-        ));
+        return Err(Error::ScriptParse("import clause requires `from`".into()));
     }
     cursor.skip_ws();
     let specifier = cursor.parse_string_literal()?;
@@ -1490,7 +1485,8 @@ pub(crate) fn parse_try_stmt(stmt: &str) -> Result<Option<Stmt>> {
 }
 
 pub(crate) fn parse_throw_stmt(stmt: &str) -> Result<Option<Stmt>> {
-    let throw_operand_required = || Error::ScriptParse("throw statement requires an operand".into());
+    let throw_operand_required =
+        || Error::ScriptParse("throw statement requires an operand".into());
     let mut cursor = Cursor::new(stmt);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "throw") {

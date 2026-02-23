@@ -220,28 +220,32 @@ impl Harness {
             }
             Expr::Await(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
-                if let Value::Promise(promise) = value {
+                let promise = self.promise_resolve_value_as_promise(value)?;
+                loop {
                     let settled = {
                         let promise = promise.borrow();
                         match &promise.state {
                             PromiseState::Pending => None,
-                            PromiseState::Fulfilled(value) => {
-                                Some(PromiseSettledValue::Fulfilled(value.clone()))
-                            }
-                            PromiseState::Rejected(reason) => {
-                                Some(PromiseSettledValue::Rejected(reason.clone()))
-                            }
+                            PromiseState::Fulfilled(value) => Some(Ok(value.clone())),
+                            PromiseState::Rejected(reason) => Some(Err(reason.clone())),
                         }
                     };
                     match settled {
-                        Some(PromiseSettledValue::Fulfilled(value)) => Ok(value),
-                        Some(PromiseSettledValue::Rejected(reason)) => Err(Error::ScriptRuntime(
-                            format!("await rejected Promise: {}", reason.as_string()),
-                        )),
-                        None => Ok(Value::Undefined),
+                        Some(Ok(value)) => return Ok(value),
+                        Some(Err(reason)) => {
+                            return Err(Error::ScriptThrown(ThrownValue::new(reason)));
+                        }
+                        None => {
+                            if !self.scheduler.microtask_queue.is_empty() {
+                                self.run_microtask_queue()?;
+                                continue;
+                            }
+                            let ran_timers = self.run_due_timers_internal()?;
+                            if ran_timers == 0 {
+                                return Ok(Value::Undefined);
+                            }
+                        }
                     }
-                } else {
-                    Ok(value)
                 }
             }
             Expr::Yield(inner) => {

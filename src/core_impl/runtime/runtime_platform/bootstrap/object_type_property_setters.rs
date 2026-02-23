@@ -1,7 +1,10 @@
 use super::*;
 
 impl Harness {
-    fn arguments_param_name_for_index(env: &HashMap<String, Value>, index: usize) -> Option<String> {
+    fn arguments_param_name_for_index(
+        env: &HashMap<String, Value>,
+        index: usize,
+    ) -> Option<String> {
         let Some(Value::Array(bindings)) = env.get(INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY) else {
             return None;
         };

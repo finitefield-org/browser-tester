@@ -65,6 +65,7 @@ impl Harness {
         Value::Function(Rc::new(FunctionValue {
             function_id,
             handler,
+            expression_name: None,
             captured_env,
             captured_pending_function_decls,
             captured_global_names,
@@ -208,7 +209,7 @@ impl Harness {
                     )])
                 };
                 let result = self.execute_function_call(
-                    function.as_ref(),
+                    function.clone(),
                     args,
                     event,
                     caller_env,
@@ -260,7 +261,7 @@ impl Harness {
                         "Class constructor cannot be invoked without 'new'".into(),
                     ));
                 }
-                self.execute_function_call(function.as_ref(), args, event, caller_env, this_arg)
+                self.execute_function_call(function.clone(), args, event, caller_env, this_arg)
             }
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
@@ -599,7 +600,8 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<()> {
-        let Some(constructor_id) = self.script_runtime.constructor_call_stack.last().copied() else {
+        let Some(constructor_id) = self.script_runtime.constructor_call_stack.last().copied()
+        else {
             return Ok(());
         };
         let Some(already_initialized) = self
@@ -615,7 +617,12 @@ impl Harness {
                 "super() has already been called for this constructor".into(),
             ));
         }
-        self.apply_constructor_instance_initializers_by_id(constructor_id, env, event_param, event)?;
+        self.apply_constructor_instance_initializers_by_id(
+            constructor_id,
+            env,
+            event_param,
+            event,
+        )?;
         if let Some(last) = self
             .script_runtime
             .constructor_instance_initialized_stack
@@ -664,7 +671,7 @@ impl Harness {
 
     pub(crate) fn execute_function_call(
         &mut self,
-        function: &FunctionValue,
+        function: Rc<FunctionValue>,
         args: &[Value],
         event: &EventState,
         caller_env: Option<&HashMap<String, Value>>,
@@ -728,7 +735,7 @@ impl Harness {
                             Self::object_set_entry(
                                 &mut arguments.borrow_mut().properties,
                                 "callee".to_string(),
-                                Value::Function(Rc::new(function.clone())),
+                                Value::Function(function.clone()),
                             );
                         }
                         call_env.insert("arguments".to_string(), arguments_value);
@@ -749,6 +756,10 @@ impl Harness {
                                 Self::new_array_value(bindings),
                             );
                         }
+                    }
+                    if let Some(expression_name) = function.expression_name.as_ref() {
+                        call_env.insert(expression_name.clone(), Value::Function(function.clone()));
+                        this.set_const_binding(&mut call_env, expression_name, true);
                     }
                     if let Some(super_constructor) = function.class_super_constructor.clone() {
                         call_env.insert(
@@ -828,7 +839,10 @@ impl Harness {
                         .iter()
                         .map(|param| param.name.clone())
                         .collect::<HashSet<_>>();
-                    this.ensure_no_direct_let_redeclarations(&function.handler.stmts, &param_names)?;
+                    this.ensure_no_direct_let_redeclarations(
+                        &function.handler.stmts,
+                        &param_names,
+                    )?;
                     let yield_collector = if function.is_generator {
                         Some(Rc::new(RefCell::new(Vec::new())))
                     } else {
@@ -939,7 +953,9 @@ impl Harness {
             }
             if is_constructor_call {
                 this.script_runtime.constructor_call_stack.pop();
-                this.script_runtime.constructor_instance_initialized_stack.pop();
+                this.script_runtime
+                    .constructor_instance_initialized_stack
+                    .pop();
             }
             this.restore_pending_function_decl_scopes(pending_scope_start);
             result

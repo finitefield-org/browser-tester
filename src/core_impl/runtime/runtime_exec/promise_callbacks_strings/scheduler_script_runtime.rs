@@ -9,7 +9,9 @@ impl Harness {
             }
             Stmt::Label { stmt, .. } => Self::stmt_has_illegal_top_level_return(stmt.as_ref()),
             Stmt::Block { stmts } => Self::has_illegal_top_level_return(stmts),
-            Stmt::For { init, post, body, .. } => {
+            Stmt::For {
+                init, post, body, ..
+            } => {
                 Self::has_illegal_top_level_return(init)
                     || Self::has_illegal_top_level_return(post)
                     || Self::has_illegal_top_level_return(body)
@@ -295,7 +297,11 @@ impl Harness {
         if let Some(cached) = self.script_runtime.module_cache.get(&cache_key) {
             return Ok(cached.clone());
         }
-        if !self.script_runtime.loading_modules.insert(cache_key.clone()) {
+        if !self
+            .script_runtime
+            .loading_modules
+            .insert(cache_key.clone())
+        {
             return Err(Error::ScriptRuntime(format!(
                 "circular module import is not supported: {cache_key}"
             )));

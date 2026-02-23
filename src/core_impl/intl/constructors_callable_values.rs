@@ -288,6 +288,7 @@ impl Harness {
                 params: Vec::new(),
                 stmts: Vec::new(),
             },
+            expression_name: None,
             captured_env: Rc::new(RefCell::new(ScriptEnv::default())),
             captured_pending_function_decls: Vec::new(),
             captured_global_names: HashSet::new(),

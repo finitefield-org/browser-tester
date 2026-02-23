@@ -105,7 +105,9 @@ pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
     Ok(Some(out))
 }
 
-fn parse_object_literal_getter_entry(entry: &str) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
+fn parse_object_literal_getter_entry(
+    entry: &str,
+) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
     let mut cursor = Cursor::new(entry);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "get") {
@@ -169,7 +171,9 @@ fn parse_object_literal_getter_entry(entry: &str) -> Result<Option<(ObjectLitera
     )))
 }
 
-fn parse_object_literal_setter_entry(entry: &str) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
+fn parse_object_literal_setter_entry(
+    entry: &str,
+) -> Result<Option<(ObjectLiteralKey, ScriptHandler)>> {
     let mut cursor = Cursor::new(entry);
     cursor.skip_ws();
     if !consume_keyword(&mut cursor, "set") {
@@ -312,6 +316,7 @@ fn parse_object_literal_method_entry(entry: &str) -> Result<Option<(ObjectLitera
                 params: parsed_params.params,
                 stmts,
             },
+            name: None,
             is_async,
             is_generator,
             is_arrow: false,

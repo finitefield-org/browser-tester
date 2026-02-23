@@ -77,7 +77,7 @@ impl Harness {
     }
 
     pub(crate) fn to_i32_for_bitwise(&self, value: &Value) -> i32 {
-        let numeric = self.numeric_value(value);
+        let numeric = Self::coerce_number_for_global(value);
         if !numeric.is_finite() {
             return 0;
         }
@@ -90,7 +90,7 @@ impl Harness {
     }
 
     pub(crate) fn to_u32_for_bitwise(&self, value: &Value) -> u32 {
-        let numeric = self.numeric_value(value);
+        let numeric = Self::coerce_number_for_global(value);
         if !numeric.is_finite() {
             return 0;
         }

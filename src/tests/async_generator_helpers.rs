@@ -214,3 +214,97 @@ fn async_generator_next_rejects_when_yielded_promise_rejects() -> Result<()> {
     h.assert_text("#out", "rejected:boom")?;
     Ok(())
 }
+
+#[test]
+fn async_function_star_expression_can_be_used_in_expression_contexts() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='out'></p>
+        <script>
+          async function joinAll(factory) {
+            let text = '';
+            for await (const value of factory()) {
+              text += value;
+            }
+            return text;
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const iife = (async function* (x) {
+              yield await Promise.resolve(x);
+              yield await Promise.resolve(x + 1);
+            })(10);
+
+            Promise.all([
+              joinAll(async function* () {
+                yield await Promise.resolve('a');
+                yield await Promise.resolve('b');
+                yield await Promise.resolve('c');
+              }),
+              iife.next(),
+              iife.next(),
+              iife.next(),
+            ]).then((values) => {
+              const joined = values[0];
+              const first = values[1];
+              const second = values[2];
+              const done = values[3];
+              document.getElementById('out').textContent =
+                joined + '|' +
+                first.value + ',' + second.value + ',' + done.done;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "abc|10,11,true")?;
+    Ok(())
+}
+
+#[test]
+fn named_async_function_star_expression_uses_local_name_binding() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='out'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const self = 'outer';
+            const gen = async function* self(value = 6) {
+              yield typeof self;
+              yield await Promise.resolve(value * value);
+            };
+
+            const iter = gen();
+            Promise.all([iter.next(), iter.next(), iter.next()]).then(([first, second, done]) => {
+              document.getElementById('out').textContent =
+                self + '|' +
+                first.value + ':' +
+                second.value + ':' +
+                done.done;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "outer|function:36:true")?;
+    Ok(())
+}
+
+#[test]
+fn async_function_star_expression_statement_without_name_is_rejected() {
+    let err = Harness::from_html("<script>async function* () { yield 1; }</script>")
+        .expect_err("anonymous async function* at statement start should parse as declaration");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(
+                msg.contains("function declaration requires a function name")
+                    || msg.contains("expected function name")
+            )
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

@@ -652,7 +652,62 @@ impl Harness {
         JsBigInt::parse_bytes(rendered.as_bytes(), 10)
     }
 
-    pub(crate) fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    fn invoke_primitive_coercion_method(
+        &mut self,
+        receiver: &Value,
+        method: &Value,
+    ) -> Result<Value> {
+        let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+        self.execute_callable_value_with_this_and_env(
+            method,
+            &[],
+            &event,
+            None,
+            Some(receiver.clone()),
+        )
+    }
+
+    fn to_primitive_for_addition(&mut self, value: &Value) -> Result<Value> {
+        if Self::is_primitive_value(value) || matches!(value, Value::Date(_)) {
+            return Ok(value.clone());
+        }
+
+        if let Value::Object(entries) = value {
+            let entries = entries.borrow();
+            if let Some(wrapped) = Self::string_wrapper_value_from_object(&entries) {
+                return Ok(Value::String(wrapped));
+            }
+            if let Some(id) = Self::symbol_wrapper_id_from_object(&entries) {
+                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&id) {
+                    return Ok(Value::Symbol(symbol.clone()));
+                }
+            }
+        }
+
+        for method_name in ["valueOf", "toString"] {
+            let method = match self.object_property_from_value(value, method_name) {
+                Ok(method) => method,
+                Err(Error::ScriptRuntime(msg)) if msg == "value is not an object" => {
+                    return Ok(value.clone());
+                }
+                Err(other) => return Err(other),
+            };
+            if !self.is_callable_value(&method) {
+                continue;
+            }
+            let coerced = self.invoke_primitive_coercion_method(value, &method)?;
+            if Self::is_primitive_value(&coerced) {
+                return Ok(coerced);
+            }
+        }
+
+        Ok(Value::String(value.as_string()))
+    }
+
+    pub(crate) fn add_values(&mut self, left: &Value, right: &Value) -> Result<Value> {
+        let left = self.to_primitive_for_addition(left)?;
+        let right = self.to_primitive_for_addition(right)?;
+
         if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
             return Err(Error::ScriptRuntime(
                 "Cannot convert a Symbol value to a string".into(),
@@ -667,7 +722,7 @@ impl Harness {
         }
 
         if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {
-            return match (left, right) {
+            return match (&left, &right) {
                 (Value::BigInt(l), Value::BigInt(r)) => Ok(Value::BigInt(l + r)),
                 _ => Err(Error::ScriptRuntime(
                     "cannot mix BigInt and other types in addition".into(),
@@ -675,7 +730,7 @@ impl Harness {
             };
         }
 
-        match (left, right) {
+        match (&left, &right) {
             (Value::Number(l), Value::Number(r)) => {
                 if let Some(sum) = l.checked_add(*r) {
                     Ok(Value::Number(sum))
@@ -684,7 +739,7 @@ impl Harness {
                 }
             }
             _ => Ok(Value::Float(
-                self.numeric_value(left) + self.numeric_value(right),
+                Self::coerce_number_for_global(&left) + Self::coerce_number_for_global(&right),
             )),
         }
     }

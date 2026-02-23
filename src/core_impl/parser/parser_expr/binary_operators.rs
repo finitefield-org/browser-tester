@@ -1,4 +1,8 @@
 use super::*;
+use super::super::parser_stmt::{
+    parse_destructure_assign, parse_dom_assignment, parse_object_assign, parse_private_assign,
+    parse_var_assign,
+};
 
 pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
@@ -229,7 +233,7 @@ pub(crate) fn parse_comma_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
     let parts = split_top_level_by_char(src, b',');
     if parts.len() == 1 {
-        return parse_ternary_expr(src);
+        return parse_assignment_expr(src);
     }
 
     let mut parsed = Vec::with_capacity(parts.len());
@@ -240,9 +244,65 @@ pub(crate) fn parse_comma_expr(src: &str) -> Result<Expr> {
                 "invalid comma expression: {src}"
             )));
         }
-        parsed.push(parse_ternary_expr(part)?);
+        parsed.push(parse_assignment_expr(part)?);
     }
     Ok(Expr::Comma(parsed))
+}
+
+pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
+    let src = strip_outer_parens(src.trim());
+    let Some((eq_pos, op_len)) = find_top_level_assignment(src) else {
+        return parse_ternary_expr(src);
+    };
+
+    // Assignment expressions are right-associative and lower precedence than
+    // conditional expressions. This runtime currently supports expression-form
+    // assignment for plain "=" by lowering to an IIFE that executes the
+    // existing statement assignment path and returns the assigned value.
+    if op_len != 1 {
+        return parse_ternary_expr(src);
+    }
+
+    let lhs_raw = src[..eq_pos].trim();
+    let rhs_src = src[eq_pos + op_len..].trim();
+    if lhs_raw.is_empty() || rhs_src.is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "invalid assignment expression: {src}"
+        )));
+    }
+    let lhs = strip_outer_parens(lhs_raw).trim();
+    if lhs.is_empty() {
+        return Err(Error::ScriptParse(format!(
+            "invalid assignment target in expression: {src}"
+        )));
+    }
+
+    let assignment_src = format!("{lhs} = {rhs_src}");
+    let supports_assignment = |result: Result<Option<Stmt>>| match result {
+        Ok(Some(_)) => true,
+        Ok(None) | Err(_) => false,
+    };
+    let is_supported_target = supports_assignment(parse_var_assign(&assignment_src))
+        || supports_assignment(parse_destructure_assign(&assignment_src))
+        || supports_assignment(parse_private_assign(&assignment_src))
+        || supports_assignment(parse_object_assign(&assignment_src))
+        || supports_assignment(parse_dom_assignment(&assignment_src));
+    if !is_supported_target {
+        return parse_ternary_expr(src);
+    }
+
+    let mut temp_index = 0usize;
+    let temp_name = loop {
+        let candidate = format!("__bt_assign_value_{temp_index}");
+        if !lhs.contains(&candidate) && !rhs_src.contains(&candidate) {
+            break candidate;
+        }
+        temp_index += 1;
+    };
+    let lowered = format!(
+        "(() => {{ const {temp_name} = ({rhs_src}); {lhs} = {temp_name}; return {temp_name}; }})()"
+    );
+    parse_expr(&lowered)
 }
 
 pub(crate) fn parse_ternary_expr(src: &str) -> Result<Expr> {
@@ -551,6 +611,8 @@ pub(crate) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
             | b'>'
             | b'&'
             | b'|'
+            | b'^'
+            | b'~'
             | b'+'
             | b'-'
             | b'*'

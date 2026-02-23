@@ -854,7 +854,9 @@ fn labeled_async_or_generator_function_declaration_is_rejected() {
     let err = Harness::from_html("<script>label: function* g() {}</script>")
         .expect_err("labeled generator function declaration should fail");
     match err {
-        Error::ScriptParse(msg) => assert!(msg.contains("non-generator") || msg.contains("non-async")),
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("non-generator") || msg.contains("non-async"))
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -2539,7 +2541,9 @@ fn throw_statement_with_line_terminator_is_rejected() {
         "#;
 
     match Harness::from_html(html) {
-        Err(Error::ScriptParse(msg)) => assert!(msg.contains("throw statement requires an operand")),
+        Err(Error::ScriptParse(msg)) => {
+            assert!(msg.contains("throw statement requires an operand"))
+        }
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("throw with newline should be rejected"),
     }
@@ -2558,7 +2562,9 @@ fn throw_statement_with_line_comment_then_line_terminator_is_rejected() {
         "#;
 
     match Harness::from_html(html) {
-        Err(Error::ScriptParse(msg)) => assert!(msg.contains("throw statement requires an operand")),
+        Err(Error::ScriptParse(msg)) => {
+            assert!(msg.contains("throw statement requires an operand"))
+        }
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("throw with line-comment terminator should be rejected"),
     }
@@ -3232,7 +3238,8 @@ fn setter_syntax_rejects_invalid_parameter_counts() {
         "<script>class C { set value(a, b) {} }</script>",
         "<script>class C { set value(...rest) {} }</script>",
     ] {
-        let err = Harness::from_html(source).expect_err("invalid setter parameter arity should fail");
+        let err =
+            Harness::from_html(source).expect_err("invalid setter parameter arity should fail");
         match err {
             Error::ScriptParse(msg) => assert!(msg.contains("setter")),
             other => panic!("unexpected error: {other:?}"),
@@ -4742,10 +4749,9 @@ fn super_call_without_derived_superclass_reports_error() -> Result<()> {
 
 #[test]
 fn class_constructor_rejects_multiple_definitions() {
-    let err = Harness::from_html(
-        "<script>class C { constructor() {} constructor(value) {} }</script>",
-    )
-    .expect_err("multiple class constructors should fail");
+    let err =
+        Harness::from_html("<script>class C { constructor() {} constructor(value) {} }</script>")
+            .expect_err("multiple class constructors should fail");
     match err {
         Error::ScriptParse(msg) => assert!(msg.contains("multiple constructors")),
         other => panic!("unexpected error: {other:?}"),
@@ -4760,8 +4766,7 @@ fn class_constructor_rejects_async_generator_and_accessor_forms() {
         "<script>class C { get constructor() { return 1; } }</script>",
         "<script>class C { set constructor(value) {} }</script>",
     ] {
-        let err =
-            Harness::from_html(source).expect_err("invalid constructor forms should fail");
+        let err = Harness::from_html(source).expect_err("invalid constructor forms should fail");
         match err {
             Error::ScriptParse(msg) => assert!(msg.contains("constructor")),
             other => panic!("unexpected error: {other:?}"),
@@ -5327,8 +5332,8 @@ fn public_class_fields_reject_static_prototype_name() {
         "<script>class C { static get prototype() { return 1; } }</script>",
         "<script>class C { static set prototype(value) {} }</script>",
     ] {
-        let err = Harness::from_html(source)
-            .expect_err("static property named prototype should fail");
+        let err =
+            Harness::from_html(source).expect_err("static property named prototype should fail");
         match err {
             Error::ScriptParse(msg) => {
                 assert!(msg.contains("static class property name cannot be prototype"))
@@ -5555,10 +5560,9 @@ fn class_static_block_initializes_superclass_before_subclass() -> Result<()> {
 
 #[test]
 fn class_static_block_rejects_super_call() {
-    let err = Harness::from_html(
-        "<script>class A {} class B extends A { static { super(); } }</script>",
-    )
-    .expect_err("super() in static block should fail");
+    let err =
+        Harness::from_html("<script>class A {} class B extends A { static { super(); } }</script>")
+            .expect_err("super() in static block should fail");
     match err {
         Error::ScriptParse(msg) => {
             assert!(msg.contains("super() is not allowed in class static initialization block"))
@@ -5572,9 +5576,9 @@ fn class_static_block_rejects_arguments_object() {
     let err = Harness::from_html("<script>class C { static { arguments; } }</script>")
         .expect_err("arguments in static block should fail");
     match err {
-        Error::ScriptParse(msg) => assert!(
-            msg.contains("arguments is not allowed in class static initialization block")
-        ),
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("arguments is not allowed in class static initialization block"))
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }

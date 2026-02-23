@@ -155,6 +155,21 @@ pub(crate) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
                 op: BinaryOp::Sub,
                 right: Box::new(rhs_expr),
             },
+            "|=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitOr,
+                right: Box::new(rhs_expr),
+            },
+            "^=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitXor,
+                right: Box::new(rhs_expr),
+            },
+            "&=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitAnd,
+                right: Box::new(rhs_expr),
+            },
             "*=" => Expr::Binary {
                 left: Box::new(lhs_expr),
                 op: BinaryOp::Mul,
@@ -267,6 +282,21 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
             "-=" => Expr::Binary {
                 left: Box::new(lhs_expr),
                 op: BinaryOp::Sub,
+                right: Box::new(rhs_expr),
+            },
+            "|=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitOr,
+                right: Box::new(rhs_expr),
+            },
+            "^=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitXor,
+                right: Box::new(rhs_expr),
+            },
+            "&=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::BitAnd,
                 right: Box::new(rhs_expr),
             },
             "*=" => Expr::Binary {

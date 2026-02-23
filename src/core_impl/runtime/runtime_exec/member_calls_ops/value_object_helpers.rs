@@ -1205,7 +1205,9 @@ impl Harness {
                 if Self::is_url_object(&entries) && key == "constructor" {
                     return Ok(Value::UrlConstructor);
                 }
-                if let Some(value) = self.object_property_from_entries_with_getter(value, &entries, key)? {
+                if let Some(value) =
+                    self.object_property_from_entries_with_getter(value, &entries, key)?
+                {
                     return Ok(value);
                 }
 

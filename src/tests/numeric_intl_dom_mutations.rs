@@ -567,6 +567,100 @@ fn decimal_numeric_literals_work_in_comparisons_and_assignment() -> Result<()> {
 }
 
 #[test]
+fn assignment_expression_returns_assigned_value_and_updates_binding() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 2;
+            const y = 3;
+            const box = { n: 0 };
+            const first = (x = y + 1);
+            const second = (x = x * y);
+            const prop = (box.n = 7);
+            document.getElementById('result').textContent = x + '|' + first + '|' + second + '|' + prop;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "12|4|12|7")?;
+    Ok(())
+}
+
+#[test]
+fn assignment_chaining_works_in_statements_and_initializers() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 5;
+            let y = 10;
+            let z = 25;
+            x = y;
+            x = y = z;
+            let w;
+            const init = (w = 2);
+            document.getElementById('result').textContent = x + '|' + y + '|' + z + '|' + w + '|' + init;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "25|25|25|2|2")?;
+    Ok(())
+}
+
+#[test]
+fn assignment_expression_supports_destructuring_pattern() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 0;
+            let b = 0;
+            const source = [11, 22];
+            const assigned = ([a, b] = source);
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + assigned[0] + '|' + assigned[1];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "11|22|11|22")?;
+    Ok(())
+}
+
+#[test]
+fn const_initializer_assignment_to_undeclared_identifier_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = y = 5;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("assignment to undeclared identifier should fail in this runtime");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("unknown variable: y")),
+        other => panic!("unexpected undeclared assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn multiplication_and_division_work_for_numbers() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -608,23 +702,474 @@ fn subtraction_and_unary_minus_work_for_numbers() -> Result<()> {
 }
 
 #[test]
-fn addition_supports_numeric_and_string_left_fold() -> Result<()> {
+fn addition_supports_numeric_string_and_bigint_cases() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            const a = 1 + 2;
-            const b = 1 + 2 + 'x';
-            const c = 1 + '2' + 3;
-            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+            const a = 2 + 2;
+            const b = 2 + true;
+            const c = 'hello ' + 'everyone';
+            const d = 2001 + ': A Space Odyssey';
+            const e = true + 1;
+            const f = false + false;
+            const g = 1n + 2n;
+            const h = '2' + 2;
+            const i = 'x' + 1n;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' + h + '|' + i;
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "3:3x:123")?;
+    h.assert_text(
+        "#result",
+        "4|3|hello everyone|2001: A Space Odyssey|2|0|3|22|x1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn addition_prefers_valueof_then_falls_back_to_tostring() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const lhs = {
+              valueOf() {
+                return 40;
+              },
+              toString() {
+                return 'wrong';
+              },
+            };
+            const rhs = {
+              valueOf() {
+                return { boxed: true };
+              },
+              toString() {
+                return 'fallback';
+              },
+            };
+
+            const a = lhs + 2;
+            const b = 'n=' + lhs;
+            const c = rhs + '!';
+            document.getElementById('result').textContent = a + '|' + b + '|' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "42|n=40|fallback!")?;
+    Ok(())
+}
+
+#[test]
+fn addition_assignment_supports_numbers_strings_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 2;
+            let b = 'hello';
+            let bar = 5;
+            let baz = true;
+            let big = 1n;
+            let foo = 'foo';
+
+            a += 3;
+            b += ' world';
+            bar += 2;
+            baz += 1;
+            baz += false;
+            big += 2n;
+            foo += false;
+            foo += 'bar';
+            bar += 'foo';
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + bar + '|' + baz + '|' + big + '|' + foo;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5|hello world|7foo|2|3|foofalsebar")?;
+    Ok(())
+}
+
+#[test]
+fn addition_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1n;
+            x += 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("mixed BigInt/Number addition assignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in addition"))
+        }
+        other => panic!("unexpected mixed addition assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn addition_assignment_reads_getter_once_for_property_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 7,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value += 5;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "7|1")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_and_assignment_supports_numbers_booleans_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 5;
+            let b = 5n;
+            let c = true;
+            let d = '0x10';
+            a &= 2;
+            b &= 2n;
+            c &= 1;
+            d &= 15;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + (typeof d);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0|0|1|0|number")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_and_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1n;
+            x &= 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("mixed BigInt/Number bitwise AND assignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed bitwise AND assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn bitwise_and_assignment_reads_property_once_for_reference_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 5,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value &= 3;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5|1")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_or_assignment_supports_numbers_booleans_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 5;
+            let b = 5n;
+            let c = true;
+            let d = '0x10';
+            a |= 2;
+            b |= 2n;
+            c |= 0;
+            d |= 3;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + (typeof d);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "7|7|1|19|number")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_or_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1n;
+            x |= 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("mixed BigInt/Number bitwise OR assignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed bitwise OR assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn bitwise_or_assignment_reads_property_once_for_reference_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 5,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value |= 2;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5|1")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_xor_assignment_supports_numbers_booleans_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 5;
+            let b = 5n;
+            let c = true;
+            let d = '0x10';
+            a ^= 3;
+            b ^= 3n;
+            c ^= 0;
+            d ^= 3;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + (typeof d);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "6|6|1|19|number")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_xor_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1n;
+            x ^= 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("mixed BigInt/Number bitwise XOR assignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed bitwise XOR assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn bitwise_xor_assignment_reads_property_once_for_reference_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 5,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value ^= 3;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5|1")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_not_supports_numbers_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = ~5;
+            const b = ~-3;
+            const c = ~0;
+            const d = ~-1;
+            const e = ~1;
+            const f = ~0n;
+            const g = ~4294967295n;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' +
+              (typeof f) + '|' + (typeof g);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-6|2|-1|0|-2|-1|-4294967296|bigint|bigint")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_not_coerces_and_truncates_number_operands_to_i32() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fromBool = ~true;
+            const fromHexString = ~'0x10';
+            const fromLarge = ~4294967297;
+            const doubleNotFloat = ~~3.9;
+            const doubleNotLarge = ~~1099511627781;
+            const doubleNotNegativeFloat = ~~-3.9;
+            document.getElementById('result').textContent =
+              fromBool + '|' + fromHexString + '|' + fromLarge + '|' +
+              doubleNotFloat + '|' + doubleNotLarge + '|' + doubleNotNegativeFloat;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-2|-17|-2|3|5|-3")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_not_symbol_operand_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sym = Symbol('foo');
+            const value = ~sym;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("bitwise NOT on symbol should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("Cannot convert a Symbol value to a number"))
+        }
+        other => panic!("unexpected bitwise NOT symbol error: {other:?}"),
+    }
     Ok(())
 }
 

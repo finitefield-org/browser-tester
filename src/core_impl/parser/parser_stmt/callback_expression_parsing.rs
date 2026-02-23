@@ -28,14 +28,14 @@ pub(crate) fn parse_arrow_or_block_body(cursor: &mut Cursor<'_>) -> Result<(Stri
             continue;
         }
 
-        if parse_expr(stripped).is_ok() {
-            cursor.set_pos(cursor.i + end);
-            return Ok((stripped.to_string(), true));
-        }
-
         if let Some(rewritten) = rewrite_assignment_arrow_body(stripped)? {
             cursor.set_pos(cursor.i + end);
             return Ok((rewritten, false));
+        }
+
+        if parse_expr(stripped).is_ok() {
+            cursor.set_pos(cursor.i + end);
+            return Ok((stripped.to_string(), true));
         }
 
         // Keep concise callback bodies that are valid single statements even
@@ -216,13 +216,16 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
             cursor.skip_ws();
             if cursor.consume_byte(b'*') {
                 cursor.skip_ws();
-                if !cursor.consume_byte(b'(') {
-                    let _ = cursor
+                let function_name = if cursor.consume_byte(b'(') {
+                    None
+                } else {
+                    let name = cursor
                         .parse_identifier()
                         .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
                     cursor.skip_ws();
                     cursor.expect_byte(b'(')?;
-                }
+                    Some(name)
+                };
                 let params_src = cursor.read_until_byte(b')')?;
                 cursor.expect_byte(b')')?;
                 let parsed_params =
@@ -242,6 +245,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                         params: parsed_params.params,
                         stmts: body_stmts,
                     },
+                    name: function_name,
                     is_async: false,
                     is_generator: true,
                     is_arrow: false,
@@ -259,13 +263,16 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
             cursor.skip_ws();
             if cursor.consume_byte(b'*') {
                 cursor.skip_ws();
-                if !cursor.consume_byte(b'(') {
-                    let _ = cursor
+                let function_name = if cursor.consume_byte(b'(') {
+                    None
+                } else {
+                    let name = cursor
                         .parse_identifier()
                         .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
                     cursor.skip_ws();
                     cursor.expect_byte(b'(')?;
-                }
+                    Some(name)
+                };
                 let params_src = cursor.read_until_byte(b')')?;
                 cursor.expect_byte(b')')?;
                 let parsed_params =
@@ -285,6 +292,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                         params: parsed_params.params,
                         stmts: body_stmts,
                     },
+                    name: function_name,
                     is_async: true,
                     is_generator: true,
                     is_arrow: false,
@@ -298,21 +306,41 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
         let mut cursor = Cursor::new(src);
         cursor.skip_ws();
         if try_consume_async_function_prefix(&mut cursor) {
-            let (params, body, concise_body) =
-                parse_callback(&mut cursor, usize::MAX, "function parameters")?;
+            cursor.consume_ascii("function");
+            cursor.skip_ws();
+            if cursor.peek() == Some(b'*') {
+                return Ok(None);
+            }
+            let function_name = if cursor.consume_byte(b'(') {
+                None
+            } else {
+                let name = cursor
+                    .parse_identifier()
+                    .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+                cursor.skip_ws();
+                cursor.expect_byte(b'(')?;
+                Some(name)
+            };
+            let params_src = cursor.read_until_byte(b')')?;
+            cursor.expect_byte(b')')?;
+            let parsed_params =
+                parse_callback_parameter_list(&params_src, usize::MAX, "function parameters")?;
+            cursor.skip_ws();
+            let body = cursor.read_balanced_block(b'{', b'}')?;
             cursor.skip_ws();
             if !cursor.eof() {
                 return Ok(None);
             }
-            let stmts = if concise_body {
-                vec![Stmt::Return {
-                    value: Some(parse_expr(body.trim())?),
-                }]
-            } else {
-                parse_block_statements(&body)?
-            };
+            let body_stmts = prepend_callback_param_prologue_stmts(
+                parse_block_statements(&body)?,
+                &parsed_params.prologue,
+            )?;
             return Ok(Some(Expr::Function {
-                handler: ScriptHandler { params, stmts },
+                handler: ScriptHandler {
+                    params: parsed_params.params,
+                    stmts: body_stmts,
+                },
+                name: function_name,
                 is_async: true,
                 is_generator: false,
                 is_arrow: false,
@@ -339,6 +367,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
                     };
                     return Ok(Some(Expr::Function {
                         handler: ScriptHandler { params, stmts },
+                        name: None,
                         is_async: true,
                         is_generator: false,
                         is_arrow: true,
@@ -379,6 +408,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     };
     Ok(Some(Expr::Function {
         handler: ScriptHandler { params, stmts },
+        name: None,
         is_async: false,
         is_generator: false,
         is_arrow: !src.starts_with("function"),
