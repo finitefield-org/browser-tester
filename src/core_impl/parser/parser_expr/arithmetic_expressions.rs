@@ -1,3 +1,6 @@
+use super::super::parser_stmt::{
+    parse_dom_assignment, parse_object_assign, parse_private_assign, parse_var_assign,
+};
 use super::*;
 pub(crate) fn parse_mul_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
@@ -238,14 +241,24 @@ pub(crate) fn parse_prefix_update_expr(target: &str, delta: i8) -> Result<Option
             "update operator requires an operand".into(),
         ));
     }
-    if !is_ident(target) {
+    if !is_valid_update_target(target) {
         return Err(Error::ScriptParse(
             "invalid left-hand side expression in prefix operation".into(),
         ));
     }
 
-    let next = build_update_numeric_expr(target, delta);
-    let lowered = format!("({target} = {next})");
+    let mut temp_index = 0usize;
+    let temp_name = loop {
+        let candidate = format!("__bt_update_prev_{temp_index}");
+        if !target.contains(&candidate) {
+            break candidate;
+        }
+        temp_index += 1;
+    };
+    let next = build_update_numeric_expr(&temp_name, delta);
+    let lowered = format!(
+        "(() => {{ const {temp_name} = {target}; {target} = {next}; return {next}; }})()"
+    );
     Ok(Some(parse_expr(&lowered)?))
 }
 
@@ -255,7 +268,7 @@ pub(crate) fn parse_postfix_update_expr(target: &str, delta: i8) -> Result<Optio
             "update operator requires an operand".into(),
         ));
     }
-    if !is_ident(target) {
+    if !is_valid_update_target(target) {
         return Err(Error::ScriptParse(
             "invalid left-hand side expression in postfix operation".into(),
         ));
@@ -278,10 +291,23 @@ pub(crate) fn parse_postfix_update_expr(target: &str, delta: i8) -> Result<Optio
 
 pub(crate) fn build_update_numeric_expr(source: &str, delta: i8) -> String {
     if delta >= 0 {
-        format!("(typeof {source} === 'bigint' ? ({source} + 1n) : ({source} + 1))")
+        format!("(typeof {source} === 'bigint' ? ({source} + 1n) : (+{source} + 1))")
     } else {
-        format!("(typeof {source} === 'bigint' ? ({source} - 1n) : ({source} - 1))")
+        format!("(typeof {source} === 'bigint' ? ({source} - 1n) : (+{source} - 1))")
     }
+}
+
+pub(crate) fn is_valid_update_target(target: &str) -> bool {
+    let assignment_src = format!("{target} = 0");
+    let supports_assignment = |result: Result<Option<Stmt>>| match result {
+        Ok(Some(_)) => true,
+        Ok(None) | Err(_) => false,
+    };
+
+    supports_assignment(parse_var_assign(&assignment_src))
+        || supports_assignment(parse_object_assign(&assignment_src))
+        || supports_assignment(parse_private_assign(&assignment_src))
+        || supports_assignment(parse_dom_assignment(&assignment_src))
 }
 
 pub(crate) fn fold_binary<F, G>(

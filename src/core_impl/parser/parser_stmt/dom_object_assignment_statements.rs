@@ -141,14 +141,20 @@ pub(crate) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
 
     let rhs_expr = parse_expr(rhs)?;
     let op = &stmt[eq_pos..eq_pos + op_len];
-    let expr = if op_len == 1 {
-        rhs_expr
+    let (assign_op, expr) = if op_len == 1 {
+        (VarAssignOp::Assign, rhs_expr)
+    } else if op == "&&=" {
+        (VarAssignOp::LogicalAnd, rhs_expr)
+    } else if op == "||=" {
+        (VarAssignOp::LogicalOr, rhs_expr)
+    } else if op == "??=" {
+        (VarAssignOp::Nullish, rhs_expr)
     } else {
         let lhs_expr = Expr::DomRead {
             target: target.clone(),
             prop: prop.clone(),
         };
-        match op {
+        let expr = match op {
             "+=" => append_concat_expr(lhs_expr, rhs_expr),
             "-=" => Expr::Binary {
                 left: Box::new(lhs_expr),
@@ -168,6 +174,21 @@ pub(crate) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
             "&=" => Expr::Binary {
                 left: Box::new(lhs_expr),
                 op: BinaryOp::BitAnd,
+                right: Box::new(rhs_expr),
+            },
+            "<<=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::ShiftLeft,
+                right: Box::new(rhs_expr),
+            },
+            ">>=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::ShiftRight,
+                right: Box::new(rhs_expr),
+            },
+            ">>>=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::UnsignedShiftRight,
                 right: Box::new(rhs_expr),
             },
             "*=" => Expr::Binary {
@@ -191,9 +212,15 @@ pub(crate) fn parse_dom_assignment(stmt: &str) -> Result<Option<Stmt>> {
                 right: Box::new(rhs_expr),
             },
             _ => rhs_expr,
-        }
+        };
+        (VarAssignOp::Assign, expr)
     };
-    Ok(Some(Stmt::DomAssign { target, prop, expr }))
+    Ok(Some(Stmt::DomAssign {
+        target,
+        prop,
+        op: assign_op,
+        expr,
+    }))
 }
 
 pub(crate) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String, Vec<Expr>)>> {
@@ -253,8 +280,14 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
 
     let rhs_expr = parse_expr(rhs)?;
     let op = &stmt[eq_pos..eq_pos + op_len];
-    let expr = if op_len == 1 {
-        rhs_expr
+    let (assign_op, expr) = if op_len == 1 {
+        (VarAssignOp::Assign, rhs_expr)
+    } else if op == "&&=" {
+        (VarAssignOp::LogicalAnd, rhs_expr)
+    } else if op == "||=" {
+        (VarAssignOp::LogicalOr, rhs_expr)
+    } else if op == "??=" {
+        (VarAssignOp::Nullish, rhs_expr)
     } else {
         let mut static_path = Vec::with_capacity(path.len());
         for segment in &path {
@@ -277,7 +310,7 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
                 path: static_path,
             }
         };
-        match op {
+        let expr = match op {
             "+=" => append_concat_expr(lhs_expr, rhs_expr),
             "-=" => Expr::Binary {
                 left: Box::new(lhs_expr),
@@ -297,6 +330,21 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
             "&=" => Expr::Binary {
                 left: Box::new(lhs_expr),
                 op: BinaryOp::BitAnd,
+                right: Box::new(rhs_expr),
+            },
+            "<<=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::ShiftLeft,
+                right: Box::new(rhs_expr),
+            },
+            ">>=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::ShiftRight,
+                right: Box::new(rhs_expr),
+            },
+            ">>>=" => Expr::Binary {
+                left: Box::new(lhs_expr),
+                op: BinaryOp::UnsignedShiftRight,
                 right: Box::new(rhs_expr),
             },
             "*=" => Expr::Binary {
@@ -320,9 +368,15 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
                 right: Box::new(rhs_expr),
             },
             _ => return Ok(None),
-        }
+        };
+        (VarAssignOp::Assign, expr)
     };
-    Ok(Some(Stmt::ObjectAssign { target, path, expr }))
+    Ok(Some(Stmt::ObjectAssign {
+        target,
+        path,
+        op: assign_op,
+        expr,
+    }))
 }
 
 pub(crate) fn parse_private_assign(stmt: &str) -> Result<Option<Stmt>> {

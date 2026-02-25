@@ -1459,6 +1459,106 @@ fn bitwise_xor_assignment_reads_property_once_for_reference_target() -> Result<(
 }
 
 #[test]
+fn bitwise_left_shift_assignment_supports_numbers_booleans_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 5;
+            let b = 5n;
+            let c = true;
+            let d = '0x10';
+            a <<= 2;
+            b <<= 2n;
+            c <<= 1;
+            d <<= 1;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + (typeof d);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "20|20|2|32|number")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_left_shift_assignment_supports_object_property_targets() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { count: 5, nested: { count: 3 } };
+            obj.count <<= 2;
+            obj.nested.count <<= 1;
+            document.getElementById('result').textContent = obj.count + '|' + obj.nested.count;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "20|6")?;
+    Ok(())
+}
+
+#[test]
+fn bitwise_left_shift_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1n;
+            x <<= 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("mixed BigInt/Number left shift assignment should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed left shift assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn bitwise_left_shift_assignment_reads_property_once_for_reference_target() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 5,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value <<= 2;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "5|1")?;
+    Ok(())
+}
+
+#[test]
 fn bitwise_not_supports_numbers_and_bigints() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

@@ -148,6 +148,10 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
         }
 
         let base = base_src.trim();
+        if !optional && !is_private && base == "import" && member == "meta" {
+            return Ok(Some(Expr::ImportMeta));
+        }
+
         if !optional && (base == "document" || base == "window.document") {
             let target = match member.as_str() {
                 "body" => Some(DomQuery::DocumentBody),
@@ -265,6 +269,49 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
         cursor.skip_ws();
         if cursor.peek() == Some(b'(') {
             let args_src = cursor.read_balanced_block(b'(', b')')?;
+            if target == "import" {
+                let args = parse_call_args(&args_src, "import() arguments cannot be empty")?;
+                if args.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "import() requires a module specifier".into(),
+                    ));
+                }
+                if args.len() > 2 {
+                    return Err(Error::ScriptParse(
+                        "import() accepts at most two arguments".into(),
+                    ));
+                }
+
+                let module_src = args[0].trim();
+                if module_src.is_empty() {
+                    return Err(Error::ScriptParse(
+                        "import() requires a module specifier".into(),
+                    ));
+                }
+
+                let module = parse_expr(module_src)?;
+                let options = if args.len() == 2 {
+                    let options_src = args[1].trim();
+                    if options_src.is_empty() {
+                        return Err(Error::ScriptParse(
+                            "import() options argument cannot be empty".into(),
+                        ));
+                    }
+                    Some(Box::new(parse_expr(options_src)?))
+                } else {
+                    None
+                };
+
+                cursor.skip_ws();
+                if cursor.eof() {
+                    return Ok(Some(Expr::ImportCall {
+                        module: Box::new(module),
+                        options,
+                    }));
+                }
+                return Ok(None);
+            }
+
             let parsed = parse_args(&args_src)?;
 
             cursor.skip_ws();

@@ -649,6 +649,7 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) module_export_stack: Vec<Rc<RefCell<HashMap<String, ModuleExportBinding>>>>,
     pub(crate) module_referrer_stack: Vec<String>,
     pub(crate) module_cache: HashMap<String, HashMap<String, Value>>,
+    pub(crate) module_namespace_cache: HashMap<String, Value>,
     pub(crate) loading_modules: HashSet<String>,
     pub(crate) next_function_id: usize,
     pub(crate) next_private_slot_id: usize,

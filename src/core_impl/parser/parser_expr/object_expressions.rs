@@ -639,6 +639,10 @@ pub(crate) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
+    if target == "import" && path.first().is_some_and(|key| key == "meta") {
+        return Ok(None);
+    }
+
     if path.len() == 1 {
         return Ok(Some(Expr::ObjectGet {
             target,

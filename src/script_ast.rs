@@ -574,6 +574,10 @@ pub(crate) enum Expr {
         target: String,
         args: Vec<Expr>,
     },
+    ImportCall {
+        module: Box<Expr>,
+        options: Option<Box<Expr>>,
+    },
     Call {
         target: Box<Expr>,
         args: Vec<Expr>,
@@ -607,6 +611,7 @@ pub(crate) enum Expr {
         index: Box<Expr>,
         optional: bool,
     },
+    ImportMeta,
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -1134,6 +1139,7 @@ pub(crate) enum Stmt {
     ObjectAssign {
         target: String,
         path: Vec<Expr>,
+        op: VarAssignOp,
         expr: Expr,
     },
     FormDataAppend {
@@ -1144,6 +1150,7 @@ pub(crate) enum Stmt {
     DomAssign {
         target: DomQuery,
         prop: DomProp,
+        op: VarAssignOp,
         expr: Expr,
     },
     ClassListCall {

@@ -29,7 +29,12 @@ impl Harness {
         out
     }
 
-    pub(crate) fn eval_binary(&self, op: &BinaryOp, left: &Value, right: &Value) -> Result<Value> {
+    pub(crate) fn eval_binary(
+        &mut self,
+        op: &BinaryOp,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value> {
         if matches!(left, Value::Symbol(_)) || matches!(right, Value::Symbol(_)) {
             if matches!(
                 op,
@@ -80,8 +85,8 @@ impl Harness {
             BinaryOp::Ne => Value::Bool(!self.loose_equal(left, right)),
             BinaryOp::StrictEq => Value::Bool(self.strict_equal(left, right)),
             BinaryOp::StrictNe => Value::Bool(!self.strict_equal(left, right)),
-            BinaryOp::In => Value::Bool(self.value_in(left, right)),
-            BinaryOp::InstanceOf => Value::Bool(self.value_instance_of(left, right)),
+            BinaryOp::In => Value::Bool(self.value_in(left, right)?),
+            BinaryOp::InstanceOf => Value::Bool(self.value_instance_of(left, right)?),
             BinaryOp::BitOr => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
                     return Ok(Value::BigInt(l | r));
@@ -378,76 +383,224 @@ impl Harness {
         }
     }
 
-    pub(crate) fn value_in(&self, left: &Value, right: &Value) -> bool {
-        match right {
-            Value::NodeList(nodes) => self
-                .value_as_index(left)
-                .is_some_and(|index| index < nodes.len()),
-            Value::Array(values) => self.value_as_index(left).is_some_and(|index| {
-                let values = values.borrow();
-                if index >= values.len() {
-                    return false;
-                }
-                !Self::array_index_is_hole(&values, index)
-            }),
-            Value::TypedArray(values) => self
-                .value_as_index(left)
-                .is_some_and(|index| index < values.borrow().observed_length()),
-            Value::Object(entries) => {
-                let key = self.property_key_to_storage_key(left);
-                entries.borrow().iter().any(|(name, _)| name == &key)
-            }
-            Value::FormData(entries) => {
-                let key = left.as_string();
-                entries.iter().any(|(name, _)| name == &key)
-            }
-            _ => false,
+    fn object_has_property_in_chain(entries: &ObjectValue, key: &str) -> bool {
+        if Self::object_get_entry(entries, key).is_some() {
+            return true;
         }
+
+        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        while let Some(Value::Object(object)) = prototype {
+            let object_ref = object.borrow();
+            if Self::object_get_entry(&object_ref, key).is_some() {
+                return true;
+            }
+            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        }
+        false
     }
 
-    pub(crate) fn value_instance_of(&self, left: &Value, right: &Value) -> bool {
-        if let (Value::Object(left), Value::Object(right)) = (left, right) {
-            if Self::is_iterator_constructor_object(&right.borrow()) {
-                return Self::is_iterator_object(&left.borrow());
+    pub(crate) fn value_in(&self, left: &Value, right: &Value) -> Result<bool> {
+        if Self::is_primitive_value(right) {
+            return Err(Error::ScriptRuntime(
+                "right-hand side of in must be an object".into(),
+            ));
+        }
+
+        let key = self.property_key_to_storage_key(left);
+        let has_property = match right {
+            Value::NodeList(nodes) => {
+                if key == "length" {
+                    true
+                } else {
+                    self.value_as_index(left)
+                        .is_some_and(|index| index < nodes.len())
+                }
+            }
+            Value::Array(values) => {
+                let values = values.borrow();
+                if key == "length" || Self::object_get_entry(&values.properties, &key).is_some() {
+                    true
+                } else {
+                    self.value_as_index(left).is_some_and(|index| {
+                        index < values.len() && !Self::array_index_is_hole(&values, index)
+                    })
+                }
+            }
+            Value::TypedArray(values) => {
+                if key == "length" {
+                    true
+                } else {
+                    self.value_as_index(left)
+                        .is_some_and(|index| index < values.borrow().observed_length())
+                }
+            }
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
+                    if key == "length" || key == "constructor" {
+                        return Ok(true);
+                    }
+                    if key
+                        .parse::<usize>()
+                        .ok()
+                        .is_some_and(|index| text.chars().nth(index).is_some())
+                    {
+                        return Ok(true);
+                    }
+                }
+                Self::object_has_property_in_chain(&entries, &key)
+            }
+            Value::FormData(entries) => entries.iter().any(|(name, _)| name == &key),
+            _ => false,
+        };
+
+        Ok(has_property)
+    }
+
+    pub(crate) fn value_instance_of(&mut self, left: &Value, right: &Value) -> Result<bool> {
+        if let (Value::Object(left_obj), Value::Object(right_obj)) = (left, right) {
+            if Self::is_iterator_constructor_object(&right_obj.borrow()) {
+                return Ok(Self::is_iterator_object(&left_obj.borrow()));
             }
         }
 
         if let Value::Node(node) = left {
             if self.is_named_constructor_value(right, "HTMLElement") {
-                return self.dom.element(*node).is_some();
+                return Ok(self.dom.element(*node).is_some());
             }
             if self.is_named_constructor_value(right, "HTMLInputElement") {
-                return self
+                return Ok(self
                     .dom
                     .tag_name(*node)
                     .map(|tag| tag.eq_ignore_ascii_case("input"))
-                    .unwrap_or(false);
+                    .unwrap_or(false));
             }
         }
 
-        match (left, right) {
-            (Value::Node(left), Value::Node(right)) => left == right,
-            (Value::Node(left), Value::NodeList(nodes)) => nodes.contains(left),
-            (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
-            (Value::Map(left), Value::Map(right)) => Rc::ptr_eq(left, right),
-            (Value::WeakMap(left), Value::WeakMap(right)) => Rc::ptr_eq(left, right),
-            (Value::Set(left), Value::Set(right)) => Rc::ptr_eq(left, right),
-            (Value::WeakSet(left), Value::WeakSet(right)) => Rc::ptr_eq(left, right),
-            (Value::Promise(left), Value::Promise(right)) => Rc::ptr_eq(left, right),
-            (Value::TypedArray(left), Value::TypedArray(right)) => Rc::ptr_eq(left, right),
-            (Value::Blob(left), Value::Blob(right)) => Rc::ptr_eq(left, right),
-            (Value::ArrayBuffer(left), Value::ArrayBuffer(right)) => Rc::ptr_eq(left, right),
-            (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
-            (Value::RegExp(left), Value::RegExp(right)) => Rc::ptr_eq(left, right),
-            (Value::Symbol(left), Value::Symbol(right)) => left.id == right.id,
-            (Value::Date(left), Value::Date(right)) => Rc::ptr_eq(left, right),
-            (Value::FormData(left), Value::FormData(right)) => left == right,
-            (Value::Blob(_), Value::BlobConstructor) => true,
-            (Value::Object(left), Value::UrlConstructor) => Self::is_url_object(&left.borrow()),
-            (Value::Object(left), Value::StringConstructor) => {
-                Self::string_wrapper_value_from_object(&left.borrow()).is_some()
+        if matches!(right, Value::BlobConstructor) {
+            return Ok(matches!(left, Value::Blob(_)));
+        }
+        if matches!(right, Value::UrlConstructor) {
+            return Ok(matches!(left, Value::Object(left_obj) if Self::is_url_object(&left_obj.borrow())));
+        }
+        if matches!(right, Value::StringConstructor) {
+            return Ok(matches!(left, Value::Object(left_obj) if Self::string_wrapper_value_from_object(&left_obj.borrow()).is_some()));
+        }
+
+        if !Self::is_instanceof_rhs_object_like(right) {
+            return Err(Error::ScriptRuntime(
+                "right-hand side of instanceof is not an object".into(),
+            ));
+        }
+
+        let has_instance_symbol = self.eval_symbol_static_property(SymbolStaticProperty::HasInstance);
+        let has_instance_key = self.property_key_to_storage_key(&has_instance_symbol);
+        let has_instance = self.object_property_from_value(right, &has_instance_key)?;
+        if !matches!(has_instance, Value::Undefined) {
+            if !self.is_callable_value(&has_instance) {
+                return Err(Error::ScriptRuntime(
+                    "Symbol.hasInstance is not callable".into(),
+                ));
             }
-            _ => false,
+            let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+            let verdict = self.execute_callable_value_with_this_and_env(
+                &has_instance,
+                std::slice::from_ref(left),
+                &event,
+                None,
+                Some(right.clone()),
+            )?;
+            return Ok(verdict.truthy());
+        }
+
+        if !self.is_callable_value(right) {
+            return Err(Error::ScriptRuntime(
+                "right-hand side of instanceof is not callable".into(),
+            ));
+        }
+
+        let prototype = self.object_property_from_value(right, "prototype")?;
+        let Value::Object(expected_prototype) = prototype else {
+            return Err(Error::ScriptRuntime(
+                "instanceof prototype is not an object".into(),
+            ));
+        };
+
+        Ok(Self::value_prototype_chain_contains(left, &expected_prototype))
+    }
+
+    fn is_instanceof_rhs_object_like(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Object(_)
+                | Value::Array(_)
+                | Value::Function(_)
+                | Value::Map(_)
+                | Value::WeakMap(_)
+                | Value::Set(_)
+                | Value::WeakSet(_)
+                | Value::Promise(_)
+                | Value::TypedArray(_)
+                | Value::Blob(_)
+                | Value::ArrayBuffer(_)
+                | Value::StringConstructor
+                | Value::TypedArrayConstructor(_)
+                | Value::BlobConstructor
+                | Value::UrlConstructor
+                | Value::ArrayBufferConstructor
+                | Value::PromiseConstructor
+                | Value::MapConstructor
+                | Value::WeakMapConstructor
+                | Value::SetConstructor
+                | Value::WeakSetConstructor
+                | Value::SymbolConstructor
+                | Value::RegExpConstructor
+                | Value::PromiseCapability(_)
+                | Value::RegExp(_)
+                | Value::Date(_)
+                | Value::Node(_)
+                | Value::NodeList(_)
+                | Value::FormData(_)
+        )
+    }
+
+    fn value_prototype_chain_contains(left: &Value, expected: &Rc<RefCell<ObjectValue>>) -> bool {
+        let mut prototype = Self::value_internal_prototype(left);
+        while let Some(Value::Object(current)) = prototype {
+            if Rc::ptr_eq(&current, expected) {
+                return true;
+            }
+            let current_ref = current.borrow();
+            prototype = Self::object_get_entry(&current_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        }
+        false
+    }
+
+    fn value_internal_prototype(value: &Value) -> Option<Value> {
+        match value {
+            Value::Object(entries) => {
+                Self::object_get_entry(&entries.borrow(), INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::Array(values) => {
+                Self::object_get_entry(&values.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::Map(map) => {
+                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::WeakMap(map) => {
+                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::Set(set) => {
+                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::WeakSet(set) => {
+                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::RegExp(regex) => {
+                Self::object_get_entry(&regex.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::Node(_) | Value::NodeList(_) | Value::Date(_) | Value::Function(_) => None,
+            _ => None,
         }
     }
 
@@ -534,35 +687,29 @@ impl Harness {
     where
         F: Fn(f64, f64) -> bool,
     {
+        let ordering_to_cmp = |ordering: std::cmp::Ordering| match ordering {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Equal => 0.0,
+            std::cmp::Ordering::Greater => 1.0,
+        };
         match (left, right) {
             (Value::String(l), Value::String(r)) => {
-                let ordering = l.cmp(r);
-                let cmp = if ordering.is_lt() {
-                    -1.0
-                } else if ordering.is_gt() {
-                    1.0
-                } else {
-                    0.0
+                return op(ordering_to_cmp(l.cmp(r)), 0.0);
+            }
+            (Value::String(l), Value::BigInt(r)) => {
+                let Ok(parsed) = Self::parse_js_bigint_from_string(l) else {
+                    return false;
                 };
-                return op(cmp, 0.0);
+                return op(ordering_to_cmp(parsed.cmp(r)), 0.0);
+            }
+            (Value::BigInt(l), Value::String(r)) => {
+                let Ok(parsed) = Self::parse_js_bigint_from_string(r) else {
+                    return false;
+                };
+                return op(ordering_to_cmp(l.cmp(&parsed)), 0.0);
             }
             (Value::BigInt(l), Value::BigInt(r)) => {
-                return op(
-                    l.to_f64().unwrap_or_else(|| {
-                        if l.sign() == Sign::Minus {
-                            f64::NEG_INFINITY
-                        } else {
-                            f64::INFINITY
-                        }
-                    }),
-                    r.to_f64().unwrap_or_else(|| {
-                        if r.sign() == Sign::Minus {
-                            f64::NEG_INFINITY
-                        } else {
-                            f64::INFINITY
-                        }
-                    }),
-                );
+                return op(ordering_to_cmp(l.cmp(r)), 0.0);
             }
             (Value::BigInt(l), Value::Number(_) | Value::Float(_)) => {
                 let r = Self::coerce_number_for_global(right);

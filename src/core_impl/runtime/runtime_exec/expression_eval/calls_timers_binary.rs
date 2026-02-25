@@ -1,6 +1,160 @@
 use super::*;
 
 impl Harness {
+    fn current_dynamic_import_referrer(&self) -> String {
+        self.script_runtime
+            .module_referrer_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.document_url.clone())
+    }
+
+    fn module_namespace_for_dynamic_import(
+        &mut self,
+        specifier: &str,
+        attribute_type: Option<&str>,
+        referrer: &str,
+    ) -> Result<Value> {
+        let cache_key = self.resolve_module_specifier_key(specifier, referrer);
+        if let Some(cached) = self.script_runtime.module_namespace_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
+        let exports = self.load_module_exports(specifier, attribute_type, referrer)?;
+        let mut entries = exports.into_iter().collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let namespace = Self::new_object_value(entries);
+        self.script_runtime
+            .module_namespace_cache
+            .insert(cache_key, namespace.clone());
+        Ok(namespace)
+    }
+
+    fn dynamic_import_attribute_type_from_options_value(
+        &self,
+        options: &Value,
+    ) -> Result<Option<String>> {
+        let Value::Object(options_entries) = options else {
+            return Ok(None);
+        };
+        let with_value = {
+            let options_entries = options_entries.borrow();
+            Self::object_get_entry(&options_entries, "with")
+        };
+        let Some(with_value) = with_value else {
+            return Ok(None);
+        };
+        if matches!(with_value, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+        let Value::Object(with_entries) = with_value else {
+            return Err(Error::ScriptRuntime(
+                "import() options.with must be an object".into(),
+            ));
+        };
+
+        let with_entries = with_entries.borrow();
+        let mut attribute_type = None;
+        for (key, value) in with_entries.iter() {
+            if key.starts_with('\0') {
+                continue;
+            }
+            match key.as_str() {
+                "type" => {
+                    let value = value.as_string();
+                    if value != "json" {
+                        return Err(Error::ScriptRuntime(
+                            "unsupported import attribute: type".into(),
+                        ));
+                    }
+                    attribute_type = Some(value);
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(format!(
+                        "unsupported import attribute: {key}"
+                    )));
+                }
+            }
+        }
+
+        Ok(attribute_type)
+    }
+
+    fn eval_import_call(
+        &mut self,
+        module: &Expr,
+        options: &Option<Box<Expr>>,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Value {
+        let promise = self.new_pending_promise();
+        let result = (|| -> Result<Value> {
+            let specifier = self.eval_expr(module, env, event_param, event)?.as_string();
+            let attribute_type = if let Some(options_expr) = options {
+                let options_value = self.eval_expr(options_expr, env, event_param, event)?;
+                self.dynamic_import_attribute_type_from_options_value(&options_value)?
+            } else {
+                None
+            };
+
+            let referrer = self.current_dynamic_import_referrer();
+            self.module_namespace_for_dynamic_import(
+                &specifier,
+                attribute_type.as_deref(),
+                &referrer,
+            )
+        })();
+
+        match result {
+            Ok(namespace) => {
+                if let Err(err) = self.promise_resolve(&promise, namespace) {
+                    self.promise_reject(&promise, Self::promise_error_reason(err));
+                }
+            }
+            Err(err) => {
+                self.promise_reject(&promise, Self::promise_error_reason(err));
+            }
+        }
+
+        Value::Promise(promise)
+    }
+
+    fn current_import_meta_referrer(&self) -> Result<String> {
+        self.script_runtime
+            .module_referrer_stack
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                Error::ScriptRuntime("import.meta may only be used in module scripts".into())
+            })
+    }
+
+    fn eval_import_meta_object(&self) -> Result<Value> {
+        let referrer = self.current_import_meta_referrer()?;
+        Ok(Self::new_object_value(vec![
+            (INTERNAL_IMPORT_META_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("url".to_string(), Value::String(referrer)),
+            (
+                "resolve".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ]))
+    }
+
+    fn eval_import_meta_resolve_call(&self, args: &[Value]) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(Error::ScriptRuntime(
+                "import.meta.resolve requires exactly one argument".into(),
+            ));
+        }
+        let referrer = self.current_import_meta_referrer()?;
+        let specifier = args[0].as_string();
+        let resolved =
+            Self::resolve_url_string(&specifier, Some(&referrer)).unwrap_or_else(|| specifier);
+        Ok(Value::String(resolved))
+    }
+
     fn is_super_target_expr(expr: &Expr) -> bool {
         matches!(expr, Expr::Var(name) if name == "super")
     }
@@ -76,6 +230,9 @@ impl Harness {
                             }
                             other => other,
                         })
+                }
+                Expr::ImportCall { module, options } => {
+                    Ok(self.eval_import_call(module, options, env, event_param, event))
                 }
                 Expr::Call { target, args } => {
                     let callee = self.eval_expr(target, env, event_param, event)?;
@@ -319,6 +476,17 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        let is_import_meta_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(&entries, INTERNAL_IMPORT_META_OBJECT_KEY),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_import_meta_object && member == "resolve" {
+                            return self.eval_import_meta_resolve_call(&evaluated_args);
+                        }
+
                         let is_iterator_constructor = {
                             let entries = object.borrow();
                             Self::is_iterator_constructor_object(&entries)
@@ -487,6 +655,7 @@ impl Harness {
                         Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                     }
                 }
+                Expr::ImportMeta => self.eval_import_meta_object(),
                 Expr::DomRef(target) => {
                     let is_list_query = matches!(
                         target,

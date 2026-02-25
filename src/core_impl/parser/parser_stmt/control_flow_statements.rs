@@ -205,6 +205,11 @@ pub(crate) fn parse_single_statement_with_flags(
             "import declarations may only appear at top level of module scripts".into(),
         ));
     }
+    if !allow_top_level_import && contains_import_meta_expression(stmt) {
+        return Err(Error::ScriptParse(
+            "import.meta may only appear in module scripts".into(),
+        ));
+    }
 
     if let Some(parsed) = parse_if_stmt(stmt)? {
         return Ok(parsed);
@@ -394,6 +399,58 @@ pub(crate) fn is_static_import_statement_prefix(stmt: &str) -> bool {
     )
 }
 
+pub(crate) fn contains_import_meta_expression(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+
+    while i < bytes.len() {
+        if scanner.in_normal()
+            && i + 6 <= bytes.len()
+            && &bytes[i..i + 6] == b"import"
+            && (i == 0 || !is_ident_char(bytes[i - 1]))
+            && (i + 6 == bytes.len() || !is_ident_char(bytes[i + 6]))
+        {
+            let mut prev = i;
+            let mut previous_significant = None;
+            while prev > 0 {
+                prev -= 1;
+                let ch = bytes[prev];
+                if !ch.is_ascii_whitespace() {
+                    previous_significant = Some(ch);
+                    break;
+                }
+            }
+            if previous_significant == Some(b'.') {
+                i = scanner.advance(bytes, i);
+                continue;
+            }
+
+            let mut cursor = i + 6;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= bytes.len() || bytes[cursor] != b'.' {
+                i = scanner.advance(bytes, i);
+                continue;
+            }
+            cursor += 1;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor + 4 <= bytes.len()
+                && &bytes[cursor..cursor + 4] == b"meta"
+                && (cursor + 4 == bytes.len() || !is_ident_char(bytes[cursor + 4]))
+            {
+                return true;
+            }
+        }
+        i = scanner.advance(bytes, i);
+    }
+
+    false
+}
+
 pub(crate) fn parse_import_attribute_type(cursor: &mut Cursor<'_>) -> Result<Option<String>> {
     if !consume_keyword(cursor, "with") {
         return Ok(None);
@@ -503,6 +560,9 @@ pub(crate) fn parse_import_stmt(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
     cursor.skip_ws();
+    if matches!(cursor.peek(), Some(b'(' | b'.')) {
+        return Ok(None);
+    }
     if cursor.eof() {
         return Err(Error::ScriptParse(
             "import statement requires a module specifier".into(),

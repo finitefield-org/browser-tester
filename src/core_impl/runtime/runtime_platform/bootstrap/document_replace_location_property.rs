@@ -25,6 +25,7 @@ impl Harness {
         self.script_runtime.module_export_stack.clear();
         self.script_runtime.module_referrer_stack.clear();
         self.script_runtime.module_cache.clear();
+        self.script_runtime.module_namespace_cache.clear();
         self.script_runtime.loading_modules.clear();
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);

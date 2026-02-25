@@ -494,7 +494,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::StringConstructor => true,
             Self::Number(v) => *v != 0,
-            Self::Float(v) => *v != 0.0,
+            Self::Float(v) => *v != 0.0 && !v.is_nan(),
             Self::BigInt(v) => !v.is_zero(),
             Self::Array(_) => true,
             Self::Object(_) => true,

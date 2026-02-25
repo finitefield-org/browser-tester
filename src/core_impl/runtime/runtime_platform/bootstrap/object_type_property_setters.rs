@@ -904,6 +904,7 @@ impl Harness {
         &mut self,
         target: &str,
         path: &[Expr],
+        op: VarAssignOp,
         expr: &Expr,
         env: &mut HashMap<String, Value>,
         event_param: &Option<String>,
@@ -914,8 +915,6 @@ impl Harness {
                 "object assignment path cannot be empty".into(),
             ));
         }
-
-        let value = self.eval_expr(expr, env, event_param, event)?;
 
         let mut keys = Vec::with_capacity(path.len());
         for segment in path {
@@ -933,8 +932,37 @@ impl Harness {
         let final_key = keys
             .last()
             .ok_or_else(|| Error::ScriptRuntime("object assignment key cannot be empty".into()))?;
+        let key = self.property_key_to_storage_key(final_key);
+
+        if matches!(
+            op,
+            VarAssignOp::LogicalAnd | VarAssignOp::LogicalOr | VarAssignOp::Nullish
+        ) {
+            let previous = self
+                .object_property_from_value(&container, &key)
+                .map_err(|err| match err {
+                    Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                        Error::ScriptRuntime(format!(
+                            "variable '{}' is not an object (key '{}')",
+                            target, key
+                        ))
+                    }
+                    other => other,
+                })?;
+            let should_assign = match op {
+                VarAssignOp::LogicalAnd => previous.truthy(),
+                VarAssignOp::LogicalOr => !previous.truthy(),
+                VarAssignOp::Nullish => matches!(&previous, Value::Null | Value::Undefined),
+                _ => true,
+            };
+            if !should_assign {
+                return Ok(());
+            }
+        }
+
+        let value = self.eval_expr(expr, env, event_param, event)?;
+
         let assigns_window_local_storage = if let Value::Object(object) = &container {
-            let key = self.property_key_to_storage_key(final_key);
             if key == "localStorage" {
                 let entries = object.borrow();
                 Self::is_window_object(&entries)

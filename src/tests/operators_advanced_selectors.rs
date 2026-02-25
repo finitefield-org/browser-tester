@@ -837,6 +837,71 @@ fn loose_equality_and_inequality_follow_js_coercion_rules() -> Result<()> {
 }
 
 #[test]
+fn inequality_operator_basic_and_object_comparison_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const object1 = { key: 'value' };
+            const object2 = { key: 'value' };
+
+            const a = 1 != 1;
+            const b = 'hello' != 'hello';
+            const c = '1' != 1;
+            const d = 0 != false;
+            const e = 1 != 2;
+            const f = 'hello' != 'hola';
+            const g = 0 != null;
+            const h = 0 != undefined;
+            const i = null != undefined;
+            const j = object1 != object2;
+            const k = object1 != object1;
+
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + f + ':' + g + ':' + h + ':' +
+              i + ':' + j + ':' + k;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "false:false:false:false:true:true:true:true:false:true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn inequality_operator_is_negation_of_loose_equality() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const one = { key: 1 };
+            const two = { key: 1 };
+
+            const a = (3 != '3') === (!(3 == '3'));
+            const b = (0 != false) === (!(0 == false));
+            const c = (null != undefined) === (!(null == undefined));
+            const d = (one != two) === (!(one == two));
+            const e = (one != one) === (!(one == one));
+
+            document.getElementById('result').textContent = a + ':' + b + ':' + c + ':' + d + ':' + e;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
 fn decrement_operator_prefix_and_postfix_return_expected_values() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -867,6 +932,104 @@ fn decrement_operator_prefix_and_postfix_return_expected_values() -> Result<()> 
     h.click("#btn")?;
     h.assert_text("#result", "x:1,y:3|sum:7|a:2,b:2|big:1,post:3,pre:1")?;
     Ok(())
+}
+
+#[test]
+fn increment_operator_prefix_and_postfix_return_expected_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 3;
+            const y = x++;
+            const sum = x++ + 5;
+
+            let a = 3;
+            const b = ++a;
+
+            let big = 3n;
+            const bigPost = big++;
+            const bigPre = ++big;
+
+            document.getElementById('result').textContent =
+              'x:' + x + ',y:' + y + '|' +
+              'sum:' + sum + '|' +
+              'a:' + a + ',b:' + b + '|' +
+              'big:' + big + ',post:' + bigPost + ',pre:' + bigPre;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "x:5,y:3|sum:9|a:4,b:4|big:5,post:3,pre:5")?;
+    Ok(())
+}
+
+#[test]
+fn increment_operator_coerces_statement_operands_to_numeric() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let s = '3';
+            s++;
+
+            let t = true;
+            ++t;
+
+            let n = null;
+            ++n;
+
+            let u;
+            u++;
+
+            document.getElementById('result').textContent =
+              s + ':' + t + ':' + n + ':' + Number.isNaN(u);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "4:2:1:true")?;
+    Ok(())
+}
+
+#[test]
+fn increment_operator_supports_object_property_targets() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = { n: '3' };
+            const post = box.n++;
+            const pre = ++box.n;
+            document.getElementById('result').textContent =
+              'n:' + box.n + ',post:' + post + ',pre:' + pre;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "n:5,post:3,pre:5")?;
+    Ok(())
+}
+
+#[test]
+fn increment_operator_rejects_invalid_prefix_target() {
+    let err = Harness::from_html("<script>let x = 1; ++(++x);</script>")
+        .expect_err("nested prefix increment should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("invalid left-hand side expression in prefix operation"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -930,6 +1093,100 @@ fn bitwise_expression_supports_binary_operations() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "1:7:4:12:4:4:-4:2147483647:-2")?;
+    Ok(())
+}
+
+#[test]
+fn left_shift_operator_matches_number_rules_and_coercion() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const demo = 5 << 2;
+            const mulEquivalent = 9 << 3;
+            const wrap32 = 100 << 32;
+            const wrap33 = 100 << 33;
+            const truncated = 4294967297 << 0;
+            const highBitsDiscarded = 1099511627781 << 1;
+            const stringShift = '5' << 1;
+            const boolShift = true << 1;
+            const undefinedShift = undefined << 1;
+            document.getElementById('result').textContent =
+              demo + ':' + mulEquivalent + ':' + wrap32 + ':' + wrap33 + ':' +
+              truncated + ':' + highBitsDiscarded + ':' + stringShift + ':' + boolShift + ':' +
+              undefinedShift;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "20:72:100:200:1:10:10:2:0")?;
+    Ok(())
+}
+
+#[test]
+fn left_shift_operator_supports_bigint_and_rejects_mixed_numeric_types() -> Result<()> {
+    let html = r#"
+        <button id='ok'>ok</button>
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('ok').addEventListener('click', () => {
+            const a = 9n << 3n;
+            const b = 8n << -1n;
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n << 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 << 1n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = '1' << 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    h.click("#ok")?;
+    h.assert_text("#result", "72:4")?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number in left shift should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed-type left shift error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt in left shift should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed-type left shift error: {other:?}"),
+    }
+
+    let mix3 = h
+        .click("#mix3")
+        .expect_err("String and BigInt in left shift should fail");
+    match mix3 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+        }
+        other => panic!("unexpected mixed-type left shift error: {other:?}"),
+    }
+
     Ok(())
 }
 
@@ -1916,6 +2173,220 @@ fn logical_assignment_operators_work() -> Result<()> {
 }
 
 #[test]
+fn logical_and_assignment_short_circuits_for_const_and_rhs_evaluation() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = 0;
+            let y = 1;
+            let marker = '';
+            function rhs(label) {
+              marker += label;
+              return 2;
+            }
+
+            x &&= rhs('x');
+            y &&= rhs('y');
+
+            document.getElementById('result').textContent = x + ':' + y + ':' + marker;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:2:y")?;
+    Ok(())
+}
+
+#[test]
+fn logical_and_assignment_skips_setter_when_left_is_falsy() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              get value() {
+                return 0;
+              },
+              set value(v) {
+                setterCalls += 1;
+              },
+            };
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj.value &&= rhs();
+            document.getElementById('result').textContent = setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:0")?;
+    Ok(())
+}
+
+#[test]
+fn logical_and_assignment_evaluates_property_reference_once() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let keyCalls = 0;
+            let getterCalls = 0;
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              _value: 1,
+              get value() {
+                getterCalls += 1;
+                return this._value;
+              },
+              set value(v) {
+                setterCalls += 1;
+                this._value = v;
+              },
+            };
+            function key() {
+              keyCalls += 1;
+              return 'value';
+            }
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj[key()] &&= rhs();
+            document.getElementById('result').textContent =
+              obj._value + ':' + keyCalls + ':' + getterCalls + ':' + setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:1:1:1:1")?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_assignment_short_circuits_for_const_and_rhs_evaluation() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = 1;
+            let y = 0;
+            let marker = '';
+            function rhs(label) {
+              marker += label;
+              return 2;
+            }
+
+            x ||= rhs('x');
+            y ||= rhs('y');
+
+            document.getElementById('result').textContent = x + ':' + y + ':' + marker;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:2:y")?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_assignment_skips_setter_when_left_is_truthy() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              get value() {
+                return 1;
+              },
+              set value(v) {
+                setterCalls += 1;
+              },
+            };
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj.value ||= rhs();
+            document.getElementById('result').textContent = setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:0")?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_assignment_evaluates_property_reference_once() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let keyCalls = 0;
+            let getterCalls = 0;
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              _value: 0,
+              get value() {
+                getterCalls += 1;
+                return this._value;
+              },
+              set value(v) {
+                setterCalls += 1;
+                this._value = v;
+              },
+            };
+            function key() {
+              keyCalls += 1;
+              return 'value';
+            }
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj[key()] ||= rhs();
+            document.getElementById('result').textContent =
+              obj._value + ':' + keyCalls + ':' + getterCalls + ':' + setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:1:1:1:1")?;
+    Ok(())
+}
+
+#[test]
 fn destructuring_assignment_for_array_and_object_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2222,28 +2693,226 @@ fn in_operator_works_with_query_selector_all_indexes() -> Result<()> {
 }
 
 #[test]
-fn instanceof_operator_works_with_node_membership_and_identity() -> Result<()> {
+fn in_operator_handles_arrays_objects_and_prototype_chain() -> Result<()> {
     let html = r#"
-        <div id='a'>A</div>
-        <div id='b'>B</div>
         <button id='btn'>run</button>
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            const a_node = document.getElementById('a');
-            const b_node = document.getElementById('b');
-            const a_only = document.querySelectorAll('#a');
-            const same = a_node instanceof a_node;
-            const member = a_node instanceof a_only;
-            const other = b_node instanceof a_only;
-            document.getElementById('result').textContent = same + ':' + member + ':' + other;
+            const trees = ['redwood', 'bay', 'cedar', 'oak', 'maple'];
+            const a0 = 0 in trees;
+            const a3 = 3 in trees;
+            const a6 = 6 in trees;
+            const av = 'bay' in trees;
+            const al = 'length' in trees;
+
+            const car = { make: 'Honda', model: 'Accord', year: 1998 };
+            const makeBefore = 'make' in car;
+            delete car.make;
+            const makeAfterDelete = 'make' in car;
+            car.make = undefined;
+            const makeAfterUndefined = 'make' in car;
+
+            const proto = { shared: 1 };
+            const child = { __proto__: proto };
+            const inherited = 'shared' in child;
+
+            document.getElementById('result').textContent =
+              a0 + ':' + a3 + ':' + a6 + ':' + av + ':' + al + ':' +
+              makeBefore + ':' + makeAfterDelete + ':' + makeAfterUndefined + ':' + inherited;
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "true:true:false")?;
+    h.assert_text("#result", "true:true:false:false:true:true:false:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn in_operator_requires_object_rhs() {
+    let err = Harness::from_html("<script>const color2 = 'coral'; 'length' in color2;</script>")
+        .expect_err("primitive rhs should fail for in operator");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("in"));
+            assert!(msg.contains("object"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn in_operator_supports_string_wrapper_objects() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const color1 = new String('green');
+            const hasLength = 'length' in color1;
+            const hasIndex = 0 in color1;
+            document.getElementById('result').textContent = hasLength + ':' + hasIndex;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_uses_constructor_prototype_chain_for_functions_and_classes() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function Car() {}
+            class A {}
+            class B extends A {}
+
+            const auto = new Car();
+            const o1 = new A();
+            const o2 = new B();
+            const disguised = { __proto__: Car.prototype };
+
+            document.getElementById('result').textContent =
+              (auto instanceof Car) + ':' +
+              (o1 instanceof A) + ':' +
+              (o1 instanceof B) + ':' +
+              (o2 instanceof A) + ':' +
+              (o2 instanceof B) + ':' +
+              (disguised instanceof Car);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:false:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_uses_symbol_has_instance_when_defined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const checker = {};
+            checker[Symbol.hasInstance] = function (obj) {
+              return obj && obj.flag === true;
+            };
+
+            const ok = ({ flag: true }) instanceof checker;
+            const ng = ({ flag: false }) instanceof checker;
+            document.getElementById('result').textContent = ok + ':' + ng;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_with_string_wrapper_objects_matches_constructor() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const literalString = 'This is a literal string';
+            const stringObject = new String('String created with constructor');
+            document.getElementById('result').textContent =
+              (literalString instanceof String) + ':' +
+              (stringObject instanceof String);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "false:true")?;
+    Ok(())
+}
+
+#[test]
+fn instanceof_rejects_non_object_right_hand_side() {
+    let err = Harness::from_html("<script>1 instanceof 1;</script>")
+        .expect_err("primitive rhs should fail for instanceof");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("instanceof"));
+            assert!(msg.contains("object"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn instanceof_rejects_non_callable_right_hand_side_object() {
+    let html = r#"
+        <div id='a'>A</div>
+        <script>
+          const aNode = document.getElementById('a');
+          const list = document.querySelectorAll('#a');
+          aNode instanceof list;
+        </script>
+        "#;
+    let err = Harness::from_html(html).expect_err("non-callable rhs object should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("instanceof"));
+            assert!(msg.contains("callable"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn instanceof_rejects_non_callable_symbol_has_instance() {
+    let html = r#"
+        <script>
+          const rhs = {};
+          rhs[Symbol.hasInstance] = 1;
+          ({}) instanceof rhs;
+        </script>
+        "#;
+    let err = Harness::from_html(html).expect_err("@@hasInstance must be callable");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("hasInstance"));
+            assert!(msg.contains("callable"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn instanceof_rejects_non_object_prototype() -> Result<()> {
+    let html = r#"
+        <script>
+          function C() {}
+          C.prototype = 1;
+          ({}) instanceof C;
+        </script>
+        "#;
+    let err = Harness::from_html(html).expect_err("prototype must be object");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("prototype"));
+            assert!(msg.contains("object"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
     Ok(())
 }
 

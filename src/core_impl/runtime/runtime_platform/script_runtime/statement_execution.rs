@@ -2107,6 +2107,17 @@ impl Harness {
                             let previous = env.get(name).cloned().ok_or_else(|| {
                                 Error::ScriptRuntime(format!("unknown variable: {name}"))
                             })?;
+                            let should_assign = match op {
+                                VarAssignOp::LogicalAnd => previous.truthy(),
+                                VarAssignOp::LogicalOr => !previous.truthy(),
+                                VarAssignOp::Nullish => {
+                                    matches!(&previous, Value::Null | Value::Undefined)
+                                }
+                                _ => true,
+                            };
+                            if !should_assign {
+                                continue;
+                            }
                             self.ensure_binding_is_mutable(env, name)?;
 
                             let next = match op {
@@ -2208,22 +2219,17 @@ impl Harness {
                             })?;
                             self.ensure_binding_is_mutable(env, name)?;
                             let next = match previous {
-                                Value::Number(value) => {
-                                    if let Some(sum) = value.checked_add(i64::from(*delta)) {
-                                        Value::Number(sum)
-                                    } else {
-                                        Value::Float((value as f64) + f64::from(*delta))
-                                    }
-                                }
-                                Value::Float(value) => Value::Float(value + f64::from(*delta)),
                                 Value::BigInt(value) => {
                                     Value::BigInt(value + JsBigInt::from(*delta))
                                 }
-                                _ => {
-                                    return Err(Error::ScriptRuntime(format!(
-                                        "cannot apply update operator to '{}'",
-                                        name
-                                    )));
+                                Value::Symbol(_) => {
+                                    return Err(Error::ScriptRuntime(
+                                        "Cannot convert a Symbol value to a number".into(),
+                                    ));
+                                }
+                                other => {
+                                    let numeric = Self::coerce_number_for_global(&other);
+                                    Self::number_value(numeric + f64::from(*delta))
                                 }
                             };
                             env.insert(name.clone(), next.clone());
@@ -2379,10 +2385,16 @@ impl Harness {
                                 self.sync_global_binding_if_needed(env, rest_name, &next);
                             }
                         }
-                        Stmt::ObjectAssign { target, path, expr } => {
+                        Stmt::ObjectAssign {
+                            target,
+                            path,
+                            op,
+                            expr,
+                        } => {
                             self.execute_object_assignment_stmt(
                                 target,
                                 path,
+                                *op,
                                 expr,
                                 env,
                                 event_param,
@@ -2434,30 +2446,53 @@ impl Harness {
                                 }
                             }
                         }
-                        Stmt::DomAssign { target, prop, expr } => {
+                        Stmt::DomAssign {
+                            target,
+                            prop,
+                            op,
+                            expr,
+                        } => {
+                            if matches!(
+                                op,
+                                VarAssignOp::LogicalAnd | VarAssignOp::LogicalOr | VarAssignOp::Nullish
+                            ) {
+                                let previous = self.eval_expr(
+                                    &Expr::DomRead {
+                                        target: target.clone(),
+                                        prop: prop.clone(),
+                                    },
+                                    env,
+                                    event_param,
+                                    event,
+                                )?;
+                                let should_assign = match op {
+                                    VarAssignOp::LogicalAnd => previous.truthy(),
+                                    VarAssignOp::LogicalOr => !previous.truthy(),
+                                    VarAssignOp::Nullish => {
+                                        matches!(&previous, Value::Null | Value::Undefined)
+                                    }
+                                    _ => true,
+                                };
+                                if !should_assign {
+                                    continue;
+                                }
+                            }
+
                             let value = self.eval_expr(expr, env, event_param, event)?;
                             if let DomQuery::Var(name) = target {
                                 if let Some(key) = Self::object_key_from_dom_prop(prop) {
-                                    if let Some(Value::Object(entries)) = env.get(name) {
-                                        Self::object_set_entry(
-                                            &mut entries.borrow_mut(),
-                                            key.to_string(),
-                                            value.clone(),
-                                        );
-                                        continue;
-                                    }
-                                    if let Some(Value::Function(function)) = env.get(name) {
-                                        let entries = self
-                                            .script_runtime
-                                            .function_public_properties
-                                            .entry(function.function_id)
-                                            .or_default();
-                                        Self::object_set_entry(
-                                            entries,
-                                            key.to_string(),
-                                            value.clone(),
-                                        );
-                                        continue;
+                                    if let Some(receiver) = env.get(name).cloned() {
+                                        if !matches!(receiver, Value::Node(_) | Value::NodeList(_)) {
+                                            self.set_object_assignment_property(
+                                                &receiver,
+                                                &Value::String(key.to_string()),
+                                                value.clone(),
+                                                name,
+                                                env,
+                                                event,
+                                            )?;
+                                            continue;
+                                        }
                                     }
                                 }
                             }

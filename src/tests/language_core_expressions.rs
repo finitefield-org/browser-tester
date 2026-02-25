@@ -2026,6 +2026,250 @@ fn module_import_json_with_attribute_works() -> Result<()> {
 }
 
 #[test]
+fn import_meta_url_exposes_module_url_and_query_params() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          const currentUrl = import.meta.url;
+          const queryValue = new URL(import.meta.url).searchParams.get("someURLInfo");
+          window.importMetaInfo = currentUrl + ':' + String(queryValue);
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.importMetaInfo;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url(
+        "https://app.local/modules/index.html?someURLInfo=5#hash",
+        html,
+    )?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/modules/index.html?someURLInfo=5#hash:5",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn import_meta_resolve_resolves_against_current_module() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          window.importMetaResolved = import.meta.resolve("./utils/helper.js");
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.importMetaResolved;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/app/main/page.html", html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "https://app.local/app/main/utils/helper.js")?;
+    Ok(())
+}
+
+#[test]
+fn import_meta_url_uses_imported_module_specifier() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          import importedModuleUrl from "data:text/javascript,export%20default%20import.meta.url%3B";
+          window.importedModuleMetaUrl = importedModuleUrl;
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.importedModuleMetaUrl;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "data:text/javascript,export%20default%20import.meta.url%3B",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn property_access_named_import_meta_is_not_import_meta_syntax() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const holder = { import: { meta: 7 } };
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = String(holder.import.meta);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
+fn import_meta_is_rejected_in_classic_script() {
+    let err = Harness::from_html("<script>window.importMeta = import.meta.url;</script>")
+        .expect_err("import.meta in classic script should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(msg.contains("module scripts")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn dynamic_import_works_in_classic_script_with_computed_specifier() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', async () => {
+            const specifier =
+              "data:text/javascript,export%20default%204%3B%20export%20const%20named%20%3D%207%3B";
+            const ns = await import(specifier);
+            document.getElementById('result').textContent =
+              String(ns.default) + ':' + String(ns.named);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "4:7")?;
+    Ok(())
+}
+
+#[test]
+fn dynamic_import_supports_side_effect_only_usage() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', async () => {
+            await import("data:text/javascript,window.dynamicImportSideEffect%20%3D%20%22yes%22%3B");
+            document.getElementById('result').textContent = String(window.dynamicImportSideEffect);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "yes")?;
+    Ok(())
+}
+
+#[test]
+fn dynamic_import_supports_json_import_attributes() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', async () => {
+            const ns = await import("data:application/json,%7B%22answer%22%3A42%7D", {
+              with: { type: "json" },
+            });
+            document.getElementById('result').textContent = String(ns.default.answer);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "42")?;
+    Ok(())
+}
+
+#[test]
+fn dynamic_import_rejection_is_async_not_sync_throw() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let syncState = 'not-thrown';
+            try {
+              import('/missing-dynamic-module.js')
+                .then(() => {
+                  document.getElementById('result').textContent = syncState + ':resolved';
+                })
+                .catch((err) => {
+                  const isRejected = String(err).includes('module source mock not found');
+                  document.getElementById('result').textContent =
+                    syncState + ':' + (isRejected ? 'rejected' : 'other');
+                });
+            } catch (err) {
+              syncState = 'thrown';
+              document.getElementById('result').textContent = syncState;
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "not-thrown:rejected")?;
+    Ok(())
+}
+
+#[test]
+fn dynamic_import_reuses_cached_module_namespace_object() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', async () => {
+            const specifier = "data:text/javascript,export%20const%20value%20%3D%201%3B";
+            const first = await import(specifier);
+            const second = await import(specifier);
+            document.getElementById('result').textContent =
+              String(first === second) + ':' + Object.keys(first).join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:value")?;
+    Ok(())
+}
+
+#[test]
+fn dynamic_import_expression_statement_is_accepted_in_module_script() -> Result<()> {
+    let html = r#"
+        <script type='module'>
+          import("data:text/javascript,window.dynamicModuleImportRan%20%3D%20%22ok%22%3B")
+            .then(() => {
+              window.dynamicModuleImportResult = String(window.dynamicModuleImportRan);
+            });
+        </script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = window.dynamicModuleImportResult;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
 fn import_is_rejected_in_classic_script() {
     let err = Harness::from_html("<script>import value from './dep.js';</script>")
         .expect_err("import in classic script should fail");
@@ -4251,6 +4495,243 @@ fn logical_and_relational_and_strict_operators_work() -> Result<()> {
 }
 
 #[test]
+fn logical_and_operator_returns_first_falsy_or_last_truthy_and_short_circuits() -> Result<()> {
+    let html = r#"
+        <p id='log'></p>
+        <p id='result'></p>
+        <script>
+          function sideEffect(value) {
+            const log = document.getElementById('log');
+            log.textContent = log.textContent + value;
+            return value;
+          }
+          function format(value) {
+            if (typeof value === 'number' && Number.isNaN(value)) return 'NaN';
+            if (value === '') return '<empty>';
+            return String(value);
+          }
+
+          const out = [
+            format(true && true),
+            format(true && false),
+            format(false && true),
+            format(false && (3 === 4)),
+            format("Cat" && "Dog"),
+            format(false && "Cat"),
+            format("Cat" && false),
+            format("" && false),
+            format(false && ""),
+            format(NaN && "x"),
+            format(0 && sideEffect('rhs')),
+            format(1 && sideEffect('rhs')),
+            document.getElementById('log').textContent,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,false,false,false,Dog,false,false,<empty>,false,NaN,0,rhs,rhs",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_operator_returns_first_truthy_or_last_falsy_and_short_circuits() -> Result<()> {
+    let html = r#"
+        <p id='log'></p>
+        <p id='result'></p>
+        <script>
+          function sideEffect(value) {
+            const log = document.getElementById('log');
+            log.textContent = log.textContent + value;
+            return value;
+          }
+          function format(value) {
+            if (typeof value === 'number' && Number.isNaN(value)) return 'NaN';
+            if (value === '') return '<empty>';
+            if (value && typeof value === 'object') return 'object';
+            return String(value);
+          }
+
+          const obj = { ok: 1 };
+          const out = [
+            format(true || true),
+            format(false || true),
+            format(true || false),
+            format(false || (3 === 4)),
+            format("Cat" || "Dog"),
+            format(false || "Cat"),
+            format("Cat" || false),
+            format("" || false),
+            format(false || ""),
+            format(false || obj),
+            format(NaN || "x"),
+            format(0 || sideEffect('rhs')),
+            format(1 || sideEffect('skip')),
+            document.getElementById('log').textContent,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,true,true,false,Cat,Cat,Cat,false,<empty>,object,x,rhs,1,rhs",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_operator_precedence_and_grouping_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            true || false && false,
+            (true || false) && false,
+            false || true && false,
+            (false || true) && false,
+          ];
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true,false,false,false")?;
+    Ok(())
+}
+
+#[test]
+fn logical_and_operator_has_higher_precedence_than_or() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            true || false && false,
+            true && (false || false),
+            (2 === 3) || (4 < 0) && (1 === 1),
+          ];
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true,false,false")?;
+    Ok(())
+}
+
+#[test]
+fn logical_not_operator_negates_truthiness_and_supports_double_not_coercion() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const a = 3;
+          const b = -2;
+          const out = [
+            !(a > 0 || b > 0),
+            !true,
+            !false,
+            !'',
+            !'Cat',
+            !null,
+            !NaN,
+            !0,
+            !undefined,
+            !!true,
+            !!{},
+            !!false,
+            !!'',
+            !!Boolean(false),
+          ];
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "false,false,true,true,false,true,true,true,true,true,true,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn less_than_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 < 3,
+            3 < 3,
+            3n < 5,
+            "aa" < "ab",
+            "a" < "b",
+            "a" < "a",
+            "a" < "3",
+            "5" < 3,
+            "3" < 3,
+            "3" < 5,
+            "hello" < 5,
+            5 < "hello",
+            "5" < 3n,
+            "3" < 5n,
+            5n < 3,
+            3 < 5n,
+            true < false,
+            false < true,
+            0 < true,
+            true < 1,
+            null < 0,
+            null < 1,
+            undefined < 3,
+            3 < undefined,
+            3 < NaN,
+            NaN < 3,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "false,false,true,true,true,false,false,false,false,true,false,false,false,true,false,true,false,true,true,false,false,true,false,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn less_than_operator_handles_bigint_string_non_integral_edge_cases() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            "1.5" < 2n,
+            2n < "2.5",
+            "2e0" < 3n,
+            1n < "001",
+            1n < " 2 ",
+            " 2 " < 3n,
+            1n < "not-a-bigint",
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "false,false,false,false,true,true,false")?;
+    Ok(())
+}
+
+#[test]
 fn greater_than_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -4335,6 +4816,89 @@ fn greater_than_or_equal_operator_handles_number_string_bigint_and_special_value
     h.assert_text(
         "#result",
         "true,true,false,true,false,true,true,true,true,false,false,false,true,true,false,true,true,false,true,true,true,true,false,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn less_than_or_equal_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 <= 3,
+            3 <= 3,
+            3n <= 5,
+            "aa" <= "ab",
+            "a" <= "b",
+            "a" <= "a",
+            "a" <= "3",
+            "5" <= 3,
+            "3" <= 3,
+            "3" <= 5,
+            "hello" <= 5,
+            5 <= "hello",
+            "5" <= 3n,
+            "3" <= 5n,
+            5n <= 3,
+            3 <= 3n,
+            3 <= 5n,
+            true <= false,
+            true <= true,
+            false <= true,
+            true <= 0,
+            true <= 1,
+            null <= 0,
+            1 <= null,
+            undefined <= 3,
+            3 <= undefined,
+            3 <= NaN,
+            NaN <= 3,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "false,true,true,true,true,true,false,false,true,true,false,false,false,true,false,true,true,false,true,true,false,true,true,false,false,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn less_than_or_equal_operator_special_equivalence_edge_cases_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const sameObject = {};
+          const leftDate = new Date(0);
+          const rightDate = new Date(0);
+          const badBigIntString = 'not-a-bigint';
+
+          const out = [
+            null <= 0,
+            (null < 0) || (null == 0),
+            undefined <= null,
+            undefined == null,
+            sameObject <= sameObject,
+            sameObject == sameObject,
+            leftDate <= rightDate,
+            (leftDate < rightDate) || (leftDate == rightDate),
+            1n <= badBigIntString,
+            1n > badBigIntString,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,false,false,true,false,true,true,false,false,false",
     )?;
     Ok(())
 }
