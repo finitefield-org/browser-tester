@@ -1,6 +1,76 @@
 use super::*;
 
 impl Harness {
+    fn delete_property_from_value(&mut self, value: &Value, key: &str) -> Result<bool> {
+        match value {
+            Value::Null | Value::Undefined => {
+                Err(Error::ScriptRuntime("value is not an object".into()))
+            }
+            Value::Object(entries) => {
+                Self::delete_object_property_entries(&mut entries.borrow_mut(), key);
+                Ok(true)
+            }
+            Value::Array(array) => {
+                if let Ok(index) = key.parse::<usize>() {
+                    let has_index = {
+                        let mut values = array.borrow_mut();
+                        let has_index = index < values.len();
+                        if has_index {
+                            values[index] = Value::Undefined;
+                        }
+                        has_index
+                    };
+                    if has_index {
+                        Self::mark_array_hole(array, index);
+                    }
+                    return Ok(true);
+                }
+                Self::delete_object_property_entries(&mut array.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::Map(map) => {
+                Self::delete_object_property_entries(&mut map.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::WeakMap(weak_map) => {
+                Self::delete_object_property_entries(&mut weak_map.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::Set(set) => {
+                Self::delete_object_property_entries(&mut set.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::WeakSet(weak_set) => {
+                Self::delete_object_property_entries(&mut weak_set.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::RegExp(regex) => {
+                Self::delete_object_property_entries(&mut regex.borrow_mut().properties, key);
+                Ok(true)
+            }
+            Value::Node(node) => {
+                self.dom_runtime
+                    .node_expando_props
+                    .remove(&(*node, key.to_string()));
+                Ok(true)
+            }
+            _ => Ok(true),
+        }
+    }
+
+    fn delete_member_expr_property(
+        &mut self,
+        receiver: &Value,
+        key: String,
+        optional: bool,
+    ) -> Result<Value> {
+        if optional && matches!(receiver, Value::Null | Value::Undefined) {
+            return Ok(Value::Bool(true));
+        }
+        let deleted = self.delete_property_from_value(receiver, &key)?;
+        Ok(Value::Bool(deleted))
+    }
+
     pub(crate) fn eval_expr_events_unary_control(
         &mut self,
         expr: &Expr,
@@ -120,12 +190,81 @@ impl Harness {
                 self.eval_expr(inner, env, event_param, event)?;
                 Ok(Value::Undefined)
             }
-            Expr::Delete(inner) => match inner.as_ref() {
+            Expr::Delete(inner) => {
+                match inner.as_ref() {
                 Expr::Var(name) => Ok(Value::Bool(!env.contains_key(name))),
+                Expr::ObjectGet { target, key } => {
+                    let value = env.get(target).cloned().ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unknown variable: {}", target))
+                    })?;
+                    let deleted = self.delete_property_from_value(&value, key)?;
+                    Ok(Value::Bool(deleted))
+                }
+                Expr::ArrayIndex { target, index } => {
+                    let value = env.get(target).cloned().ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unknown variable: {}", target))
+                    })?;
+                    let index_value = self.eval_expr(index, env, event_param, event)?;
+                    let key = self.property_key_to_storage_key(&index_value);
+                    let deleted = self.delete_property_from_value(&value, &key)?;
+                    Ok(Value::Bool(deleted))
+                }
+                Expr::ObjectPathGet { target, path } => {
+                    let Some(mut receiver) = env.get(target).cloned() else {
+                        return Err(Error::ScriptRuntime(format!("unknown variable: {}", target)));
+                    };
+                    if path.is_empty() {
+                        return Ok(Value::Bool(true));
+                    }
+                    for key in path.iter().take(path.len().saturating_sub(1)) {
+                        receiver = self.object_property_from_value(&receiver, key)?;
+                    }
+                    let final_key = path
+                        .last()
+                        .ok_or_else(|| Error::ScriptRuntime("object path cannot be empty".into()))?;
+                    let deleted = self.delete_property_from_value(&receiver, final_key)?;
+                    Ok(Value::Bool(deleted))
+                }
+                Expr::MemberGet {
+                    target,
+                    member,
+                    optional,
+                } => {
+                    if matches!(target.as_ref(), Expr::Var(name) if name == "super") {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
+                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    self.delete_member_expr_property(&receiver, member.clone(), *optional)
+                }
+                Expr::IndexGet {
+                    target,
+                    index,
+                    optional,
+                } => {
+                    if matches!(target.as_ref(), Expr::Var(name) if name == "super") {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
+                    let receiver = self.eval_expr(target, env, event_param, event)?;
+                    let index_value = self.eval_expr(index, env, event_param, event)?;
+                    let key = match index_value {
+                        Value::Number(value) => value.to_string(),
+                        Value::BigInt(value) => value.to_string(),
+                        Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                            format!("{:.0}", value)
+                        }
+                        other => self.property_key_to_storage_key(&other),
+                    };
+                    self.delete_member_expr_property(&receiver, key, *optional)
+                }
                 _ => {
                     self.eval_expr(inner, env, event_param, event)?;
                     Ok(Value::Bool(true))
                 }
+            }
             },
             Expr::TypeOf(inner) => {
                 let js_type = match inner.as_ref() {

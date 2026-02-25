@@ -1122,12 +1122,12 @@ pub(crate) enum Stmt {
         delta: i8,
     },
     ArrayDestructureAssign {
-        targets: Vec<Option<String>>,
+        pattern: ArrayDestructurePattern,
         expr: Expr,
         decl_kind: Option<VarDeclKind>,
     },
     ObjectDestructureAssign {
-        bindings: Vec<(String, String)>,
+        pattern: ObjectDestructurePattern,
         expr: Expr,
         decl_kind: Option<VarDeclKind>,
     },
@@ -1299,6 +1299,31 @@ pub(crate) enum Stmt {
         arg: Option<Expr>,
     },
     Expr(Expr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ArrayDestructureBinding {
+    pub(crate) target: String,
+    pub(crate) default: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ArrayDestructurePattern {
+    pub(crate) items: Vec<Option<ArrayDestructureBinding>>,
+    pub(crate) rest: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ObjectDestructureBinding {
+    pub(crate) source: String,
+    pub(crate) target: String,
+    pub(crate) default: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ObjectDestructurePattern {
+    pub(crate) bindings: Vec<ObjectDestructureBinding>,
+    pub(crate) rest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

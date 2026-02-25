@@ -828,6 +828,7 @@ impl Harness {
                         }
                         elements[index] = value;
                     }
+                    Self::clear_array_hole(array_values, index);
                     self.sync_param_after_arguments_write(
                         env,
                         array_values,

@@ -4,6 +4,60 @@ impl Harness {
     const EXEC_STMTS_STACK_RED_ZONE: usize = 64 * 1024;
     const EXEC_STMTS_STACK_SIZE: usize = 32 * 1024 * 1024;
 
+    fn array_destructure_binding_names(pattern: &ArrayDestructurePattern) -> Vec<String> {
+        pattern
+            .items
+            .iter()
+            .flatten()
+            .map(|binding| binding.target.clone())
+            .chain(pattern.rest.iter().cloned())
+            .collect()
+    }
+
+    fn object_destructure_binding_names(pattern: &ObjectDestructurePattern) -> Vec<String> {
+        pattern
+            .bindings
+            .iter()
+            .map(|binding| binding.target.clone())
+            .chain(pattern.rest.iter().cloned())
+            .collect()
+    }
+
+    fn enumerable_own_keys_for_object_destructure(value: &Value) -> Vec<String> {
+        match value {
+            Value::Object(entries) => entries
+                .borrow()
+                .iter()
+                .filter(|(key, _)| !Self::is_internal_object_key(key))
+                .map(|(key, _)| key.clone())
+                .collect(),
+            Value::Array(values) => {
+                let values = values.borrow();
+                let mut keys = values
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, _)| {
+                        (!Self::array_index_is_hole(&values, index)).then(|| index.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                keys.extend(
+                    values
+                        .properties
+                        .iter()
+                        .filter(|(key, _)| !Self::is_internal_object_key(key))
+                        .map(|(key, _)| key.clone()),
+                );
+                keys
+            }
+            Value::String(text) => text
+                .chars()
+                .enumerate()
+                .map(|(index, _)| index.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub(crate) fn execute_stmts(
         &mut self,
         stmts: &[Stmt],
@@ -47,27 +101,25 @@ impl Harness {
             Stmt::ClassDecl { name, .. } => vec![(name.clone(), true)],
             Stmt::ExportDecl { declaration, .. } => Self::direct_decl_binding_kinds(declaration),
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(kind),
                 ..
             } => {
                 let is_lexical = !matches!(kind, VarDeclKind::Var);
-                targets
-                    .iter()
-                    .flatten()
-                    .cloned()
+                Self::array_destructure_binding_names(pattern)
+                    .into_iter()
                     .map(|name| (name, is_lexical))
                     .collect()
             }
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(kind),
                 ..
             } => {
                 let is_lexical = !matches!(kind, VarDeclKind::Var);
-                bindings
-                    .iter()
-                    .map(|(_, target_name)| (target_name.clone(), is_lexical))
+                Self::object_destructure_binding_names(pattern)
+                    .into_iter()
+                    .map(|target_name| (target_name, is_lexical))
                     .collect()
             }
             _ => Vec::new(),
@@ -83,15 +135,15 @@ impl Harness {
             } => vec![name.clone()],
             Stmt::ClassDecl { name, .. } => vec![name.clone()],
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(VarDeclKind::Let | VarDeclKind::Const),
                 ..
-            } => targets.iter().flatten().cloned().collect(),
+            } => Self::array_destructure_binding_names(pattern),
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(VarDeclKind::Let | VarDeclKind::Const),
                 ..
-            } => bindings.iter().map(|(_, target)| target.clone()).collect(),
+            } => Self::object_destructure_binding_names(pattern),
             Stmt::ExportDecl { declaration, .. } => Self::direct_tdz_binding_names(declaration),
             _ => Vec::new(),
         }
@@ -123,21 +175,21 @@ impl Harness {
                 out.insert(name.clone());
             }
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(VarDeclKind::Var),
                 ..
             } => {
-                for name in targets.iter().flatten() {
+                for name in Self::array_destructure_binding_names(pattern) {
                     out.insert(name.clone());
                 }
             }
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(VarDeclKind::Var),
                 ..
             } => {
-                for (_, target) in bindings {
-                    out.insert(target.clone());
+                for target in Self::object_destructure_binding_names(pattern) {
+                    out.insert(target);
                 }
             }
             Stmt::ExportDecl { declaration, .. } => {
@@ -241,15 +293,15 @@ impl Harness {
                 ..
             } => vec![name.clone()],
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(VarDeclKind::Let),
                 ..
-            } => targets.iter().flatten().cloned().collect(),
+            } => Self::array_destructure_binding_names(pattern),
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(VarDeclKind::Let),
                 ..
-            } => bindings.iter().map(|(_, target)| target.clone()).collect(),
+            } => Self::object_destructure_binding_names(pattern),
             Stmt::ExportDecl { declaration, .. } => Self::direct_let_decl_names(declaration),
             _ => Vec::new(),
         }
@@ -393,7 +445,7 @@ impl Harness {
         let mut seen = HashSet::new();
         let mut previous = Vec::new();
         for stmt in stmts {
-            let names: Vec<&str> = match stmt {
+            let names: Vec<String> = match stmt {
                 Stmt::ImportDecl {
                     default_binding,
                     namespace_binding,
@@ -402,51 +454,51 @@ impl Harness {
                 } => {
                     let mut names = Vec::new();
                     if let Some(name) = default_binding {
-                        names.push(name.as_str());
+                        names.push(name.clone());
                     }
                     if let Some(name) = namespace_binding {
-                        names.push(name.as_str());
+                        names.push(name.clone());
                     }
-                    names.extend(named_bindings.iter().map(|binding| binding.local.as_str()));
+                    names.extend(named_bindings.iter().map(|binding| binding.local.clone()));
                     names
                 }
                 Stmt::VarDecl { name, kind, .. } => {
                     if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                        vec![name.as_str()]
+                        vec![name.clone()]
                     } else {
                         Vec::new()
                     }
                 }
-                Stmt::ClassDecl { name, .. } => vec![name.as_str()],
-                Stmt::FunctionDecl { name, .. } => vec![name.as_str()],
+                Stmt::ClassDecl { name, .. } => vec![name.clone()],
+                Stmt::FunctionDecl { name, .. } => vec![name.clone()],
                 Stmt::ExportDecl { declaration, .. } => match declaration.as_ref() {
                     Stmt::VarDecl { name, kind, .. } => {
                         if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                            vec![name.as_str()]
+                            vec![name.clone()]
                         } else {
                             Vec::new()
                         }
                     }
-                    Stmt::ClassDecl { name, .. } => vec![name.as_str()],
-                    Stmt::FunctionDecl { name, .. } => vec![name.as_str()],
+                    Stmt::ClassDecl { name, .. } => vec![name.clone()],
+                    Stmt::FunctionDecl { name, .. } => vec![name.clone()],
                     Stmt::ArrayDestructureAssign {
-                        targets,
+                        pattern,
                         decl_kind: Some(kind),
                         ..
                     } => {
                         if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                            targets.iter().flatten().map(String::as_str).collect()
+                            Self::array_destructure_binding_names(pattern)
                         } else {
                             Vec::new()
                         }
                     }
                     Stmt::ObjectDestructureAssign {
-                        bindings,
+                        pattern,
                         decl_kind: Some(kind),
                         ..
                     } => {
                         if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                            bindings.iter().map(|(_, target)| target.as_str()).collect()
+                            Self::object_destructure_binding_names(pattern)
                         } else {
                             Vec::new()
                         }
@@ -454,23 +506,23 @@ impl Harness {
                     _ => Vec::new(),
                 },
                 Stmt::ArrayDestructureAssign {
-                    targets,
+                    pattern,
                     decl_kind: Some(kind),
                     ..
                 } => {
                     if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                        targets.iter().flatten().map(String::as_str).collect()
+                        Self::array_destructure_binding_names(pattern)
                     } else {
                         Vec::new()
                     }
                 }
                 Stmt::ObjectDestructureAssign {
-                    bindings,
+                    pattern,
                     decl_kind: Some(kind),
                     ..
                 } => {
                     if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
-                        bindings.iter().map(|(_, target)| target.as_str()).collect()
+                        Self::object_destructure_binding_names(pattern)
                     } else {
                         Vec::new()
                     }
@@ -478,11 +530,11 @@ impl Harness {
                 _ => Vec::new(),
             };
             for name in names {
-                if seen.insert(name.to_string()) {
+                if seen.insert(name.clone()) {
                     previous.push((
-                        name.to_string(),
-                        env.get(name).cloned(),
-                        self.is_const_binding(env, name),
+                        name.clone(),
+                        env.get(&name).cloned(),
+                        self.is_const_binding(env, &name),
                     ));
                 }
             }
@@ -2179,7 +2231,7 @@ impl Harness {
                             self.sync_global_binding_if_needed(env, name, &next);
                         }
                         Stmt::ArrayDestructureAssign {
-                            targets,
+                            pattern,
                             expr,
                             decl_kind,
                         } => {
@@ -2187,17 +2239,24 @@ impl Harness {
                             let values = self.array_like_values_from_value(&value)?;
                             let is_declaration = decl_kind.is_some();
                             let is_const_decl = matches!(decl_kind, Some(VarDeclKind::Const));
-                            for (index, target_name) in targets.iter().enumerate() {
-                                let Some(target_name) = target_name else {
+                            for (index, binding) in pattern.items.iter().enumerate() {
+                                let Some(binding) = binding else {
                                     continue;
                                 };
+                                let target_name = &binding.target;
                                 if !is_declaration {
                                     self.ensure_binding_initialized(env, target_name)?;
                                 }
                                 if !is_declaration && env.contains_key(target_name) {
                                     self.ensure_binding_is_mutable(env, target_name)?;
                                 }
-                                let next = values.get(index).cloned().unwrap_or(Value::Undefined);
+                                let mut next =
+                                    values.get(index).cloned().unwrap_or(Value::Undefined);
+                                if matches!(next, Value::Undefined) {
+                                    if let Some(default) = &binding.default {
+                                        next = self.eval_expr(default, env, event_param, event)?;
+                                    }
+                                }
                                 env.insert(target_name.clone(), next.clone());
                                 self.sync_arguments_after_param_write(env, target_name, &next);
                                 if is_declaration {
@@ -2213,30 +2272,60 @@ impl Harness {
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
                             }
+                            if let Some(rest_name) = &pattern.rest {
+                                if !is_declaration {
+                                    self.ensure_binding_initialized(env, rest_name)?;
+                                }
+                                if !is_declaration && env.contains_key(rest_name) {
+                                    self.ensure_binding_is_mutable(env, rest_name)?;
+                                }
+                                let rest_values =
+                                    values.into_iter().skip(pattern.items.len()).collect::<Vec<_>>();
+                                let next = Self::new_array_value(rest_values);
+                                env.insert(rest_name.clone(), next.clone());
+                                self.sync_arguments_after_param_write(env, rest_name, &next);
+                                if is_declaration {
+                                    self.set_const_binding(env, rest_name, is_const_decl);
+                                    if decl_kind.is_some_and(|kind| {
+                                        matches!(kind, VarDeclKind::Let | VarDeclKind::Const)
+                                    }) {
+                                        self.mark_tdz_initialized(
+                                            &mut pending_tdz_bindings,
+                                            rest_name,
+                                        );
+                                    }
+                                }
+                                self.sync_global_binding_if_needed(env, rest_name, &next);
+                            }
                         }
                         Stmt::ObjectDestructureAssign {
-                            bindings,
+                            pattern,
                             expr,
                             decl_kind,
                         } => {
-                            let value = self.eval_expr(expr, env, event_param, event)?;
-                            let Value::Object(entries) = value else {
+                            let source = self.eval_expr(expr, env, event_param, event)?;
+                            if matches!(source, Value::Null | Value::Undefined) {
                                 return Err(Error::ScriptRuntime(
                                     "object destructuring source must be an object".into(),
                                 ));
-                            };
-                            let entries = entries.borrow();
+                            }
                             let is_declaration = decl_kind.is_some();
                             let is_const_decl = matches!(decl_kind, Some(VarDeclKind::Const));
-                            for (source_key, target_name) in bindings {
+                            for binding in &pattern.bindings {
+                                let source_key = &binding.source;
+                                let target_name = &binding.target;
                                 if !is_declaration {
                                     self.ensure_binding_initialized(env, target_name)?;
                                 }
                                 if !is_declaration && env.contains_key(target_name) {
                                     self.ensure_binding_is_mutable(env, target_name)?;
                                 }
-                                let next = Self::object_get_entry(&entries, source_key)
-                                    .unwrap_or(Value::Undefined);
+                                let mut next = self.object_property_from_value(&source, source_key)?;
+                                if matches!(next, Value::Undefined) {
+                                    if let Some(default) = &binding.default {
+                                        next = self.eval_expr(default, env, event_param, event)?;
+                                    }
+                                }
                                 env.insert(target_name.clone(), next.clone());
                                 self.sync_arguments_after_param_write(env, target_name, &next);
                                 if is_declaration {
@@ -2251,6 +2340,43 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
+                            }
+                            if let Some(rest_name) = &pattern.rest {
+                                if !is_declaration {
+                                    self.ensure_binding_initialized(env, rest_name)?;
+                                }
+                                if !is_declaration && env.contains_key(rest_name) {
+                                    self.ensure_binding_is_mutable(env, rest_name)?;
+                                }
+                                let excluded = pattern
+                                    .bindings
+                                    .iter()
+                                    .map(|binding| binding.source.clone())
+                                    .collect::<HashSet<_>>();
+                                let mut entries = Vec::new();
+                                for key in Self::enumerable_own_keys_for_object_destructure(&source)
+                                {
+                                    if excluded.contains(&key) {
+                                        continue;
+                                    }
+                                    let value = self.object_property_from_value(&source, &key)?;
+                                    entries.push((key, value));
+                                }
+                                let next = Self::new_object_value(entries);
+                                env.insert(rest_name.clone(), next.clone());
+                                self.sync_arguments_after_param_write(env, rest_name, &next);
+                                if is_declaration {
+                                    self.set_const_binding(env, rest_name, is_const_decl);
+                                    if decl_kind.is_some_and(|kind| {
+                                        matches!(kind, VarDeclKind::Let | VarDeclKind::Const)
+                                    }) {
+                                        self.mark_tdz_initialized(
+                                            &mut pending_tdz_bindings,
+                                            rest_name,
+                                        );
+                                    }
+                                }
+                                self.sync_global_binding_if_needed(env, rest_name, &next);
                             }
                         }
                         Stmt::ObjectAssign { target, path, expr } => {

@@ -342,6 +342,17 @@ impl ObjectValue {
             .map(|(_, value)| value.clone())
     }
 
+    pub(crate) fn delete_entry(&mut self, key: &str) -> bool {
+        let Some(index) = self.index_by_key.remove(key) else {
+            return false;
+        };
+        self.entries.remove(index);
+        for (offset, (entry_key, _)) in self.entries.iter().enumerate().skip(index) {
+            self.index_by_key.insert(entry_key.clone(), offset);
+        }
+        true
+    }
+
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.index_by_key.clear();

@@ -278,6 +278,13 @@ pub(crate) fn parse_single_statement_with_flags(
         return Ok(parsed);
     }
 
+    // Comma has the lowest precedence. If a statement contains a top-level
+    // comma, it must be parsed as a sequence expression instead of being
+    // treated as a single assignment statement.
+    if split_top_level_by_char(stmt, b',').len() > 1 {
+        return Ok(Stmt::Expr(parse_expr(stmt)?));
+    }
+
     if let Some(parsed) = parse_destructure_assign(stmt)? {
         return Ok(parsed);
     }
@@ -779,23 +786,36 @@ pub(crate) fn export_bindings_from_declaration_stmt(stmt: &Stmt) -> Vec<(String,
         Stmt::FunctionDecl { name, .. } => vec![(name.clone(), name.clone())],
         Stmt::ClassDecl { name, .. } => vec![(name.clone(), name.clone())],
         Stmt::ArrayDestructureAssign {
-            targets,
+            pattern,
             decl_kind: Some(_),
             ..
-        } => targets
-            .iter()
-            .flatten()
-            .cloned()
-            .map(|name| (name.clone(), name))
-            .collect(),
+        } => {
+            let mut out = pattern
+                .items
+                .iter()
+                .flatten()
+                .map(|binding| (binding.target.clone(), binding.target.clone()))
+                .collect::<Vec<_>>();
+            if let Some(rest) = &pattern.rest {
+                out.push((rest.clone(), rest.clone()));
+            }
+            out
+        }
         Stmt::ObjectDestructureAssign {
-            bindings,
+            pattern,
             decl_kind: Some(_),
             ..
-        } => bindings
-            .iter()
-            .map(|(_, target)| (target.clone(), target.clone()))
-            .collect(),
+        } => {
+            let mut out = pattern
+                .bindings
+                .iter()
+                .map(|binding| (binding.target.clone(), binding.target.clone()))
+                .collect::<Vec<_>>();
+            if let Some(rest) = &pattern.rest {
+                out.push((rest.clone(), rest.clone()));
+            }
+            out
+        }
         _ => Vec::new(),
     }
 }

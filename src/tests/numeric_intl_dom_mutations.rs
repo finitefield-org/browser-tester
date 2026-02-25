@@ -859,6 +859,369 @@ fn addition_assignment_reads_getter_once_for_property_reference() -> Result<()> 
 }
 
 #[test]
+fn division_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 3;
+            a /= 2;
+            const first = a;
+            a /= 0;
+            const second = a;
+            a /= 'hello';
+            const third = String(a);
+
+            let bar = 5;
+            bar /= '2';
+            const fourth = bar;
+            bar /= 'foo';
+            const fifth = String(bar);
+
+            let big = 3n;
+            big /= 2n;
+            const big1 = big;
+            big /= 2n;
+            const big2 = big;
+
+            document.getElementById('result').textContent =
+              first + '|' + second + '|' + third + '|' + fourth + '|' + fifth + '|' + big1 + '|' + big2;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1.5|Infinity|NaN|2.5|NaN|1|0")?;
+    Ok(())
+}
+
+#[test]
+fn division_assignment_mixed_bigint_and_zero_divisor_report_errors() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='zero'>zero</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 3n;
+            x /= 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 2;
+            y /= 1n;
+          });
+          document.getElementById('zero').addEventListener('click', () => {
+            let z = 3n;
+            z /= 0n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("mixed BigInt/Number division assignment should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed division assignment error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("mixed Number/BigInt division assignment should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed division assignment error: {other:?}"),
+    }
+
+    let zero = h
+        .click("#zero")
+        .expect_err("BigInt division assignment by zero should fail");
+    match zero {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("division by zero")),
+        other => panic!("unexpected BigInt division assignment error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn division_assignment_reads_getter_once_for_property_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 8,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value /= 2;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "8|1")?;
+    Ok(())
+}
+
+#[test]
+fn exponentiation_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 3;
+            a **= 2;
+            const first = a;
+            a **= 0;
+            const second = a;
+            a **= 'hello';
+            const third = String(a);
+
+            let bar = 5;
+            bar **= 2;
+            const fourth = bar;
+
+            let baz = 5;
+            baz **= 'foo';
+            const fifth = String(baz);
+
+            let big = 3n;
+            big **= 2n;
+            const big1 = big;
+
+            document.getElementById('result').textContent =
+              first + '|' + second + '|' + third + '|' + fourth + '|' + fifth + '|' + big1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "9|1|NaN|25|NaN|9")?;
+    Ok(())
+}
+
+#[test]
+fn exponentiation_assignment_mixed_bigint_and_invalid_exponent_report_errors() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='neg'>neg</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 3n;
+            x **= 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 2;
+            y **= 1n;
+          });
+          document.getElementById('neg').addEventListener('click', () => {
+            let z = 2n;
+            z **= -1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("mixed BigInt/Number exponentiation assignment should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed exponentiation assignment error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("mixed Number/BigInt exponentiation assignment should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed exponentiation assignment error: {other:?}"),
+    }
+
+    let neg = h
+        .click("#neg")
+        .expect_err("negative BigInt exponent assignment should fail");
+    match neg {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("BigInt exponent must be non-negative"))
+        }
+        other => panic!("unexpected BigInt exponentiation assignment error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn exponentiation_assignment_reads_getter_once_for_property_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 3,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value **= 2;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3|1")?;
+    Ok(())
+}
+
+#[test]
+fn equality_operator_handles_core_loose_comparison_rules() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 1 == 1;
+            const b = 'hello' == 'hello';
+            const c = '1' == 1;
+            const d = 1 == '1';
+            const e = 0 == false;
+            const f = 0 == null;
+            const g = 0 == undefined;
+            const h = 0 == !!null;
+            const i = 0 == !!undefined;
+            const j = null == undefined;
+            const k = NaN == NaN;
+            const l = NaN != NaN;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' +
+              h + '|' + i + '|' + j + '|' + k + '|' + l;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|false|false|true|true|true|false|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn equality_operator_compares_objects_by_reference_and_primitive_conversion() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const object1 = { key: 'value' };
+            const object2 = { key: 'value' };
+
+            const string1 = 'hello';
+            const string2 = String('hello');
+            const string3 = new String('hello');
+            const string4 = new String('hello');
+
+            const a = object1 == object2;
+            const b = object1 == object1;
+            const c = string1 == string2;
+            const d = string1 == string3;
+            const e = string2 == string3;
+            const f = string3 == string4;
+            const g = string4 == string4;
+
+            const arr = [1, 2, 3];
+            const arrText = '1,2,3';
+            const mixed = [true, 0.5, 'hey'];
+            const mixedText = mixed.toString();
+            const h = arr == arrText;
+            const i = mixed == mixedText;
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' + h + '|' + i;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "false|true|true|true|true|false|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn equality_operator_handles_bigint_symbol_and_symmetry_cases() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 1n == 1;
+            const b = 1n == '1';
+            const c = 1n == '1.0';
+            const d = 1n == 1.1;
+            const e = 1n == Infinity;
+            const f = 0n == false;
+            const g = 0n == null;
+
+            const sym1 = Symbol('x');
+            const sym2 = Symbol('x');
+            const h = sym1 == sym2;
+            const i = sym1 == sym1;
+            const j = sym1 == 'Symbol(x)';
+
+            const k = (1 == '1') === ('1' == 1);
+            const l = (0 == false) === (false == 0);
+
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' +
+              h + '|' + i + '|' + j + '|' + k + '|' + l;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|false|false|false|true|false|false|true|false|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn bitwise_and_assignment_supports_numbers_booleans_and_bigints() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

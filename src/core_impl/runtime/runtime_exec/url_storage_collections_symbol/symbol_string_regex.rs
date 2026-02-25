@@ -33,6 +33,7 @@ impl Harness {
         Self::is_symbol_storage_key(key)
             || key.starts_with(INTERNAL_OBJECT_GETTER_KEY_PREFIX)
             || key.starts_with(INTERNAL_OBJECT_SETTER_KEY_PREFIX)
+            || key.starts_with(INTERNAL_ARRAY_HOLE_KEY_PREFIX)
             || key == INTERNAL_OBJECT_PROTOTYPE_KEY
             || key == INTERNAL_CLASS_SUPER_PROTOTYPE_KEY
             || key == INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY

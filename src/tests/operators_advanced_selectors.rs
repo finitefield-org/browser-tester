@@ -640,6 +640,159 @@ fn assignment_and_remainder_expressions_work() -> Result<()> {
 }
 
 #[test]
+fn division_operator_coerces_operands_and_handles_special_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 12 / 2;
+            const b = 3 / 2;
+            const c = 6 / '3';
+            const d = 2 / 0;
+            const e = 2 / -0.0;
+            const f = 5 / 'foo';
+            const g = true / 2;
+            const h = false / 2;
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c + ':' + d + ':' + e + ':' + String(f) + ':' + g + ':' + h;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "6:1.5:2:Infinity:-Infinity:NaN:0.5:0")?;
+    Ok(())
+}
+
+#[test]
+fn division_operator_supports_bigint_and_truncates_toward_zero() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 1n / 2n;
+            const b = 5n / 3n;
+            const c = -1n / 3n;
+            const d = 1n / -3n;
+            document.getElementById('result').textContent = a + ':' + b + ':' + c + ':' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:1:0:0")?;
+    Ok(())
+}
+
+#[test]
+fn division_operator_rejects_mixed_bigint_and_division_by_zero() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='zero'>zero</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 2n / 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 / 2n;
+          });
+          document.getElementById('zero').addEventListener('click', () => {
+            const v = 2n / 0n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number division should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type division error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt division should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type division error: {other:?}"),
+    }
+
+    let zero = h
+        .click("#zero")
+        .expect_err("BigInt division by zero should fail");
+    match zero {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("division by zero"))
+        }
+        other => panic!("unexpected BigInt division-by-zero error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn conditional_operator_selects_truthy_and_falsy_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const member = true ? '$2.00' : '$10.00';
+            const guest = false ? '$2.00' : '$10.00';
+            const unknown = null ? '$2.00' : '$10.00';
+            document.getElementById('result').textContent = member + ':' + guest + ':' + unknown;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "$2.00:$10.00:$10.00")?;
+    Ok(())
+}
+
+#[test]
+fn conditional_operator_is_right_associative_and_short_circuits() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function mark(label, value) {
+              alert(label);
+              return value;
+            }
+            const chain = false ? 'a' : true ? 'b' : 'c';
+            const first = true ? mark('t-branch', 't') : mark('f-branch', 'f');
+            const second = false ? mark('x-branch', 'x') : mark('y-branch', 'y');
+            document.getElementById('result').textContent = chain + ':' + first + ':' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "b:t:y")?;
+    assert_eq!(
+        h.take_alert_messages(),
+        vec!["t-branch".to_string(), "y-branch".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
 fn loose_equality_and_inequality_follow_js_coercion_rules() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -681,6 +834,51 @@ fn loose_equality_and_inequality_follow_js_coercion_rules() -> Result<()> {
             "true:true:true:true:true:true:false:false:true:true:true:false:true:false:true:false:true:true:false",
         )?;
     Ok(())
+}
+
+#[test]
+fn decrement_operator_prefix_and_postfix_return_expected_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 3;
+            const y = x--;
+            const sum = x-- + 5;
+
+            let a = 3;
+            const b = --a;
+
+            let big = 3n;
+            const bigPost = big--;
+            const bigPre = --big;
+
+            document.getElementById('result').textContent =
+              'x:' + x + ',y:' + y + '|' +
+              'sum:' + sum + '|' +
+              'a:' + a + ',b:' + b + '|' +
+              'big:' + big + ',post:' + bigPost + ',pre:' + bigPre;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "x:1,y:3|sum:7|a:2,b:2|big:1,post:3,pre:1")?;
+    Ok(())
+}
+
+#[test]
+fn decrement_operator_rejects_invalid_prefix_target() {
+    let err = Harness::from_html("<script>let x = 1; --(--x);</script>")
+        .expect_err("nested prefix decrement should fail");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("invalid left-hand side expression in prefix operation"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -1043,6 +1241,145 @@ fn exponentiation_expression_and_compound_assignment_work() -> Result<()> {
 }
 
 #[test]
+fn exponentiation_operator_supports_number_rules_and_coercion() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 3 ** 4;
+            const b = 10 ** -2;
+            const c = 2 ** (3 ** 2);
+            const d = (2 ** 3) ** 2;
+            const e = 2 ** '3';
+            const f = String(2 ** 'hello');
+            const g = NaN ** 0;
+            const h = String(1 ** Infinity);
+            const i = 0 ** 5;
+            const j = 0 ** 0;
+            const k = 0 ** -1;
+            const l = (-0.0) ** -1;
+            document.getElementById('result').textContent =
+              a + '|' + b + '|' + c + '|' + d + '|' + e + '|' + f + '|' + g + '|' + h + '|' +
+              i + '|' + j + '|' + k + '|' + l;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "81|0.01|512|64|8|NaN|1|NaN|0|1|Infinity|-Infinity",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn exponentiation_operator_supports_bigint_and_rejects_mixed_numeric_types() -> Result<()> {
+    let html = r#"
+        <button id='ok'>ok</button>
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='neg'>neg</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('ok').addEventListener('click', () => {
+            const a = 2n ** 3n;
+            const b = 2n ** BigInt(2);
+            const c = Number(2n) ** 2;
+            const d = 2n ** 54n;
+            document.getElementById('result').textContent = a + '|' + b + '|' + c + '|' + (d > 0n);
+          });
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 2n ** 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 ** 2n;
+          });
+          document.getElementById('neg').addEventListener('click', () => {
+            const v = 2n ** -1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    h.click("#ok")?;
+    h.assert_text("#result", "8|4|4|true")?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number in exponentiation should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected exponentiation mixed-type error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt in exponentiation should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected exponentiation mixed-type error: {other:?}"),
+    }
+
+    let neg = h
+        .click("#neg")
+        .expect_err("negative BigInt exponent should fail");
+    match neg {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("BigInt exponent must be non-negative"))
+        }
+        other => panic!("unexpected BigInt exponent error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn exponentiation_rejects_unparenthesized_unary_base_and_accepts_parenthesized_forms() -> Result<()> {
+    let neg_err = Harness::from_html("<script>-2 ** 2;</script>")
+        .expect_err("unparenthesized unary minus base should fail");
+    match neg_err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("left-hand side of '**'"))
+        }
+        other => panic!("unexpected parse error for unary minus exponentiation: {other:?}"),
+    }
+
+    let plus_err = Harness::from_html("<script>+2 ** 2;</script>")
+        .expect_err("unparenthesized unary plus base should fail");
+    match plus_err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("left-hand side of '**'"))
+        }
+        other => panic!("unexpected parse error for unary plus exponentiation: {other:?}"),
+    }
+
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = -(2 ** 2);
+            const b = (-2) ** 2;
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-4:4")?;
+    Ok(())
+}
+
+#[test]
 fn update_statements_change_identifier_values() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1116,6 +1453,59 @@ fn undefined_void_delete_and_special_literals_work() -> Result<()> {
         "#result",
         "undefined:undefined:number:number:true:false:true:false",
     )?;
+    Ok(())
+}
+
+#[test]
+fn delete_operator_removes_object_properties_and_reveals_prototype_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const proto = { bar: 42 };
+            const obj = { __proto__: proto, bar: 10 };
+            const before = obj.bar;
+            const deletedOwn = delete obj.bar;
+            const afterOwnDelete = obj.bar;
+            const deletedProto = delete proto.bar;
+            const afterProtoDelete = String(obj.bar);
+            document.getElementById('result').textContent =
+              before + ':' + deletedOwn + ':' + afterOwnDelete + ':' + deletedProto + ':' + afterProtoDelete;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "10:true:42:true:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn delete_operator_creates_array_holes_for_in_checks() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const trees = ['redwood', 'bay', 'cedar', 'oak', 'maple'];
+            const before = 3 in trees;
+            const deleted = delete trees[3];
+            const afterDelete = 3 in trees;
+            const length = trees.length;
+            const valueAfterDelete = String(trees[3]);
+            trees[3] = undefined;
+            const afterAssignUndefined = 3 in trees;
+            document.getElementById('result').textContent =
+              before + ':' + deleted + ':' + afterDelete + ':' + length + ':' + valueAfterDelete + ':' + afterAssignUndefined;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:false:5:undefined:true")?;
     Ok(())
 }
 
@@ -1575,6 +1965,80 @@ fn destructuring_declaration_for_array_and_object_work() -> Result<()> {
 }
 
 #[test]
+fn destructuring_defaults_and_rest_work_for_array_patterns() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const [a = 1, b = 2, ...rest1] = [undefined, 20, 30, 40];
+            let x = 0;
+            let y = 0;
+            let rest2 = [];
+            [x = 10, y = 11, ...rest2] = [7];
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + rest1.join(',') + '|' +
+              x + ':' + y + ':' + rest2.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:20:30,40|7:11:")?;
+    Ok(())
+}
+
+#[test]
+fn destructuring_defaults_and_rest_work_for_object_patterns() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = { a: 3, c: 7, d: 8 };
+            const { a: aa = 10, b: bb = 5, ...rest1 } = source;
+
+            let x = '';
+            let y = '';
+            let rest2 = {};
+            { x = 'X', y = 'Y', ...rest2 } = { x: undefined, z: 9 };
+
+            const keys1 = Object.keys(rest1).sort().join(',');
+            const keys2 = Object.keys(rest2).sort().join(',');
+            document.getElementById('result').textContent =
+              aa + ':' + bb + ':' + keys1 + ':' + rest1.c + ':' + rest1.d + '|' +
+              x + ':' + y + ':' + keys2 + ':' + String(rest2.z);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3:5:c,d:7:8|X:Y:z:9")?;
+    Ok(())
+}
+
+#[test]
+fn destructuring_rest_rejects_trailing_comma_and_non_identifier() {
+    let array_err = Harness::from_html("<script>const [a, ...rest,] = [1, 2];</script>")
+        .expect_err("array rest trailing comma should fail");
+    match array_err {
+        Error::ScriptParse(msg) => assert!(msg.contains("rest element may not have a trailing comma")),
+        other => panic!("unexpected error for array rest trailing comma: {other:?}"),
+    }
+
+    let object_err = Harness::from_html("<script>const { a, ...{ b } } = { a: 1, b: 2 };</script>")
+        .expect_err("object rest non-identifier should fail");
+    match object_err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("rest property must be an identifier"))
+        }
+        other => panic!("unexpected error for object rest target: {other:?}"),
+    }
+}
+
+#[test]
 fn yield_and_yield_star_operators_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1639,6 +2103,97 @@ fn comma_operator_returns_last_value_in_order() -> Result<()> {
         vec!["first".to_string(), "second".to_string()]
     );
     Ok(())
+}
+
+#[test]
+fn comma_operator_respects_assignment_precedence() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a, b, c;
+          a = b = 3, c = 4;
+          document.getElementById('result').textContent =
+            String(a) + ':' + String(b) + ':' + String(c);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3:3:4")?;
+    Ok(())
+}
+
+#[test]
+fn comma_operator_in_for_afterthought_updates_both_sides() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let out = '';
+          for (let i = 0, j = 2; i <= 2; i++, j--) {
+            out = out + String(i) + ':' + String(j) + '|';
+          }
+          document.getElementById('result').textContent = out;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "0:2|1:1|2:0|")?;
+    Ok(())
+}
+
+#[test]
+fn comma_operator_discards_reference_binding_for_method_call() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = {
+            value: 'obj',
+            method() {
+              return String(this && this.value);
+            },
+          };
+
+          const direct = obj.method();
+          const viaComma = (0, obj.method)();
+          document.getElementById('result').textContent = direct + ':' + viaComma;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "obj:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn comma_operator_demo_increment_and_last_value_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let x = 1;
+            x = (x++, x);
+            const y = (2, 3);
+            document.getElementById('result').textContent = x + ':' + y;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:3")?;
+    Ok(())
+}
+
+#[test]
+fn comma_operator_rejects_trailing_comma_in_expression() {
+    let err = Harness::from_html("<script>const x = (1, 2,);</script>")
+        .expect_err("comma operator must not allow trailing comma");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("invalid comma expression"))
+        }
+        other => panic!("unexpected parse error for trailing comma expression: {other:?}"),
+    }
 }
 
 #[test]

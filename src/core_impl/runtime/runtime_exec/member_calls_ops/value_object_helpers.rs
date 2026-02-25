@@ -568,6 +568,38 @@ impl Harness {
         Self::object_set_entry(&mut array.borrow_mut().properties, key, value);
     }
 
+    pub(crate) fn array_hole_storage_key(index: usize) -> String {
+        format!("{INTERNAL_ARRAY_HOLE_KEY_PREFIX}{index}")
+    }
+
+    pub(crate) fn array_index_is_hole(array: &ArrayValue, index: usize) -> bool {
+        let hole_key = Self::array_hole_storage_key(index);
+        Self::object_get_entry(&array.properties, &hole_key).is_some()
+    }
+
+    pub(crate) fn clear_array_hole(array: &Rc<RefCell<ArrayValue>>, index: usize) {
+        let hole_key = Self::array_hole_storage_key(index);
+        array.borrow_mut().properties.delete_entry(&hole_key);
+    }
+
+    pub(crate) fn mark_array_hole(array: &Rc<RefCell<ArrayValue>>, index: usize) {
+        let hole_key = Self::array_hole_storage_key(index);
+        Self::object_set_entry(
+            &mut array.borrow_mut().properties,
+            hole_key,
+            Value::Bool(true),
+        );
+    }
+
+    pub(crate) fn delete_object_property_entries(entries: &mut ObjectValue, key: &str) -> bool {
+        let mut deleted = entries.delete_entry(key);
+        let getter_key = Self::object_getter_storage_key(key);
+        deleted |= entries.delete_entry(&getter_key);
+        let setter_key = Self::object_setter_storage_key(key);
+        deleted |= entries.delete_entry(&setter_key);
+        deleted
+    }
+
     pub(crate) fn new_object_value(entries: Vec<(String, Value)>) -> Value {
         Value::Object(Rc::new(RefCell::new(ObjectValue::new(entries))))
     }

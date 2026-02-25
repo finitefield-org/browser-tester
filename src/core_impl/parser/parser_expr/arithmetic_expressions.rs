@@ -88,7 +88,15 @@ pub(crate) fn parse_pow_expr(src: &str) -> Result<Expr> {
     while i < bytes.len() {
         let b = bytes[i];
         if scanner.is_top_level() && b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            let left = parse_expr(src[..i].trim())?;
+            let left_src = src[..i].trim();
+            if has_unparenthesized_unary_pow_base(left_src) {
+                return Err(Error::ScriptParse(
+                    "unparenthesized unary expression cannot appear on the left-hand side of '**'"
+                        .into(),
+                ));
+            }
+
+            let left = parse_expr(left_src)?;
             let right = parse_pow_expr(src[i + 2..].trim())?;
             return Ok(Expr::Binary {
                 left: Box::new(left),
@@ -102,11 +110,41 @@ pub(crate) fn parse_pow_expr(src: &str) -> Result<Expr> {
     parse_unary_expr(src)
 }
 
+pub(crate) fn has_unparenthesized_unary_pow_base(src: &str) -> bool {
+    let trimmed = src.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if strip_outer_parens(trimmed).len() != trimmed.len() {
+        return false;
+    }
+
+    if trimmed.starts_with("++")
+        || trimmed.starts_with("--")
+        || trimmed.starts_with('+')
+        || trimmed.starts_with('-')
+        || trimmed.starts_with('!')
+        || trimmed.starts_with('~')
+    {
+        return true;
+    }
+
+    strip_keyword_operator(trimmed, "await").is_some()
+        || strip_keyword_operator(trimmed, "typeof").is_some()
+        || strip_keyword_operator(trimmed, "void").is_some()
+        || strip_keyword_operator(trimmed, "delete").is_some()
+        || strip_keyword_operator(trimmed, "yield*").is_some()
+        || strip_keyword_operator(trimmed, "yield").is_some()
+}
+
 pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
     let trimmed = src.trim();
     let src = strip_outer_parens(trimmed);
     if src.len() != trimmed.len() {
         return parse_expr(src);
+    }
+    if let Some(update) = parse_update_expr(src)? {
+        return Ok(update);
     }
     if let Some(rest) = strip_keyword_operator(src, "await") {
         if rest.is_empty() {
@@ -170,6 +208,80 @@ pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
         return Ok(Expr::BitNot(Box::new(inner)));
     }
     parse_primary(src)
+}
+
+pub(crate) fn parse_update_expr(src: &str) -> Result<Option<Expr>> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(rest) = src.strip_prefix("++") {
+        return parse_prefix_update_expr(rest.trim(), 1);
+    }
+    if let Some(rest) = src.strip_prefix("--") {
+        return parse_prefix_update_expr(rest.trim(), -1);
+    }
+    if let Some(rest) = src.strip_suffix("++") {
+        return parse_postfix_update_expr(rest.trim(), 1);
+    }
+    if let Some(rest) = src.strip_suffix("--") {
+        return parse_postfix_update_expr(rest.trim(), -1);
+    }
+
+    Ok(None)
+}
+
+pub(crate) fn parse_prefix_update_expr(target: &str, delta: i8) -> Result<Option<Expr>> {
+    if target.is_empty() {
+        return Err(Error::ScriptParse(
+            "update operator requires an operand".into(),
+        ));
+    }
+    if !is_ident(target) {
+        return Err(Error::ScriptParse(
+            "invalid left-hand side expression in prefix operation".into(),
+        ));
+    }
+
+    let next = build_update_numeric_expr(target, delta);
+    let lowered = format!("({target} = {next})");
+    Ok(Some(parse_expr(&lowered)?))
+}
+
+pub(crate) fn parse_postfix_update_expr(target: &str, delta: i8) -> Result<Option<Expr>> {
+    if target.is_empty() {
+        return Err(Error::ScriptParse(
+            "update operator requires an operand".into(),
+        ));
+    }
+    if !is_ident(target) {
+        return Err(Error::ScriptParse(
+            "invalid left-hand side expression in postfix operation".into(),
+        ));
+    }
+
+    let mut temp_index = 0usize;
+    let temp_name = loop {
+        let candidate = format!("__bt_update_prev_{temp_index}");
+        if candidate != target {
+            break candidate;
+        }
+        temp_index += 1;
+    };
+    let next = build_update_numeric_expr(&temp_name, delta);
+    let lowered = format!(
+        "(() => {{ const {temp_name} = {target}; {target} = {next}; return {temp_name}; }})()"
+    );
+    Ok(Some(parse_expr(&lowered)?))
+}
+
+pub(crate) fn build_update_numeric_expr(source: &str, delta: i8) -> String {
+    if delta >= 0 {
+        format!("(typeof {source} === 'bigint' ? ({source} + 1n) : ({source} + 1))")
+    } else {
+        format!("(typeof {source} === 'bigint' ? ({source} - 1n) : ({source} - 1))")
+    }
 }
 
 pub(crate) fn fold_binary<F, G>(

@@ -515,6 +515,9 @@ pub(crate) fn parse_add_expr(src: &str) -> Result<Expr> {
     if src.len() != trimmed.len() {
         return parse_expr(src);
     }
+    if let Some(update) = parse_update_expr(src)? {
+        return Ok(update);
+    }
     let (parts, ops) = split_top_level_add_sub(src);
     if ops.is_empty() {
         return parse_mul_expr(src);
@@ -587,6 +590,9 @@ pub(crate) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
     if idx >= bytes.len() {
         return false;
     }
+    if idx + 1 < bytes.len() && matches!(bytes[idx], b'+' | b'-') && bytes[idx + 1] == bytes[idx] {
+        return false;
+    }
     let mut left = idx;
     while left > 0 && bytes[left - 1].is_ascii_whitespace() {
         left -= 1;
@@ -595,6 +601,21 @@ pub(crate) fn is_add_sub_binary_operator(bytes: &[u8], idx: usize) -> bool {
         return false;
     }
     let prev = bytes[left - 1];
+    if matches!(prev, b'+' | b'-') && left >= 2 && bytes[left - 2] == prev {
+        let mut operand_end = left - 2;
+        while operand_end > 0 && bytes[operand_end - 1].is_ascii_whitespace() {
+            operand_end -= 1;
+        }
+        if operand_end > 0 {
+            let operand_tail = bytes[operand_end - 1];
+            if is_ident_char(operand_tail)
+                || operand_tail.is_ascii_digit()
+                || matches!(operand_tail, b')' | b']' | b'}' | b'"' | b'\'' | b'`')
+            {
+                return true;
+            }
+        }
+    }
     if matches!(prev, b'e' | b'E') && is_decimal_exponent_sign(bytes, left - 1) {
         return false;
     }

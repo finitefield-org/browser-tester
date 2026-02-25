@@ -32,28 +32,43 @@ impl Harness {
                 Self::direct_decl_names_for_catch_conflict(declaration)
             }
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(kind),
                 ..
             } => {
                 let is_var = matches!(kind, VarDeclKind::Var);
-                targets
+                pattern
+                    .items
                     .iter()
                     .flatten()
-                    .cloned()
-                    .map(|name| (name, is_var))
-                    .collect()
+                    .map(|binding| (binding.target.clone(), is_var))
+                    .chain(
+                        pattern
+                            .rest
+                            .iter()
+                            .cloned()
+                            .map(|name| (name, is_var)),
+                    )
+                    .collect::<Vec<_>>()
             }
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(kind),
                 ..
             } => {
                 let is_var = matches!(kind, VarDeclKind::Var);
-                bindings
+                pattern
+                    .bindings
                     .iter()
-                    .map(|(_, target)| (target.clone(), is_var))
-                    .collect()
+                    .map(|binding| (binding.target.clone(), is_var))
+                    .chain(
+                        pattern
+                            .rest
+                            .iter()
+                            .cloned()
+                            .map(|name| (name, is_var)),
+                    )
+                    .collect::<Vec<_>>()
             }
             _ => Vec::new(),
         }
@@ -278,21 +293,27 @@ impl Harness {
                 }
             }
             Stmt::ArrayDestructureAssign {
-                targets,
+                pattern,
                 decl_kind: Some(_),
                 ..
             } => {
-                for name in targets.iter().flatten() {
-                    out.insert(name.clone());
+                for binding in pattern.items.iter().flatten() {
+                    out.insert(binding.target.clone());
+                }
+                if let Some(rest) = &pattern.rest {
+                    out.insert(rest.clone());
                 }
             }
             Stmt::ObjectDestructureAssign {
-                bindings,
+                pattern,
                 decl_kind: Some(_),
                 ..
             } => {
-                for (_, target) in bindings {
-                    out.insert(target.clone());
+                for binding in &pattern.bindings {
+                    out.insert(binding.target.clone());
+                }
+                if let Some(rest) = &pattern.rest {
+                    out.insert(rest.clone());
                 }
             }
             Stmt::FunctionDecl { name, .. } => {

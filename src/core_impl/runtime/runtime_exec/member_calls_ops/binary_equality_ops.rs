@@ -171,7 +171,13 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                Value::Float(self.numeric_value(left).powf(self.numeric_value(right)))
+                let base = Self::coerce_number_for_global(left);
+                let exponent = Self::coerce_number_for_global(right);
+                if (base == 1.0 || base == -1.0) && !exponent.is_finite() {
+                    Value::Float(f64::NAN)
+                } else {
+                    Value::Float(base.powf(exponent))
+                }
             }
             BinaryOp::Lt => Value::Bool(self.compare(left, right, |l, r| l < r)),
             BinaryOp::Gt => Value::Bool(self.compare(left, right, |l, r| l > r)),
@@ -229,7 +235,9 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                Value::Float(self.numeric_value(left) / self.numeric_value(right))
+                Value::Float(
+                    Self::coerce_number_for_global(left) / Self::coerce_number_for_global(right),
+                )
             }
         };
         Ok(out)
@@ -375,9 +383,13 @@ impl Harness {
             Value::NodeList(nodes) => self
                 .value_as_index(left)
                 .is_some_and(|index| index < nodes.len()),
-            Value::Array(values) => self
-                .value_as_index(left)
-                .is_some_and(|index| index < values.borrow().len()),
+            Value::Array(values) => self.value_as_index(left).is_some_and(|index| {
+                let values = values.borrow();
+                if index >= values.len() {
+                    return false;
+                }
+                !Self::array_index_is_hole(&values, index)
+            }),
             Value::TypedArray(values) => self
                 .value_as_index(left)
                 .is_some_and(|index| index < values.borrow().observed_length()),

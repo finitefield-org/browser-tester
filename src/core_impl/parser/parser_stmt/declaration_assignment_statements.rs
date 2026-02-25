@@ -736,19 +736,19 @@ pub(crate) fn parse_var_decl(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     if name.starts_with('[') && name.ends_with(']') {
-        let targets = parse_array_destructure_pattern(name)?;
+        let pattern = parse_array_destructure_assignment_pattern(name)?;
         let expr = parse_expr(expr_src)?;
         return Ok(Some(Stmt::ArrayDestructureAssign {
-            targets,
+            pattern,
             expr,
             decl_kind: Some(kind),
         }));
     }
     if name.starts_with('{') && name.ends_with('}') {
-        let bindings = parse_object_destructure_pattern(name)?;
+        let pattern = parse_object_destructure_assignment_pattern(name)?;
         let expr = parse_expr(expr_src)?;
         return Ok(Some(Stmt::ObjectDestructureAssign {
-            bindings,
+            pattern,
             expr,
             decl_kind: Some(kind),
         }));
@@ -841,19 +841,19 @@ pub(crate) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     if lhs.starts_with('[') && lhs.ends_with(']') {
-        let targets = parse_array_destructure_pattern(lhs)?;
+        let pattern = parse_array_destructure_assignment_pattern(lhs)?;
         let expr = parse_expr(rhs)?;
         return Ok(Some(Stmt::ArrayDestructureAssign {
-            targets,
+            pattern,
             expr,
             decl_kind: None,
         }));
     }
     if lhs.starts_with('{') && lhs.ends_with('}') {
-        let bindings = parse_object_destructure_pattern(lhs)?;
+        let pattern = parse_object_destructure_assignment_pattern(lhs)?;
         let expr = parse_expr(rhs)?;
         return Ok(Some(Stmt::ObjectDestructureAssign {
-            bindings,
+            pattern,
             expr,
             decl_kind: None,
         }));
@@ -946,4 +946,242 @@ pub(crate) fn parse_object_destructure_pattern(pattern: &str) -> Result<Vec<(Str
     }
 
     Ok(bindings)
+}
+
+pub(crate) fn parse_array_destructure_assignment_pattern(
+    pattern: &str,
+) -> Result<ArrayDestructurePattern> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'[', b']')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid array destructuring pattern: {pattern}"
+        )));
+    }
+
+    let mut items = split_top_level_by_char(&items_src, b',');
+    let had_trailing_empty = items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(ArrayDestructurePattern {
+            items: Vec::new(),
+            rest: None,
+        });
+    }
+
+    let mut parsed_items = Vec::with_capacity(items.len());
+    let mut rest = None;
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            if rest.is_some() {
+                return Err(Error::ScriptParse(
+                    "array destructuring rest element must be last".into(),
+                ));
+            }
+            parsed_items.push(None);
+            continue;
+        }
+
+        if let Some(rest_name) = item.strip_prefix("...") {
+            let rest_name = rest_name.trim();
+            if rest_name.is_empty() || !is_ident(rest_name) {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring rest target must be an identifier: {item}"
+                )));
+            }
+            if rest.is_some() {
+                return Err(Error::ScriptParse(
+                    "array destructuring pattern cannot contain multiple rest elements".into(),
+                ));
+            }
+            rest = Some(rest_name.to_string());
+            continue;
+        }
+
+        if rest.is_some() {
+            return Err(Error::ScriptParse(
+                "array destructuring rest element must be last".into(),
+            ));
+        }
+
+        let (name, default) = if let Some((eq_pos, op_len)) = find_top_level_assignment(item) {
+            if op_len != 1 {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            let name = item[..eq_pos].trim();
+            let default_src = item[eq_pos + op_len..].trim();
+            if !is_ident(name) || default_src.is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            (name.to_string(), Some(parse_expr(default_src)?))
+        } else {
+            if !is_ident(item) {
+                return Err(Error::ScriptParse(format!(
+                    "array destructuring target must be an identifier: {item}"
+                )));
+            }
+            (item.to_string(), None)
+        };
+
+        parsed_items.push(Some(ArrayDestructureBinding {
+            target: name,
+            default,
+        }));
+    }
+
+    if rest.is_some() && had_trailing_empty {
+        return Err(Error::ScriptParse(
+            "array destructuring rest element may not have a trailing comma".into(),
+        ));
+    }
+
+    Ok(ArrayDestructurePattern {
+        items: parsed_items,
+        rest,
+    })
+}
+
+pub(crate) fn parse_object_destructure_assignment_pattern(
+    pattern: &str,
+) -> Result<ObjectDestructurePattern> {
+    let mut cursor = Cursor::new(pattern);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'{', b'}')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "invalid object destructuring pattern: {pattern}"
+        )));
+    }
+
+    let mut items = split_top_level_by_char(&items_src, b',');
+    let had_trailing_empty = items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return Ok(ObjectDestructurePattern {
+            bindings: Vec::new(),
+            rest: None,
+        });
+    }
+
+    let mut bindings = Vec::with_capacity(items.len());
+    let mut rest = None;
+
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err(Error::ScriptParse(
+                "object destructuring pattern does not support empty entries".into(),
+            ));
+        }
+
+        if let Some(rest_name) = item.strip_prefix("...") {
+            let rest_name = rest_name.trim();
+            if rest_name.is_empty() || !is_ident(rest_name) {
+                return Err(Error::ScriptParse(
+                    "object destructuring rest property must be an identifier".into(),
+                ));
+            }
+            if rest.is_some() {
+                return Err(Error::ScriptParse(
+                    "object destructuring pattern cannot contain multiple rest properties".into(),
+                ));
+            }
+            rest = Some(rest_name.to_string());
+            continue;
+        }
+
+        if rest.is_some() {
+            return Err(Error::ScriptParse(
+                "object destructuring rest property must be last".into(),
+            ));
+        }
+
+        let binding = if let Some(colon) = find_first_top_level_colon(item) {
+            let source = item[..colon].trim();
+            let target_src = item[colon + 1..].trim();
+            if !is_ident(source) {
+                return Err(Error::ScriptParse(format!(
+                    "object destructuring entry must be identifier or identifier: identifier: {item}"
+                )));
+            }
+            let (target, default) =
+                if let Some((eq_pos, op_len)) = find_top_level_assignment(target_src) {
+                    if op_len != 1 {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    let target = target_src[..eq_pos].trim();
+                    let default_src = target_src[eq_pos + op_len..].trim();
+                    if !is_ident(target) || default_src.is_empty() {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    (target.to_string(), Some(parse_expr(default_src)?))
+                } else {
+                    if !is_ident(target_src) {
+                        return Err(Error::ScriptParse(format!(
+                            "object destructuring entry must be identifier or identifier: identifier: {item}"
+                        )));
+                    }
+                    (target_src.to_string(), None)
+                };
+            ObjectDestructureBinding {
+                source: source.to_string(),
+                target,
+                default,
+            }
+        } else {
+            let (name, default) = if let Some((eq_pos, op_len)) = find_top_level_assignment(item) {
+                if op_len != 1 {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                let name = item[..eq_pos].trim();
+                let default_src = item[eq_pos + op_len..].trim();
+                if !is_ident(name) || default_src.is_empty() {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                (name.to_string(), Some(parse_expr(default_src)?))
+            } else {
+                if !is_ident(item) {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                (item.to_string(), None)
+            };
+            ObjectDestructureBinding {
+                source: name.clone(),
+                target: name,
+                default,
+            }
+        };
+
+        bindings.push(binding);
+    }
+
+    if rest.is_some() && had_trailing_empty {
+        return Err(Error::ScriptParse(
+            "object destructuring rest property may not have a trailing comma".into(),
+        ));
+    }
+
+    Ok(ObjectDestructurePattern { bindings, rest })
 }
