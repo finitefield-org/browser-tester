@@ -641,6 +641,49 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_function_call_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("function_call".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_function_apply_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("function_apply".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_function_bind_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("function_bind".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_bound_function_callable(
+        target: Value,
+        bound_this: Value,
+        bound_args: Vec<Value>,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("bound_function".to_string()),
+            ),
+            (INTERNAL_BOUND_CALLABLE_TARGET_KEY.to_string(), target),
+            (INTERNAL_BOUND_CALLABLE_THIS_KEY.to_string(), bound_this),
+            (
+                INTERNAL_BOUND_CALLABLE_ARGS_KEY.to_string(),
+                Self::new_array_value(bound_args),
+            ),
+            ("call".to_string(), Self::new_function_call_callable()),
+            ("apply".to_string(), Self::new_function_apply_callable()),
+            ("bind".to_string(), Self::new_function_bind_callable()),
+        ])
+    }
+
     pub(crate) fn new_string_wrapper_value(value: String) -> Value {
         Self::new_object_value(vec![(
             INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
@@ -735,6 +778,10 @@ impl Harness {
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
+                "function_call" => "function_call",
+                "function_apply" => "function_apply",
+                "function_bind" => "function_bind",
+                "bound_function" => "bound_function",
                 _ => return None,
             }),
             _ => None,
@@ -1115,6 +1162,19 @@ impl Harness {
                             .unwrap_or(Value::Undefined));
                     }
                 }
+                if matches!(key, "call" | "apply" | "bind")
+                    && Self::callable_kind_from_value(value).is_some()
+                {
+                    if let Some(existing) = Self::object_get_entry(&entries, key) {
+                        return Ok(existing);
+                    }
+                    let function_method = match key {
+                        "call" => Self::new_function_call_callable(),
+                        "apply" => Self::new_function_apply_callable(),
+                        _ => Self::new_function_bind_callable(),
+                    };
+                    return Ok(function_method);
+                }
                 if Self::is_generator_object(&entries) && key == "constructor" {
                     let constructor = self.new_generator_function_constructor_value();
                     if let Value::Object(constructor_entries) = constructor {
@@ -1439,6 +1499,9 @@ impl Harness {
                         }
                         Value::Number(length)
                     }
+                    "call" => Self::new_function_call_callable(),
+                    "apply" => Self::new_function_apply_callable(),
+                    "bind" => Self::new_function_bind_callable(),
                     _ => Value::Undefined,
                 };
                 if !matches!(own_value, Value::Undefined) {
@@ -1468,6 +1531,101 @@ impl Harness {
             }
             Value::StringConstructor => Ok(Value::Undefined),
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
+        }
+    }
+
+    pub(crate) fn object_property_from_value_with_receiver(
+        &mut self,
+        value: &Value,
+        key: &str,
+        receiver: &Value,
+    ) -> Result<Value> {
+        match value {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(value) =
+                    self.object_property_from_entries_with_getter(receiver, &entries, key)?
+                {
+                    return Ok(value);
+                }
+                let mut prototype = Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
+                drop(entries);
+                while let Some(Value::Object(object)) = prototype {
+                    let object_ref = object.borrow();
+                    if let Some(value) =
+                        self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
+                    {
+                        return Ok(value);
+                    }
+                    prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+                }
+                Ok(Value::Undefined)
+            }
+            Value::Function(function) => {
+                if let Some(entries) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    .cloned()
+                {
+                    if let Some(custom_value) =
+                        self.object_property_from_entries_with_getter(receiver, &entries, key)?
+                    {
+                        return Ok(custom_value);
+                    }
+                }
+                let own_value = match key {
+                    "constructor" => {
+                        if function.is_generator {
+                            if function.is_async {
+                                self.new_async_generator_function_constructor_value()
+                            } else {
+                                self.new_generator_function_constructor_value()
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    }
+                    "prototype" => {
+                        if function.is_arrow || function.is_method {
+                            Value::Undefined
+                        } else {
+                            Value::Object(function.prototype_object.clone())
+                        }
+                    }
+                    "length" => {
+                        let mut length = 0_i64;
+                        for param in &function.handler.params {
+                            if param.is_rest || param.default.is_some() {
+                                break;
+                            }
+                            length += 1;
+                        }
+                        Value::Number(length)
+                    }
+                    "call" => Self::new_function_call_callable(),
+                    "apply" => Self::new_function_apply_callable(),
+                    "bind" => Self::new_function_bind_callable(),
+                    _ => Value::Undefined,
+                };
+                if !matches!(own_value, Value::Undefined) {
+                    return Ok(own_value);
+                }
+                if let Some(super_constructor) = function.class_super_constructor.clone() {
+                    if !matches!(super_constructor, Value::Null) {
+                        let inherited = self.object_property_from_value_with_receiver(
+                            &super_constructor,
+                            key,
+                            receiver,
+                        )?;
+                        if !matches!(inherited, Value::Undefined) {
+                            return Ok(inherited);
+                        }
+                    }
+                }
+                Ok(Value::Undefined)
+            }
+            _ => self.object_property_from_value(value, key),
         }
     }
 

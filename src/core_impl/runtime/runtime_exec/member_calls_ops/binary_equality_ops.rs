@@ -197,7 +197,9 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                Value::Float(self.numeric_value(left) - self.numeric_value(right))
+                Value::Float(
+                    Self::coerce_number_for_global(left) - Self::coerce_number_for_global(right),
+                )
             }
             BinaryOp::Mul => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
@@ -215,7 +217,7 @@ impl Harness {
             BinaryOp::Mod => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {
                     if r.is_zero() {
-                        return Err(Error::ScriptRuntime("modulo by zero".into()));
+                        return Err(Error::ScriptRuntime("division by zero".into()));
                     }
                     return Ok(Value::BigInt(l % r));
                 }
@@ -224,11 +226,7 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                let rhs = self.numeric_value(right);
-                if rhs == 0.0 {
-                    return Err(Error::ScriptRuntime("modulo by zero".into()));
-                }
-                Value::Float(self.numeric_value(left) % rhs)
+                Value::Float(self.numeric_value(left) % self.numeric_value(right))
             }
             BinaryOp::Div => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {

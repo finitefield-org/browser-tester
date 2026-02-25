@@ -263,6 +263,9 @@ impl Harness {
             .insert("window".to_string(), window.clone());
         self.script_runtime
             .env
+            .insert("this".to_string(), window.clone());
+        self.script_runtime
+            .env
             .insert("self".to_string(), window.clone());
         self.script_runtime
             .env

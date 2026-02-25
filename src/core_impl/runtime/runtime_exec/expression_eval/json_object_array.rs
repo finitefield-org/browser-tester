@@ -193,6 +193,15 @@ impl Harness {
                     Ok(Self::new_object_value(object_entries))
                 }
                 Expr::ObjectGet { target, key } => match env.get(target) {
+                    _ if target == "super" => {
+                        let super_prototype = Self::super_prototype_from_env(env)?;
+                        let this_value = Self::super_this_from_env(env)?;
+                        self.object_property_from_value_with_receiver(
+                            &super_prototype,
+                            key,
+                            &this_value,
+                        )
+                    }
                     Some(value) => {
                         self.object_property_from_value(value, key)
                             .map_err(|err| match err {
@@ -211,16 +220,33 @@ impl Harness {
                     ))),
                 },
                 Expr::ObjectPathGet { target, path } => {
-                    let Some(mut value) = env.get(target).cloned() else {
-                        return Err(Error::ScriptRuntime(format!(
-                            "unknown variable: {}",
-                            target
-                        )));
-                    };
-                    for key in path {
-                        value = self.object_property_from_value(&value, key)?;
+                    if target == "super" {
+                        let mut value = Self::super_prototype_from_env(env)?;
+                        let this_value = Self::super_this_from_env(env)?;
+                        for (index, key) in path.iter().enumerate() {
+                            if index == 0 {
+                                value = self.object_property_from_value_with_receiver(
+                                    &value,
+                                    key,
+                                    &this_value,
+                                )?;
+                            } else {
+                                value = self.object_property_from_value(&value, key)?;
+                            }
+                        }
+                        Ok(value)
+                    } else {
+                        let Some(mut value) = env.get(target).cloned() else {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {}",
+                                target
+                            )));
+                        };
+                        for key in path {
+                            value = self.object_property_from_value(&value, key)?;
+                        }
+                        Ok(value)
                     }
-                    Ok(value)
                 }
                 Expr::ObjectGetOwnPropertySymbols(object) => {
                     let object = self.eval_expr(object, env, event_param, event)?;
@@ -462,6 +488,16 @@ impl Harness {
                 },
                 Expr::ArrayIndex { target, index } => {
                     let index = self.eval_expr(index, env, event_param, event)?;
+                    if target == "super" {
+                        let super_prototype = Self::super_prototype_from_env(env)?;
+                        let this_value = Self::super_this_from_env(env)?;
+                        let key = self.property_key_to_storage_key(&index);
+                        return self.object_property_from_value_with_receiver(
+                            &super_prototype,
+                            &key,
+                            &this_value,
+                        );
+                    }
                     match env.get(target) {
                         Some(Value::Object(entries)) => {
                             let entries_ref = entries.borrow();

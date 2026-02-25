@@ -168,7 +168,7 @@ impl Harness {
                         "Cannot convert a Symbol value to a number".into(),
                     ));
                 }
-                Ok(Value::Float(self.numeric_value(&value)))
+                Ok(Self::number_value(Self::coerce_number_for_global(&value)))
             }
             Expr::BitNot(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
@@ -194,6 +194,11 @@ impl Harness {
                 match inner.as_ref() {
                 Expr::Var(name) => Ok(Value::Bool(!env.contains_key(name))),
                 Expr::ObjectGet { target, key } => {
+                    if target == "super" {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
                     let value = env.get(target).cloned().ok_or_else(|| {
                         Error::ScriptRuntime(format!("unknown variable: {}", target))
                     })?;
@@ -201,6 +206,11 @@ impl Harness {
                     Ok(Value::Bool(deleted))
                 }
                 Expr::ArrayIndex { target, index } => {
+                    if target == "super" {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
                     let value = env.get(target).cloned().ok_or_else(|| {
                         Error::ScriptRuntime(format!("unknown variable: {}", target))
                     })?;
@@ -210,6 +220,11 @@ impl Harness {
                     Ok(Value::Bool(deleted))
                 }
                 Expr::ObjectPathGet { target, path } => {
+                    if target == "super" {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
                     let Some(mut receiver) = env.get(target).cloned() else {
                         return Err(Error::ScriptRuntime(format!("unknown variable: {}", target)));
                     };
@@ -402,10 +417,8 @@ impl Harness {
             }
             Expr::YieldStar(inner) => {
                 let value = self.eval_expr(inner, env, event_param, event)?;
+                let values = self.array_like_values_from_value(&value)?;
                 if let Some(yields) = self.script_runtime.generator_yield_stack.last() {
-                    let values = self
-                        .array_like_values_from_value(&value)
-                        .unwrap_or_else(|_| vec![value.clone()]);
                     let mut yields = yields.borrow_mut();
                     for item in values {
                         yields.push(item);
@@ -416,7 +429,19 @@ impl Harness {
                         }
                     }
                 }
-                Ok(value)
+                let completion = match &value {
+                    Value::Object(entries) => {
+                        let entries = entries.borrow();
+                        if Self::is_iterator_object(&entries) {
+                            Self::object_get_entry(&entries, INTERNAL_ITERATOR_RETURN_VALUE_KEY)
+                                .unwrap_or(Value::Undefined)
+                        } else {
+                            Value::Undefined
+                        }
+                    }
+                    _ => Value::Undefined,
+                };
+                Ok(completion)
             }
             Expr::Comma(parts) => {
                 let mut last = Value::Undefined;

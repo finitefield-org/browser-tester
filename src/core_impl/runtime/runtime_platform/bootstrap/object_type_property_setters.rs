@@ -900,6 +900,88 @@ impl Harness {
         }
     }
 
+    fn set_super_assignment_property(
+        &mut self,
+        super_base: &Value,
+        receiver: &Value,
+        key_value: &Value,
+        value: Value,
+        target: &str,
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<()> {
+        let key = self.property_key_to_storage_key(key_value);
+        let mut current = Some(super_base.clone());
+        while let Some(container) = current {
+            match container {
+                Value::Object(object) => {
+                    let (setter, getter, next) = {
+                        let entries = object.borrow();
+                        (
+                            Self::object_setter_from_entries(&entries, &key),
+                            Self::object_getter_from_entries(&entries, &key).is_some(),
+                            Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
+                        )
+                    };
+                    if let Some(setter) = setter {
+                        if !self.is_callable_value(&setter) {
+                            return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                        }
+                        self.execute_callable_value_with_this_and_env(
+                            &setter,
+                            &[value],
+                            event,
+                            None,
+                            Some(receiver.clone()),
+                        )?;
+                        return Ok(());
+                    }
+                    if getter {
+                        return Ok(());
+                    }
+                    current = next;
+                }
+                Value::Function(function) => {
+                    let (setter, getter, next) = {
+                        if let Some(entries) = self
+                            .script_runtime
+                            .function_public_properties
+                            .get(&function.function_id)
+                        {
+                            (
+                                Self::object_setter_from_entries(entries, &key),
+                                Self::object_getter_from_entries(entries, &key).is_some(),
+                                function.class_super_constructor.clone(),
+                            )
+                        } else {
+                            (None, false, function.class_super_constructor.clone())
+                        }
+                    };
+                    if let Some(setter) = setter {
+                        if !self.is_callable_value(&setter) {
+                            return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                        }
+                        self.execute_callable_value_with_this_and_env(
+                            &setter,
+                            &[value],
+                            event,
+                            None,
+                            Some(receiver.clone()),
+                        )?;
+                        return Ok(());
+                    }
+                    if getter {
+                        return Ok(());
+                    }
+                    current = next;
+                }
+                _ => break,
+            }
+        }
+
+        self.set_object_assignment_property(receiver, key_value, value, target, env, event)
+    }
+
     pub(crate) fn execute_object_assignment_stmt(
         &mut self,
         target: &str,
@@ -919,6 +1001,72 @@ impl Harness {
         let mut keys = Vec::with_capacity(path.len());
         for segment in path {
             keys.push(self.eval_expr(segment, env, event_param, event)?);
+        }
+
+        if target == "super" {
+            let super_base = Self::super_prototype_from_env(env)?;
+            let this_value = Self::super_this_from_env(env)?;
+
+            let final_key = keys.last().ok_or_else(|| {
+                Error::ScriptRuntime("object assignment key cannot be empty".into())
+            })?;
+            let key = self.property_key_to_storage_key(final_key);
+
+            let mut container = super_base.clone();
+            for (index, key_value) in keys.iter().take(keys.len().saturating_sub(1)).enumerate() {
+                if index == 0 {
+                    container = self.object_property_from_value_with_receiver(
+                        &container,
+                        &self.property_key_to_storage_key(key_value),
+                        &this_value,
+                    )?;
+                } else {
+                    container = self.read_object_assignment_property(&container, key_value, target)?;
+                }
+            }
+
+            if matches!(
+                op,
+                VarAssignOp::LogicalAnd | VarAssignOp::LogicalOr | VarAssignOp::Nullish
+            ) {
+                let previous = if keys.len() <= 1 {
+                    self.object_property_from_value_with_receiver(&super_base, &key, &this_value)?
+                } else {
+                    self.object_property_from_value(&container, &key)?
+                };
+                let should_assign = match op {
+                    VarAssignOp::LogicalAnd => previous.truthy(),
+                    VarAssignOp::LogicalOr => !previous.truthy(),
+                    VarAssignOp::Nullish => matches!(&previous, Value::Null | Value::Undefined),
+                    _ => true,
+                };
+                if !should_assign {
+                    return Ok(());
+                }
+            }
+
+            let value = self.eval_expr(expr, env, event_param, event)?;
+            if keys.len() <= 1 {
+                self.set_super_assignment_property(
+                    &super_base,
+                    &this_value,
+                    final_key,
+                    value,
+                    target,
+                    env,
+                    event,
+                )?;
+            } else {
+                self.set_object_assignment_property(
+                    &container,
+                    final_key,
+                    value,
+                    target,
+                    env,
+                    event,
+                )?;
+            }
+            return Ok(());
         }
 
         let mut container = env

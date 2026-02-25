@@ -170,9 +170,7 @@ pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
     }
     if let Some(rest) = strip_keyword_operator(src, "yield") {
         if rest.is_empty() {
-            return Err(Error::ScriptParse(
-                "yield operator requires an operand".into(),
-            ));
+            return Ok(Expr::Yield(Box::new(Expr::Undefined)));
         }
         let inner = parse_expr(rest)?;
         return Ok(Expr::Yield(Box::new(inner)));

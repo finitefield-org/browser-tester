@@ -4672,6 +4672,79 @@ fn normal_function_expression_keeps_dynamic_this_binding() -> Result<()> {
 }
 
 #[test]
+fn function_prototype_call_apply_and_bind_set_this_and_arguments() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function add(c, d) {
+            return this.a + this.b + c + d;
+          }
+
+          const target = { a: 1, b: 3 };
+          const fromCall = add.call(target, 5, 7);
+          const fromApplyArray = add.apply(target, [10, 20]);
+          const fromApplyArrayLike = add.apply(target, { 0: 4, 1: 5, length: 2 });
+          const bound = add.bind({ a: 2, b: 4 }, 1);
+          const fromBind = bound(3);
+
+          document.getElementById('result').textContent =
+            String(fromCall) + ':' +
+            String(fromApplyArray) + ':' +
+            String(fromApplyArrayLike) + ':' +
+            String(fromBind);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "16:34:13:10")?;
+    Ok(())
+}
+
+#[test]
+fn function_prototype_call_and_bind_do_not_rebind_arrow_this() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const source = {
+            value: 7,
+            make() {
+              return () => this.value;
+            },
+          };
+
+          const arrow = source.make();
+          const viaCall = arrow.call({ value: 99 });
+          const rebound = arrow.bind({ value: 42 });
+          const viaBind = rebound();
+          document.getElementById('result').textContent = String(viaCall) + ':' + String(viaBind);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "7:7")?;
+    Ok(())
+}
+
+#[test]
+fn top_level_this_is_window_and_free_function_this_is_undefined() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function readThisKind() {
+            return this === undefined ? 'undefined' : 'other';
+          }
+
+          const topLevel = this === window ? 'window' : 'other';
+          document.getElementById('result').textContent = topLevel + ':' + readThisKind();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "window:undefined")?;
+    Ok(())
+}
+
+#[test]
 fn arrow_function_cannot_be_used_as_constructor() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -4979,6 +5052,118 @@ fn null_keyword_core_behaviors_match_javascript_rules() -> Result<()> {
 }
 
 #[test]
+fn property_accessors_dot_and_bracket_basic_usage_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const person1 = {};
+          person1["firstName"] = "Mario";
+          person1["lastName"] = "Rossi";
+
+          const person2 = {
+            firstName: "John",
+            lastName: "Doe",
+          };
+
+          const object = {};
+          object.$1 = "foo";
+          const reserved = { default: 7 };
+
+          document.getElementById('result').textContent =
+            person1.firstName + ':' +
+            person2["lastName"] + ':' +
+            object.$1 + ':' +
+            String(reserved.default);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "Mario:Doe:foo:7")?;
+    Ok(())
+}
+
+#[test]
+fn property_accessors_bracket_expression_and_key_coercion_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const key = "name";
+          const getKey = () => "name";
+          const obj = { name: "Michel" };
+
+          const dict = {};
+          dict["1"] = "value";
+
+          const foo = { uniqueProp: 1 };
+          const bar = { uniqueProp: 2 };
+          const refMap = {};
+          refMap[foo] = "same-key";
+
+          document.getElementById('result').textContent =
+            obj["name"] + ':' +
+            obj[key] + ':' +
+            obj[getKey()] + ':' +
+            dict[1] + ':' +
+            refMap[bar];
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "Michel:Michel:Michel:value:same-key")?;
+    Ok(())
+}
+
+#[test]
+fn property_accessors_method_this_depends_on_call_site() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const source = {
+            x: 1,
+            getX() {
+              return this.x;
+            },
+          };
+          const target = { x: 7, getX: source.getX };
+
+          document.getElementById('result').textContent =
+            String(source.getX()) + ':' + String(target.getX());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:7")?;
+    Ok(())
+}
+
+#[test]
+fn property_accessors_support_numeric_literal_method_forms() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const a = 77 .toExponential();
+          const b = (77).toExponential();
+          const c = 77..toExponential();
+          document.getElementById('result').textContent = a + ':' + b + ':' + c;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "7.7e+1:7.7e+1:7.7e+1")?;
+    Ok(())
+}
+
+#[test]
+fn property_accessors_dot_notation_rejects_numeric_identifier() {
+    let err = Harness::from_html("<script>const object = {}; object.1 = 'bar';</script>")
+        .expect_err("object.1 should be invalid syntax");
+    match err {
+        Error::ScriptParse(msg) => assert!(!msg.is_empty()),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn property_access_on_null_throws_runtime_error() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -4998,6 +5183,665 @@ fn property_access_on_null_throws_runtime_error() -> Result<()> {
         Error::ScriptRuntime(msg) => assert!(msg.contains("not an object")),
         other => panic!("unexpected error: {other:?}"),
     }
+    Ok(())
+}
+
+#[test]
+fn remainder_operator_handles_number_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            13 % 5,
+            -13 % 5,
+            4 % 2,
+            1 / (-4 % 2),
+            1 % -2,
+            1 % 2,
+            2 % 3,
+            5.5 % 2,
+            String(3n % 2n),
+            String(-3n % 2n),
+            Number.isNaN(NaN % 2),
+            Number.isNaN(Infinity % 2),
+            Number.isNaN(Infinity % 0),
+            Number.isNaN(Infinity % Infinity),
+            2 % Infinity,
+            0 % Infinity,
+          ];
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "3,-3,0,-Infinity,1,1,2,1.5,1,-1,true,true,true,true,2,0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn remainder_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 2n % 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 % 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number remainder should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type remainder error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt remainder should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type remainder error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn remainder_operator_rejects_bigint_division_by_zero() -> Result<()> {
+    let html = r#"
+        <button id='zero'>zero</button>
+        <script>
+          document.getElementById('zero').addEventListener('click', () => {
+            const v = 2n % 0n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let zero = h
+        .click("#zero")
+        .expect_err("BigInt remainder by zero should fail");
+    match zero {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("division by zero")),
+        other => panic!("unexpected BigInt remainder-by-zero error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn remainder_assignment_operator_handles_number_nan_and_bigint_cases() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a = 3;
+          a %= 2;
+          const first = a;
+          a %= 0;
+          const second = String(a);
+          a %= "hello";
+          const third = String(a);
+
+          let b = 5;
+          b %= 2;
+          const fourth = b;
+
+          let c = 3n;
+          c %= 2n;
+          const fifth = String(c);
+
+          document.getElementById('result').textContent =
+            String(first) + ':' + second + ':' + third + ':' + String(fourth) + ':' + fifth;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:NaN:NaN:1:1")?;
+    Ok(())
+}
+
+#[test]
+fn remainder_assignment_operator_expression_returns_assigned_value() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a = 3;
+          const first = (a %= 2);
+          const second = (a %= 0);
+          const third = (a %= "hello");
+          document.getElementById('result').textContent =
+            String(first) + ':' + String(second) + ':' + String(third) + ':' + String(a);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:NaN:NaN:NaN")?;
+    Ok(())
+}
+
+#[test]
+fn remainder_assignment_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 3n;
+            x %= 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 3;
+            y %= 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number remainder assignment should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type remainder-assignment error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt remainder assignment should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type remainder-assignment error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn remainder_assignment_operator_rejects_bigint_zero_divisor() -> Result<()> {
+    let html = r#"
+        <button id='zero'>zero</button>
+        <script>
+          document.getElementById('zero').addEventListener('click', () => {
+            let x = 3n;
+            x %= 0n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let zero = h
+        .click("#zero")
+        .expect_err("BigInt remainder assignment by zero should fail");
+    match zero {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("division by zero")),
+        other => panic!("unexpected BigInt remainder-assignment-by-zero error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn right_shift_operator_handles_number_rules_and_coercion() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 >> 2,
+            -5 >> 2,
+            9 >> 2,
+            -9 >> 2,
+            100 >> 32,
+            100 >> 33,
+            4294967297 >> 0,
+            "8" >> 1,
+            true >> 1,
+            undefined >> 1,
+            Infinity >> 1,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1,-2,2,-3,100,50,1,4,0,0,0")?;
+    Ok(())
+}
+
+#[test]
+fn right_shift_operator_supports_bigint() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            String(9n >> 2n),
+            String(-9n >> 2n),
+            String(8n >> -1n),
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "2,-3,16")?;
+    Ok(())
+}
+
+#[test]
+fn right_shift_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n >> 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 1 >> 1n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = "1" >> 1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    for selector in ["#mix1", "#mix2", "#mix3"] {
+        let err = h
+            .click(selector)
+            .expect_err("mixed BigInt and Number right shift should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+            }
+            other => panic!("unexpected mixed-type right shift error: {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn unsigned_right_shift_operator_handles_number_rules_and_coercion() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 >>> 2,
+            -5 >>> 2,
+            9 >>> 2,
+            -9 >>> 2,
+            100 >>> 32,
+            100 >>> 33,
+            4294967297 >>> 0,
+            "8" >>> 1,
+            true >>> 1,
+            undefined >>> 1,
+            Infinity >>> 1,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1,1073741822,2,1073741821,100,50,1,4,0,0,0")?;
+    Ok(())
+}
+
+#[test]
+fn unsigned_right_shift_operator_rejects_bigint_values() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 1n >>> 1n;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 1n >>> 1;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            const v = 1 >>> 1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    for selector in ["#mix1", "#mix2", "#mix3"] {
+        let err = h
+            .click(selector)
+            .expect_err("unsigned right shift with BigInt should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("BigInt values do not support unsigned right shift"))
+            }
+            other => panic!("unexpected unsigned right shift BigInt error: {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn unsigned_right_shift_assignment_operator_handles_number_rules() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a = 5;
+          const ra = (a >>>= 2);
+
+          let b = -5;
+          const rb = (b >>>= 2);
+
+          let c = 100;
+          c >>>= 32;
+
+          let d = 100;
+          d >>>= 33;
+
+          let e = "8";
+          const re = (e >>>= 1);
+
+          document.getElementById('result').textContent =
+            String(ra) + ':' + String(a) + ':' +
+            String(rb) + ':' + String(b) + ':' +
+            String(c) + ':' + String(d) + ':' +
+            String(re) + ':' + String(e);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:1:1073741822:1073741822:100:50:4:4")?;
+    Ok(())
+}
+
+#[test]
+fn unsigned_right_shift_assignment_operator_rejects_bigint_values() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 5n;
+            x >>>= 2n;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 5n;
+            y >>>= 2;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            let z = 5;
+            z >>>= 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    for selector in ["#mix1", "#mix2", "#mix3"] {
+        let err = h
+            .click(selector)
+            .expect_err("unsigned right shift assignment with BigInt should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("BigInt values do not support unsigned right shift"))
+            }
+            other => panic!("unexpected unsigned right shift assignment BigInt error: {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn right_shift_assignment_operator_handles_number_and_bigint() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let a = 5;
+          const ra = (a >>= 2);
+
+          let b = -5;
+          const rb = (b >>= 2);
+
+          let c = 5n;
+          const rc = (c >>= 2n);
+
+          let d = 100;
+          d >>= 32;
+
+          document.getElementById('result').textContent =
+            String(ra) + ':' + String(a) + ':' +
+            String(rb) + ':' + String(b) + ':' +
+            String(rc) + ':' + String(c) + ':' +
+            String(d);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:1:-2:-2:1:1:100")?;
+    Ok(())
+}
+
+#[test]
+fn right_shift_assignment_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <button id='mix3'>mix3</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 5n;
+            x >>= 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 5;
+            y >>= 2n;
+          });
+          document.getElementById('mix3').addEventListener('click', () => {
+            let z = 5n;
+            z >>= "2";
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    for selector in ["#mix1", "#mix2", "#mix3"] {
+        let err = h
+            .click(selector)
+            .expect_err("mixed BigInt and Number right shift assignment should fail");
+        match err {
+            Error::ScriptRuntime(msg) => {
+                assert!(msg.contains("cannot mix BigInt and other types in bitwise operations"))
+            }
+            other => panic!("unexpected mixed-type right shift assignment error: {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn spread_syntax_in_function_calls_and_constructor_calls_works() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function sum(x, y, z) {
+            return x + y + z;
+          }
+          function collect(v, w, x, y, z) {
+            return [v, w, x, y, z].join(',');
+          }
+          function Point(x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+          }
+
+          const args = [0, 1];
+          const numbers = [1, 2, 3];
+          const pointFields = [7, 8, 9];
+          const point = new Point(...pointFields);
+
+          document.getElementById('result').textContent = [
+            sum(...numbers),
+            collect(-1, ...args, 2, ...[3]),
+            ((...chars) => chars.join(''))(...'abc'),
+            [point.x, point.y, point.z].join(','),
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "6:-1,0,1,2,3:abc:7,8,9")?;
+    Ok(())
+}
+
+#[test]
+fn spread_syntax_in_array_literals_supports_copy_concat_and_conditional_elements() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const parts = ['shoulders', 'knees'];
+          const lyrics = ['head', ...parts, 'and', 'toes'];
+
+          const arr = [1, 2, 3];
+          const arr2 = [...arr];
+          arr2.push(4);
+
+          const isSummer = false;
+          const fruits = ['apple', 'banana', ...(isSummer ? ['watermelon'] : [])];
+
+          const nested = [[1], [2], [3]];
+          const shallow = [...nested];
+          shallow.shift().shift();
+
+          document.getElementById('result').textContent =
+            lyrics.join('|') + ':' +
+            arr.join(',') + ':' +
+            arr2.join(',') + ':' +
+            fruits.join(',') + ':' +
+            JSON.stringify(nested);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "head|shoulders|knees|and|toes:1,2,3:1,2,3,4:apple,banana:[[],[2],[3]]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn spread_syntax_in_object_literals_supports_merge_override_and_primitive_sources() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj1 = { foo: 'bar', x: 42 };
+          const obj2 = { foo: 'baz', y: 13 };
+          const merged = { x: 41, ...obj1, ...obj2, y: 9 };
+
+          const primitiveSpread = { ...true, ...'test', ...10 };
+
+          const isSummer = false;
+          const fruits = {
+            apple: 10,
+            banana: 5,
+            ...(isSummer && { watermelon: 30 }),
+          };
+
+          const nullishSpread = { a: 1, ...null, ...undefined, b: 2 };
+
+          window.setterCalled = 0;
+          const spreadTarget = {
+            set foo(value) {
+              window.setterCalled += 1;
+            },
+            ...{ foo: 1 },
+          };
+
+          const merge = (...objects) => ({ ...objects });
+          const mergeReduce = (...objects) =>
+            objects.reduce((acc, cur) => ({ ...acc, ...cur }), {});
+          const mergedObj1 = merge(obj1, obj2);
+          const mergedObj2 = mergeReduce(obj1, obj2);
+
+          document.getElementById('result').textContent = [
+            merged.foo + ':' + merged.x + ':' + merged.y,
+            primitiveSpread[0] + primitiveSpread[3],
+            Object.keys(primitiveSpread).join(','),
+            String(Object.hasOwn(fruits, 'watermelon')),
+            String(Object.hasOwn(nullishSpread, 'a')) + ':' + String(Object.hasOwn(nullishSpread, 'b')),
+            String(window.setterCalled) + ':' + String(spreadTarget.foo),
+            Object.keys(mergedObj1).join(','),
+            mergedObj2.foo + ':' + mergedObj2.x + ':' + mergedObj2.y,
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "baz:42:9|tt|0,1,2,3|false|true:true|0:1|0,1|baz:42:13",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn spread_syntax_requires_iterables_in_array_literals_and_call_arguments() -> Result<()> {
+    let html = r#"
+        <button id='arr'>arr</button>
+        <button id='call'>call</button>
+        <script>
+          document.getElementById('arr').addEventListener('click', () => {
+            const values = [...{ key1: 'value1' }];
+          });
+          document.getElementById('call').addEventListener('click', () => {
+            const f = () => {};
+            f(...{ key1: 'value1' });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    for selector in ["#arr", "#call"] {
+        let err = h
+            .click(selector)
+            .expect_err("spreading a non-iterable should fail");
+        match err {
+            Error::ScriptRuntime(msg) => assert!(msg.contains("spread source is not iterable")),
+            other => panic!("unexpected spread non-iterable error: {other:?}"),
+        }
+    }
+
     Ok(())
 }
 
@@ -6072,6 +6916,189 @@ fn class_extends_uses_default_super_constructor_and_super_method_calls() -> Resu
 }
 
 #[test]
+fn super_keyword_class_demo_works_for_constructor_and_method_lookup() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Foo {
+            constructor(name) {
+              this.name = name;
+            }
+            getNameSeparator() {
+              return '-';
+            }
+          }
+
+          class FooBar extends Foo {
+            constructor(name, index) {
+              super(name);
+              this.index = index;
+            }
+            getNameSeparator() {
+              return '/';
+            }
+            getFullName() {
+              return this.name + super.getNameSeparator() + this.index;
+            }
+          }
+
+          const firstFooBar = new FooBar('foo', 1);
+          document.getElementById('result').textContent =
+            firstFooBar.name + '|' + firstFooBar.getFullName();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "foo|foo-1")?;
+    Ok(())
+}
+
+#[test]
+fn super_keyword_supports_static_methods_getters_and_bracket_access() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class Rectangle {
+            static logNbSides() {
+              return 'I have 4 sides';
+            }
+          }
+
+          class Square extends Rectangle {
+            static logDescription() {
+              return `${super.logNbSides()} which are all equal`;
+            }
+          }
+
+          class Base {
+            get baseLabel() {
+              return this.name + '-base';
+            }
+            get score() {
+              return this.name.length;
+            }
+          }
+
+          class Child extends Base {
+            constructor(name) {
+              super();
+              this.name = name;
+            }
+            readLabel() {
+              return super.baseLabel;
+            }
+            readByKey(key) {
+              return super[key];
+            }
+          }
+
+          const child = new Child('neo');
+          document.getElementById('result').textContent =
+            Square.logDescription() + '|' + child.readLabel() + '|' + child.readByKey('score');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "I have 4 sides which are all equal|neo-base|3")?;
+    Ok(())
+}
+
+#[test]
+fn super_property_assignment_sets_on_this_and_can_invoke_super_setter() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class A {
+            set y(v) {
+              this._y = 'setter:' + v;
+            }
+          }
+
+          class B extends A {
+            setValues() {
+              super.x = 1;
+              super.y = 2;
+              return String(this.hasOwnProperty('x')) + ':' + String(this.x) + ':' + this._y;
+            }
+          }
+
+          const instance = new B();
+          document.getElementById('result').textContent = instance.setValues();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:1:setter:2")?;
+    Ok(())
+}
+
+#[test]
+fn super_keyword_in_object_literals_works_with_proto_setter() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj1 = {
+            method1() {
+              return 'method 1';
+            },
+            separator: '-',
+          };
+
+          const obj2 = {
+            __proto__: obj1,
+            method2() {
+              return super.method1();
+            },
+            method3() {
+              return 'A' + super['separator'] + 'B';
+            },
+          };
+
+          document.getElementById('result').textContent = obj2.method2() + '|' + obj2.method3();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "method 1|A-B")?;
+    Ok(())
+}
+
+#[test]
+fn delete_super_property_throws_runtime_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          class Base {
+            foo() {}
+          }
+          class Derived extends Base {
+            drop() {
+              delete super.foo;
+            }
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const instance = new Derived();
+            instance.drop();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("deleting super properties should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(
+            msg.contains("Cannot delete super property"),
+            "unexpected runtime error: {msg}"
+        ),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn class_extends_default_constructor_forwards_all_arguments() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -6530,6 +7557,24 @@ fn typeof_let_in_tdz_throws() {
         Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
         Err(_) => panic!("unexpected error kind"),
         Ok(_) => panic!("typeof in TDZ should fail"),
+    }
+}
+
+#[test]
+fn typeof_const_in_tdz_throws() {
+    match Harness::from_html("<script>{ typeof c; const c = 10; }</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("typeof in TDZ for const should fail"),
+    }
+}
+
+#[test]
+fn typeof_class_in_tdz_throws() {
+    match Harness::from_html("<script>{ typeof C; class C {} }</script>") {
+        Err(Error::ScriptRuntime(msg)) => assert!(msg.contains("before initialization")),
+        Err(_) => panic!("unexpected error kind"),
+        Ok(_) => panic!("typeof in TDZ for class should fail"),
     }
 }
 

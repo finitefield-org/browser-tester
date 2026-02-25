@@ -1697,6 +1697,11 @@ impl Harness {
                             }
 
                             for method in methods {
+                                let method_super_prototype = if method.is_static {
+                                    super_constructor.clone()
+                                } else {
+                                    super_prototype.clone()
+                                };
                                 let method_value = self.make_function_value_with_super(
                                     method.handler.clone(),
                                     env,
@@ -1706,7 +1711,7 @@ impl Harness {
                                     false,
                                     true,
                                     super_constructor.clone(),
-                                    super_prototype.clone(),
+                                    method_super_prototype,
                                 );
                                 if let Value::Function(function) = &method_value {
                                     class_function_ids.push(function.function_id);

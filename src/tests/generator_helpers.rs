@@ -128,6 +128,105 @@ fn generator_declaration_is_hoisted_and_yield_star_delegates_values() -> Result<
 }
 
 #[test]
+fn yield_star_operator_delegates_to_generators_and_other_iterables() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          function* g1() {
+            yield 2;
+            yield 3;
+            yield 4;
+          }
+
+          function* g2() {
+            yield 1;
+            yield* g1();
+            yield 5;
+          }
+
+          function* g3(...args) {
+            yield* [1, 2];
+            yield* "34";
+            yield* args;
+          }
+
+          const a = g2().toArray().join(',');
+          const b = g3(5, 6).toArray().join(',');
+          document.getElementById('out').textContent = a + '|' + b;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "1,2,3,4,5|1,2,3,4,5,6")?;
+    Ok(())
+}
+
+#[test]
+fn yield_star_expression_returns_delegated_generator_completion_value() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          function* g4() {
+            yield* [1, 2, 3];
+            return "foo";
+          }
+
+          function* g5() {
+            const g4ReturnValue = yield* g4();
+            return g4ReturnValue;
+          }
+
+          const gen = g5();
+          const first = gen.next();
+          const second = gen.next();
+          const third = gen.next();
+          const fourth = gen.next();
+          const fifth = gen.next();
+
+          document.getElementById('out').textContent =
+            String(first.value) + ':' + String(first.done) + ',' +
+            String(second.value) + ':' + String(second.done) + ',' +
+            String(third.value) + ':' + String(third.done) + ',' +
+            String(fourth.value) + ':' + String(fourth.done) + ',' +
+            String(fifth.value) + ':' + String(fifth.done);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "1:false,2:false,3:false,foo:true,undefined:true")?;
+    Ok(())
+}
+
+#[test]
+fn yield_star_throws_when_operand_is_not_iterable() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          function* bad() {
+            yield* 123;
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const iter = bad();
+            iter.next();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#run")
+        .expect_err("yield* over non-iterable should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("expected an array-like or iterable source"))
+        }
+        other => panic!("unexpected yield* non-iterable error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn function_line_break_before_generator_star_is_allowed() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -203,6 +302,60 @@ fn generator_function_expression_can_be_assigned_and_iterated() -> Result<()> {
 
     let h = Harness::from_html(html)?;
     h.assert_text("#out", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn yield_operator_pauses_and_resumes_generator_iteration() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          function* foo(index) {
+            while (index < 2) {
+              yield index;
+              index++;
+            }
+          }
+
+          const iterator = foo(0);
+          const first = iterator.next();
+          const second = iterator.next();
+          const done = iterator.next();
+          document.getElementById('out').textContent =
+            String(first.value) + ':' + String(first.done) + '|' +
+            String(second.value) + ':' + String(second.done) + '|' +
+            String(done.value) + ':' + String(done.done);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "0:false|1:false|undefined:true")?;
+    Ok(())
+}
+
+#[test]
+fn yield_without_expression_yields_undefined_value() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          function* sample() {
+            yield;
+            yield 1;
+          }
+
+          const iter = sample();
+          const first = iter.next();
+          const second = iter.next();
+          const third = iter.next();
+          document.getElementById('out').textContent =
+            String(first.value) + ':' + String(first.done) + '|' +
+            String(second.value) + ':' + String(second.done) + '|' +
+            String(third.value) + ':' + String(third.done);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "undefined:false|1:false|undefined:true")?;
     Ok(())
 }
 

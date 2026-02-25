@@ -259,12 +259,8 @@ pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
     };
 
     // Assignment expressions are right-associative and lower precedence than
-    // conditional expressions. This runtime currently supports expression-form
-    // assignment for plain "=" by lowering to an IIFE that executes the
-    // existing statement assignment path and returns the assigned value.
-    if op_len != 1 {
-        return parse_ternary_expr(src);
-    }
+    // conditional expressions. We lower supported assignment forms to an IIFE
+    // so the existing statement assignment path is reused.
 
     let lhs_raw = src[..eq_pos].trim();
     let rhs_src = src[eq_pos + op_len..].trim();
@@ -273,6 +269,9 @@ pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
             "invalid assignment expression: {src}"
         )));
     }
+    let op = src
+        .get(eq_pos..eq_pos + op_len)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid assignment expression: {src}")))?;
     let lhs = strip_outer_parens(lhs_raw).trim();
     if lhs.is_empty() {
         return Err(Error::ScriptParse(format!(
@@ -294,6 +293,12 @@ pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
         return parse_ternary_expr(src);
     }
 
+    // Compound assignment expressions need the assigned value as expression
+    // result. We currently support this lowering only for plain identifiers.
+    if op != "=" && !is_ident(lhs) {
+        return parse_ternary_expr(src);
+    }
+
     let mut temp_index = 0usize;
     let temp_name = loop {
         let candidate = format!("__bt_assign_value_{temp_index}");
@@ -302,9 +307,13 @@ pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
         }
         temp_index += 1;
     };
-    let lowered = format!(
-        "(() => {{ const {temp_name} = ({rhs_src}); {lhs} = {temp_name}; return {temp_name}; }})()"
-    );
+    let lowered = if op == "=" {
+        format!(
+            "(() => {{ const {temp_name} = ({rhs_src}); {lhs} = {temp_name}; return {temp_name}; }})()"
+        )
+    } else {
+        format!("(() => {{ {lhs} {op} ({rhs_src}); return {lhs}; }})()")
+    };
     parse_expr(&lowered)
 }
 

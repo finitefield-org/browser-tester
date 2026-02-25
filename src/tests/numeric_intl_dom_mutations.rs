@@ -859,6 +859,112 @@ fn addition_assignment_reads_getter_once_for_property_reference() -> Result<()> 
 }
 
 #[test]
+fn subtraction_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 2;
+            const first = (a -= 3);
+            const second = (a -= 'Hello');
+
+            let bar = 5;
+            bar -= 2;
+            const third = bar;
+            bar -= 'foo';
+            const fourth = String(bar);
+
+            let baz = 5;
+            baz -= true;
+            const fifth = baz;
+
+            let big = 3n;
+            big -= 2n;
+            const sixth = big;
+
+            document.getElementById('result').textContent =
+              first + '|' + String(second) + '|' + third + '|' + fourth + '|' + fifth + '|' + sixth;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-1|NaN|3|NaN|4|1")?;
+    Ok(())
+}
+
+#[test]
+fn subtraction_assignment_mixed_bigint_and_number_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 3n;
+            x -= 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 2;
+            y -= 1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("mixed BigInt/Number subtraction assignment should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed subtraction assignment error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("mixed Number/BigInt subtraction assignment should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed subtraction assignment error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn subtraction_assignment_reads_getter_once_for_property_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 7,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value -= 5;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "7|1")?;
+    Ok(())
+}
+
+#[test]
 fn division_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1234,6 +1340,94 @@ fn equality_operator_handles_core_loose_comparison_rules() -> Result<()> {
     h.assert_text(
         "#result",
         "true|true|true|true|true|false|false|true|true|true|false|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn strict_equality_operator_uses_is_strictly_equal_semantics() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const string1 = 'hello';
+            const string2 = String('hello');
+            const string3 = new String('hello');
+            const string4 = new String('hello');
+
+            const object1 = { key: 'value' };
+            const object2 = { key: 'value' };
+
+            const out = [
+              string1 === string2,
+              string1 === string3,
+              string3 === string4,
+              string3 === string3,
+              object1 === object2,
+              object1 === object1,
+              1 === 1,
+              '1' === 1,
+              0 === false,
+              null === undefined,
+              null === null,
+              NaN === NaN,
+              3 === 3.0,
+              +0 === -0,
+            ];
+
+            document.getElementById('result').textContent = out.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|false|false|true|false|true|true|false|false|false|true|false|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn strict_inequality_operator_is_negation_of_strict_equality() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const object1 = { key: 'value' };
+            const object2 = { key: 'value' };
+
+            const out = [
+              1 !== 1,
+              'hello' !== 'hello',
+              '1' !== 1,
+              0 !== false,
+              'hello' !== 'hola',
+              3 !== 4,
+              true !== true,
+              true !== false,
+              null !== null,
+              null !== undefined,
+              object1 !== object2,
+              object1 !== object1,
+              (3 !== '3') === !(3 === '3'),
+              NaN !== NaN,
+              +0 !== -0,
+            ];
+
+            document.getElementById('result').textContent = out.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "false|false|true|true|true|true|false|true|false|true|true|false|true|true|false",
     )?;
     Ok(())
 }

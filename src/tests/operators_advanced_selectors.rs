@@ -667,6 +667,78 @@ fn division_operator_coerces_operands_and_handles_special_values() -> Result<()>
 }
 
 #[test]
+fn subtraction_operator_coerces_operands_and_handles_nan_and_bigint_cases() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 5 - 3;
+            const b = 3.5 - 5;
+            const c = 5 - "hello";
+            const d = 5 - true;
+            const e = "5" - 3;
+            const f = "3" - 5;
+            const g = "foo" - 3;
+            const h = null - 0;
+            const i = undefined - 3;
+            const j = 3 - undefined;
+            const k = 2n - 1n;
+
+            document.getElementById('result').textContent = [
+              a, b, String(c), d, e, f, String(g), h, String(i), String(j), k,
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:-1.5:NaN:4:2:-2:NaN:0:NaN:NaN:1")?;
+    Ok(())
+}
+
+#[test]
+fn subtraction_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 2n - 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 - 1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number subtraction should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type subtraction error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt subtraction should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type subtraction error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn multiplication_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1124,19 +1196,80 @@ fn unary_plus_works_as_numeric_expression() -> Result<()> {
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            const text = '12';
-            const value = +text;
-            const direct = +'-3.5';
-            const paren = +('+7');
-            document.getElementById('result').textContent =
-              value + ':' + direct + ':' + paren;
+            const x = 1;
+            const y = -1;
+            const out = [
+              +x,
+              +y,
+              +'',
+              +true,
+              +false,
+              +null,
+              +'hello',
+              +[],
+              +'-3.5',
+              +('+7'),
+            ];
+            document.getElementById('result').textContent = out.map(String).join(',');
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "12:-3.5:7")?;
+    h.assert_text("#result", "1,-1,0,1,0,0,NaN,0,-3.5,7")?;
+    Ok(())
+}
+
+#[test]
+fn unary_negation_negates_numbers_and_coerces_non_numbers() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = 4;
+            const y = -x;
+            const a = "4";
+            const b = -a;
+            const c = -4n;
+            document.getElementById('result').textContent =
+              String(y) + ':' +
+              String(b) + ':' +
+              String(c) + ':' +
+              String(x);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "-4:-4:-4:4")?;
+    Ok(())
+}
+
+#[test]
+fn unary_negation_symbol_operand_reports_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sym = Symbol('x');
+            const value = -sym;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("unary negation on symbol should fail");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("Cannot convert a Symbol value to a number"))
+        }
+        other => panic!("unexpected unary negation symbol error: {other:?}"),
+    }
     Ok(())
 }
 
@@ -1739,18 +1872,31 @@ fn typeof_operator_works_for_known_and_undefined_identifiers() -> Result<()> {
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            const known = 1;
-            const a = typeof known;
-            const b = typeof unknownName;
-            const c = typeof false;
-            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+            class C {}
+            const fn = function () {};
+            const out = [
+              typeof 42,
+              typeof "blubber",
+              typeof true,
+              typeof unknownName,
+              typeof null,
+              typeof Symbol.iterator,
+              typeof fn,
+              typeof C,
+              typeof 99 + " foo",
+              typeof (99 + " foo"),
+            ];
+            document.getElementById('result').textContent = out.join(':');
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "number:undefined:boolean")?;
+    h.assert_text(
+        "#result",
+        "number:string:boolean:undefined:object:symbol:function:function:number foo:string",
+    )?;
     Ok(())
 }
 
@@ -1783,6 +1929,74 @@ fn undefined_void_delete_and_special_literals_work() -> Result<()> {
         "#result",
         "undefined:undefined:number:number:true:false:true:false",
     )?;
+    Ok(())
+}
+
+#[test]
+fn void_operator_returns_undefined_and_respects_precedence() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let sideEffect = '';
+            const output = void 1;
+            const evaluated = void (sideEffect = 'evaluated');
+            const precedence1 = (void 2 === "2");
+            const precedence2 = String(void (2 === "2"));
+            document.getElementById('result').textContent =
+              String(output) + ':' +
+              String(evaluated) + ':' +
+              sideEffect + ':' +
+              String(precedence1) + ':' +
+              precedence2;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "undefined:undefined:evaluated:false:undefined",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn void_operator_supports_function_iife_without_leaking_name() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let trace = '';
+            void (function iife() {
+              trace += 'iife';
+            })();
+
+            let namedExecuted = false;
+            void function test() {
+              namedExecuted = true;
+            };
+
+            let state = 'ok';
+            try {
+              test();
+              state = 'defined';
+            } catch (e) {
+              state = 'not-defined';
+            }
+
+            document.getElementById('result').textContent =
+              trace + ':' + state + ':' + String(namedExecuted) + ':' + typeof test;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "iife:not-defined:false:undefined")?;
     Ok(())
 }
 
@@ -2820,17 +3034,35 @@ fn yield_and_yield_star_operators_work() -> Result<()> {
         <button id='btn'>run</button>
         <p id='result'></p>
         <script>
-          document.getElementById('btn').addEventListener('click', () => {
+          function* inner() {
+            yield 5;
+            return 9;
+          }
+
+          function* outer() {
             const a = yield 3;
-            const b = yield* (2 + 3);
-            document.getElementById('result').textContent = a + ':' + b;
+            const b = yield* inner();
+            return String(a) + ':' + String(b);
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const iter = outer();
+            const first = iter.next();
+            const second = iter.next();
+            const third = iter.next();
+            const fourth = iter.next();
+            document.getElementById('result').textContent =
+              String(first.value) + ':' + String(first.done) + '|' +
+              String(second.value) + ':' + String(second.done) + '|' +
+              String(third.value) + ':' + String(third.done) + '|' +
+              String(fourth.value) + ':' + String(fourth.done);
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "3:5")?;
+    h.assert_text("#result", "3:false|5:false|3:9:true|undefined:true")?;
     Ok(())
 }
 

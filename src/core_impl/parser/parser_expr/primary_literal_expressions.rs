@@ -517,6 +517,9 @@ pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if src.is_empty() {
         return Ok(None);
     }
+    if src.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
 
     if let Some(value) = parse_bigint_literal(src)? {
         return Ok(Some(value));
@@ -534,6 +537,13 @@ pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
 
     if src.as_bytes().iter().any(|b| matches!(b, b'e' | b'E')) {
         if !matches!(src.as_bytes().first(), Some(b) if b.is_ascii_digit() || *b == b'.') {
+            return Ok(None);
+        }
+        if src
+            .as_bytes()
+            .iter()
+            .any(|b| !matches!(b, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'))
+        {
             return Ok(None);
         }
         let n: f64 = src
@@ -566,7 +576,7 @@ pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if dot_count != 1 {
         return Ok(None);
     }
-    if src.starts_with('.') || src.ends_with('.') {
+    if src.starts_with('.') {
         return Ok(None);
     }
 

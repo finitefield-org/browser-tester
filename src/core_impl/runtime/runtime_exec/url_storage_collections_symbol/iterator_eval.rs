@@ -83,6 +83,14 @@ impl Harness {
                 Self::new_array_value(values),
             ),
             (INTERNAL_ITERATOR_INDEX_KEY.to_string(), Value::Number(0)),
+            (
+                INTERNAL_ITERATOR_RETURN_VALUE_KEY.to_string(),
+                Value::Undefined,
+            ),
+            (
+                INTERNAL_ITERATOR_RETURN_EMITTED_KEY.to_string(),
+                Value::Bool(true),
+            ),
         ])));
         let iterator_value = Value::Object(iterator.clone());
         let iterator_self = self.new_iterator_self_callable(iterator_value.clone());
@@ -99,7 +107,7 @@ impl Harness {
         iterator_value
     }
 
-    pub(crate) fn new_generator_value(&mut self, values: Vec<Value>) -> Value {
+    pub(crate) fn new_generator_value(&mut self, values: Vec<Value>, return_value: Value) -> Value {
         let iterator = Rc::new(RefCell::new(ObjectValue::new(vec![
             (INTERNAL_ITERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
             (INTERNAL_GENERATOR_OBJECT_KEY.to_string(), Value::Bool(true)),
@@ -108,6 +116,11 @@ impl Harness {
                 Self::new_array_value(values),
             ),
             (INTERNAL_ITERATOR_INDEX_KEY.to_string(), Value::Number(0)),
+            (INTERNAL_ITERATOR_RETURN_VALUE_KEY.to_string(), return_value),
+            (
+                INTERNAL_ITERATOR_RETURN_EMITTED_KEY.to_string(),
+                Value::Bool(false),
+            ),
         ])));
         let iterator_value = Value::Object(iterator.clone());
         let iterator_self = self.new_iterator_self_callable(iterator_value.clone());
@@ -206,7 +219,57 @@ impl Harness {
             INTERNAL_ITERATOR_INDEX_KEY.to_string(),
             Value::Number(len as i64),
         );
+        Self::object_set_entry(
+            &mut entries,
+            INTERNAL_ITERATOR_RETURN_EMITTED_KEY.to_string(),
+            Value::Bool(true),
+        );
         Ok(())
+    }
+
+    pub(crate) fn generator_done_value_if_exhausted(
+        &self,
+        iterator: &Rc<RefCell<ObjectValue>>,
+    ) -> Result<Option<Value>> {
+        let mut entries = iterator.borrow_mut();
+        if !Self::is_iterator_object(&entries) {
+            return Err(Error::ScriptRuntime("value is not an Iterator".into()));
+        }
+        if !Self::is_generator_object(&entries) {
+            return Ok(None);
+        }
+        let values = match Self::object_get_entry(&entries, INTERNAL_ITERATOR_VALUES_KEY) {
+            Some(Value::Array(values)) => values,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "Iterator has invalid internal state".into(),
+                ));
+            }
+        };
+        let index = match Self::object_get_entry(&entries, INTERNAL_ITERATOR_INDEX_KEY) {
+            Some(Value::Number(value)) if value >= 0 => value as usize,
+            _ => 0,
+        };
+        let len = values.borrow().len();
+        if index < len {
+            return Ok(None);
+        }
+
+        let emitted = matches!(
+            Self::object_get_entry(&entries, INTERNAL_ITERATOR_RETURN_EMITTED_KEY),
+            Some(Value::Bool(true))
+        );
+        if emitted {
+            return Ok(Some(Value::Undefined));
+        }
+        let value =
+            Self::object_get_entry(&entries, INTERNAL_ITERATOR_RETURN_VALUE_KEY).unwrap_or(Value::Undefined);
+        Self::object_set_entry(
+            &mut entries,
+            INTERNAL_ITERATOR_RETURN_EMITTED_KEY.to_string(),
+            Value::Bool(true),
+        );
+        Ok(Some(value))
     }
 
     pub(crate) fn iterator_next_value_from_object(
@@ -324,6 +387,14 @@ impl Harness {
                     return Err(Error::ScriptRuntime(
                         "Iterator.next does not take arguments".into(),
                     ));
+                }
+                if is_generator {
+                    if let Some(done_value) = self.generator_done_value_if_exhausted(iterator)? {
+                        return Ok(Some(Self::new_object_value(vec![
+                            ("value".to_string(), done_value),
+                            ("done".to_string(), Value::Bool(true)),
+                        ])));
+                    }
                 }
                 if let Some(value) = self.iterator_next_value_from_object(iterator)? {
                     Self::new_object_value(vec![

@@ -161,6 +161,121 @@ impl Harness {
         ) || Self::callable_kind_from_value(value).is_some()
     }
 
+    fn callable_receiver_from_this_arg(
+        &self,
+        this_arg: Option<Value>,
+        method: &str,
+    ) -> Result<Value> {
+        let Some(target) = this_arg else {
+            return Err(Error::ScriptRuntime(format!(
+                "Function.prototype.{method} called on non-callable value"
+            )));
+        };
+        if !self.is_callable_value(&target) {
+            return Err(Error::ScriptRuntime(format!(
+                "Function.prototype.{method} called on non-callable value"
+            )));
+        }
+        Ok(target)
+    }
+
+    pub(crate) fn execute_function_prototype_member(
+        &mut self,
+        member: &str,
+        receiver: &Value,
+        args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
+    ) -> Result<Value> {
+        if !self.is_callable_value(receiver) {
+            return Err(Error::ScriptRuntime(format!(
+                "Function.prototype.{member} called on non-callable value"
+            )));
+        }
+        match member {
+            "call" => {
+                let call_this = args.first().cloned().unwrap_or(Value::Undefined);
+                let call_args = args.get(1..).unwrap_or(&[]);
+                self.execute_callable_value_with_this_and_env(
+                    receiver,
+                    call_args,
+                    event,
+                    caller_env,
+                    Some(call_this),
+                )
+            }
+            "apply" => {
+                let call_this = args.first().cloned().unwrap_or(Value::Undefined);
+                let call_args = if let Some(args_value) = args.get(1) {
+                    self.apply_arguments_from_value(args_value)?
+                } else {
+                    Vec::new()
+                };
+                self.execute_callable_value_with_this_and_env(
+                    receiver,
+                    &call_args,
+                    event,
+                    caller_env,
+                    Some(call_this),
+                )
+            }
+            "bind" => {
+                let bound_this = args.first().cloned().unwrap_or(Value::Undefined);
+                let bound_args = args.get(1..).unwrap_or(&[]).to_vec();
+                Ok(Self::new_bound_function_callable(
+                    receiver.clone(),
+                    bound_this,
+                    bound_args,
+                ))
+            }
+            _ => Err(Error::ScriptRuntime(format!(
+                "unsupported Function.prototype method: {member}"
+            ))),
+        }
+    }
+
+    fn apply_arguments_from_value(&mut self, value: &Value) -> Result<Vec<Value>> {
+        match value {
+            Value::Undefined | Value::Null => Ok(Vec::new()),
+            Value::Array(values) => Ok(values.borrow().clone()),
+            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
+            Value::TypedArray(array) => self.typed_array_snapshot(array),
+            Value::Object(_) | Value::Function(_) => {
+                let length = Self::value_to_i64(&self.object_property_from_value(value, "length")?);
+                let length = length.max(0) as usize;
+                let mut out = Vec::with_capacity(length);
+                for index in 0..length {
+                    out.push(self.object_property_from_value(value, &index.to_string())?);
+                }
+                Ok(out)
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Function.prototype.apply requires array-like arguments".into(),
+            )),
+        }
+    }
+
+    fn bound_callable_components(callable: &Value) -> Result<(Value, Value, Vec<Value>)> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime("bound function has invalid internal state".into()));
+        };
+        let entries = entries.borrow();
+        let target = Self::object_get_entry(&entries, INTERNAL_BOUND_CALLABLE_TARGET_KEY)
+            .ok_or_else(|| Error::ScriptRuntime("bound function has invalid target".into()))?;
+        let bound_this = Self::object_get_entry(&entries, INTERNAL_BOUND_CALLABLE_THIS_KEY)
+            .unwrap_or(Value::Undefined);
+        let bound_args = match Self::object_get_entry(&entries, INTERNAL_BOUND_CALLABLE_ARGS_KEY) {
+            Some(Value::Array(values)) => values.borrow().clone(),
+            Some(Value::Undefined) | None => Vec::new(),
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "bound function has invalid bound arguments".into(),
+                ))
+            }
+        };
+        Ok((target, bound_this, bound_args))
+    }
+
     pub(crate) fn execute_callable_value(
         &mut self,
         callable: &Value,
@@ -239,6 +354,17 @@ impl Harness {
                 }
             }
             other => {
+                if matches!(Self::callable_kind_from_value(other), Some("bound_function")) {
+                    let (target, _bound_this, mut bound_args) =
+                        Self::bound_callable_components(other)?;
+                    bound_args.extend_from_slice(args);
+                    return self.execute_constructor_value_with_env(
+                        &target,
+                        &bound_args,
+                        event,
+                        caller_env,
+                    );
+                }
                 if self.is_callable_value(other) {
                     self.execute_callable_value_with_env(other, args, event, caller_env)
                 } else {
@@ -268,7 +394,7 @@ impl Harness {
     ) -> Result<Value> {
         match callable {
             Value::Function(function) => {
-                if function.is_class_constructor && this_arg.is_none() {
+                if function.is_class_constructor {
                     return Err(Error::ScriptRuntime(
                         "Class constructor cannot be invoked without 'new'".into(),
                     ));
@@ -287,6 +413,48 @@ impl Harness {
                     return Err(Error::ScriptRuntime("callback is not a function".into()));
                 };
                 match kind {
+                    "function_call" => {
+                        let target = self.callable_receiver_from_this_arg(this_arg, "call")?;
+                        self.execute_function_prototype_member(
+                            "call",
+                            &target,
+                            args,
+                            event,
+                            caller_env,
+                        )
+                    }
+                    "function_apply" => {
+                        let target = self.callable_receiver_from_this_arg(this_arg, "apply")?;
+                        self.execute_function_prototype_member(
+                            "apply",
+                            &target,
+                            args,
+                            event,
+                            caller_env,
+                        )
+                    }
+                    "function_bind" => {
+                        let target = self.callable_receiver_from_this_arg(this_arg, "bind")?;
+                        self.execute_function_prototype_member(
+                            "bind",
+                            &target,
+                            args,
+                            event,
+                            caller_env,
+                        )
+                    }
+                    "bound_function" => {
+                        let (target, bound_this, mut bound_args) =
+                            Self::bound_callable_components(callable)?;
+                        bound_args.extend_from_slice(args);
+                        self.execute_callable_value_with_this_and_env(
+                            &target,
+                            &bound_args,
+                            event,
+                            caller_env,
+                            Some(bound_this),
+                        )
+                    }
                     "intl_collator_compare" => {
                         let (locale, case_first, sensitivity) =
                             self.resolve_intl_collator_options(callable)?;
@@ -790,11 +958,30 @@ impl Harness {
                             INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(),
                             super_prototype,
                         );
+                    } else if function.is_method {
+                        let inferred_super = match call_env.get("this").cloned() {
+                            Some(Value::Object(object)) => {
+                                Self::object_get_entry(&object.borrow(), INTERNAL_OBJECT_PROTOTYPE_KEY)
+                            }
+                            Some(Value::Function(function_value)) => {
+                                function_value.class_super_constructor.clone()
+                            }
+                            _ => None,
+                        };
+                        if let Some(super_prototype) = inferred_super {
+                            call_env.insert(
+                                INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(),
+                                super_prototype,
+                            );
+                        }
                     }
                     let mut global_sync_keys = HashSet::new();
                     let caller_view = caller_env;
                     for name in &function.captured_global_names {
-                        if Self::is_internal_env_key(name) || function.local_bindings.contains(name)
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name)
+                            || name == "this"
+                            || name == "arguments"
                         {
                             continue;
                         }
@@ -810,6 +997,8 @@ impl Harness {
                     for (name, global_value) in this.script_runtime.env.iter() {
                         if Self::is_internal_env_key(name)
                             || function.local_bindings.contains(name)
+                            || name == "this"
+                            || name == "arguments"
                             || call_env.contains_key(name)
                         {
                             continue;
@@ -894,8 +1083,19 @@ impl Harness {
                         .as_ref()
                         .map(|values| values.borrow().clone())
                         .unwrap_or_default();
+                    let generator_return_value = if matches!(flow, ExecFlow::Return) {
+                        body_env
+                            .get(INTERNAL_RETURN_SLOT)
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                    } else {
+                        Value::Undefined
+                    };
                     for name in &global_sync_keys {
-                        if Self::is_internal_env_key(name) || function.local_bindings.contains(name)
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name)
+                            || name == "this"
+                            || name == "arguments"
                         {
                             continue;
                         }
@@ -926,6 +1126,8 @@ impl Harness {
                         for name in captured_env_before_call.keys() {
                             if Self::is_internal_env_key(name)
                                 || function.local_bindings.contains(name.as_str())
+                                || name == "this"
+                                || name == "arguments"
                             {
                                 continue;
                             }
@@ -953,7 +1155,7 @@ impl Harness {
                         if function.is_async {
                             return Ok(this.new_async_generator_value(generator_yields));
                         }
-                        return Ok(this.new_generator_value(generator_yields));
+                        return Ok(this.new_generator_value(generator_yields, generator_return_value));
                     }
                     match flow {
                         ExecFlow::Continue => Ok(Value::Undefined),

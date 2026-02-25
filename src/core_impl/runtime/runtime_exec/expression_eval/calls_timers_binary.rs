@@ -176,7 +176,7 @@ impl Harness {
             })
     }
 
-    fn super_prototype_from_env(env: &HashMap<String, Value>) -> Result<Value> {
+    pub(crate) fn super_prototype_from_env(env: &HashMap<String, Value>) -> Result<Value> {
         env.get(INTERNAL_CLASS_SUPER_PROTOTYPE_KEY)
             .cloned()
             .ok_or_else(|| {
@@ -184,7 +184,7 @@ impl Harness {
             })
     }
 
-    fn super_this_from_env(env: &HashMap<String, Value>) -> Result<Value> {
+    pub(crate) fn super_this_from_env(env: &HashMap<String, Value>) -> Result<Value> {
         match env.get("this").cloned().unwrap_or(Value::Undefined) {
             Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
                 "super requires an initialized this value".into(),
@@ -274,7 +274,11 @@ impl Harness {
                         let this_value = Self::super_this_from_env(env)?;
                         let evaluated_args =
                             self.eval_call_args_with_spread(args, env, event_param, event)?;
-                        let callee = self.object_property_from_value(&super_prototype, member)?;
+                        let callee = self.object_property_from_value_with_receiver(
+                            &super_prototype,
+                            member,
+                            &this_value,
+                        )?;
                         return self
                             .execute_callable_value_with_this_and_env(
                                 &callee,
@@ -335,6 +339,18 @@ impl Harness {
                     }
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
+
+                    if matches!(member.as_str(), "call" | "apply" | "bind")
+                        && self.is_callable_value(&receiver)
+                    {
+                        return self.execute_function_prototype_member(
+                            member,
+                            &receiver,
+                            &evaluated_args,
+                            event,
+                            Some(env),
+                        );
+                    }
 
                     if let Value::Array(values) = &receiver {
                         if let Some(value) =
@@ -658,7 +674,12 @@ impl Harness {
                 } => {
                     if Self::is_super_target_expr(target) {
                         let super_prototype = Self::super_prototype_from_env(env)?;
-                        return self.object_property_from_value(&super_prototype, member);
+                        let this_value = Self::super_this_from_env(env)?;
+                        return self.object_property_from_value_with_receiver(
+                            &super_prototype,
+                            member,
+                            &this_value,
+                        );
                     }
                     let receiver = self.eval_expr(target, env, event_param, event)?;
                     if *optional && matches!(receiver, Value::Null | Value::Undefined) {
@@ -679,7 +700,8 @@ impl Harness {
                     index,
                     optional,
                 } => {
-                    let receiver = if Self::is_super_target_expr(target) {
+                    let is_super = Self::is_super_target_expr(target);
+                    let receiver = if is_super {
                         Self::super_prototype_from_env(env)?
                     } else {
                         self.eval_expr(target, env, event_param, event)?
@@ -696,9 +718,21 @@ impl Harness {
                         }
                         other => self.property_key_to_storage_key(&other),
                     };
-                    self.object_property_from_value(&receiver, &key)
+                    if is_super {
+                        let this_value = Self::super_this_from_env(env)?;
+                        self.object_property_from_value_with_receiver(
+                            &receiver,
+                            &key,
+                            &this_value,
+                        )
+                    } else {
+                        self.object_property_from_value(&receiver, &key)
+                    }
                 }
                 Expr::Var(name) => {
+                    if name == "super" {
+                        return Self::super_prototype_from_env(env);
+                    }
                     self.ensure_binding_initialized(env, name)?;
                     if let Some(value) = env.get(name).cloned() {
                         Ok(value)
