@@ -255,6 +255,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -278,6 +279,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -301,6 +303,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -338,6 +341,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -361,6 +365,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -384,6 +389,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -407,6 +413,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };
@@ -430,6 +437,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                         member: method.clone(),
                         args: parsed_args,
                         optional: false,
+                        optional_call: false,
                     }));
                 }
             };

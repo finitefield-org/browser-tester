@@ -208,7 +208,9 @@ impl Harness {
                         "cannot mix BigInt and other types in arithmetic operations".into(),
                     ));
                 }
-                Value::Float(self.numeric_value(left) * self.numeric_value(right))
+                Value::Float(
+                    Self::coerce_number_for_global(left) * Self::coerce_number_for_global(right),
+                )
             }
             BinaryOp::Mod => {
                 if let (Value::BigInt(l), Value::BigInt(r)) = (left, right) {

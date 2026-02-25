@@ -326,7 +326,7 @@ pub(crate) fn parse_ternary_expr(src: &str) -> Result<Expr> {
         });
     }
 
-    parse_logical_or_expr(src)
+    parse_nullish_expr(src)
 }
 
 pub(crate) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
@@ -337,9 +337,9 @@ pub(crate) fn parse_logical_or_expr(src: &str) -> Result<Expr> {
     }
     let (parts, ops) = split_top_level_by_ops(src, &["||"]);
     if ops.is_empty() {
-        return parse_nullish_expr(src);
+        return parse_logical_and_expr(src);
     }
-    fold_binary(parts, ops, parse_nullish_expr, |op| match op {
+    fold_binary(parts, ops, parse_logical_and_expr, |op| match op {
         "||" => BinaryOp::Or,
         _ => unreachable!(),
     })
@@ -353,9 +353,15 @@ pub(crate) fn parse_nullish_expr(src: &str) -> Result<Expr> {
     }
     let (parts, ops) = split_top_level_by_ops(src, &["??"]);
     if ops.is_empty() {
-        return parse_logical_and_expr(src);
+        return parse_logical_or_expr(src);
     }
-    fold_binary(parts, ops, parse_logical_and_expr, |op| match op {
+    let (_, mixed_logical_ops) = split_top_level_by_ops(src, &["||", "&&"]);
+    if !mixed_logical_ops.is_empty() {
+        return Err(Error::ScriptParse(
+            "cannot mix '??' with '&&' or '||' without parentheses".into(),
+        ));
+    }
+    fold_binary(parts, ops, parse_logical_or_expr, |op| match op {
         "??" => BinaryOp::Nullish,
         _ => unreachable!(),
     })
@@ -534,7 +540,7 @@ pub(crate) fn parse_add_expr(src: &str) -> Result<Expr> {
 
     let mut expr = parse_mul_expr(parts[0].trim())?;
     for (idx, op) in ops.iter().enumerate() {
-        let rhs = parse_expr(parts[idx + 1].trim())?;
+        let rhs = parse_mul_expr(parts[idx + 1].trim())?;
         if *op == '+' {
             expr = append_concat_expr(expr, rhs);
         } else {

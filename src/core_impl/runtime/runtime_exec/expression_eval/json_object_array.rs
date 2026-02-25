@@ -54,13 +54,11 @@ impl Harness {
                     for entry in entries {
                         match entry {
                             ObjectLiteralEntry::Pair(key, value) => {
-                                let (key, proto_mutator) = match key {
-                                    ObjectLiteralKey::Static(key) => {
-                                        (key.clone(), key == "__proto__")
-                                    }
+                                let key = match key {
+                                    ObjectLiteralKey::Static(key) => key.clone(),
                                     ObjectLiteralKey::Computed(expr) => {
                                         let key = self.eval_expr(expr, env, event_param, event)?;
-                                        (self.property_key_to_storage_key(&key), false)
+                                        self.property_key_to_storage_key(&key)
                                     }
                                 };
 
@@ -97,17 +95,17 @@ impl Harness {
                                     _ => self.eval_expr(value, env, event_param, event)?,
                                 };
 
-                                if proto_mutator {
-                                    if matches!(value, Value::Object(_) | Value::Null) {
-                                        Self::object_set_entry(
-                                            &mut object_entries,
-                                            INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
-                                            value,
-                                        );
-                                    }
-                                    continue;
-                                }
                                 Self::object_set_entry(&mut object_entries, key, value);
+                            }
+                            ObjectLiteralEntry::ProtoSetter(expr) => {
+                                let value = self.eval_expr(expr, env, event_param, event)?;
+                                if matches!(value, Value::Object(_) | Value::Null) {
+                                    Self::object_set_entry(
+                                        &mut object_entries,
+                                        INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                                        value,
+                                    );
+                                }
                             }
                             ObjectLiteralEntry::Getter(key, handler) => {
                                 let key = match key {

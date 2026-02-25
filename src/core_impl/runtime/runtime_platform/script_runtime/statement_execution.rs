@@ -1913,6 +1913,8 @@ impl Harness {
                                 let mut static_env = env.clone();
                                 static_env.insert("this".to_string(), class_constructor.clone());
                                 static_env.insert(name.clone(), class_constructor.clone());
+                                static_env
+                                    .insert(INTERNAL_NEW_TARGET_KEY.to_string(), Value::Undefined);
                                 if let Some(super_constructor) = super_constructor.clone() {
                                     static_env.insert(
                                         INTERNAL_CLASS_SUPER_PROTOTYPE_KEY.to_string(),

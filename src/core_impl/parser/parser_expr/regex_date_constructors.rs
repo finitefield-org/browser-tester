@@ -143,44 +143,82 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
     cursor.skip_ws();
-    let callee = if cursor.peek() == Some(b'(') {
-        let callee_src = cursor.read_balanced_block(b'(', b')')?;
-        parse_expr(callee_src.trim())?
-    } else if let Some(name) = cursor.parse_identifier() {
-        if is_reserved_new_constructor_name(name.as_str()) {
-            return Ok(None);
-        }
-        Expr::Var(name)
-    } else {
+    let rest = cursor.src[cursor.i..].trim();
+    if rest.is_empty() {
         return Ok(None);
-    };
-    cursor.skip_ws();
-    let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let raw_args = split_top_level_by_char(&args_src, b',');
-    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+    }
+    if rest.starts_with('.') {
+        return Ok(None);
+    }
+
+    let mut callee_src = rest;
+    let mut args_src = None;
+    if rest.ends_with(')') {
+        for open in collect_top_level_char_positions(rest, b'(').into_iter().rev() {
+            let Some(candidate) = rest.get(open..) else {
+                continue;
+            };
+            let mut arg_cursor = Cursor::new(candidate);
+            let Ok(parsed_args_src) = arg_cursor.read_balanced_block(b'(', b')') else {
+                continue;
+            };
+            arg_cursor.skip_ws();
+            if !arg_cursor.eof() {
+                continue;
+            }
+            let Some(prefix) = rest.get(..open) else {
+                continue;
+            };
+            let prefix = prefix.trim();
+            if prefix.is_empty() {
+                continue;
+            }
+            callee_src = prefix;
+            args_src = Some(parsed_args_src);
+            break;
+        }
+    }
+
+    if is_reserved_new_constructor_callee_root(callee_src) {
+        return Ok(None);
+    }
+
+    let callee = parse_expr(callee_src)?;
+    let parsed = if let Some(args_src) = args_src {
+        let args = parse_call_args(&args_src, "constructor argument cannot be empty")?;
+        let mut parsed = Vec::with_capacity(args.len());
+        for arg in args {
+            parsed.push(parse_call_arg_expr(arg)?);
+        }
+        parsed
+    } else {
         Vec::new()
-    } else {
-        raw_args
     };
-    let mut parsed = Vec::with_capacity(args.len());
-    for arg in args {
-        let arg = arg.trim();
-        if arg.is_empty() {
-            return Err(Error::ScriptParse(
-                "constructor argument cannot be empty".into(),
-            ));
-        }
-        parsed.push(parse_expr(arg)?);
-    }
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
+
     Ok(Some(Expr::TypedArrayConstructWithCallee {
         callee: Box::new(callee),
         args: parsed,
         called_with_new: true,
     }))
+}
+
+fn new_callee_root_identifier(callee_src: &str) -> Option<String> {
+    let mut cursor = Cursor::new(callee_src.trim());
+    cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            return cursor.parse_identifier();
+        }
+        return Some("window".to_string());
+    }
+    cursor.parse_identifier()
+}
+
+fn is_reserved_new_constructor_callee_root(callee_src: &str) -> bool {
+    new_callee_root_identifier(callee_src)
+        .is_some_and(|name| is_reserved_new_constructor_name(name.as_str()))
 }
 
 pub(crate) fn is_reserved_new_constructor_name(name: &str) -> bool {

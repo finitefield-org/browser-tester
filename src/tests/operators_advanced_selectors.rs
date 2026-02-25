@@ -667,6 +667,79 @@ fn division_operator_coerces_operands_and_handles_special_values() -> Result<()>
 }
 
 #[test]
+fn multiplication_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = 3 * 4;
+            const b = -3 * 4;
+            const c = "3" * 2;
+            const d = "foo" * 2;
+            const e = 2 * 2;
+            const f = -2 * 2;
+            const g = Infinity * 0;
+            const h = Infinity * Infinity;
+            const i = 2n * 2n;
+            const j = -2n * 2n;
+            const k = 2n * BigInt(2);
+            const l = Number(2n) * 2;
+
+            document.getElementById('result').textContent = [
+              a, b, c, String(d), e, f, String(g), h, i, j, k, l,
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "12:-12:6:NaN:4:-4:NaN:Infinity:4:-4:4:4")?;
+    Ok(())
+}
+
+#[test]
+fn multiplication_operator_rejects_mixed_bigint_and_number() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            const v = 2n * 2;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            const v = 2 * 2n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("BigInt and Number multiplication should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type multiplication error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("Number and BigInt multiplication should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed-type multiplication error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn division_operator_supports_bigint_and_truncates_toward_zero() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2140,6 +2213,98 @@ fn nullish_coalescing_operator_works() -> Result<()> {
 }
 
 #[test]
+fn nullish_coalescing_operator_short_circuits_rhs_evaluation() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function a() {
+              return undefined;
+            }
+            function b() {
+              return false;
+            }
+            function c() {
+              return 'foo';
+            }
+
+            const first = a() ?? c();
+            const second = b() ?? c();
+            document.getElementById('result').textContent = first + ':' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "foo:false")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_coalescing_operator_works_with_optional_chaining() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const foo = { someFooProp: 'hi' };
+            const a = foo.someFooProp?.toUpperCase() ?? 'not available';
+            const b = foo.someBarProp?.toUpperCase() ?? 'not available';
+            document.getElementById('result').textContent = a + ':' + b;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "HI:not available")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_coalescing_operator_rejects_direct_mixing_with_and_or() {
+    for source in [
+        "<script>null || undefined ?? 'foo';</script>",
+        "<script>true && undefined ?? 'foo';</script>",
+        "<script>null ?? undefined || 'foo';</script>",
+        "<script>null ?? undefined && 'foo';</script>",
+    ] {
+        let err = Harness::from_html(source)
+            .expect_err("mixing ?? with &&/|| without grouping should fail");
+        match err {
+            Error::ScriptParse(msg) => {
+                assert!(msg.contains("cannot mix '??' with '&&' or '||' without parentheses"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn nullish_coalescing_operator_allows_grouped_mixing_with_and_or() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const a = (null || undefined) ?? 'foo';
+            const b = (true && undefined) ?? 'foo';
+            const c = null ?? (undefined || 'bar');
+            const d = null ?? (true && 'baz');
+            document.getElementById('result').textContent = a + ':' + b + ':' + c + ':' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "foo:foo:bar:baz")?;
+    Ok(())
+}
+
+#[test]
 fn logical_assignment_operators_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2383,6 +2548,146 @@ fn logical_or_assignment_evaluates_property_reference_once() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "2:1:1:1:1")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_assignment_short_circuits_for_const_and_rhs_evaluation() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const x = 1;
+            let y = null;
+            let z = undefined;
+            let marker = '';
+            function rhs(label, value) {
+              marker += label;
+              return value;
+            }
+
+            x ??= rhs('x', 2);
+            y ??= rhs('y', 3);
+            z ??= rhs('z', 4);
+
+            document.getElementById('result').textContent = x + ':' + y + ':' + z + ':' + marker;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1:3:4:yz")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_assignment_skips_setter_when_left_is_non_nullish() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              get value() {
+                return 1;
+              },
+              set value(v) {
+                setterCalls += 1;
+              },
+            };
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj.value ??= rhs();
+            document.getElementById('result').textContent = setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:0")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_assignment_evaluates_property_reference_once() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let keyCalls = 0;
+            let getterCalls = 0;
+            let setterCalls = 0;
+            let rhsCalls = 0;
+            const obj = {
+              _value: null,
+              get value() {
+                getterCalls += 1;
+                return this._value;
+              },
+              set value(v) {
+                setterCalls += 1;
+                this._value = v;
+              },
+            };
+            function key() {
+              keyCalls += 1;
+              return 'value';
+            }
+            function rhs() {
+              rhsCalls += 1;
+              return 2;
+            }
+
+            obj[key()] ??= rhs();
+            document.getElementById('result').textContent =
+              obj._value + ':' + keyCalls + ':' + getterCalls + ':' + setterCalls + ':' + rhsCalls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:1:1:1:1")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_assignment_applies_defaults_for_null_and_undefined_only() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function config(options) {
+            options.duration ??= 100;
+            options.speed ??= 25;
+            return options;
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const one = config({ duration: 125 });
+            const two = config({});
+            const three = config({ duration: null, speed: 0 });
+
+            document.getElementById('result').textContent =
+              one.duration + ',' + one.speed + '|' +
+              two.duration + ',' + two.speed + '|' +
+              three.duration + ',' + three.speed;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "125,25|100,25|100,0")?;
     Ok(())
 }
 

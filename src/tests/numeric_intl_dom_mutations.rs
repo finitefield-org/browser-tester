@@ -898,6 +898,108 @@ fn division_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
 }
 
 #[test]
+fn multiplication_assignment_supports_numbers_coercion_and_bigints() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let a = 2;
+            a *= 3;
+            const first = a;
+            a *= 'hello';
+            const second = String(a);
+
+            let bar = 5;
+            bar *= 'foo';
+            const third = String(bar);
+
+            let big = 3n;
+            big *= 2n;
+            const fourth = big;
+
+            document.getElementById('result').textContent =
+              first + '|' + second + '|' + third + '|' + fourth;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "6|NaN|NaN|6")?;
+    Ok(())
+}
+
+#[test]
+fn multiplication_assignment_mixed_bigint_and_number_reports_errors() -> Result<()> {
+    let html = r#"
+        <button id='mix1'>mix1</button>
+        <button id='mix2'>mix2</button>
+        <script>
+          document.getElementById('mix1').addEventListener('click', () => {
+            let x = 3n;
+            x *= 1;
+          });
+          document.getElementById('mix2').addEventListener('click', () => {
+            let y = 2;
+            y *= 1n;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+
+    let mix1 = h
+        .click("#mix1")
+        .expect_err("mixed BigInt/Number multiplication assignment should fail");
+    match mix1 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed multiplication assignment error: {other:?}"),
+    }
+
+    let mix2 = h
+        .click("#mix2")
+        .expect_err("mixed Number/BigInt multiplication assignment should fail");
+    match mix2 {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("cannot mix BigInt and other types in arithmetic operations"))
+        }
+        other => panic!("unexpected mixed multiplication assignment error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn multiplication_assignment_reads_getter_once_for_property_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            let reads = 0;
+            const obj = {
+              _value: 3,
+              get value() {
+                reads += 1;
+                return this._value;
+              },
+            };
+            obj.value *= 2;
+            document.getElementById('result').textContent = obj._value + '|' + reads;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "3|1")?;
+    Ok(())
+}
+
+#[test]
 fn division_assignment_mixed_bigint_and_zero_divisor_report_errors() -> Result<()> {
     let html = r#"
         <button id='mix1'>mix1</button>

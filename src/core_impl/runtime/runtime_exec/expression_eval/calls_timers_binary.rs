@@ -133,7 +133,10 @@ impl Harness {
     fn eval_import_meta_object(&self) -> Result<Value> {
         let referrer = self.current_import_meta_referrer()?;
         Ok(Self::new_object_value(vec![
-            (INTERNAL_IMPORT_META_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_IMPORT_META_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             ("url".to_string(), Value::String(referrer)),
             (
                 "resolve".to_string(),
@@ -153,6 +156,12 @@ impl Harness {
         let resolved =
             Self::resolve_url_string(&specifier, Some(&referrer)).unwrap_or_else(|| specifier);
         Ok(Value::String(resolved))
+    }
+
+    fn eval_new_target_value(&self, env: &HashMap<String, Value>) -> Result<Value> {
+        env.get(INTERNAL_NEW_TARGET_KEY).cloned().ok_or_else(|| {
+            Error::ScriptRuntime("new.target is only valid in function or class bodies".into())
+        })
     }
 
     fn is_super_target_expr(expr: &Expr) -> bool {
@@ -234,8 +243,15 @@ impl Harness {
                 Expr::ImportCall { module, options } => {
                     Ok(self.eval_import_call(module, options, env, event_param, event))
                 }
-                Expr::Call { target, args } => {
+                Expr::Call {
+                    target,
+                    args,
+                    optional,
+                } => {
                     let callee = self.eval_expr(target, env, event_param, event)?;
+                    if *optional && matches!(callee, Value::Null | Value::Undefined) {
+                        return Ok(Value::Undefined);
+                    }
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
                     self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
@@ -251,6 +267,7 @@ impl Harness {
                     member,
                     args,
                     optional,
+                    optional_call,
                 } => {
                     if Self::is_super_target_expr(target) {
                         let super_prototype = Self::super_prototype_from_env(env)?;
@@ -279,6 +296,42 @@ impl Harness {
                     let receiver = self.eval_expr(target, env, event_param, event)?;
                     if *optional && matches!(receiver, Value::Null | Value::Undefined) {
                         return Ok(Value::Undefined);
+                    }
+                    if *optional_call {
+                        let callee =
+                            self.object_property_from_value(&receiver, member)
+                                .map_err(|err| match err {
+                                    Error::ScriptRuntime(msg)
+                                        if msg == "value is not an object" =>
+                                    {
+                                        Error::ScriptRuntime(format!(
+                                            "member call target does not support property '{}'",
+                                            member
+                                        ))
+                                    }
+                                    other => other,
+                                })?;
+                        if matches!(callee, Value::Null | Value::Undefined) {
+                            return Ok(Value::Undefined);
+                        }
+                        let evaluated_args =
+                            self.eval_call_args_with_spread(args, env, event_param, event)?;
+                        return self
+                            .execute_callable_value_with_this_and_env(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                                Some(receiver.clone()),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime(format!("'{}' is not a function", member))
+                                }
+                                other => other,
+                            });
                     }
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
@@ -656,6 +709,7 @@ impl Harness {
                     }
                 }
                 Expr::ImportMeta => self.eval_import_meta_object(),
+                Expr::NewTarget => self.eval_new_target_value(env),
                 Expr::DomRef(target) => {
                     let is_list_query = matches!(
                         target,

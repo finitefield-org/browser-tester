@@ -1525,6 +1525,79 @@ fn grouping_operator_can_avoid_return_asi_pitfall() -> Result<()> {
 }
 
 #[test]
+fn operator_precedence_examples_and_associativity_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const n = 1;
+          const out = [
+            3 + 4 * 5,
+            4 * 3 ** 2,
+            (window.chainA = window.chainB = 5),
+            window.chainA,
+            window.chainB,
+            4 ** 3 ** 2,
+            12 / 3 / 2,
+            typeof n + 2,
+          ];
+          document.getElementById('result').textContent = out.join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "23:36:5:5:5:262144:2:number2")?;
+    Ok(())
+}
+
+#[test]
+fn operator_precedence_keeps_left_to_right_operand_evaluation_with_short_circuiting() -> Result<()>
+{
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let evalOrder = '';
+          function echo(name, num) {
+            evalOrder += name;
+            return num;
+          }
+
+          const expValue = echo('L', 4) ** echo('M', 3) ** echo('R', 2);
+          const divValue = echo('l', 4) / echo('m', 3) ** echo('r', 2);
+
+          let calls1 = '';
+          function A1() { calls1 += 'A'; return false; }
+          function B1() { calls1 += 'B'; return false; }
+          function C1() { calls1 += 'C'; return true; }
+          const short1 = C1() || B1() && A1();
+
+          let calls2 = '';
+          function A2() { calls2 += 'A'; return false; }
+          function B2() { calls2 += 'B'; return false; }
+          function C2() { calls2 += 'C'; return true; }
+          const short2 = A2() && B2() || C2();
+
+          document.getElementById('result').textContent =
+            evalOrder + ':' + String(expValue) + ':' + String(divValue) + ':' +
+            calls1 + ':' + String(short1) + ':' + calls2 + ':' + String(short2);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "LMRlmr:262144:0.4444444444444444:C:true:AC:true")?;
+    Ok(())
+}
+
+#[test]
+fn additive_expression_does_not_allow_unparenthesized_assignment_rhs() {
+    let err = Harness::from_html("<script>let a = 1; 1 + a = 2;</script>")
+        .expect_err("assignment with additive lhs should fail");
+    match err {
+        Error::ScriptParse(msg) => assert!(!msg.is_empty()),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn leading_parenthesis_without_semicolon_triggers_asi_hazard() {
     let err = Harness::from_html(
         r#"
@@ -3761,6 +3834,83 @@ fn object_method_definition_supports_this_and_computed_names() -> Result<()> {
 }
 
 #[test]
+fn object_initializer_supports_numeric_literal_keys() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = {
+            1: 'one',
+            1.5: 'float',
+            0x10: 'hex',
+            1e2: 'exp',
+          };
+          document.getElementById('result').textContent =
+            obj[1] + ':' + obj['1.5'] + ':' + obj[16] + ':' + obj[100] + ':' + String(obj['1e2']);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "one:float:hex:exp:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn object_initializer_proto_setter_only_applies_to_colon_form() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const proto = { marker: 'proto' };
+          const __proto__ = 'shorthand';
+          const obj = {
+            __proto__: proto,
+            __proto__,
+            ['__proto__']: 'computed',
+            __proto__() {
+              return 'method';
+            },
+          };
+
+          document.getElementById('result').textContent =
+            String(Object.hasOwn(obj, '__proto__')) + ':' + String(obj.marker) + ':' + String(obj.__proto__());
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:proto:method")?;
+    Ok(())
+}
+
+#[test]
+fn object_initializer_rejects_duplicate_proto_setters() {
+    let err =
+        Harness::from_html("<script>const obj = { __proto__: {}, \"__proto__\": null };</script>")
+            .expect_err("duplicate __proto__ setters should fail");
+
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("duplicate"));
+            assert!(msg.contains("__proto__"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn object_initializer_proto_setter_ignores_non_object_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = { __proto__: 1 };
+          document.getElementById('result').textContent = String(Object.hasOwn(obj, '__proto__'));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "false")?;
+    Ok(())
+}
+
+#[test]
 fn object_method_definition_variants_generator_async_and_async_generator_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -4301,6 +4451,144 @@ fn optional_chain_with_dom_select_options_dynamic_index_and_trim_works() -> Resu
 }
 
 #[test]
+fn optional_chaining_basic_property_access_and_missing_method_call_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const adventurer = {
+            name: 'Alice',
+            cat: {
+              name: 'Dinah',
+            },
+          };
+
+          const dogName = adventurer.dog?.name;
+          const missingMethod = adventurer.someNonExistentMethod?.();
+          document.getElementById('result').textContent =
+            String(dogName) + ':' + String(missingMethod);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_function_call_behaviors_work_and_short_circuit_rhs_evaluation() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const iface = {
+            value: 41,
+            method() {
+              return this.value + 1;
+            },
+            nonFn: 123,
+          };
+
+          let side = 0;
+          const fromMissing = iface.missing?.(side++);
+          const fromMethod = iface.method?.();
+          const fnValue = undefined;
+          const fromFn = fnValue?.(side++);
+
+          let nonFunctionThrows = 'no';
+          try {
+            iface.nonFn?.();
+          } catch (e) {
+            nonFunctionThrows = 'yes';
+          }
+
+          let nullBaseThrows = 'no';
+          try {
+            const root = null;
+            root.customMethod?.();
+          } catch (e) {
+            nullBaseThrows = 'yes';
+          }
+
+          document.getElementById('result').textContent =
+            String(fromMissing) + ':' +
+            String(fromMethod) + ':' +
+            String(fromFn) + ':' +
+            String(side) + ':' +
+            nonFunctionThrows + ':' +
+            nullBaseThrows;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:42:undefined:0:yes:yes")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_short_circuits_computed_operands_and_continuous_chains() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const potentiallyNullObj = null;
+          let x = 0;
+
+          const indexValue = potentiallyNullObj?.[x++];
+          const chainedValue = potentiallyNullObj?.a.b;
+
+          let groupedThrows = 'no';
+          try {
+            const grouped = (potentiallyNullObj?.a).b;
+          } catch (e) {
+            groupedThrows = 'yes';
+          }
+
+          document.getElementById('result').textContent =
+            String(indexValue) + ':' + String(x) + ':' + String(chainedValue) + ':' + groupedThrows;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:0:undefined:yes")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_on_undeclared_root_still_throws_reference_error() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let threw = 'no';
+          try {
+            undeclaredVar?.prop;
+          } catch (e) {
+            threw = 'yes';
+          }
+          document.getElementById('result').textContent = threw;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "yes")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_invalid_syntax_cases_are_rejected() {
+    for source in [
+        "<script>const object = {}; object?.property = 1;</script>",
+        "<script>String?.raw`Hello, world!`;</script>",
+        "<script>String.raw?.`Hello, world!`;</script>",
+        "<script>new Intl?.DateTimeFormat();</script>",
+        "<script>new Map?.();</script>",
+    ] {
+        let err = Harness::from_html(source).expect_err("invalid optional chaining syntax");
+        match err {
+            Error::ScriptParse(msg) => assert!(!msg.is_empty()),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn for_each_arrow_concise_assignment_expression_updates_outer_binding() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -4658,6 +4946,58 @@ fn logical_not_operator_negates_truthiness_and_supports_double_not_coercion() ->
         "#result",
         "false,false,true,true,false,true,true,true,true,true,true,false,false,false",
     )?;
+    Ok(())
+}
+
+#[test]
+fn null_keyword_core_behaviors_match_javascript_rules() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            typeof null,
+            typeof undefined,
+            null === undefined,
+            null == undefined,
+            null === null,
+            null == null,
+            !null,
+            Number.isNaN(1 + null),
+            Number.isNaN(1 + undefined),
+            JSON.stringify(null),
+          ];
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "object,undefined,false,true,true,true,true,false,true,null",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn property_access_on_null_throws_runtime_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const value = null;
+            value.anyProp;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("property access on null should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("not an object")),
+        other => panic!("unexpected error: {other:?}"),
+    }
     Ok(())
 }
 
@@ -5379,6 +5719,195 @@ fn class_declaration_supports_constructor_and_new() -> Result<()> {
     h.click("#btn")?;
     h.assert_text("#result", "12")?;
     Ok(())
+}
+
+#[test]
+fn new_operator_supports_omitted_argument_list_and_property_access_callee() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function Plain(color) {
+            this.color = color || 'red';
+          }
+          const registry = {
+            Car: function(make) {
+              this.make = make || 'Default';
+            },
+          };
+
+          const a = new Plain;
+          const b = new registry.Car('Eagle');
+          const c = new registry.Car;
+          document.getElementById('result').textContent = a.color + ':' + b.make + ':' + c.make;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "red:Eagle:Default")?;
+    Ok(())
+}
+
+#[test]
+fn new_operator_uses_non_primitive_constructor_return_and_ignores_primitive_return() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function ReturnsObject() {
+            this.tag = 'instance';
+            return { tag: 'override' };
+          }
+          function ReturnsPrimitive() {
+            this.tag = 'kept';
+            return 1;
+          }
+
+          const a = new ReturnsObject();
+          const b = new ReturnsPrimitive();
+          document.getElementById('result').textContent = a.tag + ':' + b.tag;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "override:kept")?;
+    Ok(())
+}
+
+#[test]
+fn new_operator_uses_current_constructor_prototype_value() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function C() {}
+          const first = new C();
+          C.prototype = { marker: 'next' };
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const second = new C();
+            document.getElementById('result').textContent =
+              (second instanceof C) + ':' +
+              (first instanceof C) + ':' +
+              String(second.marker) + ':' +
+              String(first.marker);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:next:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn new_target_in_function_is_constructor_or_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function Foo() {
+            const seen = new.target === Foo ? 'Foo' : String(new.target);
+            if (new.target) {
+              this.seen = seen;
+            }
+            return seen;
+          }
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const called = Foo();
+            const constructed = new Foo();
+            document.getElementById('result').textContent = called + ':' + constructed.seen;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:Foo")?;
+    Ok(())
+}
+
+#[test]
+fn new_target_in_derived_and_base_constructors_points_to_invoked_class() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class A {
+            constructor() {
+              this.baseSeen = new.target === B ? 'B' : String(new.target);
+            }
+          }
+
+          class B extends A {
+            constructor() {
+              super();
+              this.derivedSeen = new.target === B ? 'B' : String(new.target);
+            }
+          }
+
+          const b = new B();
+          document.getElementById('result').textContent = b.baseSeen + ':' + b.derivedSeen;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "B:B")?;
+    Ok(())
+}
+
+#[test]
+fn new_target_in_arrow_function_inherits_outer_binding() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function plain() {
+            const read = () => (new.target === undefined ? 'undefined' : 'set');
+            return read();
+          }
+
+          function Box() {
+            const read = () => (new.target === Box ? 'Box' : String(new.target));
+            this.fromArrow = read();
+          }
+
+          const instance = new Box();
+          document.getElementById('result').textContent = plain() + ':' + instance.fromArrow;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:Box")?;
+    Ok(())
+}
+
+#[test]
+fn new_target_is_undefined_in_class_static_block() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          class C {
+            static {
+              window.staticNewTarget = String(new.target);
+            }
+          }
+
+          document.getElementById('result').textContent = window.staticNewTarget;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined")?;
+    Ok(())
+}
+
+#[test]
+fn new_target_outside_function_or_class_body_is_rejected() {
+    let err = Harness::from_html("<script>new.target;</script>")
+        .expect_err("new.target outside function should fail");
+    match err {
+        Error::ScriptRuntime(msg) => assert!(msg.contains("new.target")),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

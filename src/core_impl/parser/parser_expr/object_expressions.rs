@@ -24,6 +24,7 @@ pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
     }
 
     let mut out = Vec::with_capacity(entries.len());
+    let mut seen_proto_setter = false;
     for entry in entries {
         let entry = entry.trim();
         if entry.is_empty() {
@@ -93,13 +94,36 @@ pub(crate) fn parse_object_literal_expr(src: &str) -> Result<Option<Vec<ObjectLi
             ObjectLiteralKey::Static(parse_string_literal_exact(key_src)?)
         } else if is_ident(key_src) {
             ObjectLiteralKey::Static(key_src.to_string())
+        } else if let Some(numeric_key) = parse_numeric_literal(key_src)? {
+            match numeric_key {
+                Expr::Number(_) | Expr::Float(_) => {
+                    ObjectLiteralKey::Computed(Box::new(numeric_key))
+                }
+                _ => {
+                    return Err(Error::ScriptParse(
+                        "object literal key must be identifier, string literal, numeric literal, or computed key".into(),
+                    ));
+                }
+            }
         } else {
             return Err(Error::ScriptParse(
-                "object literal key must be identifier, string literal, or computed key".into(),
+                "object literal key must be identifier, string literal, numeric literal, or computed key".into(),
             ));
         };
 
-        out.push(ObjectLiteralEntry::Pair(key, parse_expr(value_src)?));
+        let value = parse_expr(value_src)?;
+        if matches!(&key, ObjectLiteralKey::Static(key) if key == "__proto__") {
+            if seen_proto_setter {
+                return Err(Error::ScriptParse(
+                    "duplicate __proto__ fields are not allowed in object literals".into(),
+                ));
+            }
+            seen_proto_setter = true;
+            out.push(ObjectLiteralEntry::ProtoSetter(value));
+            continue;
+        }
+
+        out.push(ObjectLiteralEntry::Pair(key, value));
     }
 
     Ok(Some(out))
@@ -640,6 +664,9 @@ pub(crate) fn parse_object_get_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     if target == "import" && path.first().is_some_and(|key| key == "meta") {
+        return Ok(None);
+    }
+    if target == "new" && path.first().is_some_and(|key| key == "target") {
         return Ok(None);
     }
 

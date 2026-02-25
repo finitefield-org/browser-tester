@@ -35,6 +35,9 @@ pub(crate) fn parse_event_property_expr(src: &str) -> Result<Option<(String, Eve
     {
         return Ok(None);
     }
+    if event_var == "new" && head == "target" {
+        return Ok(None);
+    }
 
     let prop = match (head.as_str(), nested.as_deref()) {
         ("type", None) => EventExprProp::Type,

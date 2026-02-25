@@ -181,6 +181,12 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
     if !cursor.eof() {
         return Ok(None);
     }
+    if matches!(&target, DomQuery::Var(name) if name == "new")
+        && head == "target"
+        && nested.is_none()
+    {
+        return Ok(None);
+    }
 
     let is_anchor_target = !matches!(target, DomQuery::DocumentRoot)
         && !matches!(

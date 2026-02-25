@@ -193,8 +193,19 @@ impl Harness {
                 if function.is_generator || function.is_arrow || function.is_method {
                     return Err(Error::ScriptRuntime("value is not a constructor".into()));
                 }
+                let effective_new_target = if this_arg.is_some() {
+                    caller_env
+                        .and_then(|env| env.get(INTERNAL_NEW_TARGET_KEY).cloned())
+                        .unwrap_or_else(|| constructor.clone())
+                } else {
+                    constructor.clone()
+                };
                 let is_derived_class_constructor =
                     function.is_class_constructor && function.class_super_constructor.is_some();
+                let constructor_prototype = match self.object_property_from_value(constructor, "prototype")? {
+                    Value::Object(prototype) => Value::Object(prototype),
+                    _ => Value::Object(function.prototype_object.clone()),
+                };
                 let instance = if let Some(instance) = this_arg {
                     if Self::is_primitive_value(&instance) {
                         return Err(Error::ScriptRuntime(
@@ -205,7 +216,7 @@ impl Harness {
                 } else {
                     Self::new_object_value(vec![(
                         INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
-                        Value::Object(function.prototype_object.clone()),
+                        constructor_prototype,
                     )])
                 };
                 let result = self.execute_function_call(
@@ -214,6 +225,7 @@ impl Harness {
                     event,
                     caller_env,
                     Some(instance.clone()),
+                    Some(effective_new_target),
                 )?;
                 if Self::is_primitive_value(&result) {
                     if is_derived_class_constructor && !matches!(result, Value::Undefined) {
@@ -261,7 +273,7 @@ impl Harness {
                         "Class constructor cannot be invoked without 'new'".into(),
                     ));
                 }
-                self.execute_function_call(function.clone(), args, event, caller_env, this_arg)
+                self.execute_function_call(function.clone(), args, event, caller_env, this_arg, None)
             }
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
@@ -676,10 +688,12 @@ impl Harness {
         event: &EventState,
         caller_env: Option<&HashMap<String, Value>>,
         this_arg: Option<Value>,
+        new_target: Option<Value>,
     ) -> Result<Value> {
         let run = |this: &mut Self,
                    caller_env: Option<&HashMap<String, Value>>,
-                   this_arg: Option<Value>|
+                   this_arg: Option<Value>,
+                   new_target: Option<Value>|
          -> Result<Value> {
             let pending_scope_start =
                 this.push_pending_function_decl_scopes(&function.captured_pending_function_decls);
@@ -730,6 +744,10 @@ impl Harness {
                     } else {
                         call_env.insert("this".to_string(), this_arg.unwrap_or(Value::Undefined));
                         this.set_const_binding(&mut call_env, "this", false);
+                        call_env.insert(
+                            INTERNAL_NEW_TARGET_KEY.to_string(),
+                            new_target.unwrap_or(Value::Undefined),
+                        );
                         let arguments_value = Self::new_array_value(args.to_vec());
                         if let Value::Array(arguments) = &arguments_value {
                             Self::object_set_entry(
@@ -963,7 +981,7 @@ impl Harness {
 
         if function.is_async && !function.is_generator {
             let promise = self.new_pending_promise();
-            match run(self, caller_env, this_arg.clone()) {
+            match run(self, caller_env, this_arg.clone(), new_target.clone()) {
                 Ok(value) => {
                     if let Err(err) = self.promise_resolve(&promise, value) {
                         self.promise_reject(&promise, Self::promise_error_reason(err));
@@ -973,7 +991,7 @@ impl Harness {
             }
             Ok(Value::Promise(promise))
         } else {
-            run(self, caller_env, this_arg)
+            run(self, caller_env, this_arg, new_target)
         }
     }
 }

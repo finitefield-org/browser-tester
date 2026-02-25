@@ -9,6 +9,21 @@ fn parse_member_name(cursor: &mut Cursor<'_>) -> Option<(String, bool)> {
     Some((name, false))
 }
 
+fn has_top_level_optional_chain_marker(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+
+    while i + 1 < bytes.len() {
+        if scanner.is_top_level() && bytes[i] == b'?' && bytes[i + 1] == b'.' {
+            return true;
+        }
+        i = scanner.advance(bytes, i);
+    }
+
+    false
+}
+
 pub(crate) fn parse_call_args<'a>(
     args_src: &'a str,
     empty_err: &'static str,
@@ -55,6 +70,9 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             optional = true;
             base_src = stripped.trim_end();
         }
+        if !optional && has_top_level_optional_chain_marker(base_src) {
+            optional = true;
+        }
         let base_src = base_src.trim();
         if base_src.is_empty() {
             continue;
@@ -69,10 +87,15 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             continue;
         };
         cursor.skip_ws();
+        let mut optional_call = false;
+        if cursor.consume_ascii("?.") {
+            optional_call = true;
+            cursor.skip_ws();
+        }
         if cursor.peek() != Some(b'(') {
             continue;
         }
-        if is_private && optional {
+        if is_private && (optional || optional_call) {
             return Err(Error::ScriptParse(
                 "optional chaining is not supported for private members".into(),
             ));
@@ -91,6 +114,15 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             parsed_args.push(parse_call_arg_expr(arg)?);
         }
 
+        let base = base_src.trim();
+        if !optional && !optional_call && !is_private && base == "new" && member == "target" {
+            return Ok(Some(Expr::Call {
+                target: Box::new(Expr::NewTarget),
+                args: parsed_args,
+                optional: false,
+            }));
+        }
+
         if is_private {
             return Ok(Some(Expr::PrivateMemberCall {
                 target: Box::new(parse_expr(base_src)?),
@@ -103,6 +135,7 @@ pub(crate) fn parse_member_call_expr(src: &str) -> Result<Option<Expr>> {
             member,
             args: parsed_args,
             optional,
+            optional_call,
         }));
     }
     Ok(None)
@@ -138,6 +171,9 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
             optional = true;
             base_src = stripped.trim_end();
         }
+        if !optional && has_top_level_optional_chain_marker(base_src) {
+            optional = true;
+        }
         if is_private && optional {
             return Err(Error::ScriptParse(
                 "optional chaining is not supported for private members".into(),
@@ -150,6 +186,9 @@ pub(crate) fn parse_member_get_expr(src: &str) -> Result<Option<Expr>> {
         let base = base_src.trim();
         if !optional && !is_private && base == "import" && member == "meta" {
             return Ok(Some(Expr::ImportMeta));
+        }
+        if !optional && !is_private && base == "new" && member == "target" {
+            return Ok(Some(Expr::NewTarget));
         }
 
         if !optional && (base == "document" || base == "window.document") {
@@ -204,6 +243,9 @@ pub(crate) fn parse_member_index_get_expr(src: &str) -> Result<Option<Expr>> {
         } else if let Some(stripped) = base_src.strip_suffix('?') {
             optional = true;
             base_src = stripped.trim_end();
+        }
+        if !optional && has_top_level_optional_chain_marker(base_src) {
+            optional = true;
         }
         let base_src = base_src.trim();
         if base_src.is_empty() {
@@ -267,9 +309,14 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     cursor.skip_ws();
     if let Some(target) = cursor.parse_identifier() {
         cursor.skip_ws();
+        let mut optional = false;
+        if cursor.consume_ascii("?.") {
+            optional = true;
+            cursor.skip_ws();
+        }
         if cursor.peek() == Some(b'(') {
             let args_src = cursor.read_balanced_block(b'(', b')')?;
-            if target == "import" {
+            if target == "import" && !optional {
                 let args = parse_call_args(&args_src, "import() arguments cannot be empty")?;
                 if args.is_empty() {
                     return Err(Error::ScriptParse(
@@ -316,6 +363,13 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
 
             cursor.skip_ws();
             if cursor.eof() {
+                if optional {
+                    return Ok(Some(Expr::Call {
+                        target: Box::new(Expr::Var(target)),
+                        args: parsed,
+                        optional: true,
+                    }));
+                }
                 return Ok(Some(Expr::FunctionCall {
                     target,
                     args: parsed,
@@ -338,6 +392,11 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     }
 
     cursor.skip_ws();
+    let mut optional = false;
+    if cursor.consume_ascii("?.") {
+        optional = true;
+        cursor.skip_ws();
+    }
     if cursor.peek() != Some(b'(') {
         return Ok(None);
     }
@@ -352,5 +411,6 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(Expr::Call {
         target: Box::new(parse_expr(target_src)?),
         args,
+        optional,
     }))
 }

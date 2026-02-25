@@ -581,12 +581,14 @@ pub(crate) enum Expr {
     Call {
         target: Box<Expr>,
         args: Vec<Expr>,
+        optional: bool,
     },
     MemberCall {
         target: Box<Expr>,
         member: String,
         args: Vec<Expr>,
         optional: bool,
+        optional_call: bool,
     },
     PrivateMemberCall {
         target: Box<Expr>,
@@ -612,6 +614,7 @@ pub(crate) enum Expr {
         optional: bool,
     },
     ImportMeta,
+    NewTarget,
     Var(String),
     DomRef(DomQuery),
     CreateElement(String),
@@ -763,6 +766,7 @@ pub(crate) enum ObjectLiteralKey {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ObjectLiteralEntry {
     Pair(ObjectLiteralKey, Expr),
+    ProtoSetter(Expr),
     Getter(ObjectLiteralKey, ScriptHandler),
     Setter(ObjectLiteralKey, ScriptHandler),
     Spread(Expr),
