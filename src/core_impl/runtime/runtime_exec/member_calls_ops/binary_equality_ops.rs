@@ -565,7 +565,7 @@ impl Harness {
                 );
             }
             (Value::BigInt(l), Value::Number(_) | Value::Float(_)) => {
-                let r = self.numeric_value(right);
+                let r = Self::coerce_number_for_global(right);
                 if r.is_nan() {
                     return false;
                 }
@@ -599,7 +599,7 @@ impl Harness {
                 );
             }
             (Value::Number(_) | Value::Float(_), Value::BigInt(r)) => {
-                let l = self.numeric_value(left);
+                let l = Self::coerce_number_for_global(left);
                 if l.is_nan() {
                     return false;
                 }
@@ -634,8 +634,8 @@ impl Harness {
             }
             _ => {}
         }
-        let l = self.numeric_value(left);
-        let r = self.numeric_value(right);
+        let l = Self::coerce_number_for_global(left);
+        let r = Self::coerce_number_for_global(right);
         op(l, r)
     }
 

@@ -1421,6 +1421,42 @@ fn expression_statement_allows_parenthesized_object_literal() -> Result<()> {
 }
 
 #[test]
+fn grouping_operator_controls_precedence_without_changing_operand_order() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          window.trace = '';
+          function a() {
+            window.trace += 'a';
+            return 2;
+          }
+          function b() {
+            window.trace += 'b';
+            return 3;
+          }
+          function c() {
+            window.trace += 'c';
+            return 4;
+          }
+
+          const values = [
+            1 + 2 * 3,
+            1 + (2 * 3),
+            (1 + 2) * 3,
+            1 * 3 + 2 * 3,
+            a() * (b() + c()),
+            window.trace
+          ];
+          document.getElementById('result').textContent = values.join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "7:7:9:9:14:abc")?;
+    Ok(())
+}
+
+#[test]
 fn function_declaration_invocation_syntax_is_rejected() {
     let err = Harness::from_html("<script>function foo() { console.log('foo'); }();</script>")
         .expect_err("function declaration invocation form should fail");
@@ -1428,6 +1464,99 @@ fn function_declaration_invocation_syntax_is_rejected() {
         Error::ScriptParse(msg) => assert!(!msg.is_empty()),
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn grouped_iife_and_arrow_object_literal_expression_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const iifeValue = (function () {
+            return 'ok';
+          })();
+          const f = () => ({ a: 1 });
+          document.getElementById('result').textContent =
+            iifeValue + ':' + String(f().a);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "ok:1")?;
+    Ok(())
+}
+
+#[test]
+fn grouping_operator_allows_integer_literal_property_access() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent = (1).toString();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn grouping_operator_can_avoid_return_asi_pitfall() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function broken(a, b) {
+            return
+              a + b;
+          }
+          function fixed(a, b) {
+            return (
+              a + b
+            );
+          }
+
+          document.getElementById('result').textContent =
+            String(fixed(1, 2)) + ':' + typeof broken(1, 2);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn leading_parenthesis_without_semicolon_triggers_asi_hazard() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          const a = 1
+          (1).toString()
+        </script>
+        "#,
+    )
+    .expect_err("line-leading parenthesis without semicolon should be hazardous");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("unsupported expression"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn leading_parenthesis_with_semicolon_avoids_asi_hazard() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const a = 1;
+          ;(1).toString();
+          document.getElementById('result').textContent = String(a);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1")?;
+    Ok(())
 }
 
 #[test]
@@ -1449,6 +1578,122 @@ fn function_declaration_is_hoisted_and_callable_before_declaration() -> Result<(
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "30")?;
+    Ok(())
+}
+
+#[test]
+fn function_expression_can_be_assigned_and_called() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const getRectArea = function (width, height) {
+            return width * height;
+          };
+
+          document.getElementById('result').textContent = String(getRectArea(3, 4));
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "12")?;
+    Ok(())
+}
+
+#[test]
+fn function_expression_is_not_hoisted_like_declaration() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const beforeType = typeof notHoisted;
+            let callStatus = 'ok';
+            try {
+              notHoisted();
+              callStatus = 'no-throw';
+            } catch (error) {
+              callStatus = 'threw';
+            }
+
+            var notHoisted = function () {
+              return 'ready';
+            };
+
+            document.getElementById('result').textContent =
+              beforeType + ':' + callStatus + ':' + notHoisted();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:threw:ready")?;
+    Ok(())
+}
+
+#[test]
+fn named_function_expression_supports_recursion_and_keeps_name_local() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const math = {
+            factorial: function factorial(n) {
+              if (n <= 1) {
+                return 1;
+              }
+              return n * factorial(n - 1);
+            },
+          };
+
+          document.getElementById('result').textContent =
+            String(math.factorial(4)) + ':' + typeof factorial;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "24:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn named_function_expression_name_binding_is_read_only() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const fn = function foo() {
+            let status = 'no-throw';
+            try {
+              foo = 1;
+            } catch (error) {
+              status = 'threw';
+            }
+            return typeof foo + ':' + status;
+          };
+
+          document.getElementById('result').textContent = fn();
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:threw")?;
+    Ok(())
+}
+
+#[test]
+fn standard_iife_function_expression_runs_immediately() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const value = (function (a, b) {
+            return a + b;
+          })(1, 2);
+
+          document.getElementById('result').textContent = String(value);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "3")?;
     Ok(())
 }
 
@@ -4002,6 +4247,130 @@ fn logical_and_relational_and_strict_operators_work() -> Result<()> {
     h.type_text("#age", "18")?;
     h.click("#btn")?;
     h.assert_text("#result", "pass")?;
+    Ok(())
+}
+
+#[test]
+fn greater_than_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 > 3,
+            3 > 3,
+            3n > 5,
+            "ab" > "aa",
+            "5" > 3,
+            "3" > 3,
+            "3" > 5,
+            "hello" > 5,
+            5 > "hello",
+            "5" > 3n,
+            "3" > 5n,
+            5n > 3,
+            3 > 5n,
+            true > false,
+            false > true,
+            true > 0,
+            true > 1,
+            null > 0,
+            1 > null,
+            undefined > 3,
+            3 > undefined,
+            3 > NaN,
+            NaN > 3,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,false,false,true,true,false,false,false,false,true,false,true,false,true,false,true,false,false,true,false,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn greater_than_or_equal_operator_handles_number_string_bigint_and_special_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const out = [
+            5 >= 3,
+            3 >= 3,
+            3n >= 5,
+            "ab" >= "aa",
+            "a" >= "b",
+            "a" >= "a",
+            "a" >= "3",
+            "5" >= 3,
+            "3" >= 3,
+            "3" >= 5,
+            "hello" >= 5,
+            5 >= "hello",
+            5n >= 3,
+            3 >= 3n,
+            3 >= 5n,
+            true >= false,
+            true >= true,
+            false >= true,
+            true >= 0,
+            true >= 1,
+            null >= 0,
+            1 >= null,
+            undefined >= 3,
+            3 >= undefined,
+            3 >= NaN,
+            NaN >= 3,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,true,false,true,false,true,true,true,true,false,false,false,true,true,false,true,true,false,true,true,true,true,false,false,false,false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn greater_than_or_equal_operator_special_equivalence_edge_cases_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const sameObject = {};
+          const leftDate = new Date(0);
+          const rightDate = new Date(0);
+          const badBigIntString = 'not-a-bigint';
+
+          const out = [
+            null >= 0,
+            (null > 0) || (null == 0),
+            undefined >= null,
+            undefined == null,
+            sameObject >= sameObject,
+            sameObject == sameObject,
+            leftDate >= rightDate,
+            (leftDate > rightDate) || (leftDate == rightDate),
+            1n >= badBigIntString,
+            1n < badBigIntString,
+          ];
+
+          document.getElementById('result').textContent = out.join(',');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true,false,false,true,false,true,true,false,false,false",
+    )?;
     Ok(())
 }
 

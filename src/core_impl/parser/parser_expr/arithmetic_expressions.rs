@@ -162,7 +162,7 @@ pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
                 "yield* operator requires an operand".into(),
             ));
         }
-        let inner = parse_unary_expr(rest)?;
+        let inner = parse_expr(rest)?;
         return Ok(Expr::YieldStar(Box::new(inner)));
     }
     if let Some(rest) = strip_keyword_operator(src, "yield") {
@@ -171,7 +171,7 @@ pub(crate) fn parse_unary_expr(src: &str) -> Result<Expr> {
                 "yield operator requires an operand".into(),
             ));
         }
-        let inner = parse_unary_expr(rest)?;
+        let inner = parse_expr(rest)?;
         return Ok(Expr::Yield(Box::new(inner)));
     }
     if let Some(rest) = strip_keyword_operator(src, "typeof") {

@@ -180,3 +180,92 @@ fn generator_declarations_are_not_constructable() -> Result<()> {
     h.assert_text("#out", "not-constructable")?;
     Ok(())
 }
+
+#[test]
+fn generator_function_expression_can_be_assigned_and_iterated() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          const foo = function* () {
+            yield 'a';
+            yield 'b';
+            yield 'c';
+          };
+
+          let str = '';
+          for (const val of foo()) {
+            str += val;
+          }
+
+          document.getElementById('out').textContent = str;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn named_generator_function_expression_uses_local_name_binding() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          const gen = function* localName(value = 6) {
+            yield typeof localName;
+            yield value * value;
+          };
+
+          const iter = gen();
+          const first = iter.next();
+          const second = iter.next();
+          const done = iter.next();
+          document.getElementById('out').textContent =
+            first.value + ':' + second.value + ':' + done.done + ':' + typeof localName;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "function:36:true:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn named_generator_function_expression_name_binding_is_read_only() -> Result<()> {
+    let html = r#"
+        <p id='out'></p>
+        <script>
+          const fn = function* localName() {
+            let status = 'no-throw';
+            try {
+              localName = 1;
+            } catch (error) {
+              status = 'threw';
+            }
+            yield typeof localName + ':' + status;
+          };
+
+          const iter = fn();
+          document.getElementById('out').textContent = String(iter.next().value);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#out", "function:threw")?;
+    Ok(())
+}
+
+#[test]
+fn function_star_expression_statement_without_name_is_rejected() {
+    let err = Harness::from_html("<script>function* () { yield 1; }</script>")
+        .expect_err("anonymous function* at statement start should parse as declaration");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(
+                msg.contains("function declaration requires a function name")
+                    || msg.contains("expected function name")
+            )
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

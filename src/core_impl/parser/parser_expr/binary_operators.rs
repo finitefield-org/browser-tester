@@ -251,6 +251,9 @@ pub(crate) fn parse_comma_expr(src: &str) -> Result<Expr> {
 
 pub(crate) fn parse_assignment_expr(src: &str) -> Result<Expr> {
     let src = strip_outer_parens(src.trim());
+    if strip_keyword_operator(src, "yield").is_some() {
+        return parse_unary_expr(src);
+    }
     let Some((eq_pos, op_len)) = find_top_level_assignment(src) else {
         return parse_ternary_expr(src);
     };

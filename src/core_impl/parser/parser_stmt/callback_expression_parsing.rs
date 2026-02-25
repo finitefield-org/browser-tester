@@ -207,6 +207,30 @@ pub(crate) fn try_consume_async_arrow_prefix(cursor: &mut Cursor<'_>) -> bool {
     true
 }
 
+fn parse_plain_function_expression_name(src: &str) -> Result<Option<String>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    if !cursor.consume_ascii("function") {
+        return Ok(None);
+    }
+    if cursor.peek().is_some_and(is_ident_char) {
+        return Ok(None);
+    }
+
+    cursor.skip_ws();
+    if cursor.peek() == Some(b'*') {
+        return Ok(None);
+    }
+    if cursor.consume_byte(b'(') {
+        return Ok(None);
+    }
+
+    let name = cursor
+        .parse_identifier()
+        .ok_or_else(|| Error::ScriptParse("expected function name".into()))?;
+    Ok(Some(name))
+}
+
 pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     {
@@ -382,6 +406,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
+    let function_name = parse_plain_function_expression_name(src)?;
     let mut cursor = Cursor::new(src);
     let parsed = match parse_callback(&mut cursor, usize::MAX, "function parameters") {
         Ok(parsed) => parsed,
@@ -408,7 +433,7 @@ pub(crate) fn parse_function_expr(src: &str) -> Result<Option<Expr>> {
     };
     Ok(Some(Expr::Function {
         handler: ScriptHandler { params, stmts },
-        name: None,
+        name: function_name,
         is_async: false,
         is_generator: false,
         is_arrow: !src.starts_with("function"),
