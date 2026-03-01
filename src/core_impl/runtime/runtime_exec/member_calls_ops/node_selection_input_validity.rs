@@ -44,6 +44,7 @@ impl Harness {
                     self.dom.query_selector_all(&selector)?,
                 )))
             }
+            "createTreeWalker" => self.eval_create_tree_walker_call(evaluated_args),
             "addEventListener" => {
                 if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
                     return Err(Error::ScriptRuntime(
@@ -323,6 +324,33 @@ impl Harness {
                 Ok(Some(Value::NodeList(
                     self.dom.query_selector_all_from(&node, &selector)?,
                 )))
+            }
+            "cloneNode" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "cloneNode supports at most one argument".into(),
+                    ));
+                }
+                let deep = evaluated_args.first().is_some_and(Value::truthy);
+                let cloned = self.clone_dom_node(node, deep)?;
+                Ok(Some(Value::Node(cloned)))
+            }
+            "remove" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("remove takes no arguments".into()));
+                }
+                if let Some(active) = self.dom.active_element() {
+                    if active == node || self.dom.is_descendant_of(active, node) {
+                        self.dom.set_active_element(None);
+                    }
+                }
+                if let Some(active_pseudo) = self.dom.active_pseudo_element() {
+                    if active_pseudo == node || self.dom.is_descendant_of(active_pseudo, node) {
+                        self.dom.set_active_pseudo_element(None);
+                    }
+                }
+                self.dom.remove_node(node)?;
+                Ok(Some(Value::Undefined))
             }
             "getContext" => {
                 if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {

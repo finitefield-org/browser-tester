@@ -440,6 +440,91 @@ fn mixed_call_spread_arguments_supported() -> browser_tester::Result<()> {
 }
 
 #[test]
+fn math_min_spread_in_ternary_expression_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const widths = [5, 3];
+      let width = 0;
+      width = widths.length ? Math.min(...widths) : 0;
+      document.getElementById("r").textContent = String(width);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "3")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_block_with_math_min_spread_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function indentWidth(v, options) { return v.length; }
+      function run(targetIndexes, parsedLines, options) {
+        let width = 0;
+        if (options.indentAlignMode === "2") width = 2;
+        else if (options.indentAlignMode === "4") width = 4;
+        else {
+          const widths = targetIndexes.map((index) => indentWidth(parsedLines[index].indentRaw, options));
+          width = widths.length ? Math.min(...widths) : 0;
+        }
+        return width;
+      }
+
+      const parsedLines = [{ indentRaw: "   " }, { indentRaw: " " }, { indentRaw: "  " }];
+      document.getElementById("r").textContent =
+        String(run([0, 1, 2], parsedLines, { indentAlignMode: "auto" }));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "1")?;
+    Ok(())
+}
+
+#[test]
+fn window_match_media_property_reference_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const mediaFactory = window.matchMedia;
+      document.getElementById("r").textContent = String(mediaFactory === undefined);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "true")?;
+    Ok(())
+}
+
+#[test]
+fn malformed_triple_quote_literal_in_replace_chain_is_tolerated() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&")
+          .replace(/</g, "<")
+          .replace(/>/g, ">")
+          .replace(/"/g, """)
+          .replace(/'/g, "'");
+      }
+
+      const id = `custom:${Date.now().toString(36)}`;
+      document.getElementById("r").textContent =
+        escapeHtml("\"") + "|" + String(id.startsWith("custom:"));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "\"|true")?;
+    Ok(())
+}
+
+#[test]
 fn array_push_spread_arguments_supported() -> browser_tester::Result<()> {
     let html = r#"
     <div id='r'></div>
@@ -1336,5 +1421,51 @@ fn new_array_fill_join_chain_is_supported() -> browser_tester::Result<()> {
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "<span></span><span></span><span></span>")?;
+    Ok(())
+}
+
+#[test]
+fn template_literal_with_member_access_in_dom_assignments_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="output" class="strength-meter-output"></div>
+    <div id="strengthFill"></div>
+    <div id="strengthText"></div>
+    <div id="resultClass"></div>
+    <script>
+      const meta = { percent: 78, label: "Strong", levelClass: "is-strong" };
+      const el = {
+        output: document.getElementById("output"),
+        strengthFill: document.getElementById("strengthFill"),
+        strengthText: document.getElementById("strengthText"),
+      };
+
+      el.strengthFill.style.width = `${meta.percent}%`;
+      el.strengthText.textContent = `${meta.label} (${meta.percent}%)`;
+      el.output.className = `strength-meter-output ${meta.levelClass}`;
+      document.getElementById("resultClass").textContent = el.output.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#strengthText", "Strong (78%)")?;
+    harness.assert_text("#resultClass", "strength-meter-output is-strong")?;
+    Ok(())
+}
+
+#[test]
+fn focus_accepts_optional_options_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <input id="name">
+    <p id="result"></p>
+    <script>
+      const name = document.getElementById("name");
+      name.focus({ preventScroll: true });
+      document.getElementById("result").textContent =
+        document.activeElement === name ? "focused" : "not-focused";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "focused")?;
     Ok(())
 }

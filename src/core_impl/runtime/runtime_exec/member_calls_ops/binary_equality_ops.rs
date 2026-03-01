@@ -481,10 +481,14 @@ impl Harness {
             return Ok(matches!(left, Value::Blob(_)));
         }
         if matches!(right, Value::UrlConstructor) {
-            return Ok(matches!(left, Value::Object(left_obj) if Self::is_url_object(&left_obj.borrow())));
+            return Ok(
+                matches!(left, Value::Object(left_obj) if Self::is_url_object(&left_obj.borrow())),
+            );
         }
         if matches!(right, Value::StringConstructor) {
-            return Ok(matches!(left, Value::Object(left_obj) if Self::string_wrapper_value_from_object(&left_obj.borrow()).is_some()));
+            return Ok(
+                matches!(left, Value::Object(left_obj) if Self::string_wrapper_value_from_object(&left_obj.borrow()).is_some()),
+            );
         }
 
         if !Self::is_instanceof_rhs_object_like(right) {
@@ -493,7 +497,8 @@ impl Harness {
             ));
         }
 
-        let has_instance_symbol = self.eval_symbol_static_property(SymbolStaticProperty::HasInstance);
+        let has_instance_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::HasInstance);
         let has_instance_key = self.property_key_to_storage_key(&has_instance_symbol);
         let has_instance = self.object_property_from_value(right, &has_instance_key)?;
         if !matches!(has_instance, Value::Undefined) {
@@ -526,7 +531,10 @@ impl Harness {
             ));
         };
 
-        Ok(Self::value_prototype_chain_contains(left, &expected_prototype))
+        Ok(Self::value_prototype_chain_contains(
+            left,
+            &expected_prototype,
+        ))
     }
 
     fn is_instanceof_rhs_object_like(value: &Value) -> bool {

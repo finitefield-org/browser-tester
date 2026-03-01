@@ -89,6 +89,9 @@ impl Harness {
             "URL",
             "HTMLElement",
             "HTMLInputElement",
+            "DOMParser",
+            "Node",
+            "NodeFilter",
             "name",
         ]
     }
@@ -103,6 +106,9 @@ impl Harness {
         url_constructor: &Value,
         html_element_constructor: &Value,
         html_input_element_constructor: &Value,
+        dom_parser_constructor: &Value,
+        node_constants: &Value,
+        node_filter_constants: &Value,
         local_storage: &Value,
     ) {
         let mut extras = Vec::new();
@@ -170,6 +176,9 @@ impl Harness {
                 "HTMLInputElement".to_string(),
                 html_input_element_constructor.clone(),
             ),
+            ("DOMParser".to_string(), dom_parser_constructor.clone()),
+            ("Node".to_string(), node_constants.clone()),
+            ("NodeFilter".to_string(), node_filter_constants.clone()),
             ("name".to_string(), name_value),
         ];
         entries.extend(extras);

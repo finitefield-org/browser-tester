@@ -9,6 +9,11 @@ pub(crate) fn parse_string_literal_exact(src: &str) -> Result<String> {
         return Err(Error::ScriptParse(format!("invalid string literal: {src}")));
     }
 
+    // Compatibility: tolerate malformed `"""` / `'''` as a single quote character.
+    if bytes.len() == 3 && bytes[1] == quote {
+        return Ok((quote as char).to_string());
+    }
+
     let mut escaped = false;
     let mut i = 1;
     while i + 1 < bytes.len() {

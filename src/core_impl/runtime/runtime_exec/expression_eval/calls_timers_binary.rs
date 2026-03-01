@@ -555,6 +555,54 @@ impl Harness {
                         if is_import_meta_object && member == "resolve" {
                             return self.eval_import_meta_resolve_call(&evaluated_args);
                         }
+                        let is_dom_parser_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_dom_parser_object {
+                            if let Some(value) =
+                                self.eval_dom_parser_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
+                        let is_parsed_document_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(
+                                    &entries,
+                                    INTERNAL_PARSED_DOCUMENT_OBJECT_KEY
+                                ),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_parsed_document_object {
+                            if let Some(value) = self.eval_parsed_document_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                                event,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        let is_tree_walker_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_tree_walker_object {
+                            if let Some(value) =
+                                self.eval_tree_walker_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
 
                         let is_iterator_constructor = {
                             let entries = object.borrow();
@@ -720,11 +768,7 @@ impl Harness {
                     };
                     if is_super {
                         let this_value = Self::super_this_from_env(env)?;
-                        self.object_property_from_value_with_receiver(
-                            &receiver,
-                            &key,
-                            &this_value,
-                        )
+                        self.object_property_from_value_with_receiver(&receiver, &key, &this_value)
                     } else {
                         self.object_property_from_value(&receiver, &key)
                     }

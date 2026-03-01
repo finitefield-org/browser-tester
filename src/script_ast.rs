@@ -337,7 +337,11 @@ pub(crate) enum Expr {
     },
     ParseFloat(Box<Expr>),
     JsonParse(Box<Expr>),
-    JsonStringify(Box<Expr>),
+    JsonStringify {
+        value: Box<Expr>,
+        replacer: Option<Box<Expr>>,
+        space: Option<Box<Expr>>,
+    },
     ObjectConstruct {
         value: Option<Box<Expr>>,
     },

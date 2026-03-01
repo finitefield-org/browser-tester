@@ -1470,10 +1470,7 @@ fn equality_operator_compares_objects_by_reference_and_primitive_conversion() ->
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text(
-        "#result",
-        "false|true|true|true|true|false|true|true|true",
-    )?;
+    h.assert_text("#result", "false|true|true|true|true|false|true|true|true")?;
     Ok(())
 }
 

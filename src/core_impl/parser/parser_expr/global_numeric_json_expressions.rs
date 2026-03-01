@@ -138,7 +138,9 @@ pub(crate) fn parse_json_parse_expr(src: &str) -> Result<Option<Expr>> {
     Ok(Some(value))
 }
 
-pub(crate) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
+pub(crate) fn parse_json_stringify_expr(
+    src: &str,
+) -> Result<Option<(Expr, Option<Expr>, Option<Expr>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
 
@@ -175,16 +177,38 @@ pub(crate) fn parse_json_stringify_expr(src: &str) -> Result<Option<Expr>> {
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 || args[0].trim().is_empty() {
+    if args.is_empty() || args.len() > 3 || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "JSON.stringify requires exactly one argument".into(),
+            "JSON.stringify requires one to three arguments".into(),
         ));
     }
 
     let value = parse_expr(args[0].trim())?;
+    let replacer = if args.len() >= 2 {
+        let replacer = args[1].trim();
+        if replacer.is_empty() {
+            return Err(Error::ScriptParse(
+                "JSON.stringify replacer argument cannot be empty".into(),
+            ));
+        }
+        Some(parse_expr(replacer)?)
+    } else {
+        None
+    };
+    let space = if args.len() >= 3 {
+        let space = args[2].trim();
+        if space.is_empty() {
+            return Err(Error::ScriptParse(
+                "JSON.stringify space argument cannot be empty".into(),
+            ));
+        }
+        Some(parse_expr(space)?)
+    } else {
+        None
+    };
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
-    Ok(Some(value))
+    Ok(Some((value, replacer, space)))
 }

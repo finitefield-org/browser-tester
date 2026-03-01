@@ -254,9 +254,8 @@ pub(crate) fn parse_prefix_update_expr(target: &str, delta: i8) -> Result<Option
         temp_index += 1;
     };
     let next = build_update_numeric_expr(&temp_name, delta);
-    let lowered = format!(
-        "(() => {{ const {temp_name} = {target}; {target} = {next}; return {next}; }})()"
-    );
+    let lowered =
+        format!("(() => {{ const {temp_name} = {target}; {target} = {next}; return {next}; }})()");
     Ok(Some(parse_expr(&lowered)?))
 }
 

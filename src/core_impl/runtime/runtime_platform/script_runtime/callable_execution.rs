@@ -257,7 +257,9 @@ impl Harness {
 
     fn bound_callable_components(callable: &Value) -> Result<(Value, Value, Vec<Value>)> {
         let Value::Object(entries) = callable else {
-            return Err(Error::ScriptRuntime("bound function has invalid internal state".into()));
+            return Err(Error::ScriptRuntime(
+                "bound function has invalid internal state".into(),
+            ));
         };
         let entries = entries.borrow();
         let target = Self::object_get_entry(&entries, INTERNAL_BOUND_CALLABLE_TARGET_KEY)
@@ -270,7 +272,7 @@ impl Harness {
             _ => {
                 return Err(Error::ScriptRuntime(
                     "bound function has invalid bound arguments".into(),
-                ))
+                ));
             }
         };
         Ok((target, bound_this, bound_args))
@@ -317,10 +319,11 @@ impl Harness {
                 };
                 let is_derived_class_constructor =
                     function.is_class_constructor && function.class_super_constructor.is_some();
-                let constructor_prototype = match self.object_property_from_value(constructor, "prototype")? {
-                    Value::Object(prototype) => Value::Object(prototype),
-                    _ => Value::Object(function.prototype_object.clone()),
-                };
+                let constructor_prototype =
+                    match self.object_property_from_value(constructor, "prototype")? {
+                        Value::Object(prototype) => Value::Object(prototype),
+                        _ => Value::Object(function.prototype_object.clone()),
+                    };
                 let instance = if let Some(instance) = this_arg {
                     if Self::is_primitive_value(&instance) {
                         return Err(Error::ScriptRuntime(
@@ -354,7 +357,10 @@ impl Harness {
                 }
             }
             other => {
-                if matches!(Self::callable_kind_from_value(other), Some("bound_function")) {
+                if matches!(
+                    Self::callable_kind_from_value(other),
+                    Some("bound_function")
+                ) {
                     let (target, _bound_this, mut bound_args) =
                         Self::bound_callable_components(other)?;
                     bound_args.extend_from_slice(args);
@@ -399,7 +405,14 @@ impl Harness {
                         "Class constructor cannot be invoked without 'new'".into(),
                     ));
                 }
-                self.execute_function_call(function.clone(), args, event, caller_env, this_arg, None)
+                self.execute_function_call(
+                    function.clone(),
+                    args,
+                    event,
+                    caller_env,
+                    this_arg,
+                    None,
+                )
             }
             Value::PromiseCapability(capability) => {
                 self.invoke_promise_capability(capability, args)
@@ -416,31 +429,19 @@ impl Harness {
                     "function_call" => {
                         let target = self.callable_receiver_from_this_arg(this_arg, "call")?;
                         self.execute_function_prototype_member(
-                            "call",
-                            &target,
-                            args,
-                            event,
-                            caller_env,
+                            "call", &target, args, event, caller_env,
                         )
                     }
                     "function_apply" => {
                         let target = self.callable_receiver_from_this_arg(this_arg, "apply")?;
                         self.execute_function_prototype_member(
-                            "apply",
-                            &target,
-                            args,
-                            event,
-                            caller_env,
+                            "apply", &target, args, event, caller_env,
                         )
                     }
                     "function_bind" => {
                         let target = self.callable_receiver_from_this_arg(this_arg, "bind")?;
                         self.execute_function_prototype_member(
-                            "bind",
-                            &target,
-                            args,
-                            event,
-                            caller_env,
+                            "bind", &target, args, event, caller_env,
                         )
                     }
                     "bound_function" => {
@@ -702,6 +703,14 @@ impl Harness {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))
                     }
+                    "dom_parser_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DOMParser constructor does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_dom_parser_instance_value())
+                    }
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }
             }
@@ -960,9 +969,10 @@ impl Harness {
                         );
                     } else if function.is_method {
                         let inferred_super = match call_env.get("this").cloned() {
-                            Some(Value::Object(object)) => {
-                                Self::object_get_entry(&object.borrow(), INTERNAL_OBJECT_PROTOTYPE_KEY)
-                            }
+                            Some(Value::Object(object)) => Self::object_get_entry(
+                                &object.borrow(),
+                                INTERNAL_OBJECT_PROTOTYPE_KEY,
+                            ),
                             Some(Value::Function(function_value)) => {
                                 function_value.class_super_constructor.clone()
                             }
@@ -1155,7 +1165,9 @@ impl Harness {
                         if function.is_async {
                             return Ok(this.new_async_generator_value(generator_yields));
                         }
-                        return Ok(this.new_generator_value(generator_yields, generator_return_value));
+                        return Ok(
+                            this.new_generator_value(generator_yields, generator_return_value)
+                        );
                     }
                     match flow {
                         ExecFlow::Continue => Ok(Value::Undefined),

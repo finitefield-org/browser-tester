@@ -24,7 +24,10 @@ pub(crate) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
             "setAttribute requires 2 arguments: {stmt}"
         )));
     }
-    let name = parse_string_literal_exact(args[0].trim())?;
+    let name = match parse_string_literal_exact(args[0].trim()) {
+        Ok(name) => name,
+        Err(_) => return Ok(None),
+    };
     let value = parse_expr(args[1].trim())?;
 
     cursor.skip_ws();
@@ -60,11 +63,17 @@ pub(crate) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let name = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Err(Error::ScriptParse(format!(
+            "removeAttribute requires exactly one argument: {stmt}"
+        )));
+    }
+    let name = match parse_string_literal_exact(args[0].trim()) {
+        Ok(name) => name,
+        Err(_) => return Ok(None),
+    };
     cursor.skip_ws();
     cursor.consume_byte(b';');
     cursor.skip_ws();

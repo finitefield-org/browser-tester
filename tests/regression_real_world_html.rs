@@ -600,3 +600,52 @@ fn utf8_script_assigned_text_is_preserved() -> browser_tester::Result<()> {
     harness.assert_text("#result", "A 〜 B")?;
     Ok(())
 }
+
+#[test]
+fn non_executable_script_types_are_inert_and_text_is_preserved() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script id="ld" type="application/ld+json">
+      window.__ld_json_should_not_run = true;
+    </script>
+    <script id="raw" type="text/plain">
+      const keep = "plain";
+    </script>
+    <script>
+      const ldText = document.getElementById("ld").textContent.includes("__ld_json_should_not_run");
+      const rawText = document.getElementById("raw").textContent.includes('const keep = "plain"');
+      const ldExecuted = window.__ld_json_should_not_run === true;
+      document.getElementById("result").textContent = ldText + ":" + rawText + ":" + ldExecuted;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_clone_node_true_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <template id="row-template">
+      <div data-row><input value="seed"></div>
+    </template>
+    <p id="result"></p>
+    <script>
+      const tpl = document.getElementById("row-template");
+      const fragment = tpl.content.cloneNode(true);
+      const row = fragment.querySelector("[data-row]");
+      row.setAttribute("data-clone", "yes");
+      row.querySelector("input").value = "ok";
+      document.body.appendChild(row);
+
+      const appended = document.querySelector("[data-clone='yes'] input").value;
+      document.getElementById("result").textContent =
+        document.querySelectorAll("[data-clone='yes']").length + ":" + appended;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1:ok")?;
+    Ok(())
+}

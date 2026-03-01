@@ -292,6 +292,34 @@ impl Harness {
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::Var(name) => match env.get(name) {
                 Some(Value::Node(node)) => Ok(Some(*node)),
+                Some(Value::Object(entries)) => {
+                    let entries = entries.borrow();
+                    if matches!(
+                        Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    ) {
+                        Ok(Some(self.dom.root))
+                    } else if matches!(
+                        Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    ) {
+                        match Self::object_get_entry(
+                            &entries,
+                            INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY,
+                        ) {
+                            Some(Value::Node(root)) => Ok(Some(root)),
+                            _ => Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not a single element",
+                                name
+                            ))),
+                        }
+                    } else {
+                        Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a single element",
+                            name
+                        )))
+                    }
+                }
                 Some(Value::NodeList(_)) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not a single element",
                     name
@@ -311,6 +339,34 @@ impl Harness {
                 };
                 match value {
                     Value::Node(node) => Ok(Some(node)),
+                    Value::Object(entries) => {
+                        let entries = entries.borrow();
+                        if matches!(
+                            Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                            Some(Value::Bool(true))
+                        ) {
+                            Ok(Some(self.dom.root))
+                        } else if matches!(
+                            Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                            Some(Value::Bool(true))
+                        ) {
+                            match Self::object_get_entry(
+                                &entries,
+                                INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY,
+                            ) {
+                                Some(Value::Node(root)) => Ok(Some(root)),
+                                _ => Err(Error::ScriptRuntime(format!(
+                                    "variable '{}' is not a single element",
+                                    target.describe_call()
+                                ))),
+                            }
+                        } else {
+                            Err(Error::ScriptRuntime(format!(
+                                "variable '{}' is not a single element",
+                                target.describe_call()
+                            )))
+                        }
+                    }
                     _ => Err(Error::ScriptRuntime(format!(
                         "variable '{}' is not a single element",
                         target.describe_call()

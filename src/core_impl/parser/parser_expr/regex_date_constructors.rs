@@ -154,7 +154,10 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     let mut callee_src = rest;
     let mut args_src = None;
     if rest.ends_with(')') {
-        for open in collect_top_level_char_positions(rest, b'(').into_iter().rev() {
+        for open in collect_top_level_char_positions(rest, b'(')
+            .into_iter()
+            .rev()
+        {
             let Some(candidate) = rest.get(open..) else {
                 continue;
             };

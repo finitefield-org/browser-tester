@@ -647,26 +647,9 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                 },
-                Expr::ClipboardMethodCall { method, args } => match method {
-                    ClipboardMethod::ReadText => {
-                        let _ = args;
-                        let promise = self.new_pending_promise();
-                        self.promise_resolve(
-                            &promise,
-                            Value::String(self.platform_mocks.clipboard_text.clone()),
-                        )?;
-                        Ok(Value::Promise(promise))
-                    }
-                    ClipboardMethod::WriteText => {
-                        let text = self
-                            .eval_expr(&args[0], env, event_param, event)?
-                            .as_string();
-                        self.platform_mocks.clipboard_text = text;
-                        let promise = self.new_pending_promise();
-                        self.promise_resolve(&promise, Value::Undefined)?;
-                        Ok(Value::Promise(promise))
-                    }
-                },
+                Expr::ClipboardMethodCall { method, args } => {
+                    self.eval_clipboard_method_call(method, args, env, event_param, event)
+                }
                 Expr::DocumentHasFocus => Ok(Value::Bool(self.dom.active_element().is_some())),
                 Expr::DomMatches { target, selector } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -751,5 +734,603 @@ impl Harness {
             Err(Error::ScriptRuntime(msg)) if msg == UNHANDLED_EXPR_CHUNK => Ok(None),
             other => other.map(Some),
         }
+    }
+}
+
+impl Harness {
+    fn eval_clipboard_method_call(
+        &mut self,
+        method: &ClipboardMethod,
+        args: &[Expr],
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let (method_name, evaluated_args) = match method {
+            ClipboardMethod::ReadText => ("readText", Vec::new()),
+            ClipboardMethod::WriteText => (
+                "writeText",
+                vec![self.eval_expr(&args[0], env, event_param, event)?],
+            ),
+        };
+
+        if let Some((receiver, callee)) =
+            self.resolve_clipboard_method_override(env, method_name)?
+        {
+            return self
+                .execute_callable_value_with_this_and_env(
+                    &callee,
+                    &evaluated_args,
+                    event,
+                    Some(env),
+                    Some(receiver),
+                )
+                .map_err(|err| match err {
+                    Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                        Error::ScriptRuntime(format!("'{}' is not a function", method_name))
+                    }
+                    other => other,
+                });
+        }
+
+        match method {
+            ClipboardMethod::ReadText => {
+                let promise = self.new_pending_promise();
+                if let Some(reason) = self.platform_mocks.clipboard_read_error.clone() {
+                    self.promise_reject(&promise, Value::String(reason));
+                } else {
+                    self.promise_resolve(
+                        &promise,
+                        Value::String(self.platform_mocks.clipboard_text.clone()),
+                    )?;
+                }
+                Ok(Value::Promise(promise))
+            }
+            ClipboardMethod::WriteText => {
+                let promise = self.new_pending_promise();
+                if let Some(reason) = self.platform_mocks.clipboard_write_error.clone() {
+                    self.promise_reject(&promise, Value::String(reason));
+                } else {
+                    self.platform_mocks.clipboard_text = evaluated_args[0].as_string();
+                    self.promise_resolve(&promise, Value::Undefined)?;
+                }
+                Ok(Value::Promise(promise))
+            }
+        }
+    }
+
+    fn resolve_clipboard_method_override(
+        &mut self,
+        env: &HashMap<String, Value>,
+        method_name: &str,
+    ) -> Result<Option<(Value, Value)>> {
+        let navigator = if let Some(value) = env.get("navigator") {
+            Some(value.clone())
+        } else {
+            self.script_runtime.env.get("navigator").cloned()
+        };
+        let Some(navigator) = navigator else {
+            return Ok(None);
+        };
+
+        let clipboard = self
+            .object_property_from_value(&navigator, "clipboard")
+            .map_err(|err| match err {
+                Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                    Error::ScriptRuntime(
+                        "member call target does not support property 'clipboard'".into(),
+                    )
+                }
+                other => other,
+            })?;
+
+        let use_builtin = if let Value::Object(entries) = &clipboard {
+            let entries = entries.borrow();
+            let is_builtin_clipboard = matches!(
+                Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_OBJECT_KEY),
+                Some(Value::Bool(true))
+            );
+            if !is_builtin_clipboard {
+                false
+            } else {
+                let default_key = match method_name {
+                    "readText" => INTERNAL_CLIPBOARD_READ_TEXT_DEFAULT_KEY,
+                    "writeText" => INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY,
+                    _ => return Ok(None),
+                };
+                let current =
+                    Self::object_get_entry(&entries, method_name).unwrap_or(Value::Undefined);
+                Self::object_get_entry(&entries, default_key)
+                    .as_ref()
+                    .is_some_and(|default_value| self.strict_equal(&current, default_value))
+            }
+        } else {
+            false
+        };
+
+        if use_builtin {
+            return Ok(None);
+        }
+
+        let callee = self
+            .object_property_from_value(&clipboard, method_name)
+            .map_err(|err| match err {
+                Error::ScriptRuntime(msg) if msg == "value is not an object" => {
+                    Error::ScriptRuntime(format!(
+                        "member call target does not support property '{}'",
+                        method_name
+                    ))
+                }
+                other => other,
+            })?;
+
+        Ok(Some((clipboard, callee)))
+    }
+
+    pub(crate) fn node_type_number(&self, node: NodeId) -> i64 {
+        match &self.dom.nodes[node.0].node_type {
+            NodeType::Document => 9,
+            NodeType::Text(_) => 3,
+            NodeType::Element(element)
+                if element.tag_name.eq_ignore_ascii_case("#document-fragment") =>
+            {
+                11
+            }
+            NodeType::Element(_) => 1,
+        }
+    }
+
+    pub(crate) fn clone_dom_node(&mut self, node: NodeId, deep: bool) -> Result<NodeId> {
+        let source = self.dom.clone();
+        let cloned = self
+            .dom
+            .create_node(None, source.nodes[node.0].node_type.clone());
+        if deep {
+            let children = source.nodes[node.0].children.clone();
+            for child in children {
+                let _ = self
+                    .dom
+                    .clone_subtree_from_dom(&source, child, Some(cloned), false)?;
+            }
+        }
+        Ok(cloned)
+    }
+
+    pub(crate) fn template_content_fragment_value(
+        &mut self,
+        template_node: NodeId,
+    ) -> Result<Value> {
+        let source = self.dom.clone();
+        let fragment = self
+            .dom
+            .create_detached_element("#document-fragment".to_string());
+        let children = source.nodes[template_node.0].children.clone();
+        for child in children {
+            let _ = self
+                .dom
+                .clone_subtree_from_dom(&source, child, Some(fragment), false)?;
+        }
+        Ok(Value::Node(fragment))
+    }
+
+    fn parsed_document_root_from_entries(entries: &[(String, Value)]) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
+    }
+
+    fn parsed_document_document_element(&self, root: NodeId) -> Option<NodeId> {
+        self.dom.nodes[root.0]
+            .children
+            .iter()
+            .find(|child| {
+                self.dom
+                    .tag_name(**child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("html"))
+            })
+            .copied()
+            .or_else(|| {
+                self.dom.nodes[root.0]
+                    .children
+                    .iter()
+                    .find(|child| self.dom.element(**child).is_some())
+                    .copied()
+            })
+    }
+
+    fn parsed_document_body(&self, root: NodeId) -> Option<NodeId> {
+        let doc_element = self.parsed_document_document_element(root)?;
+        self.dom.nodes[doc_element.0]
+            .children
+            .iter()
+            .find(|child| {
+                self.dom
+                    .tag_name(**child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+            })
+            .copied()
+            .or_else(|| self.dom.query_selector_from(&root, "body").ok().flatten())
+            .or(Some(doc_element))
+    }
+
+    fn find_descendant_by_id(&self, root: NodeId, id: &str) -> Option<NodeId> {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if self.dom.attr(node, "id").is_some_and(|value| value == id) {
+                return Some(node);
+            }
+            for child in self.dom.nodes[node.0].children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn parsed_document_property_from_entries(
+        &mut self,
+        entries: &[(String, Value)],
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let Some(root) = Self::parsed_document_root_from_entries(entries) else {
+            return Ok(None);
+        };
+        Ok(match key {
+            "body" => Some(
+                self.parsed_document_body(root)
+                    .map(Value::Node)
+                    .unwrap_or(Value::Null),
+            ),
+            "documentElement" => Some(
+                self.parsed_document_document_element(root)
+                    .map(Value::Node)
+                    .unwrap_or(Value::Null),
+            ),
+            "contentType" => Some(Value::String("text/html".to_string())),
+            "URL" | "documentURI" => Some(Value::String("about:blank".to_string())),
+            "createTreeWalker" | "querySelector" | "querySelectorAll" | "getElementById" => {
+                Some(Self::new_builtin_placeholder_function())
+            }
+            _ => None,
+        })
+    }
+
+    pub(crate) fn dom_parser_object_property(
+        &self,
+        entries: &[(String, Value)],
+        key: &str,
+    ) -> Option<Value> {
+        if !matches!(
+            Self::object_get_entry(entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            return None;
+        }
+        match key {
+            "parseFromString" => Some(Self::new_builtin_placeholder_function()),
+            _ => None,
+        }
+    }
+
+    fn tree_walker_mask_for_node(&self, node: NodeId) -> u32 {
+        match self.node_type_number(node) {
+            1 => 0x1,
+            3 => 0x4,
+            8 => 0x80,
+            9 => 0x100,
+            11 => 0x400,
+            _ => 0,
+        }
+    }
+
+    fn tree_walker_accepts(what_to_show: i64, node_mask: u32) -> bool {
+        if what_to_show == -1 || what_to_show == 4_294_967_295 {
+            return true;
+        }
+        ((what_to_show as u32) & node_mask) != 0
+    }
+
+    fn collect_tree_walker_traversal(&self, root: NodeId, out: &mut Vec<NodeId>) {
+        out.push(root);
+        for child in &self.dom.nodes[root.0].children {
+            self.collect_tree_walker_traversal(*child, out);
+        }
+    }
+
+    fn tree_walker_current_node_from_entries(&self, entries: &[(String, Value)]) -> Value {
+        let traversal =
+            match Self::object_get_entry(entries, INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY) {
+                Some(Value::Array(nodes)) => nodes,
+                _ => return Value::Null,
+            };
+        let nodes = traversal.borrow();
+        let index = match Self::object_get_entry(entries, INTERNAL_TREE_WALKER_INDEX_KEY) {
+            Some(Value::Number(index)) if index >= 0 => index as usize,
+            _ => 0,
+        };
+        nodes.get(index).cloned().unwrap_or(Value::Null)
+    }
+
+    pub(crate) fn tree_walker_property_from_entries(
+        &mut self,
+        entries: &[(String, Value)],
+        key: &str,
+    ) -> Result<Option<Value>> {
+        if !matches!(
+            Self::object_get_entry(entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            return Ok(None);
+        }
+        Ok(match key {
+            "currentNode" => Some(self.tree_walker_current_node_from_entries(entries)),
+            "nextNode" => Some(Self::new_builtin_placeholder_function()),
+            "root" => {
+                let traversal =
+                    Self::object_get_entry(entries, INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY);
+                match traversal {
+                    Some(Value::Array(nodes)) => nodes.borrow().first().cloned(),
+                    _ => Some(Value::Null),
+                }
+            }
+            "whatToShow" => Self::object_get_entry(entries, INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn eval_dom_parser_member_call(
+        &mut self,
+        parser_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let is_parser = {
+            let entries = parser_object.borrow();
+            matches!(
+                Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_parser {
+            return Ok(None);
+        }
+
+        match member {
+            "parseFromString" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "DOMParser.parseFromString requires exactly two arguments".into(),
+                    ));
+                }
+                let markup = evaluated_args[0].as_string();
+                let mime_type = evaluated_args[1].as_string().to_ascii_lowercase();
+                if mime_type.trim() != "text/html" {
+                    return Err(Error::ScriptRuntime(
+                        "DOMParser.parseFromString supports only 'text/html'".into(),
+                    ));
+                }
+
+                let ParseOutput { dom: parsed, .. } = parse_html(&markup)?;
+                let parsed_root = self.dom.create_node(None, NodeType::Document);
+                let children = parsed.nodes[parsed.root.0].children.clone();
+                for child in children {
+                    let _ = self.dom.clone_subtree_from_dom(
+                        &parsed,
+                        child,
+                        Some(parsed_root),
+                        false,
+                    )?;
+                }
+                Ok(Some(Self::new_object_value(vec![
+                    (
+                        INTERNAL_PARSED_DOCUMENT_OBJECT_KEY.to_string(),
+                        Value::Bool(true),
+                    ),
+                    (
+                        INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY.to_string(),
+                        Value::Node(parsed_root),
+                    ),
+                ])))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn eval_parsed_document_member_call(
+        &mut self,
+        document_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+        _event: &EventState,
+    ) -> Result<Option<Value>> {
+        let root = {
+            let entries = document_object.borrow();
+            if !matches!(
+                Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                Some(Value::Bool(true))
+            ) {
+                return Ok(None);
+            }
+            let Some(root) = Self::parsed_document_root_from_entries(&entries) else {
+                return Ok(None);
+            };
+            root
+        };
+
+        match member {
+            "getElementById" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementById requires exactly one argument".into(),
+                    ));
+                }
+                let id = evaluated_args[0].as_string();
+                Ok(Some(
+                    self.find_descendant_by_id(root, &id)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "querySelector" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "querySelector requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(
+                    self.dom
+                        .query_selector_from(&root, &selector)?
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "querySelectorAll" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "querySelectorAll requires exactly one selector argument".into(),
+                    ));
+                }
+                let selector = evaluated_args[0].as_string();
+                Ok(Some(Value::NodeList(
+                    self.dom.query_selector_all_from(&root, &selector)?,
+                )))
+            }
+            "createTreeWalker" => self.eval_create_tree_walker_call(evaluated_args),
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn eval_tree_walker_member_call(
+        &mut self,
+        walker_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let is_tree_walker = {
+            let entries = walker_object.borrow();
+            matches!(
+                Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_tree_walker {
+            return Ok(None);
+        }
+
+        match member {
+            "nextNode" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("nextNode takes no arguments".into()));
+                }
+                let (traversal, current_index, what_to_show) = {
+                    let entries = walker_object.borrow();
+                    let traversal = match Self::object_get_entry(
+                        &entries,
+                        INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY,
+                    ) {
+                        Some(Value::Array(nodes)) => nodes,
+                        _ => return Ok(Some(Value::Null)),
+                    };
+                    let current_index =
+                        match Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_INDEX_KEY) {
+                            Some(Value::Number(index)) if index >= 0 => index as usize,
+                            _ => 0,
+                        };
+                    let what_to_show = match Self::object_get_entry(
+                        &entries,
+                        INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY,
+                    ) {
+                        Some(Value::Number(mask)) => mask,
+                        _ => 4_294_967_295,
+                    };
+                    (traversal, current_index, what_to_show)
+                };
+
+                let nodes = traversal.borrow();
+                for index in (current_index + 1)..nodes.len() {
+                    let Value::Node(node) = &nodes[index] else {
+                        continue;
+                    };
+                    if !Self::tree_walker_accepts(
+                        what_to_show,
+                        self.tree_walker_mask_for_node(*node),
+                    ) {
+                        continue;
+                    }
+                    Self::object_set_entry(
+                        &mut walker_object.borrow_mut(),
+                        INTERNAL_TREE_WALKER_INDEX_KEY.to_string(),
+                        Value::Number(index as i64),
+                    );
+                    return Ok(Some(Value::Node(*node)));
+                }
+                Ok(Some(Value::Null))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn eval_create_tree_walker_call(
+        &mut self,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        if evaluated_args.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "createTreeWalker requires at least one root argument".into(),
+            ));
+        }
+
+        let root = match &evaluated_args[0] {
+            Value::Node(node) => *node,
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    self.dom.root
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    Self::parsed_document_root_from_entries(&entries).unwrap_or(self.dom.root)
+                } else {
+                    return Err(Error::ScriptRuntime(
+                        "createTreeWalker root must be a Node".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "createTreeWalker root must be a Node".into(),
+                ));
+            }
+        };
+
+        let what_to_show = evaluated_args
+            .get(1)
+            .map(Self::value_to_i64)
+            .unwrap_or(4_294_967_295);
+
+        let mut traversal = Vec::new();
+        self.collect_tree_walker_traversal(root, &mut traversal);
+        let traversal_values = traversal.into_iter().map(Value::Node).collect::<Vec<_>>();
+
+        Ok(Some(Self::new_object_value(vec![
+            (
+                INTERNAL_TREE_WALKER_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY.to_string(),
+                Self::new_array_value(traversal_values),
+            ),
+            (INTERNAL_TREE_WALKER_INDEX_KEY.to_string(), Value::Number(0)),
+            (
+                INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY.to_string(),
+                Value::Number(what_to_show),
+            ),
+        ])))
     }
 }

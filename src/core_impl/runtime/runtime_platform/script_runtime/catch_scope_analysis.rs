@@ -42,13 +42,7 @@ impl Harness {
                     .iter()
                     .flatten()
                     .map(|binding| (binding.target.clone(), is_var))
-                    .chain(
-                        pattern
-                            .rest
-                            .iter()
-                            .cloned()
-                            .map(|name| (name, is_var)),
-                    )
+                    .chain(pattern.rest.iter().cloned().map(|name| (name, is_var)))
                     .collect::<Vec<_>>()
             }
             Stmt::ObjectDestructureAssign {
@@ -61,13 +55,7 @@ impl Harness {
                     .bindings
                     .iter()
                     .map(|binding| (binding.target.clone(), is_var))
-                    .chain(
-                        pattern
-                            .rest
-                            .iter()
-                            .cloned()
-                            .map(|name| (name, is_var)),
-                    )
+                    .chain(pattern.rest.iter().cloned().map(|name| (name, is_var)))
                     .collect::<Vec<_>>()
             }
             _ => Vec::new(),

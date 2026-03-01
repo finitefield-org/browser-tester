@@ -14,9 +14,21 @@ impl Harness {
                     let value = self.eval_expr(value, env, event_param, event)?.as_string();
                     Self::parse_json_text(&value)
                 }
-                Expr::JsonStringify(value) => {
+                Expr::JsonStringify {
+                    value,
+                    replacer,
+                    space,
+                } => {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    match Self::json_stringify_top_level(&value)? {
+                    let _evaluated_replacer = replacer
+                        .as_ref()
+                        .map(|replacer| self.eval_expr(replacer, env, event_param, event))
+                        .transpose()?;
+                    let evaluated_space = space
+                        .as_ref()
+                        .map(|space| self.eval_expr(space, env, event_param, event))
+                        .transpose()?;
+                    match Self::json_stringify_top_level(&value, evaluated_space.as_ref())? {
                         Some(serialized) => Ok(Value::String(serialized)),
                         None => Ok(Value::Undefined),
                     }

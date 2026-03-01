@@ -48,6 +48,19 @@ impl Harness {
         self.platform_mocks.clipboard_text.clone()
     }
 
+    pub fn set_clipboard_read_error(&mut self, error: Option<&str>) {
+        self.platform_mocks.clipboard_read_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn set_clipboard_write_error(&mut self, error: Option<&str>) {
+        self.platform_mocks.clipboard_write_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn clear_clipboard_errors(&mut self) {
+        self.platform_mocks.clipboard_read_error = None;
+        self.platform_mocks.clipboard_write_error = None;
+    }
+
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
         let normalized = self.resolve_location_target_url(url);
         self.location_history

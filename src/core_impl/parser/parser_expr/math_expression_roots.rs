@@ -58,19 +58,20 @@ pub(crate) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
 
     if cursor.peek() == Some(b'(') {
         let args_src = cursor.read_balanced_block(b'(', b')')?;
-        let raw_args = split_top_level_by_char(&args_src, b',');
-        let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
-            Vec::new()
-        } else {
-            raw_args
-        };
+        let mut args = split_top_level_by_char(&args_src, b',');
+        if args.len() > 1 && args.last().is_some_and(|arg| arg.trim().is_empty()) {
+            args.pop();
+        }
+        if args.len() == 1 && args[0].trim().is_empty() {
+            args.clear();
+        }
 
         let Some(method) = parse_math_method_name(&member) else {
             return Ok(None);
         };
-        validate_math_arity(method, args.len())?;
 
         let mut parsed = Vec::with_capacity(args.len());
+        let mut has_spread = false;
         for arg in args {
             let arg = arg.trim();
             if arg.is_empty() {
@@ -79,7 +80,16 @@ pub(crate) fn parse_math_expr(src: &str) -> Result<Option<Expr>> {
                     member
                 )));
             }
-            parsed.push(parse_expr(arg)?);
+            let parsed_arg = parse_call_arg_expr(arg)?;
+            has_spread |= matches!(parsed_arg, Expr::Spread(_));
+            parsed.push(parsed_arg);
+        }
+
+        // Spread arity cannot be determined at parse time for fixed-arity methods.
+        // Keep existing strict checks for non-spread calls and defer spread arity
+        // validation to runtime after expansion.
+        if !has_spread {
+            validate_math_arity(method, parsed.len())?;
         }
 
         cursor.skip_ws();

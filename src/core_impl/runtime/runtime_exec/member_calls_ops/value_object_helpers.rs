@@ -641,6 +641,20 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_dom_parser_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("dom_parser_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_dom_parser_instance_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_DOM_PARSER_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])
+    }
+
     pub(crate) fn new_function_call_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -778,6 +792,7 @@ impl Harness {
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
+                "dom_parser_constructor" => "dom_parser_constructor",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
@@ -848,6 +863,15 @@ impl Harness {
                 };
 
                 match key {
+                    "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
+                    "content"
+                        if self
+                            .dom
+                            .tag_name(*node)
+                            .is_some_and(|tag| tag.eq_ignore_ascii_case("template")) =>
+                    {
+                        self.template_content_fragment_value(*node)
+                    }
                     "textContent" | "innerText" => Ok(Value::String(self.dom.text_content(*node))),
                     "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
                     "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
@@ -1142,6 +1166,32 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    if let Some(value) = self.dom_parser_object_property(&entries, key) {
+                        return Ok(value);
+                    }
+                }
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    if let Some(value) =
+                        self.parsed_document_property_from_entries(&entries, key)?
+                    {
+                        return Ok(value);
+                    }
+                }
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    if let Some(value) = self.tree_walker_property_from_entries(&entries, key)? {
+                        return Ok(value);
+                    }
+                }
                 let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
                     .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
                     .and_then(|symbol| symbol.description.as_deref())

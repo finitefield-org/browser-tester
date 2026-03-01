@@ -9,9 +9,9 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
-        let mut values = Vec::with_capacity(args.len());
-        for arg in args {
-            values.push(self.eval_expr(arg, env, event_param, event)?);
+        let values = self.eval_call_args_with_spread(args, env, event_param, event)?;
+        if let Some(message) = Self::math_method_arity_error(method, values.len()) {
+            return Err(Error::ScriptRuntime(message));
         }
 
         let single = |values: &[Value]| Self::coerce_number_for_global(&values[0]);
@@ -91,6 +91,68 @@ impl Harness {
             MathMethod::Tanh => Ok(Value::Float(single(&values).tanh())),
             MathMethod::Trunc => Ok(Value::Float(single(&values).trunc())),
         }
+    }
+
+    fn math_method_arity_error(method: MathMethod, count: usize) -> Option<String> {
+        let method_name = match method {
+            MathMethod::Abs => "abs",
+            MathMethod::Acos => "acos",
+            MathMethod::Acosh => "acosh",
+            MathMethod::Asin => "asin",
+            MathMethod::Asinh => "asinh",
+            MathMethod::Atan => "atan",
+            MathMethod::Atan2 => "atan2",
+            MathMethod::Atanh => "atanh",
+            MathMethod::Cbrt => "cbrt",
+            MathMethod::Ceil => "ceil",
+            MathMethod::Clz32 => "clz32",
+            MathMethod::Cos => "cos",
+            MathMethod::Cosh => "cosh",
+            MathMethod::Exp => "exp",
+            MathMethod::Expm1 => "expm1",
+            MathMethod::Floor => "floor",
+            MathMethod::F16Round => "f16round",
+            MathMethod::FRound => "fround",
+            MathMethod::Hypot => "hypot",
+            MathMethod::Imul => "imul",
+            MathMethod::Log => "log",
+            MathMethod::Log10 => "log10",
+            MathMethod::Log1p => "log1p",
+            MathMethod::Log2 => "log2",
+            MathMethod::Max => "max",
+            MathMethod::Min => "min",
+            MathMethod::Pow => "pow",
+            MathMethod::Random => "random",
+            MathMethod::Round => "round",
+            MathMethod::Sign => "sign",
+            MathMethod::Sin => "sin",
+            MathMethod::Sinh => "sinh",
+            MathMethod::Sqrt => "sqrt",
+            MathMethod::SumPrecise => "sumPrecise",
+            MathMethod::Tan => "tan",
+            MathMethod::Tanh => "tanh",
+            MathMethod::Trunc => "trunc",
+        };
+
+        let valid = match method {
+            MathMethod::Random => count == 0,
+            MathMethod::Atan2 | MathMethod::Imul | MathMethod::Pow => count == 2,
+            MathMethod::Hypot | MathMethod::Max | MathMethod::Min => true,
+            MathMethod::SumPrecise => count == 1,
+            _ => count == 1,
+        };
+        if valid {
+            return None;
+        }
+
+        Some(match method {
+            MathMethod::Random => format!("Math.{method_name} does not take arguments"),
+            MathMethod::Atan2 | MathMethod::Imul | MathMethod::Pow => {
+                format!("Math.{method_name} requires exactly two arguments")
+            }
+            MathMethod::SumPrecise => format!("Math.{method_name} requires exactly one argument"),
+            _ => format!("Math.{method_name} requires exactly one argument"),
+        })
     }
 
     pub(crate) fn eval_number_method(

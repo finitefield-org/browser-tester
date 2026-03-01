@@ -2261,6 +2261,94 @@ fn navigator_clipboard_property_is_read_only() {
 }
 
 #[test]
+fn navigator_clipboard_read_text_rejection_can_be_mocked() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard.readText()
+              .then((value) => {
+                document.getElementById('result').textContent = 'ok:' + value;
+              })
+              .catch((reason) => {
+                document.getElementById('result').textContent = 'err:' + String(reason);
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_read_error(Some("NotAllowedError"));
+    h.click("#btn")?;
+    h.assert_text("#result", "err:NotAllowedError")?;
+
+    h.clear_clipboard_errors();
+    h.set_clipboard_text("after-clear");
+    h.click("#btn")?;
+    h.assert_text("#result", "ok:after-clear")?;
+    Ok(())
+}
+
+#[test]
+fn navigator_clipboard_write_text_rejection_can_be_mocked() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard.writeText('saved')
+              .then(() => navigator.clipboard.readText())
+              .then((value) => {
+                document.getElementById('result').textContent = 'ok:' + value;
+              })
+              .catch((reason) => {
+                document.getElementById('result').textContent = 'err:' + String(reason);
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_write_error(Some("WriteBlocked"));
+    h.click("#btn")?;
+    h.assert_text("#result", "err:WriteBlocked")?;
+    assert_eq!(h.clipboard_text(), "");
+
+    h.clear_clipboard_errors();
+    h.click("#btn")?;
+    h.assert_text("#result", "ok:saved")?;
+    assert_eq!(h.clipboard_text(), "saved");
+    Ok(())
+}
+
+#[test]
+fn navigator_clipboard_method_override_is_used_even_with_special_clipboard_ast() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          navigator.clipboard.readText = () => Promise.resolve('stubbed-read');
+          navigator.clipboard.writeText = () => Promise.resolve('stubbed-write');
+
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard.writeText('saved')
+              .then(() => navigator.clipboard.readText())
+              .then((value) => {
+                document.getElementById('result').textContent = value;
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "stubbed-read")?;
+    assert_eq!(h.clipboard_text(), "");
+    Ok(())
+}
+
+#[test]
 fn structured_clone_deep_copies_objects_arrays_and_dates() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2483,8 +2571,8 @@ fn global_function_arity_errors_have_stable_messages() {
             "JSON.parse requires exactly one argument",
         ),
         (
-            "<script>window.JSON.stringify('x', 1);</script>",
-            "JSON.stringify requires exactly one argument",
+            "<script>window.JSON.stringify();</script>",
+            "JSON.stringify requires one to three arguments",
         ),
         (
             "<script>fetch();</script>",
@@ -2784,6 +2872,69 @@ fn json_parse_and_stringify_roundtrip_work() -> Result<()> {
         "#result",
         "{\"a\":1,\"b\":[true,null,\"x\"],\"c\":{\"d\":2}}|[1,2,3]|{\"x\":\"y\"}",
     )?;
+    Ok(())
+}
+
+#[test]
+fn json_stringify_supports_space_argument() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { a: 1, b: { c: 2 } };
+            const pretty = JSON.stringify(obj, null, 2);
+            const compact = JSON.stringify(obj, null, 0);
+            const prettyHasTopIndent = pretty.includes('\n  "a": 1');
+            const prettyHasNestedIndent = pretty.includes('\n    "c": 2');
+            document.getElementById('result').textContent =
+              prettyHasTopIndent + ':' + prettyHasNestedIndent + ':' + compact;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:{\"a\":1,\"b\":{\"c\":2}}")?;
+    Ok(())
+}
+
+#[test]
+fn dom_parser_and_tree_walker_basics_are_supported() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString('<div id="root">A<!--x--><span>B</span></div>', 'text/html');
+            const root = doc.getElementById('root');
+            const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const values = [];
+            let current = walker.nextNode();
+            while (current) {
+              values.push(current.textContent.trim());
+              current = walker.nextNode();
+            }
+
+            const commentWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_COMMENT);
+            const noComment = commentWalker.nextNode() === null;
+            root.remove();
+
+            document.getElementById('result').textContent =
+              (root !== null) + ':' +
+              (root.nodeType === Node.ELEMENT_NODE) + ':' +
+              (Node.TEXT_NODE === 3) + ':' +
+              values.join(',') + ':' +
+              noComment + ':' +
+              (doc.getElementById('root') === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:A,B:true:true")?;
     Ok(())
 }
 

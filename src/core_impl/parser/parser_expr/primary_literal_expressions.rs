@@ -198,8 +198,12 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::JsonParse(Box::new(value)));
     }
 
-    if let Some(value) = parse_json_stringify_expr(src)? {
-        return Ok(Expr::JsonStringify(Box::new(value)));
+    if let Some((value, replacer, space)) = parse_json_stringify_expr(src)? {
+        return Ok(Expr::JsonStringify {
+            value: Box::new(value),
+            replacer: replacer.map(Box::new),
+            space: space.map(Box::new),
+        });
     }
 
     if let Some(entries) = parse_object_literal_expr(src)? {

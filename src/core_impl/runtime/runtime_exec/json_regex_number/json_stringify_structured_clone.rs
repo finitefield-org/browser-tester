@@ -1,16 +1,33 @@
 use super::*;
 
 impl Harness {
-    pub(crate) fn json_stringify_top_level(value: &Value) -> Result<Option<String>> {
+    pub(crate) fn json_stringify_top_level(
+        value: &Value,
+        space: Option<&Value>,
+    ) -> Result<Option<String>> {
+        let gap = Self::json_stringify_gap(space);
         let mut array_stack = Vec::new();
         let mut object_stack = Vec::new();
-        Self::json_stringify_value(value, &mut array_stack, &mut object_stack)
+        Self::json_stringify_value(value, &mut array_stack, &mut object_stack, &gap, 0)
+    }
+
+    fn json_stringify_gap(space: Option<&Value>) -> String {
+        match space {
+            Some(Value::Number(width)) => " ".repeat((*width).clamp(0, 10) as usize),
+            Some(Value::Float(width)) if width.is_finite() => {
+                " ".repeat(width.trunc().clamp(0.0, 10.0) as usize)
+            }
+            Some(Value::String(text)) => text.chars().take(10).collect(),
+            _ => String::new(),
+        }
     }
 
     pub(crate) fn json_stringify_value(
         value: &Value,
         array_stack: &mut Vec<usize>,
         object_stack: &mut Vec<usize>,
+        gap: &str,
+        depth: usize,
     ) -> Result<Option<String>> {
         match value {
             Value::String(v) => Ok(Some(format!("\"{}\"", Self::json_escape_string(v)))),
@@ -69,16 +86,43 @@ impl Harness {
                 array_stack.push(ptr);
 
                 let items = values.borrow();
-                let mut out = String::from("[");
-                for (idx, item) in items.iter().enumerate() {
-                    if idx > 0 {
-                        out.push(',');
-                    }
-                    let serialized = Self::json_stringify_value(item, array_stack, object_stack)?
+                let out = if items.is_empty() {
+                    "[]".to_string()
+                } else if gap.is_empty() {
+                    let mut out = String::from("[");
+                    for (idx, item) in items.iter().enumerate() {
+                        if idx > 0 {
+                            out.push(',');
+                        }
+                        let serialized = Self::json_stringify_value(
+                            item,
+                            array_stack,
+                            object_stack,
+                            gap,
+                            depth + 1,
+                        )?
                         .unwrap_or_else(|| "null".to_string());
-                    out.push_str(&serialized);
-                }
-                out.push(']');
+                        out.push_str(&serialized);
+                    }
+                    out.push(']');
+                    out
+                } else {
+                    let indent = gap.repeat(depth + 1);
+                    let closing_indent = gap.repeat(depth);
+                    let mut lines = Vec::with_capacity(items.len());
+                    for item in items.iter() {
+                        let serialized = Self::json_stringify_value(
+                            item,
+                            array_stack,
+                            object_stack,
+                            gap,
+                            depth + 1,
+                        )?
+                        .unwrap_or_else(|| "null".to_string());
+                        lines.push(format!("{indent}{serialized}"));
+                    }
+                    format!("[\n{}\n{closing_indent}]", lines.join(",\n"))
+                };
 
                 array_stack.pop();
                 Ok(Some(out))
@@ -93,27 +137,44 @@ impl Harness {
                 object_stack.push(ptr);
 
                 let entries = entries.borrow();
-                let mut out = String::from("{");
-                let mut wrote = false;
+                let mut pairs = Vec::new();
                 for (key, value) in entries.iter() {
                     if Self::is_internal_object_key(key) {
                         continue;
                     }
-                    let Some(serialized) =
-                        Self::json_stringify_value(value, array_stack, object_stack)?
+                    let Some(serialized) = Self::json_stringify_value(
+                        value,
+                        array_stack,
+                        object_stack,
+                        gap,
+                        depth + 1,
+                    )?
                     else {
                         continue;
                     };
-                    if wrote {
-                        out.push(',');
+                    if gap.is_empty() {
+                        pairs.push(format!(
+                            "\"{}\":{}",
+                            Self::json_escape_string(key),
+                            serialized
+                        ));
+                    } else {
+                        let indent = gap.repeat(depth + 1);
+                        pairs.push(format!(
+                            "{indent}\"{}\": {}",
+                            Self::json_escape_string(key),
+                            serialized
+                        ));
                     }
-                    wrote = true;
-                    out.push('"');
-                    out.push_str(&Self::json_escape_string(key));
-                    out.push_str("\":");
-                    out.push_str(&serialized);
                 }
-                out.push('}');
+                let out = if pairs.is_empty() {
+                    "{}".to_string()
+                } else if gap.is_empty() {
+                    format!("{{{}}}", pairs.join(","))
+                } else {
+                    let closing_indent = gap.repeat(depth);
+                    format!("{{\n{}\n{closing_indent}}}", pairs.join(",\n"))
+                };
 
                 object_stack.pop();
                 Ok(Some(out))

@@ -704,6 +704,8 @@ impl Default for DomRuntimeState {
 #[derive(Debug, Default)]
 pub(crate) struct PlatformMockState {
     pub(crate) clipboard_text: String,
+    pub(crate) clipboard_read_error: Option<String>,
+    pub(crate) clipboard_write_error: Option<String>,
     pub(crate) fetch_mocks: HashMap<String, String>,
     pub(crate) fetch_calls: Vec<String>,
     pub(crate) match_media_mocks: HashMap<String, bool>,

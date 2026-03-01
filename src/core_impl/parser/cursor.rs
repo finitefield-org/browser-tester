@@ -149,6 +149,10 @@ impl<'a> Cursor<'a> {
         let start = self.i;
 
         let bytes = self.bytes();
+        if self.i + 1 < bytes.len() && bytes[self.i] == quote && bytes[self.i + 1] == quote {
+            self.i += 2;
+            return Ok((quote as char).to_string());
+        }
         while self.i < bytes.len() {
             let b = bytes[self.i];
             if b == b'\\' {

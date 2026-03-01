@@ -1805,7 +1805,8 @@ fn exponentiation_operator_supports_bigint_and_rejects_mixed_numeric_types() -> 
 }
 
 #[test]
-fn exponentiation_rejects_unparenthesized_unary_base_and_accepts_parenthesized_forms() -> Result<()> {
+fn exponentiation_rejects_unparenthesized_unary_base_and_accepts_parenthesized_forms() -> Result<()>
+{
     let neg_err = Harness::from_html("<script>-2 ** 2;</script>")
         .expect_err("unparenthesized unary minus base should fail");
     match neg_err {
@@ -1956,10 +1957,7 @@ fn void_operator_returns_undefined_and_respects_precedence() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text(
-        "#result",
-        "undefined:undefined:evaluated:false:undefined",
-    )?;
+    h.assert_text("#result", "undefined:undefined:evaluated:false:undefined")?;
     Ok(())
 }
 
@@ -3014,7 +3012,9 @@ fn destructuring_rest_rejects_trailing_comma_and_non_identifier() {
     let array_err = Harness::from_html("<script>const [a, ...rest,] = [1, 2];</script>")
         .expect_err("array rest trailing comma should fail");
     match array_err {
-        Error::ScriptParse(msg) => assert!(msg.contains("rest element may not have a trailing comma")),
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("rest element may not have a trailing comma"))
+        }
         other => panic!("unexpected error for array rest trailing comma: {other:?}"),
     }
 

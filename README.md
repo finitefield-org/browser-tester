@@ -85,6 +85,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `confirm` / `prompt` provide APIs for injecting mocked return values.
 - `location` navigation can load mocked HTML for a target URL.
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
+- `navigator.clipboard` read/write rejection paths can be injected deterministically for tests.
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
@@ -95,6 +96,9 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::set_fetch_mock(url, body)`
   - `Harness::set_clipboard_text(text)`
   - `Harness::clipboard_text()`
+  - `Harness::set_clipboard_read_error(Some("NotAllowedError"))`
+  - `Harness::set_clipboard_write_error(Some("NotAllowedError"))`
+  - `Harness::clear_clipboard_errors()`
   - `Harness::enqueue_confirm_response(bool)`
   - `Harness::enqueue_prompt_response(Option<&str>)`
   - `Harness::set_location_mock_page(url, html)`
@@ -440,6 +444,7 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
 - Clipboard API: `navigator.clipboard` (read-only),
   `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
+  (test hooks: `set_clipboard_read_error`, `set_clipboard_write_error`, `clear_clipboard_errors`)
 - URLSearchParams API: `new URLSearchParams(init)`, `size`,
   `append(name, value)`, `delete(name[, value])`, `entries()`, `forEach(callback[, thisArg])`,
   `get(name)`, `getAll(name)`, `has(name[, value])`, `keys()`, `set(name, value)`,
@@ -461,6 +466,8 @@ Unsupported selectors must return explicit errors (no silent ignore).
 - Time: `Date.now()` / `performance.now()` (returns current fake clock value `now_ms`)
 - Random: `Math.random()` (returns deterministic PRNG float `0.0 <= x < 1.0`)
 - Mock-oriented APIs: `fetch`, `matchMedia`, `navigator.clipboard`, `alert`, `confirm`, `prompt`
+- Non-executable script types (for example `application/ld+json`, `application/json`, `text/plain`)
+  are parsed as inert script text and never executed.
 - Events: `preventDefault`, `stopPropagation`, `stopImmediatePropagation`, `popstate` (`event.state`)
 - `offsetWidth`, `offsetHeight`, `offsetTop`, `offsetLeft`, `scrollWidth`, `scrollHeight`, `scrollTop`, `scrollLeft` (minimal implementation returns numeric values)
 
@@ -620,6 +627,9 @@ impl Harness {
     pub fn set_fetch_mock(&mut self, url: &str, body: &str);
     pub fn set_clipboard_text(&mut self, text: &str);
     pub fn clipboard_text(&self) -> String;
+    pub fn set_clipboard_read_error(&mut self, error: Option<&str>);
+    pub fn set_clipboard_write_error(&mut self, error: Option<&str>);
+    pub fn clear_clipboard_errors(&mut self);
     pub fn clear_fetch_mocks(&mut self);
     pub fn take_fetch_calls(&mut self) -> Vec<String>;
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool);

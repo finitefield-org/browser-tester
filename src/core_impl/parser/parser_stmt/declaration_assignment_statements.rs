@@ -962,7 +962,8 @@ pub(crate) fn parse_array_destructure_assignment_pattern(
     }
 
     let mut items = split_top_level_by_char(&items_src, b',');
-    let had_trailing_empty = items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
+    let had_trailing_empty =
+        items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
     while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
         items.pop();
     }
@@ -1064,7 +1065,8 @@ pub(crate) fn parse_object_destructure_assignment_pattern(
     }
 
     let mut items = split_top_level_by_char(&items_src, b',');
-    let had_trailing_empty = items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
+    let had_trailing_empty =
+        items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty());
     while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
         items.pop();
     }
@@ -1116,29 +1118,30 @@ pub(crate) fn parse_object_destructure_assignment_pattern(
                     "object destructuring entry must be identifier or identifier: identifier: {item}"
                 )));
             }
-            let (target, default) =
-                if let Some((eq_pos, op_len)) = find_top_level_assignment(target_src) {
-                    if op_len != 1 {
-                        return Err(Error::ScriptParse(format!(
-                            "object destructuring entry must be identifier or identifier: identifier: {item}"
-                        )));
-                    }
-                    let target = target_src[..eq_pos].trim();
-                    let default_src = target_src[eq_pos + op_len..].trim();
-                    if !is_ident(target) || default_src.is_empty() {
-                        return Err(Error::ScriptParse(format!(
-                            "object destructuring entry must be identifier or identifier: identifier: {item}"
-                        )));
-                    }
-                    (target.to_string(), Some(parse_expr(default_src)?))
-                } else {
-                    if !is_ident(target_src) {
-                        return Err(Error::ScriptParse(format!(
-                            "object destructuring entry must be identifier or identifier: identifier: {item}"
-                        )));
-                    }
-                    (target_src.to_string(), None)
-                };
+            let (target, default) = if let Some((eq_pos, op_len)) =
+                find_top_level_assignment(target_src)
+            {
+                if op_len != 1 {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                let target = target_src[..eq_pos].trim();
+                let default_src = target_src[eq_pos + op_len..].trim();
+                if !is_ident(target) || default_src.is_empty() {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                (target.to_string(), Some(parse_expr(default_src)?))
+            } else {
+                if !is_ident(target_src) {
+                    return Err(Error::ScriptParse(format!(
+                        "object destructuring entry must be identifier or identifier: identifier: {item}"
+                    )));
+                }
+                (target_src.to_string(), None)
+            };
             ObjectDestructureBinding {
                 source: source.to_string(),
                 target,

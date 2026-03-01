@@ -43,6 +43,20 @@ pub(crate) const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
 pub(crate) const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
 pub(crate) const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
 pub(crate) const INTERNAL_CLIPBOARD_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard";
+pub(crate) const INTERNAL_CLIPBOARD_READ_TEXT_DEFAULT_KEY: &str =
+    "\u{0}\u{0}bt_clipboard:read_text_default";
+pub(crate) const INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY: &str =
+    "\u{0}\u{0}bt_clipboard:write_text_default";
+pub(crate) const INTERNAL_DOM_PARSER_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_parser";
+pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parsed_document";
+pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =
+    "\u{0}\u{0}bt_parsed_document:root_node";
+pub(crate) const INTERNAL_TREE_WALKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_tree_walker";
+pub(crate) const INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY: &str =
+    "\u{0}\u{0}bt_tree_walker:traversal_nodes";
+pub(crate) const INTERNAL_TREE_WALKER_INDEX_KEY: &str = "\u{0}\u{0}bt_tree_walker:index";
+pub(crate) const INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY: &str =
+    "\u{0}\u{0}bt_tree_walker:what_to_show";
 pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
 pub(crate) const INTERNAL_IMPORT_META_OBJECT_KEY: &str = "\u{0}\u{0}bt_import_meta:object";
 pub(crate) const INTERNAL_NEW_TARGET_KEY: &str = "\u{0}\u{0}bt_new_target";

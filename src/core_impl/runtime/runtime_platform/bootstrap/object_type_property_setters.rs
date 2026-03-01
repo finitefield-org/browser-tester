@@ -117,7 +117,7 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "URL" | "HTMLElement" | "HTMLInputElement" => {
+            | "URL" | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Node" | "NodeFilter" => {
                 Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
             }
             "location" => self.set_location_property("href", value),
@@ -925,7 +925,9 @@ impl Harness {
                     };
                     if let Some(setter) = setter {
                         if !self.is_callable_value(&setter) {
-                            return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                            return Err(Error::ScriptRuntime(
+                                "object setter is not callable".into(),
+                            ));
                         }
                         self.execute_callable_value_with_this_and_env(
                             &setter,
@@ -959,7 +961,9 @@ impl Harness {
                     };
                     if let Some(setter) = setter {
                         if !self.is_callable_value(&setter) {
-                            return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                            return Err(Error::ScriptRuntime(
+                                "object setter is not callable".into(),
+                            ));
                         }
                         self.execute_callable_value_with_this_and_env(
                             &setter,
@@ -1021,7 +1025,8 @@ impl Harness {
                         &this_value,
                     )?;
                 } else {
-                    container = self.read_object_assignment_property(&container, key_value, target)?;
+                    container =
+                        self.read_object_assignment_property(&container, key_value, target)?;
                 }
             }
 
@@ -1058,12 +1063,7 @@ impl Harness {
                 )?;
             } else {
                 self.set_object_assignment_property(
-                    &container,
-                    final_key,
-                    value,
-                    target,
-                    env,
-                    event,
+                    &container, final_key, value, target, env, event,
                 )?;
             }
             return Ok(());

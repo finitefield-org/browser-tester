@@ -106,11 +106,25 @@ impl JsLexScanner {
                 }
                 match b {
                     b'\'' => {
+                        // Compatibility: tolerate malformed `'''` by treating it as
+                        // a single-quote character literal.
+                        if i + 2 < bytes.len() && bytes[i + 1] == b'\'' && bytes[i + 2] == b'\'' {
+                            self.previous_significant = Some(b'\'');
+                            self.previous_identifier_allows_regex = false;
+                            return i + 3;
+                        }
                         self.push_mode(JsLexMode::Single);
                         self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'"' => {
+                        // Compatibility: tolerate malformed `"""` by treating it as
+                        // a double-quote character literal.
+                        if i + 2 < bytes.len() && bytes[i + 1] == b'"' && bytes[i + 2] == b'"' {
+                            self.previous_significant = Some(b'"');
+                            self.previous_identifier_allows_regex = false;
+                            return i + 3;
+                        }
                         self.push_mode(JsLexMode::Double);
                         self.previous_identifier_allows_regex = false;
                         i + 1
@@ -201,11 +215,21 @@ impl JsLexScanner {
                 }
                 match b {
                     b'\'' => {
+                        if i + 2 < bytes.len() && bytes[i + 1] == b'\'' && bytes[i + 2] == b'\'' {
+                            self.previous_significant = Some(b'\'');
+                            self.previous_identifier_allows_regex = false;
+                            return i + 3;
+                        }
                         self.push_mode(JsLexMode::Single);
                         self.previous_identifier_allows_regex = false;
                         i + 1
                     }
                     b'"' => {
+                        if i + 2 < bytes.len() && bytes[i + 1] == b'"' && bytes[i + 2] == b'"' {
+                            self.previous_significant = Some(b'"');
+                            self.previous_identifier_allows_regex = false;
+                            return i + 3;
+                        }
                         self.push_mode(JsLexMode::Double);
                         self.previous_identifier_allows_regex = false;
                         i + 1

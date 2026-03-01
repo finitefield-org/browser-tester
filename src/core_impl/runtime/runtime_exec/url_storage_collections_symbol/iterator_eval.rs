@@ -262,8 +262,8 @@ impl Harness {
         if emitted {
             return Ok(Some(Value::Undefined));
         }
-        let value =
-            Self::object_get_entry(&entries, INTERNAL_ITERATOR_RETURN_VALUE_KEY).unwrap_or(Value::Undefined);
+        let value = Self::object_get_entry(&entries, INTERNAL_ITERATOR_RETURN_VALUE_KEY)
+            .unwrap_or(Value::Undefined);
         Self::object_set_entry(
             &mut entries,
             INTERNAL_ITERATOR_RETURN_EMITTED_KEY.to_string(),

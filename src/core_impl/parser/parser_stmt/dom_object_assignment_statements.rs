@@ -67,7 +67,7 @@ pub(crate) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     };
     let (method, accepts_optional_arg) = match method_name.as_str() {
-        "focus" => (DomMethod::Focus, false),
+        "focus" => (DomMethod::Focus, true),
         "blur" => (DomMethod::Blur, false),
         "click" => (DomMethod::Click, false),
         "scrollIntoView" => (DomMethod::ScrollIntoView, true),

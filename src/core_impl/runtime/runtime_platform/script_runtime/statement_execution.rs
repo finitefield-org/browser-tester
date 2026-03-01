@@ -2292,8 +2292,10 @@ impl Harness {
                                 if !is_declaration && env.contains_key(rest_name) {
                                     self.ensure_binding_is_mutable(env, rest_name)?;
                                 }
-                                let rest_values =
-                                    values.into_iter().skip(pattern.items.len()).collect::<Vec<_>>();
+                                let rest_values = values
+                                    .into_iter()
+                                    .skip(pattern.items.len())
+                                    .collect::<Vec<_>>();
                                 let next = Self::new_array_value(rest_values);
                                 env.insert(rest_name.clone(), next.clone());
                                 self.sync_arguments_after_param_write(env, rest_name, &next);
@@ -2333,7 +2335,8 @@ impl Harness {
                                 if !is_declaration && env.contains_key(target_name) {
                                     self.ensure_binding_is_mutable(env, target_name)?;
                                 }
-                                let mut next = self.object_property_from_value(&source, source_key)?;
+                                let mut next =
+                                    self.object_property_from_value(&source, source_key)?;
                                 if matches!(next, Value::Undefined) {
                                     if let Some(default) = &binding.default {
                                         next = self.eval_expr(default, env, event_param, event)?;
@@ -2461,7 +2464,9 @@ impl Harness {
                         } => {
                             if matches!(
                                 op,
-                                VarAssignOp::LogicalAnd | VarAssignOp::LogicalOr | VarAssignOp::Nullish
+                                VarAssignOp::LogicalAnd
+                                    | VarAssignOp::LogicalOr
+                                    | VarAssignOp::Nullish
                             ) {
                                 let previous = self.eval_expr(
                                     &Expr::DomRead {
@@ -2489,7 +2494,8 @@ impl Harness {
                             if let DomQuery::Var(name) = target {
                                 if let Some(key) = Self::object_key_from_dom_prop(prop) {
                                     if let Some(receiver) = env.get(name).cloned() {
-                                        if !matches!(receiver, Value::Node(_) | Value::NodeList(_)) {
+                                        if !matches!(receiver, Value::Node(_) | Value::NodeList(_))
+                                        {
                                             self.set_object_assignment_property(
                                                 &receiver,
                                                 &Value::String(key.to_string()),

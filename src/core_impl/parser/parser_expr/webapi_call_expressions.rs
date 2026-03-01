@@ -25,6 +25,11 @@ pub(crate) fn parse_match_media_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        // `window.matchMedia` property access should be handled by the generic
+        // member-get parser, not treated as a call parse failure.
+        return Ok(None);
+    }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');

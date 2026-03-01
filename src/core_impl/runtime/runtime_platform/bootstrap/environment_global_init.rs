@@ -126,10 +126,20 @@ impl Harness {
             vec![(INTERNAL_STORAGE_OBJECT_KEY.to_string(), Value::Bool(true))];
         Self::set_storage_pairs(&mut local_storage_entries, &local_storage_items);
         *self.browser_apis.local_storage_object.borrow_mut() = local_storage_entries.into();
+        let read_text = Self::new_builtin_placeholder_function();
+        let write_text = Self::new_builtin_placeholder_function();
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
-            ("readText".into(), Self::new_builtin_placeholder_function()),
-            ("writeText".into(), Self::new_builtin_placeholder_function()),
+            (
+                INTERNAL_CLIPBOARD_READ_TEXT_DEFAULT_KEY.into(),
+                read_text.clone(),
+            ),
+            (
+                INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY.into(),
+                write_text.clone(),
+            ),
+            ("readText".into(), read_text),
+            ("writeText".into(), write_text),
         ]);
         let location = Value::Object(self.dom_runtime.location_object.clone());
         let history = Value::Object(self.location_history.history_object.clone());
@@ -202,6 +212,23 @@ impl Harness {
         let url_constructor = Value::UrlConstructor;
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
+        let dom_parser_constructor = Self::new_dom_parser_constructor_value();
+        let node_constants = Self::new_object_value(vec![
+            ("ELEMENT_NODE".to_string(), Value::Number(1)),
+            ("TEXT_NODE".to_string(), Value::Number(3)),
+            ("COMMENT_NODE".to_string(), Value::Number(8)),
+            ("DOCUMENT_NODE".to_string(), Value::Number(9)),
+            ("DOCUMENT_FRAGMENT_NODE".to_string(), Value::Number(11)),
+        ]);
+        let node_filter_constants = Self::new_object_value(vec![
+            ("SHOW_ALL".to_string(), Value::Number(4_294_967_295)),
+            ("SHOW_ELEMENT".to_string(), Value::Number(0x1)),
+            ("SHOW_TEXT".to_string(), Value::Number(0x4)),
+            ("SHOW_COMMENT".to_string(), Value::Number(0x80)),
+            ("FILTER_ACCEPT".to_string(), Value::Number(1)),
+            ("FILTER_REJECT".to_string(), Value::Number(2)),
+            ("FILTER_SKIP".to_string(), Value::Number(3)),
+        ]);
         let local_storage = Value::Object(self.browser_apis.local_storage_object.clone());
 
         self.sync_document_object();
@@ -214,6 +241,9 @@ impl Harness {
             &url_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
+            &dom_parser_constructor,
+            &node_constants,
+            &node_filter_constants,
             &local_storage,
         );
 
@@ -249,6 +279,15 @@ impl Harness {
             "HTMLInputElement".to_string(),
             html_input_element_constructor,
         );
+        self.script_runtime
+            .env
+            .insert("DOMParser".to_string(), dom_parser_constructor);
+        self.script_runtime
+            .env
+            .insert("Node".to_string(), node_constants);
+        self.script_runtime
+            .env
+            .insert("NodeFilter".to_string(), node_filter_constants);
         self.script_runtime
             .env
             .insert("location".to_string(), location);
