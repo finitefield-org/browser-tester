@@ -67,6 +67,7 @@ mod dom_meta_element;
 mod dom_meter_element;
 mod dom_nav_element;
 mod dom_navigation_dialog;
+mod dom_node_interface;
 mod dom_noscript_element;
 mod dom_object_element;
 mod dom_ol_element;

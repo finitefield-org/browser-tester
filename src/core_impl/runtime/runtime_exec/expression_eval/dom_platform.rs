@@ -142,7 +142,8 @@ impl Harness {
                         DomProp::Readonly => Ok(Value::Bool(self.dom.readonly(node))),
                         DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
                         DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
-                        DomProp::TextContent => Ok(Value::String(self.dom.text_content(node))),
+                        DomProp::NodeType => Ok(Value::Number(self.node_type_number(node))),
+                        DomProp::TextContent => Ok(self.node_text_content_value(node)),
                         DomProp::InnerText => Ok(Value::String(self.dom.text_content(node))),
                         DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
                         DomProp::OuterHtml => Ok(Value::String(self.dom.outer_html(node)?)),
@@ -398,15 +399,23 @@ impl Harness {
                             }
                         }
                         DomProp::VisibilityState => Ok(Value::String("visible".to_string())),
-                        DomProp::Forms => Ok(Value::NodeList(self.dom.query_selector_all("form")?)),
-                        DomProp::Images => Ok(Value::NodeList(self.dom.query_selector_all("img")?)),
-                        DomProp::Links => Ok(Value::NodeList(
+                        DomProp::Forms => Ok(Self::new_static_node_list_value(
+                            self.dom.query_selector_all("form")?,
+                        )),
+                        DomProp::Images => Ok(Self::new_static_node_list_value(
+                            self.dom.query_selector_all("img")?,
+                        )),
+                        DomProp::Links => Ok(Self::new_static_node_list_value(
                             self.dom.query_selector_all("a[href], area[href]")?,
                         )),
                         DomProp::Scripts => {
-                            Ok(Value::NodeList(self.dom.query_selector_all("script")?))
+                            Ok(Self::new_static_node_list_value(
+                                self.dom.query_selector_all("script")?,
+                            ))
                         }
-                        DomProp::Children => Ok(Value::NodeList(self.dom.child_elements(node))),
+                        DomProp::Children => Ok(Self::new_static_node_list_value(
+                            self.dom.child_elements(node),
+                        )),
                         DomProp::ChildElementCount => {
                             Ok(Value::Number(self.dom.child_element_count(node) as i64))
                         }
@@ -478,9 +487,11 @@ impl Harness {
                             .resolve_aria_single_element_property(node, prop_name)
                             .map(Value::Node)
                             .unwrap_or(Value::Null)),
-                        DomProp::AriaElementRefList(prop_name) => Ok(Value::NodeList(
-                            self.resolve_aria_element_list_property(node, prop_name),
-                        )),
+                        DomProp::AriaElementRefList(prop_name) => Ok(
+                            Self::new_static_node_list_value(
+                                self.resolve_aria_element_list_property(node, prop_name),
+                            ),
+                        ),
                         DomProp::AnchorAttributionSrc => Ok(Value::String(
                             self.dom.attr(node, "attributionsrc").unwrap_or_default(),
                         )),
@@ -880,6 +891,310 @@ impl Harness {
         }
     }
 
+    pub(crate) fn new_static_node_list_value(nodes: Vec<NodeId>) -> Value {
+        Value::NodeList(Rc::new(RefCell::new(NodeListValue::static_list(nodes))))
+    }
+
+    pub(crate) fn child_nodes_live_list_value(&mut self, parent: NodeId) -> Value {
+        let existing = self.dom_runtime.live_child_nodes_lists.get(&parent).cloned();
+        let list = existing.unwrap_or_else(|| {
+            let list = Rc::new(RefCell::new(NodeListValue::live_child_nodes(
+                parent,
+                self.dom.nodes[parent.0].children.clone(),
+            )));
+            self.dom_runtime
+                .live_child_nodes_lists
+                .insert(parent, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
+    pub(crate) fn refresh_node_list(&self, list: &Rc<RefCell<NodeListValue>>) {
+        let source = list.borrow().live_source.clone();
+        let Some(LiveNodeListSource::ChildNodes { parent }) = source else {
+            return;
+        };
+        let nodes = if self.dom.is_valid_node(parent) {
+            self.dom.nodes[parent.0].children.clone()
+        } else {
+            Vec::new()
+        };
+        list.borrow_mut().nodes = nodes;
+    }
+
+    pub(crate) fn node_list_snapshot(&self, list: &Rc<RefCell<NodeListValue>>) -> Vec<NodeId> {
+        self.refresh_node_list(list);
+        list.borrow().nodes.clone()
+    }
+
+    pub(crate) fn node_list_len(&self, list: &Rc<RefCell<NodeListValue>>) -> usize {
+        self.refresh_node_list(list);
+        list.borrow().nodes.len()
+    }
+
+    pub(crate) fn node_list_get(
+        &self,
+        list: &Rc<RefCell<NodeListValue>>,
+        index: usize,
+    ) -> Option<NodeId> {
+        self.refresh_node_list(list);
+        list.borrow().nodes.get(index).copied()
+    }
+
+    pub(crate) fn node_name(&self, node: NodeId) -> String {
+        match &self.dom.nodes[node.0].node_type {
+            NodeType::Document => "#document".to_string(),
+            NodeType::Text(_) => "#text".to_string(),
+            NodeType::Element(element)
+                if element.tag_name.eq_ignore_ascii_case("#document-fragment") =>
+            {
+                "#document-fragment".to_string()
+            }
+            NodeType::Element(element) => element.tag_name.to_ascii_uppercase(),
+        }
+    }
+
+    pub(crate) fn node_value(&self, node: NodeId) -> Value {
+        match &self.dom.nodes[node.0].node_type {
+            NodeType::Text(text) => Value::String(text.clone()),
+            _ => Value::Null,
+        }
+    }
+
+    pub(crate) fn node_text_content_value(&self, node: NodeId) -> Value {
+        if matches!(self.dom.nodes[node.0].node_type, NodeType::Document) {
+            Value::Null
+        } else {
+            Value::String(self.dom.text_content(node))
+        }
+    }
+
+    pub(crate) fn node_root(&self, node: NodeId) -> NodeId {
+        let mut current = node;
+        while let Some(parent) = self.dom.parent(current) {
+            current = parent;
+        }
+        current
+    }
+
+    pub(crate) fn node_owner_document(&self, node: NodeId) -> Option<NodeId> {
+        if matches!(self.dom.nodes[node.0].node_type, NodeType::Document) {
+            return None;
+        }
+        let root = self.node_root(node);
+        if matches!(self.dom.nodes[root.0].node_type, NodeType::Document) {
+            Some(root)
+        } else {
+            Some(self.dom.root)
+        }
+    }
+
+    pub(crate) fn node_parent_element(&self, node: NodeId) -> Option<NodeId> {
+        let parent = self.dom.parent(node)?;
+        match &self.dom.nodes[parent.0].node_type {
+            NodeType::Element(element)
+                if !element.tag_name.eq_ignore_ascii_case("#document-fragment") =>
+            {
+                Some(parent)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn node_previous_sibling(&self, node: NodeId) -> Option<NodeId> {
+        let parent = self.dom.parent(node)?;
+        let siblings = &self.dom.nodes[parent.0].children;
+        let position = siblings.iter().position(|sibling| *sibling == node)?;
+        position.checked_sub(1).map(|index| siblings[index])
+    }
+
+    pub(crate) fn node_next_sibling(&self, node: NodeId) -> Option<NodeId> {
+        let parent = self.dom.parent(node)?;
+        let siblings = &self.dom.nodes[parent.0].children;
+        let position = siblings.iter().position(|sibling| *sibling == node)?;
+        siblings.get(position + 1).copied()
+    }
+
+    fn node_document_order_index(&self, root: NodeId, target: NodeId) -> Option<usize> {
+        let mut stack = vec![root];
+        let mut index = 0usize;
+        while let Some(current) = stack.pop() {
+            if current == target {
+                return Some(index);
+            }
+            index += 1;
+            for child in self.dom.nodes[current.0].children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn node_compare_document_position(&self, left: NodeId, right: NodeId) -> i64 {
+        const DOCUMENT_POSITION_DISCONNECTED: i64 = 0x01;
+        const DOCUMENT_POSITION_PRECEDING: i64 = 0x02;
+        const DOCUMENT_POSITION_FOLLOWING: i64 = 0x04;
+        const DOCUMENT_POSITION_CONTAINS: i64 = 0x08;
+        const DOCUMENT_POSITION_CONTAINED_BY: i64 = 0x10;
+        const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: i64 = 0x20;
+
+        if left == right {
+            return 0;
+        }
+
+        let left_root = self.node_root(left);
+        let right_root = self.node_root(right);
+        if left_root != right_root {
+            let disconnected_order = if left.0 < right.0 {
+                DOCUMENT_POSITION_FOLLOWING
+            } else {
+                DOCUMENT_POSITION_PRECEDING
+            };
+            return DOCUMENT_POSITION_DISCONNECTED
+                | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
+                | disconnected_order;
+        }
+
+        if self.dom.is_descendant_of(right, left) {
+            return DOCUMENT_POSITION_CONTAINED_BY | DOCUMENT_POSITION_FOLLOWING;
+        }
+        if self.dom.is_descendant_of(left, right) {
+            return DOCUMENT_POSITION_CONTAINS | DOCUMENT_POSITION_PRECEDING;
+        }
+
+        let left_index = self.node_document_order_index(left_root, left).unwrap_or(0);
+        let right_index = self.node_document_order_index(left_root, right).unwrap_or(0);
+        if left_index < right_index {
+            DOCUMENT_POSITION_FOLLOWING
+        } else {
+            DOCUMENT_POSITION_PRECEDING
+        }
+    }
+
+    pub(crate) fn nodes_are_equal(&self, left: NodeId, right: NodeId) -> bool {
+        let left_node = &self.dom.nodes[left.0];
+        let right_node = &self.dom.nodes[right.0];
+        let metadata_equal = match (&left_node.node_type, &right_node.node_type) {
+            (NodeType::Document, NodeType::Document) => true,
+            (NodeType::Text(left_text), NodeType::Text(right_text)) => left_text == right_text,
+            (NodeType::Element(left_element), NodeType::Element(right_element)) => {
+                left_element.tag_name.eq_ignore_ascii_case(&right_element.tag_name)
+                    && left_element.attrs == right_element.attrs
+                    && left_element.value == right_element.value
+                    && left_element.files == right_element.files
+                    && left_element.checked == right_element.checked
+                    && left_element.indeterminate == right_element.indeterminate
+                    && left_element.disabled == right_element.disabled
+                    && left_element.readonly == right_element.readonly
+                    && left_element.required == right_element.required
+                    && left_element.custom_validity_message
+                        == right_element.custom_validity_message
+                    && left_element.selection_start == right_element.selection_start
+                    && left_element.selection_end == right_element.selection_end
+                    && left_element.selection_direction == right_element.selection_direction
+            }
+            _ => false,
+        };
+        if !metadata_equal {
+            return false;
+        }
+        if left_node.children.len() != right_node.children.len() {
+            return false;
+        }
+        left_node
+            .children
+            .iter()
+            .zip(right_node.children.iter())
+            .all(|(left_child, right_child)| self.nodes_are_equal(*left_child, *right_child))
+    }
+
+    pub(crate) fn normalize_node_subtree(&mut self, node: NodeId) -> Result<()> {
+        let direct_children = self.dom.nodes[node.0].children.clone();
+        for child in direct_children {
+            if self.dom.parent(child) == Some(node) {
+                self.normalize_node_subtree(child)?;
+            }
+        }
+
+        let mut index = 0usize;
+        while index < self.dom.nodes[node.0].children.len() {
+            let current = self.dom.nodes[node.0].children[index];
+            let Some(mut merged_text) = (match &self.dom.nodes[current.0].node_type {
+                NodeType::Text(text) => Some(text.clone()),
+                _ => None,
+            }) else {
+                index += 1;
+                continue;
+            };
+
+            loop {
+                let Some(next) = self.dom.nodes[node.0].children.get(index + 1).copied() else {
+                    break;
+                };
+                let Some(next_text) = (match &self.dom.nodes[next.0].node_type {
+                    NodeType::Text(text) => Some(text.clone()),
+                    _ => None,
+                }) else {
+                    break;
+                };
+                merged_text.push_str(&next_text);
+                self.dom.remove_child(node, next)?;
+            }
+
+            if let NodeType::Text(text) = &mut self.dom.nodes[current.0].node_type {
+                *text = merged_text.clone();
+            }
+            if merged_text.is_empty() {
+                self.dom.remove_child(node, current)?;
+                continue;
+            }
+            index += 1;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn node_lookup_namespace_uri(
+        &self,
+        node: NodeId,
+        prefix: Option<&str>,
+    ) -> Option<String> {
+        let _ = node;
+        let normalized_prefix = prefix.unwrap_or_default();
+        if normalized_prefix.is_empty() {
+            Some("http://www.w3.org/1999/xhtml".to_string())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn node_lookup_prefix(
+        &self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+    ) -> Option<String> {
+        let _ = node;
+        let Some(namespace_uri) = namespace_uri else {
+            return None;
+        };
+        if namespace_uri == "http://www.w3.org/1999/xhtml" {
+            None
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn node_is_default_namespace(&self, node: NodeId, namespace_uri: Option<&str>) -> bool {
+        let default_namespace = self.node_lookup_namespace_uri(node, None);
+        match (namespace_uri, default_namespace.as_deref()) {
+            (None, None) => true,
+            (Some(namespace_uri), Some(default_namespace)) => namespace_uri == default_namespace,
+            _ => false,
+        }
+    }
+
     pub(crate) fn clone_dom_node(&mut self, node: NodeId, deep: bool) -> Result<NodeId> {
         let source = self.dom.clone();
         let cloned = self
@@ -1192,7 +1507,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Value::NodeList(
+                Ok(Some(Self::new_static_node_list_value(
                     self.dom.query_selector_all_from(&root, &selector)?,
                 )))
             }

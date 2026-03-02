@@ -867,7 +867,7 @@ impl Harness {
                         let nodes = self
                             .resolve_dom_query_list_runtime(target, env)?
                             .unwrap_or_default();
-                        Ok(Value::NodeList(nodes))
+                        Ok(Self::new_static_node_list_value(nodes))
                     } else {
                         let node = self.resolve_dom_query_required_runtime(target, env)?;
                         Ok(Value::Node(node))

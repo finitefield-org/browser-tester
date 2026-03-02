@@ -179,6 +179,105 @@ impl Harness {
         Ok(target)
     }
 
+    fn new_event_target_instance_from_constructor(
+        &mut self,
+        constructor: &Value,
+        this_arg: Option<Value>,
+    ) -> Result<Value> {
+        if let Some(this_value) = this_arg {
+            if Self::is_primitive_value(&this_value) {
+                return Err(Error::ScriptRuntime(
+                    "constructor this value must be an object".into(),
+                ));
+            }
+            if let Value::Object(entries) = &this_value {
+                Self::object_set_entry(
+                    &mut entries.borrow_mut(),
+                    INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(),
+                    Value::Bool(true),
+                );
+            }
+            return Ok(this_value);
+        }
+
+        let mut entries = vec![(INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(), Value::Bool(true))];
+        if let Value::Object(constructor_entries) = constructor {
+            let constructor_entries = constructor_entries.borrow();
+            if let Some(prototype) = Self::object_get_entry(&constructor_entries, "prototype") {
+                if matches!(prototype, Value::Object(_) | Value::Null) {
+                    entries.push((INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(), prototype));
+                }
+            }
+        }
+        Ok(Self::new_object_value(entries))
+    }
+
+    fn new_event_object_from_constructor_args(
+        &mut self,
+        constructor_name: &str,
+        args: &[Value],
+        include_detail: bool,
+    ) -> Result<Value> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(Error::ScriptRuntime(format!(
+                "{constructor_name} constructor supports one or two arguments"
+            )));
+        }
+        let event_type = args[0].as_string();
+        if event_type.is_empty() {
+            return Err(Error::ScriptRuntime(format!(
+                "{constructor_name} constructor requires a non-empty event type"
+            )));
+        }
+
+        let mut bubbles = false;
+        let mut cancelable = false;
+        let mut detail = if include_detail {
+            Some(Value::Null)
+        } else {
+            None
+        };
+        if let Some(options) = args.get(1) {
+            match options {
+                Value::Null | Value::Undefined => {}
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    bubbles = Self::object_get_entry(&entries, "bubbles")
+                        .is_some_and(|value| value.truthy());
+                    cancelable = Self::object_get_entry(&entries, "cancelable")
+                        .is_some_and(|value| value.truthy());
+                    if include_detail {
+                        detail = Some(
+                            Self::object_get_entry(&entries, "detail").unwrap_or(Value::Null),
+                        );
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{constructor_name} constructor options argument must be an object"
+                    )));
+                }
+            }
+        }
+
+        let mut entries = vec![
+            (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("type".to_string(), Value::String(event_type)),
+            ("bubbles".to_string(), Value::Bool(bubbles)),
+            ("cancelable".to_string(), Value::Bool(cancelable)),
+            ("defaultPrevented".to_string(), Value::Bool(false)),
+            ("isTrusted".to_string(), Value::Bool(false)),
+            ("eventPhase".to_string(), Value::Number(0)),
+            ("timeStamp".to_string(), Value::Number(self.scheduler.now_ms)),
+            ("target".to_string(), Value::Null),
+            ("currentTarget".to_string(), Value::Null),
+        ];
+        if let Some(detail) = detail {
+            entries.push(("detail".to_string(), detail));
+        }
+        Ok(Self::new_object_value(entries))
+    }
+
     pub(crate) fn execute_function_prototype_member(
         &mut self,
         member: &str,
@@ -238,7 +337,11 @@ impl Harness {
         match value {
             Value::Undefined | Value::Null => Ok(Vec::new()),
             Value::Array(values) => Ok(values.borrow().clone()),
-            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
+            Value::NodeList(nodes) => Ok(self
+                .node_list_snapshot(nodes)
+                .into_iter()
+                .map(Value::Node)
+                .collect()),
             Value::TypedArray(array) => self.typed_array_snapshot(array),
             Value::Object(_) | Value::Function(_) => {
                 let length = Self::value_to_i64(&self.object_property_from_value(value, "length")?);
@@ -372,7 +475,13 @@ impl Harness {
                     );
                 }
                 if self.is_callable_value(other) {
-                    self.execute_callable_value_with_env(other, args, event, caller_env)
+                    self.execute_callable_value_with_this_and_env(
+                        other,
+                        args,
+                        event,
+                        caller_env,
+                        this_arg,
+                    )
                 } else {
                     Err(Error::ScriptRuntime("value is not a constructor".into()))
                 }
@@ -702,6 +811,20 @@ impl Harness {
                     "boolean_constructor" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))
+                    }
+                    "event_target_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "EventTarget constructor does not take arguments".into(),
+                            ));
+                        }
+                        self.new_event_target_instance_from_constructor(callable, this_arg)
+                    }
+                    "event_constructor" => {
+                        self.new_event_object_from_constructor_args("Event", args, false)
+                    }
+                    "custom_event_constructor" => {
+                        self.new_event_object_from_constructor_args("CustomEvent", args, true)
                     }
                     "dom_parser_constructor" => {
                         if !args.is_empty() {

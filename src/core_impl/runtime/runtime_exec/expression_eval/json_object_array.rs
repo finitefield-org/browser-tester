@@ -455,7 +455,9 @@ impl Harness {
                     Some(Value::TypedArray(values)) => {
                         Ok(Value::Number(values.borrow().observed_length() as i64))
                     }
-                    Some(Value::NodeList(nodes)) => Ok(Value::Number(nodes.len() as i64)),
+                    Some(Value::NodeList(nodes)) => {
+                        Ok(Value::Number(self.node_list_len(nodes) as i64))
+                    }
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                     Some(Value::Function(function)) => {
                         let mut length = 0_i64;
@@ -557,9 +559,8 @@ impl Harness {
                             let Some(index) = self.value_as_index(&index) else {
                                 return Ok(Value::Undefined);
                             };
-                            Ok(nodes
-                                .get(index)
-                                .copied()
+                            Ok(self
+                                .node_list_get(nodes, index)
                                 .map(Value::Node)
                                 .unwrap_or(Value::Undefined))
                         }

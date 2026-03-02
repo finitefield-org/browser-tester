@@ -6881,6 +6881,90 @@ fn class_extends_supports_super_constructor_and_inherited_methods() -> Result<()
 }
 
 #[test]
+fn event_target_constructor_supports_custom_event_detail_dispatch() -> Result<()> {
+    let html = r#"
+        <button id='dec' aria-label='Decrement'>-</button>
+        <span id='currentValue'>0</span>
+        <button id='inc' aria-label='Increment'>+</button>
+        <script>
+          class Counter extends EventTarget {
+            constructor(initialValue = 0) {
+              super();
+              this.value = initialValue;
+            }
+
+            #emitChangeEvent() {
+              this.dispatchEvent(new CustomEvent('valuechange', { detail: this.value }));
+            }
+
+            increment() {
+              this.value++;
+              this.#emitChangeEvent();
+            }
+
+            decrement() {
+              this.value--;
+              this.#emitChangeEvent();
+            }
+          }
+
+          const counter = new Counter(0);
+          counter.addEventListener('valuechange', (event) => {
+            document.getElementById('currentValue').textContent = event.detail;
+          });
+
+          document.getElementById('inc').addEventListener('click', () => {
+            counter.increment();
+          });
+          document.getElementById('dec').addEventListener('click', () => {
+            counter.decrement();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#inc")?;
+    h.assert_text("#currentValue", "1")?;
+    h.click("#inc")?;
+    h.assert_text("#currentValue", "2")?;
+    h.click("#dec")?;
+    h.assert_text("#currentValue", "1")?;
+    Ok(())
+}
+
+#[test]
+fn event_target_dispatch_event_with_event_constructor_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          class Emitter extends EventTarget {
+            emit() {
+              this.dispatchEvent(new Event('ping'));
+            }
+          }
+
+          const emitter = new Emitter();
+          let count = 0;
+          emitter.addEventListener('ping', () => {
+            count++;
+          });
+
+          document.getElementById('btn').addEventListener('click', () => {
+            emitter.emit();
+            emitter.emit();
+            document.getElementById('result').textContent = count;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
 fn class_extends_uses_default_super_constructor_and_super_method_calls() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

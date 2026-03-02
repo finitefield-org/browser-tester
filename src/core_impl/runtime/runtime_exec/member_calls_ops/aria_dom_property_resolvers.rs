@@ -110,6 +110,7 @@ impl Harness {
             DomProp::Readonly => Some("readOnly"),
             DomProp::Required => Some("required"),
             DomProp::Disabled => Some("disabled"),
+            DomProp::NodeType => Some("nodeType"),
             DomProp::TextContent => Some("textContent"),
             DomProp::InnerText => Some("innerText"),
             DomProp::InnerHtml => Some("innerHTML"),

@@ -83,7 +83,7 @@ impl Harness {
     ) -> Result<()> {
         match target_value {
             Value::NodeList(nodes) => {
-                let snapshot = nodes.clone();
+                let snapshot = self.node_list_snapshot(&nodes);
                 for (idx, node) in snapshot.into_iter().enumerate() {
                     self.execute_array_callback_in_env(
                         callback,

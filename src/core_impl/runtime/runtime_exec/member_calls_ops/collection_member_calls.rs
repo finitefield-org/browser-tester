@@ -912,7 +912,7 @@ impl Harness {
 
     pub(crate) fn eval_nodelist_member_call(
         &mut self,
-        nodes: &[NodeId],
+        nodes: &Rc<RefCell<NodeListValue>>,
         member: &str,
         evaluated_args: &[Value],
         event: &EventState,
@@ -925,14 +925,14 @@ impl Harness {
                     ));
                 }
                 let callback = evaluated_args[0].clone();
-                let snapshot = nodes.to_vec();
+                let snapshot = self.node_list_snapshot(nodes);
                 for (idx, node) in snapshot.iter().copied().enumerate() {
                     let _ = self.execute_callback_value(
                         &callback,
                         &[
                             Value::Node(node),
                             Value::Number(idx as i64),
-                            Value::NodeList(snapshot.clone()),
+                            Value::NodeList(nodes.clone()),
                         ],
                         event,
                     )?;

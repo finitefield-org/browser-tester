@@ -267,6 +267,33 @@ impl PartialEq for SymbolValue {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LiveNodeListSource {
+    ChildNodes { parent: NodeId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NodeListValue {
+    pub(crate) nodes: Vec<NodeId>,
+    pub(crate) live_source: Option<LiveNodeListSource>,
+}
+
+impl NodeListValue {
+    pub(crate) fn static_list(nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            live_source: None,
+        }
+    }
+
+    pub(crate) fn live_child_nodes(parent: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::ChildNodes { parent }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     String(String),
@@ -303,7 +330,7 @@ pub(crate) enum Value {
     Null,
     Undefined,
     Node(NodeId),
-    NodeList(Vec<NodeId>),
+    NodeList(Rc<RefCell<NodeListValue>>),
     FormData(Vec<(String, String)>),
     Function(Rc<FunctionValue>),
 }
@@ -524,7 +551,7 @@ impl Value {
             Self::Null => false,
             Self::Undefined => false,
             Self::Node(_) => true,
-            Self::NodeList(nodes) => !nodes.is_empty(),
+            Self::NodeList(nodes) => !nodes.borrow().nodes.is_empty(),
             Self::FormData(_) => true,
             Self::Function(_) => true,
         }
@@ -692,6 +719,7 @@ pub(crate) enum DomProp {
     Readonly,
     Required,
     Disabled,
+    NodeType,
     TextContent,
     InnerText,
     InnerHtml,

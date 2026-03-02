@@ -598,7 +598,107 @@ impl Harness {
                 | Value::SetConstructor
                 | Value::WeakSetConstructor
                 | Value::RegExpConstructor
-        )
+        ) || matches!(Self::callable_kind_from_value(value), Some("event_target_constructor"))
+    }
+
+    fn resolve_event_target_object_for_query(
+        &mut self,
+        target: &DomQuery,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<Rc<RefCell<ObjectValue>>>> {
+        let value = match target {
+            DomQuery::Var(name) => env.get(name).cloned(),
+            DomQuery::VarPath { base, path } => {
+                self.resolve_dom_query_var_path_value(base, path, env)?
+            }
+            _ => None,
+        };
+        let Some(Value::Object(entries)) = value else {
+            return Ok(None);
+        };
+        if Self::is_event_target_object(&entries.borrow()) {
+            return Ok(Some(entries));
+        }
+        Ok(None)
+    }
+
+    fn event_target_listener_node_id(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+    ) -> NodeId {
+        let object_id = Rc::as_ptr(object) as usize;
+        if let Some(node_id) = self
+            .script_runtime
+            .event_target_listener_nodes
+            .get(&object_id)
+            .copied()
+        {
+            return node_id;
+        }
+
+        let slot = self.script_runtime.next_event_target_listener_slot;
+        self.script_runtime.next_event_target_listener_slot = slot.saturating_add(1);
+        let node_id = NodeId(usize::MAX.saturating_sub(slot));
+        self.script_runtime
+            .event_target_listener_nodes
+            .insert(object_id, node_id);
+        node_id
+    }
+
+    fn event_dispatch_payload_from_value(
+        &self,
+        value: &Value,
+    ) -> Result<(String, Option<Value>, bool, bool)> {
+        if let Value::Object(entries) = value {
+            let entries = entries.borrow();
+            if Self::is_event_object(&entries) {
+                let event_type = Self::object_get_entry(&entries, "type")
+                    .unwrap_or(Value::Undefined)
+                    .as_string();
+                let detail = Self::object_get_entry(&entries, "detail");
+                let bubbles = Self::object_get_entry(&entries, "bubbles")
+                    .is_some_and(|value| value.truthy());
+                let cancelable = Self::object_get_entry(&entries, "cancelable")
+                    .is_some_and(|value| value.truthy());
+                return Ok((event_type, detail, bubbles, cancelable));
+            }
+        }
+        Ok((value.as_string(), None, false, false))
+    }
+
+    fn dispatch_event_target_with_env(
+        &mut self,
+        target_object: Rc<RefCell<ObjectValue>>,
+        event_payload: Value,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        let (event_type, detail, bubbles, cancelable) =
+            self.event_dispatch_payload_from_value(&event_payload)?;
+        if event_type.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "dispatchEvent requires non-empty event type".into(),
+            ));
+        }
+
+        let node_id = self.event_target_listener_node_id(&target_object);
+        let target_value = Value::Object(target_object);
+        let mut event = EventState::new_untrusted(&event_type, node_id, self.scheduler.now_ms);
+        event.target_value = Some(target_value.clone());
+        event.current_target_value = Some(target_value);
+        event.detail = detail;
+        event.bubbles = bubbles;
+        event.cancelable = cancelable;
+
+        event.event_phase = 2;
+        event.current_target = node_id;
+        self.invoke_listeners(node_id, &mut event, env, true)?;
+        if event.propagation_stopped {
+            return Ok(event);
+        }
+        event.event_phase = 2;
+        self.invoke_listeners(node_id, &mut event, env, false)?;
+
+        Ok(event)
     }
 
     fn private_accessor_get_key() -> &'static str {
@@ -2953,6 +3053,7 @@ impl Harness {
                                 | DomProp::ValidityBadInput
                                 | DomProp::ValidityValid
                                 | DomProp::ValidityCustomError
+                                | DomProp::NodeType
                                 | DomProp::ClassList
                                 | DomProp::ClassListLength
                                 | DomProp::Part
@@ -3524,7 +3625,7 @@ impl Harness {
                             let for_in_result = (|| -> Result<ExecFlow> {
                                 let iterable = self.eval_expr(iterable, env, event_param, event)?;
                                 let items = match iterable {
-                                    Value::NodeList(nodes) => (0..nodes.len())
+                                    Value::NodeList(nodes) => (0..self.node_list_len(&nodes))
                                         .map(|idx| Value::String(idx.to_string()))
                                         .collect::<Vec<_>>(),
                                     Value::Array(values) => self
@@ -3597,9 +3698,14 @@ impl Harness {
 
                                 let iterable = self.eval_expr(iterable, env, event_param, event)?;
                                 let source = match iterable {
-                                    Value::NodeList(nodes) => ForOfSource::Values(
-                                        nodes.into_iter().map(Value::Node).collect::<Vec<_>>(),
-                                    ),
+                                    Value::NodeList(nodes) => {
+                                        ForOfSource::Values(
+                                            self.node_list_snapshot(&nodes)
+                                                .into_iter()
+                                                .map(Value::Node)
+                                                .collect::<Vec<_>>(),
+                                        )
+                                    }
                                     Value::Array(values) => {
                                         ForOfSource::Values(values.borrow().clone())
                                     }
@@ -3842,9 +3948,11 @@ impl Harness {
                             let for_await_result = (|| -> Result<ExecFlow> {
                                 let iterable = self.eval_expr(iterable, env, event_param, event)?;
                                 let values = match iterable {
-                                    Value::NodeList(nodes) => {
-                                        nodes.into_iter().map(Value::Node).collect::<Vec<_>>()
-                                    }
+                                    Value::NodeList(nodes) => self
+                                        .node_list_snapshot(&nodes)
+                                        .into_iter()
+                                        .map(Value::Node)
+                                        .collect::<Vec<_>>(),
                                     Value::Array(values) => values.borrow().clone(),
                                     Value::Map(map) => self.map_entries_array(&map),
                                     Value::Set(set) => set.borrow().values.clone(),
@@ -4209,9 +4317,40 @@ impl Harness {
                             capture,
                             handler,
                         } => {
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
                             let event_type =
                                 self.eval_expr(event_type, env, event_param, event)?.as_string();
+                            if let Some(target_object) =
+                                self.resolve_event_target_object_for_query(target, env)?
+                            {
+                                let node = self.event_target_listener_node_id(&target_object);
+                                match op {
+                                    ListenerRegistrationOp::Add => {
+                                        let captured_env = self.ensure_listener_capture_env();
+                                        *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+                                        self.listeners.add(
+                                            node,
+                                            event_type.clone(),
+                                            Listener {
+                                                capture: *capture,
+                                                handler: handler.clone(),
+                                                captured_env,
+                                                captured_pending_function_decls: self
+                                                    .script_runtime
+                                                    .pending_function_decls
+                                                    .clone(),
+                                            },
+                                        );
+                                    }
+                                    ListenerRegistrationOp::Remove => {
+                                        let _ = self
+                                            .listeners
+                                            .remove(node, &event_type, *capture, handler);
+                                    }
+                                }
+                                continue;
+                            }
+
+                            let node = self.resolve_dom_query_required_runtime(target, env)?;
                             match op {
                                 ListenerRegistrationOp::Add => {
                                     let captured_env = self.ensure_listener_capture_env();
@@ -4271,6 +4410,19 @@ impl Harness {
                             }
                         }
                         Stmt::DispatchEvent { target, event_type } => {
+                            if let Some(target_object) =
+                                self.resolve_event_target_object_for_query(target, env)?
+                            {
+                                let event_payload =
+                                    self.eval_expr(event_type, env, event_param, event)?;
+                                let _ = self.dispatch_event_target_with_env(
+                                    target_object,
+                                    event_payload,
+                                    env,
+                                )?;
+                                continue;
+                            }
+
                             let node = self.resolve_dom_query_required_runtime(target, env)?;
                             let event_name = self
                                 .eval_expr(event_type, env, event_param, event)?

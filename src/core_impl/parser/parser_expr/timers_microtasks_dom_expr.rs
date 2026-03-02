@@ -232,6 +232,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("readonly", None) | ("readOnly", None) => DomProp::Readonly,
         ("required", None) => DomProp::Required,
         ("disabled", None) => DomProp::Disabled,
+        ("nodeType", None) => DomProp::NodeType,
         ("textContent", None) => DomProp::TextContent,
         ("innerText", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::InnerText,
         ("innerHTML", None) => DomProp::InnerHtml,

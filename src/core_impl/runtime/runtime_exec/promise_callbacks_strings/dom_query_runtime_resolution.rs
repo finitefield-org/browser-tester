@@ -1,9 +1,9 @@
 use super::*;
 
 impl Harness {
-    fn node_list_from_value(value: &Value) -> Option<Vec<NodeId>> {
+    fn node_list_from_value(&self, value: &Value) -> Option<Vec<NodeId>> {
         match value {
-            Value::NodeList(nodes) => Some(nodes.clone()),
+            Value::NodeList(nodes) => Some(self.node_list_snapshot(nodes)),
             Value::Array(values) => {
                 let values = values.borrow();
                 let mut nodes = Vec::with_capacity(values.len());
@@ -165,7 +165,7 @@ impl Harness {
         match target {
             DomQuery::Var(name) => match env.get(name) {
                 Some(value) => {
-                    if let Some(nodes) = Self::node_list_from_value(value) {
+                    if let Some(nodes) = self.node_list_from_value(value) {
                         Ok(Some(nodes))
                     } else {
                         Err(Error::ScriptRuntime(format!(
@@ -183,7 +183,7 @@ impl Harness {
                 let Some(value) = self.resolve_dom_query_var_path_value(base, path, env)? else {
                     return Ok(None);
                 };
-                if let Some(nodes) = Self::node_list_from_value(&value) {
+                if let Some(nodes) = self.node_list_from_value(&value) {
                     Ok(Some(nodes))
                 } else {
                     Err(Error::ScriptRuntime(format!(
@@ -484,6 +484,7 @@ impl Harness {
             DomProp::Readonly => "readonly".into(),
             DomProp::Required => "required".into(),
             DomProp::Disabled => "disabled".into(),
+            DomProp::NodeType => "nodeType".into(),
             DomProp::TextContent => "textContent".into(),
             DomProp::InnerText => "innerText".into(),
             DomProp::InnerHtml => "innerHTML".into(),
@@ -635,6 +636,9 @@ impl Harness {
     }
 
     pub(crate) fn event_node_label(&self, node: NodeId) -> String {
+        if node.0 >= self.dom.nodes.len() {
+            return format!("event-target-{}", node.0);
+        }
         if let Some(id) = self.dom.attr(node, "id") {
             if !id.is_empty() {
                 return id;
@@ -647,6 +651,9 @@ impl Harness {
     }
 
     pub(crate) fn trace_node_label(&self, node: NodeId) -> String {
+        if node.0 >= self.dom.nodes.len() {
+            return format!("event-target-{}", node.0);
+        }
         if let Some(id) = self.dom.attr(node, "id") {
             if !id.is_empty() {
                 return format!("#{id}");

@@ -227,6 +227,7 @@ impl Harness {
                 self.sync_document_cookie_property();
                 Ok(())
             }
+            "textContent" => Ok(()),
             _ => {
                 Self::object_set_entry(&mut document_object.borrow_mut(), key.to_string(), value);
                 Ok(())
@@ -309,6 +310,11 @@ impl Harness {
         match key {
             "textContent" | "innerText" | "text" => {
                 self.dom.set_text_content(node, &value.as_string())?
+            }
+            "nodeValue" => {
+                if let NodeType::Text(text) = &mut self.dom.nodes[node.0].node_type {
+                    *text = value.as_string();
+                }
             }
             "innerHTML" => self.dom.set_inner_html(node, &value.as_string())?,
             "outerHTML" => self.dom.set_outer_html(node, &value.as_string())?,

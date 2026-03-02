@@ -13,6 +13,7 @@ impl Harness {
         self.listeners = ListenerStore::default();
         self.dom_runtime.node_event_handler_props.clear();
         self.dom_runtime.node_expando_props.clear();
+        self.dom_runtime.live_child_nodes_lists.clear();
         self.script_runtime.env.clear();
         self.scheduler.task_queue.clear();
         self.scheduler.microtask_queue.clear();
@@ -27,6 +28,8 @@ impl Harness {
         self.script_runtime.module_cache.clear();
         self.script_runtime.module_namespace_cache.clear();
         self.script_runtime.loading_modules.clear();
+        self.script_runtime.event_target_listener_nodes.clear();
+        self.script_runtime.next_event_target_listener_slot = 0;
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
         self.initialize_global_bindings();

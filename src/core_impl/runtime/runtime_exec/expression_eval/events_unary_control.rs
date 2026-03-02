@@ -85,28 +85,76 @@ impl Harness {
                     if param == event_var {
                         let value = match prop {
                             EventExprProp::Type => Value::String(event.event_type.clone()),
-                            EventExprProp::Target => Value::Node(event.target),
-                            EventExprProp::CurrentTarget => Value::Node(event.current_target),
-                            EventExprProp::TargetName => Value::String(
-                                self.dom.attr(event.target, "name").unwrap_or_default(),
-                            ),
-                            EventExprProp::CurrentTargetName => Value::String(
-                                self.dom
-                                    .attr(event.current_target, "name")
-                                    .unwrap_or_default(),
-                            ),
+                            EventExprProp::Target => event
+                                .target_value
+                                .as_ref()
+                                .cloned()
+                                .unwrap_or(Value::Node(event.target)),
+                            EventExprProp::CurrentTarget => event
+                                .current_target_value
+                                .as_ref()
+                                .cloned()
+                                .unwrap_or(Value::Node(event.current_target)),
+                            EventExprProp::TargetName => {
+                                if let Some(value) = event.target_value.as_ref() {
+                                    Value::String(
+                                        self.object_property_from_value(value, "name")
+                                            .ok()
+                                            .map(|name| name.as_string())
+                                            .unwrap_or_default(),
+                                    )
+                                } else {
+                                    Value::String(self.dom.attr(event.target, "name").unwrap_or_default())
+                                }
+                            }
+                            EventExprProp::CurrentTargetName => {
+                                if let Some(value) = event.current_target_value.as_ref() {
+                                    Value::String(
+                                        self.object_property_from_value(value, "name")
+                                            .ok()
+                                            .map(|name| name.as_string())
+                                            .unwrap_or_default(),
+                                    )
+                                } else {
+                                    Value::String(
+                                        self.dom
+                                            .attr(event.current_target, "name")
+                                            .unwrap_or_default(),
+                                    )
+                                }
+                            }
                             EventExprProp::DefaultPrevented => Value::Bool(event.default_prevented),
                             EventExprProp::IsTrusted => Value::Bool(event.is_trusted),
                             EventExprProp::Bubbles => Value::Bool(event.bubbles),
                             EventExprProp::Cancelable => Value::Bool(event.cancelable),
                             EventExprProp::TargetId => {
-                                Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
+                                if let Some(value) = event.target_value.as_ref() {
+                                    Value::String(
+                                        self.object_property_from_value(value, "id")
+                                            .ok()
+                                            .map(|id| id.as_string())
+                                            .unwrap_or_default(),
+                                    )
+                                } else {
+                                    Value::String(self.dom.attr(event.target, "id").unwrap_or_default())
+                                }
                             }
-                            EventExprProp::CurrentTargetId => Value::String(
-                                self.dom
-                                    .attr(event.current_target, "id")
-                                    .unwrap_or_default(),
-                            ),
+                            EventExprProp::CurrentTargetId => {
+                                if let Some(value) = event.current_target_value.as_ref() {
+                                    Value::String(
+                                        self.object_property_from_value(value, "id")
+                                            .ok()
+                                            .map(|id| id.as_string())
+                                            .unwrap_or_default(),
+                                    )
+                                } else {
+                                    Value::String(
+                                        self.dom
+                                            .attr(event.current_target, "id")
+                                            .unwrap_or_default(),
+                                    )
+                                }
+                            }
                             EventExprProp::EventPhase => Value::Number(event.event_phase as i64),
                             EventExprProp::TimeStamp => Value::Number(event.time_stamp_ms),
                             EventExprProp::State => {

@@ -67,6 +67,8 @@ pub(crate) const INTERNAL_DOM_PARSER_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_parser
 pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parsed_document";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =
     "\u{0}\u{0}bt_parsed_document:root_node";
+pub(crate) const INTERNAL_EVENT_TARGET_OBJECT_KEY: &str = "\u{0}\u{0}bt_event_target:object";
+pub(crate) const INTERNAL_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:object";
 pub(crate) const INTERNAL_TREE_WALKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_tree_walker";
 pub(crate) const INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY: &str =
     "\u{0}\u{0}bt_tree_walker:traversal_nodes";

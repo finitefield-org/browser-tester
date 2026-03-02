@@ -105,13 +105,20 @@ impl Harness {
     }
 
     fn listener_event_argument(event: &EventState) -> Value {
+        let target = event
+            .target_value
+            .as_ref()
+            .cloned()
+            .unwrap_or(Value::Node(event.target));
+        let current_target = event
+            .current_target_value
+            .as_ref()
+            .cloned()
+            .unwrap_or(Value::Node(event.current_target));
         Self::new_object_value(vec![
             ("type".to_string(), Value::String(event.event_type.clone())),
-            ("target".to_string(), Value::Node(event.target)),
-            (
-                "currentTarget".to_string(),
-                Value::Node(event.current_target),
-            ),
+            ("target".to_string(), target),
+            ("currentTarget".to_string(), current_target),
             (
                 "defaultPrevented".to_string(),
                 Value::Bool(event.default_prevented),
@@ -119,6 +126,10 @@ impl Harness {
             ("isTrusted".to_string(), Value::Bool(event.is_trusted)),
             ("bubbles".to_string(), Value::Bool(event.bubbles)),
             ("cancelable".to_string(), Value::Bool(event.cancelable)),
+            (
+                "detail".to_string(),
+                event.detail.as_ref().cloned().unwrap_or(Value::Undefined),
+            ),
             (
                 "eventPhase".to_string(),
                 Value::Number(event.event_phase as i64),

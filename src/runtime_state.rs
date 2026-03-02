@@ -404,12 +404,15 @@ pub(crate) struct EventState {
     pub(crate) event_type: String,
     pub(crate) target: NodeId,
     pub(crate) current_target: NodeId,
+    pub(crate) target_value: Option<Value>,
+    pub(crate) current_target_value: Option<Value>,
     pub(crate) event_phase: i32,
     pub(crate) time_stamp_ms: i64,
     pub(crate) default_prevented: bool,
     pub(crate) is_trusted: bool,
     pub(crate) bubbles: bool,
     pub(crate) cancelable: bool,
+    pub(crate) detail: Option<Value>,
     pub(crate) state: Option<Value>,
     pub(crate) old_state: Option<String>,
     pub(crate) new_state: Option<String>,
@@ -431,12 +434,15 @@ impl EventState {
             event_type: event_type.to_string(),
             target,
             current_target: target,
+            target_value: None,
+            current_target_value: None,
             event_phase: 2,
             time_stamp_ms,
             default_prevented: false,
             is_trusted: true,
             bubbles: true,
             cancelable: true,
+            detail: None,
             state: None,
             old_state: None,
             new_state: None,
@@ -678,6 +684,8 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) private_binding_stack: Vec<HashMap<String, PrivateBindingRuntime>>,
     pub(crate) private_instance_slots: HashMap<usize, HashMap<usize, Value>>,
     pub(crate) private_static_slots: HashMap<usize, HashMap<usize, Value>>,
+    pub(crate) event_target_listener_nodes: HashMap<usize, NodeId>,
+    pub(crate) next_event_target_listener_slot: usize,
 }
 
 impl ScriptRuntimeState {
@@ -701,6 +709,7 @@ pub(crate) struct DomRuntimeState {
     pub(crate) location_object: Rc<RefCell<ObjectValue>>,
     pub(crate) node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
     pub(crate) node_expando_props: HashMap<(NodeId, String), Value>,
+    pub(crate) live_child_nodes_lists: HashMap<NodeId, Rc<RefCell<NodeListValue>>>,
     pub(crate) dialog_return_values: HashMap<NodeId, String>,
 }
 
@@ -712,6 +721,7 @@ impl Default for DomRuntimeState {
             location_object: Rc::new(RefCell::new(ObjectValue::default())),
             node_event_handler_props: HashMap::new(),
             node_expando_props: HashMap::new(),
+            live_child_nodes_lists: HashMap::new(),
             dialog_return_values: HashMap::new(),
         }
     }

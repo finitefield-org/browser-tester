@@ -210,6 +210,9 @@ impl Harness {
         let intl = Self::new_object_value(intl_entries);
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
+        let event_target_constructor = Self::new_event_target_constructor_value();
+        let event_constructor = Self::new_event_constructor_value();
+        let custom_event_constructor = Self::new_custom_event_constructor_value();
         let iterator_constructor = self.new_iterator_constructor_value();
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
@@ -223,10 +226,38 @@ impl Harness {
         let dom_parser_constructor = Self::new_dom_parser_constructor_value();
         let node_constants = Self::new_object_value(vec![
             ("ELEMENT_NODE".to_string(), Value::Number(1)),
+            ("ATTRIBUTE_NODE".to_string(), Value::Number(2)),
             ("TEXT_NODE".to_string(), Value::Number(3)),
+            ("CDATA_SECTION_NODE".to_string(), Value::Number(4)),
+            ("PROCESSING_INSTRUCTION_NODE".to_string(), Value::Number(7)),
             ("COMMENT_NODE".to_string(), Value::Number(8)),
             ("DOCUMENT_NODE".to_string(), Value::Number(9)),
+            ("DOCUMENT_TYPE_NODE".to_string(), Value::Number(10)),
             ("DOCUMENT_FRAGMENT_NODE".to_string(), Value::Number(11)),
+            (
+                "DOCUMENT_POSITION_DISCONNECTED".to_string(),
+                Value::Number(0x01),
+            ),
+            (
+                "DOCUMENT_POSITION_PRECEDING".to_string(),
+                Value::Number(0x02),
+            ),
+            (
+                "DOCUMENT_POSITION_FOLLOWING".to_string(),
+                Value::Number(0x04),
+            ),
+            (
+                "DOCUMENT_POSITION_CONTAINS".to_string(),
+                Value::Number(0x08),
+            ),
+            (
+                "DOCUMENT_POSITION_CONTAINED_BY".to_string(),
+                Value::Number(0x10),
+            ),
+            (
+                "DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC".to_string(),
+                Value::Number(0x20),
+            ),
         ]);
         let node_filter_constants = Self::new_object_value(vec![
             ("SHOW_ALL".to_string(), Value::Number(4_294_967_295)),
@@ -245,6 +276,9 @@ impl Harness {
             &intl,
             &string_constructor,
             &boolean_constructor,
+            &event_target_constructor,
+            &event_constructor,
+            &custom_event_constructor,
             &iterator_constructor,
             &cookie_store,
             &caches,
@@ -280,6 +314,15 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Boolean".to_string(), boolean_constructor);
+        self.script_runtime
+            .env
+            .insert("EventTarget".to_string(), event_target_constructor);
+        self.script_runtime
+            .env
+            .insert("Event".to_string(), event_constructor);
+        self.script_runtime
+            .env
+            .insert("CustomEvent".to_string(), custom_event_constructor);
         self.script_runtime
             .env
             .insert("Iterator".to_string(), iterator_constructor);

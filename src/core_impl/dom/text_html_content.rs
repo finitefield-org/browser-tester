@@ -25,15 +25,26 @@ impl Dom {
     }
 
     pub(crate) fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<()> {
-        if self.element(node_id).is_none() {
-            return Err(Error::ScriptRuntime(
-                "textContent target is not an element".into(),
-            ));
+        match &mut self.nodes[node_id.0].node_type {
+            NodeType::Document => {
+                // Per DOM behavior, setting textContent on Document is a no-op.
+                return Ok(());
+            }
+            NodeType::Text(text) => {
+                *text = value.to_string();
+                return Ok(());
+            }
+            NodeType::Element(_) => {}
         }
-        self.nodes[node_id.0].children.clear();
+
+        let old_children = std::mem::take(&mut self.nodes[node_id.0].children);
+        for child in old_children {
+            self.nodes[child.0].parent = None;
+        }
         if !value.is_empty() {
             self.create_text(node_id, value.to_string());
         }
+        self.rebuild_id_index();
         Ok(())
     }
 

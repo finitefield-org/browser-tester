@@ -282,7 +282,11 @@ impl Harness {
                 .chars()
                 .map(|ch| Value::String(ch.to_string()))
                 .collect::<Vec<_>>()),
-            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
+            Value::NodeList(nodes) => Ok(self
+                .node_list_snapshot(nodes)
+                .into_iter()
+                .map(Value::Node)
+                .collect()),
             Value::Object(entries) => {
                 let is_iterator = {
                     let entries_ref = entries.borrow();
@@ -323,7 +327,11 @@ impl Harness {
                 .chars()
                 .map(|ch| Value::String(ch.to_string()))
                 .collect::<Vec<_>>()),
-            Value::NodeList(nodes) => Ok(nodes.iter().copied().map(Value::Node).collect()),
+            Value::NodeList(nodes) => Ok(self
+                .node_list_snapshot(nodes)
+                .into_iter()
+                .map(Value::Node)
+                .collect()),
             Value::Object(entries) => {
                 let is_iterator = {
                     let entries_ref = entries.borrow();

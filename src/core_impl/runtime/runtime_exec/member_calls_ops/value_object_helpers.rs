@@ -503,6 +503,20 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_event_target_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_EVENT_TARGET_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn canvas_dimension_default(name: &str) -> i64 {
         match name {
             "width" => 300,
@@ -639,6 +653,63 @@ impl Harness {
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("boolean_constructor".to_string()),
         )])
+    }
+
+    pub(crate) fn new_event_target_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("event_target_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_custom_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("custom_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
     }
 
     pub(crate) fn new_dom_parser_constructor_value() -> Value {
@@ -820,6 +891,9 @@ impl Harness {
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
+                "event_target_constructor" => "event_target_constructor",
+                "event_constructor" => "event_constructor",
+                "custom_event_constructor" => "custom_event_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
                 "fetch_function" => "fetch_function",
                 "window_close_function" => "window_close_function",
@@ -896,8 +970,34 @@ impl Harness {
 
                 match key {
                     "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
-                    "childNodes" => Ok(Value::NodeList(self.dom.nodes[node.0].children.clone())),
-                    "children" => Ok(Value::NodeList(self.dom.child_elements(*node))),
+                    "nodeName" => Ok(Value::String(self.node_name(*node))),
+                    "nodeValue" => Ok(self.node_value(*node)),
+                    "ownerDocument" => Ok(self
+                        .node_owner_document(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "parentNode" => Ok(self
+                        .dom
+                        .parent(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "parentElement" => Ok(self
+                        .node_parent_element(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "nextSibling" => Ok(self
+                        .node_next_sibling(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "previousSibling" => Ok(self
+                        .node_previous_sibling(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "isConnected" => Ok(Value::Bool(self.dom.is_connected(*node))),
+                    "childNodes" => Ok(self.child_nodes_live_list_value(*node)),
+                    "children" => Ok(Self::new_static_node_list_value(
+                        self.dom.child_elements(*node),
+                    )),
                     "childElementCount" => {
                         Ok(Value::Number(self.dom.child_element_count(*node) as i64))
                     }
@@ -935,7 +1035,8 @@ impl Harness {
                     {
                         self.template_content_fragment_value(*node)
                     }
-                    "textContent" | "innerText" => Ok(Value::String(self.dom.text_content(*node))),
+                    "textContent" => Ok(self.node_text_content_value(*node)),
+                    "innerText" => Ok(Value::String(self.dom.text_content(*node))),
                     "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
                     "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
                     "value" => Ok(Value::String(self.dom.value(*node)?)),
@@ -1141,7 +1242,7 @@ impl Harness {
                         if !is_select {
                             return Ok(Value::Undefined);
                         }
-                        Ok(Value::NodeList(select_options()))
+                        Ok(Self::new_static_node_list_value(select_options()))
                     }
                     "selectedIndex" => {
                         if !is_select {
@@ -1206,11 +1307,10 @@ impl Harness {
             }
             Value::NodeList(nodes) => {
                 if key == "length" {
-                    Ok(Value::Number(nodes.len() as i64))
+                    Ok(Value::Number(self.node_list_len(nodes) as i64))
                 } else if let Ok(index) = key.parse::<usize>() {
-                    Ok(nodes
-                        .get(index)
-                        .copied()
+                    Ok(self
+                        .node_list_get(nodes, index)
                         .map(Value::Node)
                         .unwrap_or(Value::Undefined))
                 } else {
@@ -1403,6 +1503,8 @@ impl Harness {
                 );
                 if is_document_object {
                     let value = match key {
+                        "nodeType" => Value::Number(self.node_type_number(self.dom.root)),
+                        "textContent" => self.node_text_content_value(self.dom.root),
                         "body" => self.dom.body().map(Value::Node).unwrap_or(Value::Null),
                         "head" => self.dom.head().map(Value::Node).unwrap_or(Value::Null),
                         "documentElement" => self

@@ -512,6 +512,18 @@ impl Dom {
             return Err(Error::ScriptRuntime("appendChild node is invalid".into()));
         }
 
+        // Appending a DocumentFragment moves its children into the parent and empties the fragment.
+        if self
+            .element(child)
+            .is_some_and(|element| element.tag_name.eq_ignore_ascii_case("#document-fragment"))
+        {
+            let fragment_children = self.nodes[child.0].children.clone();
+            for fragment_child in fragment_children {
+                self.append_child(parent, fragment_child)?;
+            }
+            return Ok(());
+        }
+
         // Prevent cycles: parent must not be inside child's subtree.
         let mut cursor = Some(parent);
         while let Some(node) = cursor {
@@ -563,6 +575,19 @@ impl Dom {
                 "insertBefore reference is not a direct child".into(),
             ));
         }
+
+        // Inserting a DocumentFragment moves all fragment children before the reference node.
+        if self
+            .element(child)
+            .is_some_and(|element| element.tag_name.eq_ignore_ascii_case("#document-fragment"))
+        {
+            let fragment_children = self.nodes[child.0].children.clone();
+            for fragment_child in fragment_children {
+                self.insert_before(parent, fragment_child, reference)?;
+            }
+            return Ok(());
+        }
+
         if child == reference {
             return Ok(());
         }
@@ -624,6 +649,60 @@ impl Dom {
         }
         self.insert_before(parent, child, target)?;
         self.remove_child(parent, target)
+    }
+
+    pub(crate) fn replace_child(
+        &mut self,
+        parent: NodeId,
+        new_child: NodeId,
+        old_child: NodeId,
+    ) -> Result<()> {
+        if !self.can_have_children(parent) {
+            return Err(Error::ScriptRuntime(
+                "replaceChild target cannot have children".into(),
+            ));
+        }
+        if new_child == self.root || new_child == parent {
+            return Err(Error::ScriptRuntime("invalid replaceChild node".into()));
+        }
+        if !self.is_valid_node(new_child) || !self.is_valid_node(old_child) {
+            return Err(Error::ScriptRuntime("replaceChild node is invalid".into()));
+        }
+        if self.parent(old_child) != Some(parent) {
+            return Err(Error::ScriptRuntime(
+                "replaceChild target is not a direct child".into(),
+            ));
+        }
+        if new_child == old_child {
+            return Ok(());
+        }
+
+        // Prevent cycles: parent must not be inside new_child's subtree.
+        let mut cursor = Some(parent);
+        while let Some(node) = cursor {
+            if node == new_child {
+                return Err(Error::ScriptRuntime(
+                    "replaceChild would create a cycle".into(),
+                ));
+            }
+            cursor = self.parent(node);
+        }
+
+        if let Some(old_parent) = self.parent(new_child) {
+            self.nodes[old_parent.0].children.retain(|id| *id != new_child);
+        }
+
+        let index = self.nodes[parent.0]
+            .children
+            .iter()
+            .position(|id| *id == old_child)
+            .ok_or_else(|| Error::ScriptRuntime("replaceChild target is missing".into()))?;
+
+        self.nodes[new_child.0].parent = Some(parent);
+        self.nodes[parent.0].children[index] = new_child;
+        self.nodes[old_child.0].parent = None;
+        self.rebuild_id_index();
+        Ok(())
     }
 
     pub(crate) fn insert_adjacent_node(

@@ -413,7 +413,7 @@ impl Harness {
                     true
                 } else {
                     self.value_as_index(left)
-                        .is_some_and(|index| index < nodes.len())
+                        .is_some_and(|index| index < self.node_list_len(nodes))
                 }
             }
             Value::Array(values) => {
@@ -658,6 +658,7 @@ impl Harness {
             (Value::Symbol(l), Value::Symbol(r)) => l.id == r.id,
             (Value::String(l), Value::String(r)) => l == r,
             (Value::Node(l), Value::Node(r)) => l == r,
+            (Value::NodeList(l), Value::NodeList(r)) => Rc::ptr_eq(l, r),
             (Value::Array(l), Value::Array(r)) => Rc::ptr_eq(l, r),
             (Value::Map(l), Value::Map(r)) => Rc::ptr_eq(l, r),
             (Value::WeakMap(l), Value::WeakMap(r)) => Rc::ptr_eq(l, r),
