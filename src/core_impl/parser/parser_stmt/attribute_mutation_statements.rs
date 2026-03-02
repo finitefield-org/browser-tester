@@ -137,6 +137,7 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "add" => ClassListMethod::Add,
         "remove" => ClassListMethod::Remove,
         "toggle" => ClassListMethod::Toggle,
+        "replace" => ClassListMethod::Replace,
         _ => return Ok(None),
     };
 
@@ -168,13 +169,21 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     let class_names = match method {
         ClassListMethod::Toggle => vec![parse_expr(args[0].trim())?],
+        ClassListMethod::Replace => {
+            if args.len() != 2 {
+                return Err(Error::ScriptParse(format!(
+                    "invalid classList arguments: {stmt}"
+                )));
+            }
+            vec![parse_expr(args[0].trim())?, parse_expr(args[1].trim())?]
+        }
         _ => args
             .iter()
             .map(|arg| parse_expr(arg.trim()))
             .collect::<Result<Vec<_>>>()?,
     };
 
-    if !matches!(method, ClassListMethod::Toggle) && class_names.is_empty() {
+    if matches!(method, ClassListMethod::Add | ClassListMethod::Remove) && class_names.is_empty() {
         return Err(Error::ScriptParse(format!(
             "classList add/remove requires at least one argument: {stmt}"
         )));

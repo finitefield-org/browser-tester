@@ -156,12 +156,6 @@ impl Dom {
     }
 
     pub(crate) fn set_attr(&mut self, node_id: NodeId, name: &str, value: &str) -> Result<()> {
-        let old_id = if name.eq_ignore_ascii_case("id") {
-            self.element(node_id)
-                .and_then(|element| element.attrs.get("id").cloned())
-        } else {
-            None
-        };
         let connected = self.is_connected(node_id);
         let mut details_open_group_to_enforce = None;
         let (is_option, lowered) = {
@@ -379,12 +373,8 @@ impl Dom {
         }
 
         if lowered == "id" && connected {
-            if let Some(old) = old_id {
-                self.unindex_id(&old, node_id);
-            }
-            if !value.is_empty() {
-                self.index_id(value, node_id);
-            }
+            // Preserve document-order lookup semantics when duplicate IDs exist.
+            self.rebuild_id_index();
         }
 
         if is_option && (lowered == "selected" || lowered == "value") {
@@ -401,12 +391,6 @@ impl Dom {
 
     pub(crate) fn remove_attr(&mut self, node_id: NodeId, name: &str) -> Result<()> {
         let lowered = name.to_ascii_lowercase();
-        let old_id = if lowered == "id" {
-            self.element(node_id)
-                .and_then(|element| element.attrs.get("id").cloned())
-        } else {
-            None
-        };
         let connected = self.is_connected(node_id);
         let is_option = {
             let element = self.element_mut(node_id).ok_or_else(|| {
@@ -460,9 +444,7 @@ impl Dom {
         };
 
         if lowered == "id" && connected {
-            if let Some(old) = old_id {
-                self.unindex_id(&old, node_id);
-            }
+            self.rebuild_id_index();
         }
         if matches!(lowered.as_str(), "min" | "max" | "step")
             && self

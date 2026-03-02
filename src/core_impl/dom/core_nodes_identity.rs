@@ -168,13 +168,4 @@ impl Dom {
             .push(node_id);
     }
 
-    pub(crate) fn unindex_id(&mut self, id: &str, node_id: NodeId) {
-        let Some(nodes) = self.id_index.get_mut(id) else {
-            return;
-        };
-        nodes.retain(|candidate| *candidate != node_id);
-        if nodes.is_empty() {
-            self.id_index.remove(id);
-        }
-    }
 }

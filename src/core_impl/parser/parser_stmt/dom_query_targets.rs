@@ -27,6 +27,7 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
         "activeElement"
             | "addEventListener"
             | "after"
+            | "animate"
             | "append"
             | "appendChild"
             | "assignedSlot"
@@ -437,63 +438,9 @@ pub(crate) fn parse_document_element_call(cursor: &mut Cursor<'_>) -> Result<Dom
         "getElementById" => Ok(DomQuery::ById(arg)),
         "querySelector" => Ok(DomQuery::BySelector(arg)),
         "querySelectorAll" => Ok(DomQuery::BySelectorAll { selector: arg }),
-        "getElementsByTagName" => Ok(DomQuery::BySelectorAll {
-            selector: normalize_get_elements_by_tag_name(&arg)?,
-        }),
-        "getElementsByClassName" => Ok(DomQuery::BySelectorAll {
-            selector: normalize_get_elements_by_class_name(&arg)?,
-        }),
-        "getElementsByName" => Ok(DomQuery::BySelectorAll {
-            selector: normalize_get_elements_by_name(&arg)?,
-        }),
         _ => Err(Error::ScriptParse(format!(
             "unsupported document method: {}",
             method
         ))),
     }
-}
-
-pub(crate) fn normalize_get_elements_by_tag_name(tag_name: &str) -> Result<String> {
-    let tag_name = tag_name.trim();
-    if tag_name.is_empty() {
-        return Err(Error::ScriptParse(
-            "getElementsByTagName requires a tag name".into(),
-        ));
-    }
-    if tag_name == "*" {
-        return Ok("*".into());
-    }
-    Ok(tag_name.to_ascii_lowercase())
-}
-
-pub(crate) fn normalize_get_elements_by_class_name(class_names: &str) -> Result<String> {
-    let mut selector = String::new();
-    let classes: Vec<&str> = class_names
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|class_name| !class_name.is_empty())
-        .collect();
-
-    if classes.is_empty() {
-        return Err(Error::ScriptParse(
-            "getElementsByClassName requires at least one class name".into(),
-        ));
-    }
-
-    for class_name in classes {
-        selector.push('.');
-        selector.push_str(class_name);
-    }
-    Ok(selector)
-}
-
-pub(crate) fn normalize_get_elements_by_name(name: &str) -> Result<String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error::ScriptParse(
-            "getElementsByName requires a name value".into(),
-        ));
-    }
-    let escaped = name.replace('\\', "\\\\").replace('\'', "\\'");
-    Ok(format!("[name='{}']", escaped))
 }

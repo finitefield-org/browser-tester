@@ -48,7 +48,7 @@ fn style_has_no_implicit_role_and_keeps_css_text_in_head() -> Result<()> {
     h.click("#run")?;
     h.assert_text(
         "#result",
-        ":STYLE:true:true:0:print:render:xyz:Print rules:text/css:2",
+        ":STYLE:true:true:0:print:render::Print rules:text/css:2",
     )?;
     Ok(())
 }
@@ -107,7 +107,7 @@ fn style_attribute_roundtrip_and_role_override_work() -> Result<()> {
     h.click("#run")?;
     h.assert_text(
         "#result",
-        ":screen and (width <= 600px):Base:text/css:true|print:print:Alternative:Alternative:text/css:text/css:abc123:render|none:none|:true",
+        ":screen and (width <= 600px):Base:text/css:true|print:print:Alternative:Alternative:text/css:text/css::render|none:none|:true",
     )?;
     Ok(())
 }

@@ -1,6 +1,109 @@
 use super::*;
 
 impl Harness {
+    fn hierarchy_request_error() -> Error {
+        Error::ScriptRuntime(
+            "HierarchyRequestError: The operation would yield an incorrect node tree.".into(),
+        )
+    }
+
+    fn is_document_fragment_node(&self, node: NodeId) -> bool {
+        self.dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("#document-fragment"))
+    }
+
+    fn collect_appendable_document_nodes(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        if self.is_document_fragment_node(node) {
+            let children = self.dom.nodes[node.0].children.clone();
+            for child in children {
+                self.collect_appendable_document_nodes(child, out);
+            }
+            return;
+        }
+        out.push(node);
+    }
+
+    pub(crate) fn eval_document_append_call(
+        &mut self,
+        document_node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        if matches!(
+            self.dom
+                .nodes
+                .get(document_node.0)
+                .map(|node| &node.node_type),
+            Some(NodeType::Document)
+        ) {
+            let mut nodes = Vec::new();
+            for value in evaluated_args {
+                match value {
+                    Value::Node(node) => self.collect_appendable_document_nodes(*node, &mut nodes),
+                    other => {
+                        let text = self.dom.create_detached_text(other.as_string());
+                        nodes.push(text);
+                    }
+                }
+            }
+
+            let mut existing_elements = self.dom.nodes[document_node.0]
+                .children
+                .iter()
+                .copied()
+                .filter(|child| {
+                    self.dom.element(*child).is_some_and(|element| {
+                        !element.tag_name.eq_ignore_ascii_case("#document-fragment")
+                    })
+                })
+                .count() as i64;
+
+            for node in &nodes {
+                if self.dom.parent(*node) == Some(document_node)
+                    && self.dom.element(*node).is_some_and(|element| {
+                        !element.tag_name.eq_ignore_ascii_case("#document-fragment")
+                    })
+                {
+                    existing_elements -= 1;
+                }
+            }
+
+            let mut appended_elements = 0i64;
+            for node in &nodes {
+                match self.dom.nodes.get(node.0).map(|entry| &entry.node_type) {
+                    Some(NodeType::Document) | Some(NodeType::Text(_)) => {
+                        return Err(Self::hierarchy_request_error());
+                    }
+                    Some(NodeType::Element(element))
+                        if !element.tag_name.eq_ignore_ascii_case("#document-fragment") =>
+                    {
+                        appended_elements += 1;
+                    }
+                    Some(NodeType::Element(_)) => {}
+                    None => return Err(Self::hierarchy_request_error()),
+                }
+            }
+
+            if existing_elements + appended_elements > 1 {
+                return Err(Self::hierarchy_request_error());
+            }
+
+            for node in nodes {
+                self.dom.append_child(document_node, node)?;
+            }
+            return Ok(Value::Undefined);
+        }
+
+        for value in evaluated_args {
+            let node = match value {
+                Value::Node(node) => *node,
+                other => self.dom.create_detached_text(other.as_string()),
+            };
+            self.dom.append_child(document_node, node)?;
+        }
+        Ok(Value::Undefined)
+    }
+
     pub(crate) fn eval_document_member_call(
         &mut self,
         member: &str,
@@ -19,6 +122,100 @@ impl Harness {
                     self.dom.by_id(&id).map(Value::Node).unwrap_or(Value::Null),
                 ))
             }
+            "getElementsByClassName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByClassName requires exactly one argument".into(),
+                    ));
+                }
+                let class_names = Self::class_names_from_argument(&evaluated_args[0]);
+                Ok(Some(
+                    self.class_names_live_list_value(self.dom.root, class_names),
+                ))
+            }
+            "getElementsByName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByName requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(self.name_live_list_value(
+                    self.dom.root,
+                    evaluated_args[0].as_string(),
+                )))
+            }
+            "getElementsByTagName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByTagName requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(self.tag_name_live_list_value(
+                    self.dom.root,
+                    Self::tag_name_from_argument(&evaluated_args[0]),
+                )))
+            }
+            "createElement" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
+                    return Err(Error::ScriptRuntime(
+                        "createElement requires one or two arguments".into(),
+                    ));
+                }
+                let tag_name = evaluated_args[0].as_string().to_ascii_lowercase();
+                let node = self.dom.create_detached_element(tag_name);
+                if let Some(is_value) =
+                    Self::create_element_is_option_from_arg(evaluated_args.get(1))
+                {
+                    self.dom.set_attr(node, "is", &is_value)?;
+                }
+                Ok(Some(Value::Node(node)))
+            }
+            "createTextNode" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "createTextNode requires exactly one argument".into(),
+                    ));
+                }
+                let text = evaluated_args[0].as_string();
+                let node = self.dom.create_detached_text(text);
+                Ok(Some(Value::Node(node)))
+            }
+            "createAttribute" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "createAttribute requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                if !is_valid_create_attribute_name(&name) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                    ));
+                }
+                Ok(Some(Self::new_attr_object_value(&name, "", None)))
+            }
+            "createDocumentFragment" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "createDocumentFragment takes no arguments".into(),
+                    ));
+                }
+                let node = self
+                    .dom
+                    .create_detached_element("#document-fragment".to_string());
+                Ok(Some(Value::Node(node)))
+            }
+            "createRange" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "createRange takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_range_object_value(self.dom.root)))
+            }
+            "append" => Ok(Some(
+                self.eval_document_append_call(self.dom.root, evaluated_args)?,
+            )),
             "querySelector" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -187,7 +384,16 @@ impl Harness {
                         "getAttribute requires exactly one argument".into(),
                     ));
                 }
-                let name = evaluated_args[0].as_string();
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                if name == "nonce" {
+                    return Ok(Some(
+                        if self.dom.attr(node, "nonce").is_some() {
+                            Value::String(String::new())
+                        } else {
+                            Value::Null
+                        },
+                    ));
+                }
                 Ok(Some(
                     self.dom
                         .attr(node, &name)
@@ -201,10 +407,78 @@ impl Harness {
                         "setAttribute requires exactly two arguments".into(),
                     ));
                 }
-                let name = evaluated_args[0].as_string();
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                if !is_valid_create_attribute_name(&name) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                    ));
+                }
                 let value = evaluated_args[1].as_string();
                 self.dom.set_attr(node, &name, &value)?;
                 Ok(Some(Value::Undefined))
+            }
+            "setAttributeNode" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "setAttributeNode requires exactly one argument".into(),
+                    ));
+                }
+                let attr_object = match evaluated_args.first() {
+                    Some(Value::Object(object)) => object.clone(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNode argument must be an Attr".into(),
+                        ));
+                    }
+                };
+                let (name, value): (String, String) = {
+                    let entries = attr_object.borrow();
+                    if !Self::is_attr_object(&entries) {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNode argument must be an Attr".into(),
+                        ));
+                    }
+                    let name = Self::object_get_entry(&entries, "name")
+                        .map(|entry| entry.as_string())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if !is_valid_create_attribute_name(&name) {
+                        return Err(Error::ScriptRuntime(
+                            "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                        ));
+                    }
+                    let value = Self::object_get_entry(&entries, "value")
+                        .map(|entry| entry.as_string())
+                        .unwrap_or_default();
+                    (name, value)
+                };
+                let replaced_value = self.dom.attr(node, &name);
+                self.dom.set_attr(node, &name, &value)?;
+
+                {
+                    let mut entries = attr_object.borrow_mut();
+                    Self::object_set_entry(
+                        &mut entries,
+                        "name".to_string(),
+                        Value::String(name.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut entries,
+                        "value".to_string(),
+                        Value::String(value.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut entries,
+                        "ownerElement".to_string(),
+                        Value::Node(node),
+                    );
+                }
+
+                Ok(Some(
+                    replaced_value
+                        .map(|old| Self::new_attr_object_value(&name, &old, None))
+                        .unwrap_or(Value::Null),
+                ))
             }
             "hasAttribute" => {
                 if evaluated_args.len() != 1 {
@@ -261,7 +535,12 @@ impl Harness {
                         "toggleAttribute requires one or two arguments".into(),
                     ));
                 }
-                let name = evaluated_args[0].as_string();
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                if !is_valid_create_attribute_name(&name) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                    ));
+                }
                 let has = self.dom.has_attr(node, &name)?;
                 let next = if evaluated_args.len() == 2 {
                     evaluated_args[1].truthy()
@@ -419,7 +698,9 @@ impl Harness {
                         "hasChildNodes takes no arguments".into(),
                     ));
                 }
-                Ok(Some(Value::Bool(!self.dom.nodes[node.0].children.is_empty())))
+                Ok(Some(Value::Bool(
+                    !self.dom.nodes[node.0].children.is_empty(),
+                )))
             }
             "contains" => {
                 if evaluated_args.len() != 1 {
@@ -518,10 +799,9 @@ impl Harness {
                     Some(value) => Some(value.as_string()),
                     None => None,
                 };
-                Ok(Some(Value::Bool(self.node_is_default_namespace(
-                    node,
-                    namespace.as_deref(),
-                ))))
+                Ok(Some(Value::Bool(
+                    self.node_is_default_namespace(node, namespace.as_deref()),
+                )))
             }
             "lookupPrefix" => {
                 if evaluated_args.len() != 1 {
@@ -660,22 +940,8 @@ impl Harness {
                         "getElementsByClassName requires exactly one argument".into(),
                     ));
                 }
-                let classes = evaluated_args[0]
-                    .as_string()
-                    .split_whitespace()
-                    .filter(|name| !name.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>();
-                if classes.is_empty() {
-                    return Ok(Some(Self::new_static_node_list_value(Vec::new())));
-                }
-                let selector = classes
-                    .iter()
-                    .map(|class_name| format!(".{class_name}"))
-                    .collect::<String>();
-                Ok(Some(Self::new_static_node_list_value(
-                    self.dom.query_selector_all_from(&node, &selector)?,
-                )))
+                let class_names = Self::class_names_from_argument(&evaluated_args[0]);
+                Ok(Some(self.class_names_live_list_value(node, class_names)))
             }
             "getElementsByTagName" => {
                 if evaluated_args.len() != 1 {
@@ -683,14 +949,9 @@ impl Harness {
                         "getElementsByTagName requires exactly one argument".into(),
                     ));
                 }
-                let tag_name = evaluated_args[0].as_string();
-                if tag_name == "*" {
-                    let mut nodes = Vec::new();
-                    self.dom.collect_elements_descendants_dfs(node, &mut nodes);
-                    return Ok(Some(Self::new_static_node_list_value(nodes)));
-                }
-                Ok(Some(Self::new_static_node_list_value(
-                    self.dom.query_selector_all_from(&node, &tag_name)?,
+                Ok(Some(self.tag_name_live_list_value(
+                    node,
+                    Self::tag_name_from_argument(&evaluated_args[0]),
                 )))
             }
             "checkVisibility" => {
@@ -767,12 +1028,38 @@ impl Harness {
                 self.step_input_value(node, direction, count)?;
                 Ok(Some(Value::Undefined))
             }
-            "scrollIntoView" => {
-                if !evaluated_args.is_empty() {
+            "animate" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
                     return Err(Error::ScriptRuntime(
-                        "scrollIntoView takes no arguments".into(),
+                        "animate requires one or two arguments".into(),
                     ));
                 }
+                let options_arg = evaluated_args.get(1);
+                let id = Self::animate_id_from_options(options_arg);
+                let timeline = Self::animate_option_entry(options_arg, "timeline")
+                    .unwrap_or(Value::Null);
+                let range_start = Self::animate_option_entry(options_arg, "rangeStart")
+                    .unwrap_or(Value::String("normal".to_string()));
+                let range_end = Self::animate_option_entry(options_arg, "rangeEnd")
+                    .unwrap_or(Value::String("normal".to_string()));
+                let keyframes = evaluated_args[0].clone();
+                let options = options_arg.cloned().unwrap_or(Value::Undefined);
+                Ok(Some(Self::new_animation_object_value(
+                    id,
+                    keyframes,
+                    options,
+                    timeline,
+                    range_start,
+                    range_end,
+                )))
+            }
+            "scrollIntoView" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "scrollIntoView supports zero or one argument".into(),
+                    ));
+                }
+                self.dispatch_document_scroll_sequence(true)?;
                 Ok(Some(Value::Undefined))
             }
             "scroll" | "scrollTo" | "scrollBy" => {
@@ -784,6 +1071,9 @@ impl Harness {
                         "{member} supports zero, one, or two arguments"
                     )));
                 }
+                let position_changed =
+                    self.apply_document_scroll_operation(member, evaluated_args);
+                self.dispatch_document_scroll_sequence(position_changed)?;
                 Ok(Some(Value::Undefined))
             }
             "select" => {
@@ -792,7 +1082,7 @@ impl Harness {
                 }
                 if self.node_supports_text_selection(node) {
                     let len = self.dom.value(node)?.chars().count();
-                    self.dom.set_selection_range(node, 0, len, "none")?;
+                    self.set_node_selection_range(node, 0, len as i64, "none".to_string())?;
                 }
                 Ok(Some(Value::Undefined))
             }
@@ -937,6 +1227,88 @@ impl Harness {
         }
     }
 
+    fn scroll_offset_from_object_arg(value: &Value, key: &str) -> Option<i64> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        Self::object_get_entry(&entries, key).map(|entry| Self::value_to_i64(&entry))
+    }
+
+    fn animate_option_entry(options: Option<&Value>, key: &str) -> Option<Value> {
+        let options = options?;
+        let Value::Object(entries) = options else {
+            return None;
+        };
+        let entries = entries.borrow();
+        Self::object_get_entry(&entries, key)
+    }
+
+    fn animate_id_from_options(options: Option<&Value>) -> String {
+        match Self::animate_option_entry(options, "id") {
+            Some(Value::Null) | Some(Value::Undefined) | None => String::new(),
+            Some(value) => value.as_string(),
+        }
+    }
+
+    pub(crate) fn apply_document_scroll_operation(&mut self, method: &str, args: &[Value]) -> bool {
+        let mut next_x = self.dom_runtime.document_scroll_x;
+        let mut next_y = self.dom_runtime.document_scroll_y;
+
+        match method {
+            "scroll" | "scrollTo" => match args {
+                [] => {}
+                [single] => {
+                    if matches!(single, Value::Object(_)) {
+                        if let Some(left) = Self::scroll_offset_from_object_arg(single, "left") {
+                            next_x = left;
+                        }
+                        if let Some(top) = Self::scroll_offset_from_object_arg(single, "top") {
+                            next_y = top;
+                        }
+                    } else {
+                        next_x = Self::value_to_i64(single);
+                        next_y = 0;
+                    }
+                }
+                [x, y] => {
+                    next_x = Self::value_to_i64(x);
+                    next_y = Self::value_to_i64(y);
+                }
+                _ => {}
+            },
+            "scrollBy" => {
+                let mut delta_x = 0;
+                let mut delta_y = 0;
+                match args {
+                    [] => {}
+                    [single] => {
+                        if matches!(single, Value::Object(_)) {
+                            delta_x = Self::scroll_offset_from_object_arg(single, "left").unwrap_or(0);
+                            delta_y = Self::scroll_offset_from_object_arg(single, "top").unwrap_or(0);
+                        } else {
+                            delta_x = Self::value_to_i64(single);
+                        }
+                    }
+                    [x, y] => {
+                        delta_x = Self::value_to_i64(x);
+                        delta_y = Self::value_to_i64(y);
+                    }
+                    _ => {}
+                }
+                next_x = next_x.saturating_add(delta_x);
+                next_y = next_y.saturating_add(delta_y);
+            }
+            _ => return true,
+        }
+
+        let changed =
+            next_x != self.dom_runtime.document_scroll_x || next_y != self.dom_runtime.document_scroll_y;
+        self.dom_runtime.document_scroll_x = next_x;
+        self.dom_runtime.document_scroll_y = next_y;
+        changed
+    }
+
     pub(crate) fn set_node_selection_range(
         &mut self,
         node: NodeId,
@@ -947,6 +1319,9 @@ impl Harness {
         if !self.node_supports_text_selection(node) {
             return Ok(());
         }
+        let before_start = self.dom.selection_start(node)?;
+        let before_end = self.dom.selection_end(node)?;
+        let before_direction = self.dom.selection_direction(node)?;
         let start = start.max(0) as usize;
         let end = end.max(0) as usize;
         self.dom.set_selection_range(
@@ -954,7 +1329,15 @@ impl Harness {
             start,
             end,
             Self::normalize_selection_direction(direction.as_str()),
-        )
+        )?;
+        let after_start = self.dom.selection_start(node)?;
+        let after_end = self.dom.selection_end(node)?;
+        let after_direction = self.dom.selection_direction(node)?;
+        if before_start != after_start || before_end != after_end || before_direction != after_direction
+        {
+            let _ = self.dispatch_document_selectionchange()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn shift_selection_index(index: usize, delta: i64) -> usize {
@@ -1033,8 +1416,12 @@ impl Harness {
                 }
             }
         };
-        self.dom
-            .set_selection_range(node, selection_start, selection_end, "none")
+        self.set_node_selection_range(
+            node,
+            selection_start as i64,
+            selection_end as i64,
+            "none".to_string(),
+        )
     }
 
     pub(crate) fn parse_attr_f64(&self, node: NodeId, name: &str) -> Option<f64> {

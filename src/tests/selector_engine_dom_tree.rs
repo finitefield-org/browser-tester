@@ -179,6 +179,63 @@ fn create_text_node_append_and_remove_work() -> Result<()> {
 }
 
 #[test]
+fn create_text_node_mdn_button_example_with_template_argument_works() -> Result<()> {
+    let html = r#"
+        <button id='yes'>YES!</button>
+        <button id='no'>NO!</button>
+        <button id='wecan'>WE CAN!</button>
+        <p id='p1'>First line of paragraph.</p>
+        <script>
+          function addTextNode(text) {
+            const newText = document.createTextNode(text);
+            const p1 = document.getElementById('p1');
+            p1.appendChild(newText);
+          }
+
+          document.querySelectorAll('button').forEach((button) => {
+            button.addEventListener('click', (event) => {
+              addTextNode(`${event.target.textContent} `);
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#yes")?;
+    h.click("#no")?;
+    h.click("#wecan")?;
+    h.assert_text("#p1", "First line of paragraph.YES! NO! WE CAN! ")?;
+    Ok(())
+}
+
+#[test]
+fn create_text_node_escapes_html_in_inner_html_serialization() -> Result<()> {
+    let html = r#"
+        <div id='root'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const source = '<strong>A & B</strong>';
+            const text = document.createTextNode(source);
+            root.appendChild(text);
+            document.getElementById('result').textContent =
+              root.innerHTML + ':' + root.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "&lt;strong&gt;A &amp; B&lt;/strong&gt;:<strong>A & B</strong>",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn node_remove_detaches_and_updates_id_index() -> Result<()> {
     let html = r#"
         <div id='root'></div>

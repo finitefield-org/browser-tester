@@ -39,6 +39,7 @@ pub(crate) const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
 pub(crate) const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
 pub(crate) const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 pub(crate) const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
+pub(crate) const INTERNAL_ATTR_OBJECT_KEY: &str = "\u{0}\u{0}bt_attr";
 pub(crate) const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
 pub(crate) const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
 pub(crate) const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
@@ -75,6 +76,12 @@ pub(crate) const INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY: &str =
 pub(crate) const INTERNAL_TREE_WALKER_INDEX_KEY: &str = "\u{0}\u{0}bt_tree_walker:index";
 pub(crate) const INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY: &str =
     "\u{0}\u{0}bt_tree_walker:what_to_show";
+pub(crate) const INTERNAL_RANGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_range";
+pub(crate) const INTERNAL_ANIMATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_animation";
+pub(crate) const INTERNAL_RANGE_START_CONTAINER_KEY: &str = "\u{0}\u{0}bt_range:start_container";
+pub(crate) const INTERNAL_RANGE_START_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:start_offset";
+pub(crate) const INTERNAL_RANGE_END_CONTAINER_KEY: &str = "\u{0}\u{0}bt_range:end_container";
+pub(crate) const INTERNAL_RANGE_END_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:end_offset";
 pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
 pub(crate) const INTERNAL_IMPORT_META_OBJECT_KEY: &str = "\u{0}\u{0}bt_import_meta:object";
 pub(crate) const INTERNAL_NEW_TARGET_KEY: &str = "\u{0}\u{0}bt_new_target";
@@ -279,6 +286,19 @@ pub(crate) fn has_class(element: &Element, class_name: &str) -> bool {
         .get("class")
         .map(|classes| classes.split_whitespace().any(|c| c == class_name))
         .unwrap_or(false)
+}
+
+pub(crate) fn is_valid_create_attribute_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
 }
 
 pub(crate) fn is_color_input_element(element: &Element) -> bool {

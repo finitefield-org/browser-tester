@@ -200,7 +200,10 @@ impl Harness {
             return Ok(this_value);
         }
 
-        let mut entries = vec![(INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(), Value::Bool(true))];
+        let mut entries = vec![(
+            INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )];
         if let Value::Object(constructor_entries) = constructor {
             let constructor_entries = constructor_entries.borrow();
             if let Some(prototype) = Self::object_get_entry(&constructor_entries, "prototype") {
@@ -247,9 +250,8 @@ impl Harness {
                     cancelable = Self::object_get_entry(&entries, "cancelable")
                         .is_some_and(|value| value.truthy());
                     if include_detail {
-                        detail = Some(
-                            Self::object_get_entry(&entries, "detail").unwrap_or(Value::Null),
-                        );
+                        detail =
+                            Some(Self::object_get_entry(&entries, "detail").unwrap_or(Value::Null));
                     }
                 }
                 _ => {
@@ -268,7 +270,10 @@ impl Harness {
             ("defaultPrevented".to_string(), Value::Bool(false)),
             ("isTrusted".to_string(), Value::Bool(false)),
             ("eventPhase".to_string(), Value::Number(0)),
-            ("timeStamp".to_string(), Value::Number(self.scheduler.now_ms)),
+            (
+                "timeStamp".to_string(),
+                Value::Number(self.scheduler.now_ms),
+            ),
             ("target".to_string(), Value::Null),
             ("currentTarget".to_string(), Value::Null),
         ];
@@ -476,11 +481,7 @@ impl Harness {
                 }
                 if self.is_callable_value(other) {
                     self.execute_callable_value_with_this_and_env(
-                        other,
-                        args,
-                        event,
-                        caller_env,
-                        this_arg,
+                        other, args, event, caller_env, this_arg,
                     )
                 } else {
                     Err(Error::ScriptRuntime("value is not a constructor".into()))
@@ -833,6 +834,30 @@ impl Harness {
                             ));
                         }
                         Ok(Self::new_dom_parser_instance_value())
+                    }
+                    "document_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Document constructor does not take arguments".into(),
+                            ));
+                        }
+                        Ok(self.new_empty_parsed_document_value())
+                    }
+                    "document_parse_html" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "Document.parseHTML requires exactly one argument".into(),
+                            ));
+                        }
+                        self.new_parsed_document_value_from_markup(&args[0].as_string(), true)
+                    }
+                    "document_parse_html_unsafe" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "Document.parseHTMLUnsafe requires exactly one argument".into(),
+                            ));
+                        }
+                        self.new_parsed_document_value_from_markup(&args[0].as_string(), false)
                     }
                     "fetch_function" => self.eval_fetch_call_from_values(args),
                     "window_close_function" => {

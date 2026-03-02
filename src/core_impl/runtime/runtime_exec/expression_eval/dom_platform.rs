@@ -337,7 +337,9 @@ impl Harness {
                         DomProp::CharacterSet => Ok(Value::String("UTF-8".to_string())),
                         DomProp::CompatMode => Ok(Value::String("CSS1Compat".to_string())),
                         DomProp::ContentType => Ok(Value::String("text/html".to_string())),
-                        DomProp::ReadyState => Ok(Value::String("complete".to_string())),
+                        DomProp::ReadyState => {
+                            Ok(Value::String(self.dom_runtime.document_ready_state.clone()))
+                        }
                         DomProp::Referrer => Ok(Value::String(String::new())),
                         DomProp::Title => Ok(Value::String(self.dom.document_title())),
                         DomProp::Url | DomProp::DocumentUri => {
@@ -393,12 +395,16 @@ impl Harness {
                         }
                         DomProp::Hidden => {
                             if node == self.dom.root {
-                                Ok(Value::Bool(false))
+                                Ok(Value::Bool(
+                                    self.dom_runtime.document_visibility_state == "hidden",
+                                ))
                             } else {
                                 Ok(Value::Bool(self.dom.attr(node, "hidden").is_some()))
                             }
                         }
-                        DomProp::VisibilityState => Ok(Value::String("visible".to_string())),
+                        DomProp::VisibilityState => Ok(Value::String(
+                            self.dom_runtime.document_visibility_state.clone(),
+                        )),
                         DomProp::Forms => Ok(Self::new_static_node_list_value(
                             self.dom.query_selector_all("form")?,
                         )),
@@ -408,11 +414,9 @@ impl Harness {
                         DomProp::Links => Ok(Self::new_static_node_list_value(
                             self.dom.query_selector_all("a[href], area[href]")?,
                         )),
-                        DomProp::Scripts => {
-                            Ok(Self::new_static_node_list_value(
-                                self.dom.query_selector_all("script")?,
-                            ))
-                        }
+                        DomProp::Scripts => Ok(Self::new_static_node_list_value(
+                            self.dom.query_selector_all("script")?,
+                        )),
                         DomProp::Children => Ok(Self::new_static_node_list_value(
                             self.dom.child_elements(node),
                         )),
@@ -487,11 +491,11 @@ impl Harness {
                             .resolve_aria_single_element_property(node, prop_name)
                             .map(Value::Node)
                             .unwrap_or(Value::Null)),
-                        DomProp::AriaElementRefList(prop_name) => Ok(
-                            Self::new_static_node_list_value(
+                        DomProp::AriaElementRefList(prop_name) => {
+                            Ok(Self::new_static_node_list_value(
                                 self.resolve_aria_element_list_property(node, prop_name),
-                            ),
-                        ),
+                            ))
+                        }
                         DomProp::AnchorAttributionSrc => Ok(Value::String(
                             self.dom.attr(node, "attributionsrc").unwrap_or_default(),
                         )),
@@ -728,11 +732,20 @@ impl Harness {
                 }
                 Expr::DomGetAttribute { target, name } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    Ok(self
-                        .dom
-                        .attr(node, name)
-                        .map(Value::String)
-                        .unwrap_or(Value::Null))
+                    let name = name.to_ascii_lowercase();
+                    if name == "nonce" {
+                        Ok(if self.dom.attr(node, "nonce").is_some() {
+                            Value::String(String::new())
+                        } else {
+                            Value::Null
+                        })
+                    } else {
+                        Ok(self
+                            .dom
+                            .attr(node, &name)
+                            .map(Value::String)
+                            .unwrap_or(Value::Null))
+                    }
                 }
                 Expr::DomHasAttribute { target, name } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -895,8 +908,55 @@ impl Harness {
         Value::NodeList(Rc::new(RefCell::new(NodeListValue::static_list(nodes))))
     }
 
+    pub(crate) fn class_names_from_argument(value: &Value) -> Vec<String> {
+        value
+            .as_string()
+            .split_whitespace()
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    pub(crate) fn class_names_live_list_value(
+        &self,
+        root: NodeId,
+        class_names: Vec<String>,
+    ) -> Value {
+        let nodes = self.dom.get_elements_by_class_names_from(&root, &class_names);
+        Value::NodeList(Rc::new(RefCell::new(
+            NodeListValue::live_descendants_by_class_names(root, class_names, nodes),
+        )))
+    }
+
+    pub(crate) fn name_live_list_value(&self, root: NodeId, name: String) -> Value {
+        let nodes = self.dom.get_elements_by_name_from(&root, &name);
+        Value::NodeList(Rc::new(RefCell::new(NodeListValue::live_descendants_by_name(
+            root, name, nodes,
+        ))))
+    }
+
+    pub(crate) fn tag_name_from_argument(value: &Value) -> String {
+        let raw = value.as_string();
+        if raw == "*" {
+            "*".to_string()
+        } else {
+            raw.to_ascii_lowercase()
+        }
+    }
+
+    pub(crate) fn tag_name_live_list_value(&self, root: NodeId, tag_name: String) -> Value {
+        let nodes = self.dom.get_elements_by_tag_name_from(&root, &tag_name);
+        Value::NodeList(Rc::new(RefCell::new(
+            NodeListValue::live_descendants_by_tag_name(root, tag_name, nodes),
+        )))
+    }
+
     pub(crate) fn child_nodes_live_list_value(&mut self, parent: NodeId) -> Value {
-        let existing = self.dom_runtime.live_child_nodes_lists.get(&parent).cloned();
+        let existing = self
+            .dom_runtime
+            .live_child_nodes_lists
+            .get(&parent)
+            .cloned();
         let list = existing.unwrap_or_else(|| {
             let list = Rc::new(RefCell::new(NodeListValue::live_child_nodes(
                 parent,
@@ -913,13 +973,39 @@ impl Harness {
 
     pub(crate) fn refresh_node_list(&self, list: &Rc<RefCell<NodeListValue>>) {
         let source = list.borrow().live_source.clone();
-        let Some(LiveNodeListSource::ChildNodes { parent }) = source else {
+        let Some(source) = source else {
             return;
         };
-        let nodes = if self.dom.is_valid_node(parent) {
-            self.dom.nodes[parent.0].children.clone()
-        } else {
-            Vec::new()
+
+        let nodes = match source {
+            LiveNodeListSource::ChildNodes { parent } => {
+                if self.dom.is_valid_node(parent) {
+                    self.dom.nodes[parent.0].children.clone()
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::DescendantsByClassNames { root, class_names } => {
+                if !self.dom.is_valid_node(root) || class_names.is_empty() {
+                    Vec::new()
+                } else {
+                    self.dom.get_elements_by_class_names_from(&root, &class_names)
+                }
+            }
+            LiveNodeListSource::DescendantsByName { root, name } => {
+                if !self.dom.is_valid_node(root) {
+                    Vec::new()
+                } else {
+                    self.dom.get_elements_by_name_from(&root, &name)
+                }
+            }
+            LiveNodeListSource::DescendantsByTagName { root, tag_name } => {
+                if !self.dom.is_valid_node(root) {
+                    Vec::new()
+                } else {
+                    self.dom.get_elements_by_tag_name_from(&root, &tag_name)
+                }
+            }
         };
         list.borrow_mut().nodes = nodes;
     }
@@ -1065,7 +1151,9 @@ impl Harness {
         }
 
         let left_index = self.node_document_order_index(left_root, left).unwrap_or(0);
-        let right_index = self.node_document_order_index(left_root, right).unwrap_or(0);
+        let right_index = self
+            .node_document_order_index(left_root, right)
+            .unwrap_or(0);
         if left_index < right_index {
             DOCUMENT_POSITION_FOLLOWING
         } else {
@@ -1080,7 +1168,9 @@ impl Harness {
             (NodeType::Document, NodeType::Document) => true,
             (NodeType::Text(left_text), NodeType::Text(right_text)) => left_text == right_text,
             (NodeType::Element(left_element), NodeType::Element(right_element)) => {
-                left_element.tag_name.eq_ignore_ascii_case(&right_element.tag_name)
+                left_element
+                    .tag_name
+                    .eq_ignore_ascii_case(&right_element.tag_name)
                     && left_element.attrs == right_element.attrs
                     && left_element.value == right_element.value
                     && left_element.files == right_element.files
@@ -1089,8 +1179,7 @@ impl Harness {
                     && left_element.disabled == right_element.disabled
                     && left_element.readonly == right_element.readonly
                     && left_element.required == right_element.required
-                    && left_element.custom_validity_message
-                        == right_element.custom_validity_message
+                    && left_element.custom_validity_message == right_element.custom_validity_message
                     && left_element.selection_start == right_element.selection_start
                     && left_element.selection_end == right_element.selection_end
                     && left_element.selection_direction == right_element.selection_direction
@@ -1186,7 +1275,11 @@ impl Harness {
         }
     }
 
-    pub(crate) fn node_is_default_namespace(&self, node: NodeId, namespace_uri: Option<&str>) -> bool {
+    pub(crate) fn node_is_default_namespace(
+        &self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+    ) -> bool {
         let default_namespace = self.node_lookup_namespace_uri(node, None);
         match (namespace_uri, default_namespace.as_deref()) {
             (None, None) => true,
@@ -1235,6 +1328,40 @@ impl Harness {
         }
     }
 
+    pub(crate) fn parsed_document_value_from_root(&mut self, root: NodeId) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_PARSED_DOCUMENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY.to_string(),
+                Value::Node(root),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_empty_parsed_document_value(&mut self) -> Value {
+        let root = self.dom.create_node(None, NodeType::Document);
+        self.parsed_document_value_from_root(root)
+    }
+
+    pub(crate) fn new_parsed_document_value_from_markup(
+        &mut self,
+        markup: &str,
+        sanitize: bool,
+    ) -> Result<Value> {
+        let ParseOutput { dom: parsed, .. } = parse_html(markup)?;
+        let parsed_root = self.dom.create_node(None, NodeType::Document);
+        let children = parsed.nodes[parsed.root.0].children.clone();
+        for child in children {
+            let _ = self
+                .dom
+                .clone_subtree_from_dom(&parsed, child, Some(parsed_root), sanitize)?;
+        }
+        Ok(self.parsed_document_value_from_root(parsed_root))
+    }
+
     fn parsed_document_document_element(&self, root: NodeId) -> Option<NodeId> {
         self.dom.nodes[root.0]
             .children
@@ -1269,6 +1396,23 @@ impl Harness {
             .or(Some(doc_element))
     }
 
+    fn parsed_document_head(&self, root: NodeId) -> Option<NodeId> {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if self
+                .dom
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("head"))
+            {
+                return Some(node);
+            }
+            for child in self.dom.nodes[node.0].children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        None
+    }
+
     fn find_descendant_by_id(&self, root: NodeId, id: &str) -> Option<NodeId> {
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
@@ -1296,6 +1440,11 @@ impl Harness {
                     .map(Value::Node)
                     .unwrap_or(Value::Null),
             ),
+            "head" => Some(
+                self.parsed_document_head(root)
+                    .map(Value::Node)
+                    .unwrap_or(Value::Null),
+            ),
             "documentElement" => Some(
                 self.parsed_document_document_element(root)
                     .map(Value::Node)
@@ -1303,7 +1452,10 @@ impl Harness {
             ),
             "contentType" => Some(Value::String("text/html".to_string())),
             "URL" | "documentURI" => Some(Value::String("about:blank".to_string())),
-            "createTreeWalker" | "querySelector" | "querySelectorAll" | "getElementById" => {
+            "createTreeWalker" | "querySelector" | "querySelectorAll" | "getElementById"
+            | "getElementsByClassName" | "getElementsByName" | "getElementsByTagName"
+            | "createElement" | "createTextNode" | "createAttribute"
+            | "createDocumentFragment" | "createRange" | "append" => {
                 Some(Self::new_builtin_placeholder_function())
             }
             _ => None,
@@ -1425,27 +1577,9 @@ impl Harness {
                     ));
                 }
 
-                let ParseOutput { dom: parsed, .. } = parse_html(&markup)?;
-                let parsed_root = self.dom.create_node(None, NodeType::Document);
-                let children = parsed.nodes[parsed.root.0].children.clone();
-                for child in children {
-                    let _ = self.dom.clone_subtree_from_dom(
-                        &parsed,
-                        child,
-                        Some(parsed_root),
-                        false,
-                    )?;
-                }
-                Ok(Some(Self::new_object_value(vec![
-                    (
-                        INTERNAL_PARSED_DOCUMENT_OBJECT_KEY.to_string(),
-                        Value::Bool(true),
-                    ),
-                    (
-                        INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY.to_string(),
-                        Value::Node(parsed_root),
-                    ),
-                ])))
+                Ok(Some(
+                    self.new_parsed_document_value_from_markup(&markup, false)?,
+                ))
             }
             _ => Ok(None),
         }
@@ -1473,6 +1607,7 @@ impl Harness {
         };
 
         match member {
+            "append" => Ok(Some(self.eval_document_append_call(root, evaluated_args)?)),
             "getElementById" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -1485,6 +1620,36 @@ impl Harness {
                         .map(Value::Node)
                         .unwrap_or(Value::Null),
                 ))
+            }
+            "getElementsByClassName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByClassName requires exactly one argument".into(),
+                    ));
+                }
+                let class_names = Self::class_names_from_argument(&evaluated_args[0]);
+                Ok(Some(self.class_names_live_list_value(root, class_names)))
+            }
+            "getElementsByName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByName requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(
+                    self.name_live_list_value(root, evaluated_args[0].as_string()),
+                ))
+            }
+            "getElementsByTagName" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByTagName requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(self.tag_name_live_list_value(
+                    root,
+                    Self::tag_name_from_argument(&evaluated_args[0]),
+                )))
             }
             "querySelector" => {
                 if evaluated_args.len() != 1 {
@@ -1512,6 +1677,62 @@ impl Harness {
                 )))
             }
             "createTreeWalker" => self.eval_create_tree_walker_call(evaluated_args),
+            "createElement" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
+                    return Err(Error::ScriptRuntime(
+                        "createElement requires one or two arguments".into(),
+                    ));
+                }
+                let tag_name = evaluated_args[0].as_string().to_ascii_lowercase();
+                let node = self.dom.create_detached_element(tag_name);
+                if let Some(is_value) =
+                    Self::create_element_is_option_from_arg(evaluated_args.get(1))
+                {
+                    self.dom.set_attr(node, "is", &is_value)?;
+                }
+                Ok(Some(Value::Node(node)))
+            }
+            "createTextNode" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "createTextNode requires exactly one argument".into(),
+                    ));
+                }
+                let text = evaluated_args[0].as_string();
+                let node = self.dom.create_detached_text(text);
+                Ok(Some(Value::Node(node)))
+            }
+            "createAttribute" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "createAttribute requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                if !is_valid_create_attribute_name(&name) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                    ));
+                }
+                Ok(Some(Self::new_attr_object_value(&name, "", None)))
+            }
+            "createDocumentFragment" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "createDocumentFragment takes no arguments".into(),
+                    ));
+                }
+                let node = self
+                    .dom
+                    .create_detached_element("#document-fragment".to_string());
+                Ok(Some(Value::Node(node)))
+            }
+            "createRange" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("createRange takes no arguments".into()));
+                }
+                Ok(Some(Self::new_range_object_value(root)))
+            }
             _ => Ok(None),
         }
     }
@@ -1581,6 +1802,104 @@ impl Harness {
                     return Ok(Some(Value::Node(*node)));
                 }
                 Ok(Some(Value::Null))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn range_boundary_node_from_value(&self, value: &Value) -> Result<NodeId> {
+        match value {
+            Value::Node(node) if self.dom.is_valid_node(*node) => Ok(*node),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    Ok(self.dom.root)
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    Self::parsed_document_root_from_entries(&entries).ok_or_else(|| {
+                        Error::ScriptRuntime("Range boundary container must be a Node".into())
+                    })
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "Range boundary container must be a Node".into(),
+                    ))
+                }
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Range boundary container must be a Node".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn eval_range_member_call(
+        &mut self,
+        range_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let is_range = {
+            let entries = range_object.borrow();
+            Self::is_range_object(&entries)
+        };
+        if !is_range {
+            return Ok(None);
+        }
+
+        match member {
+            "setStart" | "setEnd" => {
+                if evaluated_args.len() != 2 {
+                    let message = if member == "setStart" {
+                        "setStart requires exactly two arguments"
+                    } else {
+                        "setEnd requires exactly two arguments"
+                    };
+                    return Err(Error::ScriptRuntime(message.into()));
+                }
+
+                let container = self.range_boundary_node_from_value(&evaluated_args[0])?;
+                let offset = Self::value_to_i64(&evaluated_args[1]);
+                if offset < 0 {
+                    return Err(Error::ScriptRuntime(
+                        "IndexSizeError: offset must be non-negative".into(),
+                    ));
+                }
+
+                let (internal_container_key, internal_offset_key, container_key, offset_key) =
+                    if member == "setStart" {
+                        (
+                            INTERNAL_RANGE_START_CONTAINER_KEY,
+                            INTERNAL_RANGE_START_OFFSET_KEY,
+                            "startContainer",
+                            "startOffset",
+                        )
+                    } else {
+                        (
+                            INTERNAL_RANGE_END_CONTAINER_KEY,
+                            INTERNAL_RANGE_END_OFFSET_KEY,
+                            "endContainer",
+                            "endOffset",
+                        )
+                    };
+                let mut entries = range_object.borrow_mut();
+                Self::object_set_entry(
+                    &mut entries,
+                    internal_container_key.to_string(),
+                    Value::Node(container),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    internal_offset_key.to_string(),
+                    Value::Number(offset),
+                );
+                Self::object_set_entry(&mut entries, container_key.to_string(), Value::Node(container));
+                Self::object_set_entry(&mut entries, offset_key.to_string(), Value::Number(offset));
+
+                Ok(Some(Value::Undefined))
             }
             _ => Ok(None),
         }

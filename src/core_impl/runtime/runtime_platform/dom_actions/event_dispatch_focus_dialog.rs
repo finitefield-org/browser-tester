@@ -182,9 +182,113 @@ impl Harness {
     pub(crate) fn scroll_into_view_node_with_env(
         &mut self,
         _node: NodeId,
-        _env: &mut HashMap<String, Value>,
+        env: &mut HashMap<String, Value>,
     ) -> Result<()> {
+        self.dispatch_document_scroll_sequence_with_env(env, true)?;
         Ok(())
+    }
+
+    pub(crate) fn dispatch_document_scroll_with_env(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(
+            self.dom.root,
+            "scroll",
+            env,
+            true,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn dispatch_document_selectionchange_with_env(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(
+            self.dom.root,
+            "selectionchange",
+            env,
+            true,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn dispatch_document_dom_content_loaded_with_env(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(
+            self.dom.root,
+            "DOMContentLoaded",
+            env,
+            true,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn finalize_document_ready_state_with_dom_content_loaded(&mut self) -> Result<()> {
+        self.dom_runtime.document_ready_state = "interactive".to_string();
+        self.with_script_env_always(|this, env| {
+            let _ = this.dispatch_document_dom_content_loaded_with_env(env)?;
+            Ok(())
+        })?;
+        self.dom_runtime.document_ready_state = "complete".to_string();
+        Ok(())
+    }
+
+    pub(crate) fn dispatch_document_scrollend_with_env(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(
+            self.dom.root,
+            "scrollend",
+            env,
+            true,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn dispatch_document_scroll_sequence_with_env(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+        position_changed: bool,
+    ) -> Result<()> {
+        let _ = self.dispatch_document_scroll_with_env(env)?;
+        if position_changed {
+            let _ = self.dispatch_document_scrollend_with_env(env)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn dispatch_document_scroll_sequence(
+        &mut self,
+        position_changed: bool,
+    ) -> Result<()> {
+        self.with_script_env(|this, env| {
+            this.dispatch_document_scroll_sequence_with_env(env, position_changed)
+        })
+    }
+
+    pub(crate) fn dispatch_document_selectionchange(&mut self) -> Result<EventState> {
+        self.with_script_env(|this, env| this.dispatch_document_selectionchange_with_env(env))
     }
 
     pub(crate) fn ensure_dialog_target(&self, node: NodeId, operation: &str) -> Result<()> {

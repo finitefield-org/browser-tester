@@ -54,10 +54,12 @@ impl Harness {
 
         harness.initialize_global_bindings();
         harness.seed_initial_local_storage(initial_local_storage);
+        harness.dom_runtime.document_ready_state = "loading".to_string();
 
         for script in scripts {
             harness.compile_and_register_script(&script.code, script.is_module)?;
         }
+        harness.finalize_document_ready_state_with_dom_content_loaded()?;
 
         Ok(harness)
     }
@@ -221,9 +223,11 @@ impl Harness {
         let request_constructor = Self::new_request_constructor_value();
         let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
+        let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
         let dom_parser_constructor = Self::new_dom_parser_constructor_value();
+        let document_constructor = Self::new_document_constructor_value();
         let node_constants = Self::new_object_value(vec![
             ("ELEMENT_NODE".to_string(), Value::Number(1)),
             ("ATTRIBUTE_NODE".to_string(), Value::Number(2)),
@@ -286,9 +290,11 @@ impl Harness {
             &request_constructor,
             &headers_constructor,
             &url_constructor,
+            &element_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
             &dom_parser_constructor,
+            &document_constructor,
             &node_constants,
             &node_filter_constants,
             &local_storage,
@@ -301,6 +307,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("document".to_string(), document);
+        self.script_runtime
+            .env
+            .insert("Document".to_string(), document_constructor);
         self.script_runtime
             .env
             .insert("navigator".to_string(), navigator.clone());
@@ -329,9 +338,7 @@ impl Harness {
         self.script_runtime
             .env
             .insert("cookieStore".to_string(), cookie_store);
-        self.script_runtime
-            .env
-            .insert("caches".to_string(), caches);
+        self.script_runtime.env.insert("caches".to_string(), caches);
         self.script_runtime
             .env
             .insert("fetch".to_string(), fetch_callable);
@@ -344,6 +351,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("URL".to_string(), url_constructor);
+        self.script_runtime
+            .env
+            .insert("Element".to_string(), element_constructor);
         self.script_runtime
             .env
             .insert("HTMLElement".to_string(), html_element_constructor);

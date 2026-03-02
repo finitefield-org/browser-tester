@@ -33,9 +33,14 @@ pub(crate) fn parse_document_create_element_expr(src: &str) -> Result<Option<Str
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
     cursor.skip_ws();
+    if !matches!(cursor.peek(), Some(b'\'') | Some(b'"')) {
+        return Ok(None);
+    }
     let tag_name = cursor.parse_string_literal()?;
     cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    if !cursor.consume_byte(b')') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
@@ -60,9 +65,14 @@ pub(crate) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<S
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
     cursor.skip_ws();
+    if !matches!(cursor.peek(), Some(b'\'') | Some(b'"')) {
+        return Ok(None);
+    }
     let text = cursor.parse_string_literal()?;
     cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    if !cursor.consume_byte(b')') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);

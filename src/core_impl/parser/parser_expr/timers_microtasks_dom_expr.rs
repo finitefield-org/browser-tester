@@ -28,7 +28,11 @@ pub(crate) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<Tim
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() { Ok(callback) } else { Ok(None) }
+    if cursor.eof() {
+        Ok(callback)
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) fn parse_request_animation_frame_call(
@@ -70,7 +74,11 @@ pub(crate) fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandl
     let mut cursor = Cursor::new(src);
     let handler = parse_queue_microtask_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() { Ok(handler) } else { Ok(None) }
+    if cursor.eof() {
+        Ok(handler)
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -528,18 +536,11 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         (prop_name, None) if is_aria_string_property(prop_name) => {
             DomProp::AriaString(prop_name.to_string())
         }
-        (event_name, None)
-            if event_name.starts_with("on")
-                && !matches!(target, DomQuery::DocumentRoot)
-                && !is_non_dom_var_target(&target) =>
-        {
+        (event_name, None) if event_name.starts_with("on") && !is_non_dom_var_target(&target) => {
             DomProp::NodeEventHandler(event_name.to_ascii_lowercase())
         }
         _ => {
-            if matches!(target, DomQuery::DocumentRoot)
-                && head == "cookie"
-                && nested.is_none()
-            {
+            if matches!(target, DomQuery::DocumentRoot) && head == "cookie" && nested.is_none() {
                 return Ok(None);
             }
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {
@@ -583,11 +584,21 @@ pub(crate) fn parse_get_attribute_expr(src: &str) -> Result<Option<(DomQuery, St
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let name = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Ok(None);
+    }
+    let mut arg_cursor = Cursor::new(args[0].trim());
+    arg_cursor.skip_ws();
+    let name = match arg_cursor.parse_string_literal() {
+        Ok(name) => name,
+        Err(_) => return Ok(None),
+    };
+    arg_cursor.skip_ws();
+    if !arg_cursor.eof() {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
@@ -640,11 +651,21 @@ pub(crate) fn parse_has_attribute_expr(src: &str) -> Result<Option<(DomQuery, St
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let name = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Ok(None);
+    }
+    let mut arg_cursor = Cursor::new(args[0].trim());
+    arg_cursor.skip_ws();
+    let name = match arg_cursor.parse_string_literal() {
+        Ok(name) => name,
+        Err(_) => return Ok(None),
+    };
+    arg_cursor.skip_ws();
+    if !arg_cursor.eof() {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);

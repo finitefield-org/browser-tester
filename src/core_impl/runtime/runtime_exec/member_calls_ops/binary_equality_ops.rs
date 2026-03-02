@@ -465,6 +465,9 @@ impl Harness {
         }
 
         if let Value::Node(node) = left {
+            if self.is_named_constructor_value(right, "Element") {
+                return Ok(self.dom.element(*node).is_some());
+            }
             if self.is_named_constructor_value(right, "HTMLElement") {
                 return Ok(self.dom.element(*node).is_some());
             }

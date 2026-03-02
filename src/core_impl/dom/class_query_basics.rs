@@ -41,6 +41,44 @@ impl Dom {
         }
     }
 
+    pub(crate) fn class_replace(
+        &mut self,
+        node_id: NodeId,
+        old_class_name: &str,
+        new_class_name: &str,
+    ) -> Result<bool> {
+        let element = self
+            .element_mut(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("classList target is not an element".into()))?;
+        let classes = class_tokens(element.attrs.get("class").map(String::as_str));
+        if !classes.iter().any(|name| name == old_class_name) {
+            return Ok(false);
+        }
+        if old_class_name == new_class_name {
+            return Ok(true);
+        }
+
+        let mut next = Vec::with_capacity(classes.len());
+        let mut replaced = false;
+        for class_name in classes {
+            if class_name == old_class_name && !replaced {
+                replaced = true;
+                if !next.iter().any(|name| name == new_class_name) {
+                    next.push(new_class_name.to_string());
+                }
+                continue;
+            }
+            if class_name == old_class_name {
+                continue;
+            }
+            if !next.iter().any(|name| name == &class_name) {
+                next.push(class_name);
+            }
+        }
+        set_class_attr(element, &next);
+        Ok(true)
+    }
+
     pub(crate) fn query_selector(&self, selector: &str) -> Result<Option<NodeId>> {
         let all = self.query_selector_all(selector)?;
         Ok(all.into_iter().next())
@@ -103,6 +141,58 @@ impl Dom {
             }
         }
         Ok(matched)
+    }
+
+    pub(crate) fn get_elements_by_class_names_from(
+        &self,
+        root: &NodeId,
+        class_names: &[String],
+    ) -> Vec<NodeId> {
+        if class_names.is_empty() {
+            return Vec::new();
+        }
+
+        let mut ids = Vec::new();
+        self.collect_elements_descendants_dfs(*root, &mut ids);
+
+        ids.into_iter()
+            .filter(|node_id| {
+                self.element(*node_id).is_some_and(|element| {
+                    class_names
+                        .iter()
+                        .all(|class_name| has_class(element, class_name))
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn get_elements_by_name_from(&self, root: &NodeId, name: &str) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        self.collect_elements_descendants_dfs(*root, &mut ids);
+
+        ids.into_iter()
+            .filter(|node_id| {
+                self.element(*node_id).is_some_and(|element| {
+                    element.attrs.get("name").is_some_and(|value| value == name)
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn get_elements_by_tag_name_from(&self, root: &NodeId, tag_name: &str) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        self.collect_elements_descendants_dfs(*root, &mut ids);
+
+        if tag_name == "*" {
+            return ids;
+        }
+
+        ids.into_iter()
+            .filter(|node_id| {
+                self.tag_name(*node_id)
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(tag_name))
+            })
+            .collect()
     }
 
     pub(crate) fn matches_selector(&self, node_id: NodeId, selector: &str) -> Result<bool> {

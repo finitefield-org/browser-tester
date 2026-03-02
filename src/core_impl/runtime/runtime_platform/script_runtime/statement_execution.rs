@@ -2656,14 +2656,22 @@ impl Harness {
                                 DomProp::SelectionStart => {
                                     let next_start = Self::value_to_i64(&value).max(0) as usize;
                                     let end = self.dom.selection_end(node).unwrap_or_default();
-                                    self.dom
-                                        .set_selection_range(node, next_start, end, "none")?;
+                                    self.set_node_selection_range(
+                                        node,
+                                        next_start as i64,
+                                        end as i64,
+                                        "none".to_string(),
+                                    )?;
                                 }
                                 DomProp::SelectionEnd => {
                                     let start = self.dom.selection_start(node).unwrap_or_default();
                                     let next_end = Self::value_to_i64(&value).max(0) as usize;
-                                    self.dom
-                                        .set_selection_range(node, start, next_end, "none")?;
+                                    self.set_node_selection_range(
+                                        node,
+                                        start as i64,
+                                        next_end as i64,
+                                        "none".to_string(),
+                                    )?;
                                 }
                                 DomProp::SelectionDirection => {
                                     let start = self.dom.selection_start(node).unwrap_or_default();
@@ -2671,7 +2679,12 @@ impl Harness {
                                     let direction = value.as_string();
                                     let direction =
                                         Self::normalize_selection_direction(direction.as_str());
-                                    self.dom.set_selection_range(node, start, end, direction)?;
+                                    self.set_node_selection_range(
+                                        node,
+                                        start as i64,
+                                        end as i64,
+                                        direction.to_string(),
+                                    )?;
                                 }
                                 DomProp::Checked => self.dom.set_checked(node, value.truthy())?,
                                 DomProp::Indeterminate => {
@@ -2737,6 +2750,9 @@ impl Harness {
                                     }
                                 }
                                 DomProp::ClassName => {
+                                    self.dom.set_attr(node, "class", &value.as_string())?
+                                }
+                                DomProp::ClassList => {
                                     self.dom.set_attr(node, "class", &value.as_string())?
                                 }
                                 DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
@@ -3054,7 +3070,6 @@ impl Harness {
                                 | DomProp::ValidityValid
                                 | DomProp::ValidityCustomError
                                 | DomProp::NodeType
-                                | DomProp::ClassList
                                 | DomProp::ClassListLength
                                 | DomProp::Part
                                 | DomProp::PartLength
@@ -3173,6 +3188,23 @@ impl Harness {
                                         let _ = self.dom.class_toggle(node, &class_name)?;
                                     }
                                 }
+                                ClassListMethod::Replace => {
+                                    let old_class_name = class_names.first().ok_or_else(|| {
+                                        Error::ScriptRuntime("replace requires old and new class names".into())
+                                    })?;
+                                    let new_class_name = class_names.get(1).ok_or_else(|| {
+                                        Error::ScriptRuntime("replace requires old and new class names".into())
+                                    })?;
+                                    let old_class_name = self
+                                        .eval_expr(old_class_name, env, event_param, event)?
+                                        .as_string();
+                                    let new_class_name = self
+                                        .eval_expr(new_class_name, env, event_param, event)?
+                                        .as_string();
+                                    let _ = self
+                                        .dom
+                                        .class_replace(node, &old_class_name, &new_class_name)?;
+                                }
                             }
                         }
                         Stmt::ClassListForEach {
@@ -3243,7 +3275,14 @@ impl Harness {
                         } => {
                             let node = self.resolve_dom_query_required_runtime(target, env)?;
                             let value = self.eval_expr(value, env, event_param, event)?;
-                            if name.eq_ignore_ascii_case("open")
+                            let normalized_name = name.to_ascii_lowercase();
+                            if !is_valid_create_attribute_name(&normalized_name) {
+                                return Err(Error::ScriptRuntime(
+                                    "InvalidCharacterError: attribute name is not a valid XML name"
+                                        .into(),
+                                ));
+                            }
+                            if normalized_name == "open"
                                 && self
                                     .dom
                                     .tag_name(node)
@@ -3251,7 +3290,8 @@ impl Harness {
                             {
                                 let _ = self.set_details_open_state_with_env(node, true, env)?;
                             } else {
-                                self.dom.set_attr(node, name, &value.as_string())?;
+                                self.dom
+                                    .set_attr(node, &normalized_name, &value.as_string())?;
                             }
                         }
                         Stmt::DomRemoveAttribute { target, name } => {

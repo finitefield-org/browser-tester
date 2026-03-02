@@ -1,6 +1,37 @@
 use super::*;
 
 impl Harness {
+    fn set_document_visibility_state_with_event(&mut self, next_state: &str) -> Result<()> {
+        let next_state = match next_state {
+            "hidden" => "hidden",
+            "visible" => "visible",
+            _ => {
+                return Err(Error::ScriptRuntime(format!(
+                    "unsupported document visibilityState: {next_state}"
+                )));
+            }
+        };
+        if self.dom_runtime.document_visibility_state == next_state {
+            return Ok(());
+        }
+        self.dom_runtime.document_visibility_state = next_state.to_string();
+        self.with_script_env_always(|this, env| {
+            let _ = this.dispatch_event_with_options(
+                this.dom.root,
+                "visibilitychange",
+                env,
+                true,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn first_base_attr(&self, attr_name: &str) -> Option<String> {
         let base_nodes = self.dom.query_selector_all("base").ok()?;
         base_nodes
@@ -222,6 +253,7 @@ impl Harness {
         let Some(html) = self.location_history.location_mock_pages.get(url).cloned() else {
             return Ok(false);
         };
+        self.set_document_visibility_state_with_event("hidden")?;
         self.replace_document_with_html(&html)?;
         Ok(true)
     }

@@ -363,7 +363,6 @@ impl Harness {
                             | Value::NodeList(_)
                             | Value::FormData(_)
                             | Value::Array(_)
-                            | Value::Object(_)
                             | Value::Map(_)
                             | Value::WeakMap(_)
                             | Value::Set(_)
@@ -374,6 +373,13 @@ impl Harness {
                             | Value::TypedArray(_)
                             | Value::RegExp(_)
                             | Value::Date(_) => "object",
+                            Value::Object(_) => {
+                                if self.is_callable_value(value) {
+                                    "function"
+                                } else {
+                                    "object"
+                                }
+                            }
                         })
                     }
                     _ => {
@@ -404,7 +410,6 @@ impl Harness {
                             | Value::NodeList(_)
                             | Value::FormData(_)
                             | Value::Array(_)
-                            | Value::Object(_)
                             | Value::Map(_)
                             | Value::WeakMap(_)
                             | Value::Set(_)
@@ -415,6 +420,13 @@ impl Harness {
                             | Value::TypedArray(_)
                             | Value::RegExp(_)
                             | Value::Date(_) => "object",
+                            Value::Object(_) => {
+                                if self.is_callable_value(&value) {
+                                    "function"
+                                } else {
+                                    "object"
+                                }
+                            }
                         }
                     }
                 };

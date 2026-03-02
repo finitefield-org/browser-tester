@@ -26,6 +26,10 @@ pub(crate) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> 
         "insertBefore" => NodeTreeMethod::InsertBefore,
         _ => return Ok(None),
     };
+
+    if matches!(target, DomQuery::DocumentRoot) && method == NodeTreeMethod::Append {
+        return Ok(None);
+    }
     cursor.skip_ws();
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;

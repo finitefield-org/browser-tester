@@ -24,7 +24,26 @@ impl Harness {
     }
 
     pub(crate) fn document_builtin_keys() -> &'static [&'static str] {
-        &["defaultView", "location", "URL", "documentURI", "cookie"]
+        &[
+            "defaultView",
+            "location",
+            "URL",
+            "documentURI",
+            "cookie",
+            "createElement",
+            "createTextNode",
+            "createAttribute",
+            "createDocumentFragment",
+            "createRange",
+            "append",
+            "getElementById",
+            "getElementsByClassName",
+            "getElementsByName",
+            "getElementsByTagName",
+            "querySelector",
+            "querySelectorAll",
+            "createTreeWalker",
+        ]
     }
 
     pub(crate) fn sync_document_object(&mut self) {
@@ -64,6 +83,58 @@ impl Harness {
                 "cookie".to_string(),
                 Value::String(self.document_cookie_string()),
             ),
+            (
+                "createElement".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createTextNode".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createAttribute".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createDocumentFragment".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createRange".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "append".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getElementById".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getElementsByClassName".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getElementsByName".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getElementsByTagName".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "querySelector".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "querySelectorAll".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createTreeWalker".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ];
         entries.extend(extras);
         *self.dom_runtime.document_object.borrow_mut() = entries.into();
@@ -100,9 +171,11 @@ impl Harness {
             "Request",
             "Headers",
             "URL",
+            "Element",
             "HTMLElement",
             "HTMLInputElement",
             "DOMParser",
+            "Document",
             "Node",
             "NodeFilter",
             "name",
@@ -125,9 +198,11 @@ impl Harness {
         request_constructor: &Value,
         headers_constructor: &Value,
         url_constructor: &Value,
+        element_constructor: &Value,
         html_element_constructor: &Value,
         html_input_element_constructor: &Value,
         dom_parser_constructor: &Value,
+        document_constructor: &Value,
         node_constants: &Value,
         node_filter_constants: &Value,
         local_storage: &Value,
@@ -205,12 +280,14 @@ impl Harness {
             ("Request".to_string(), request_constructor.clone()),
             ("Headers".to_string(), headers_constructor.clone()),
             ("URL".to_string(), url_constructor.clone()),
+            ("Element".to_string(), element_constructor.clone()),
             ("HTMLElement".to_string(), html_element_constructor.clone()),
             (
                 "HTMLInputElement".to_string(),
                 html_input_element_constructor.clone(),
             ),
             ("DOMParser".to_string(), dom_parser_constructor.clone()),
+            ("Document".to_string(), document_constructor.clone()),
             ("Node".to_string(), node_constants.clone()),
             ("NodeFilter".to_string(), node_filter_constants.clone()),
             ("name".to_string(), name_value),

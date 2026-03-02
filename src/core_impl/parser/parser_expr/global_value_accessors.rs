@@ -239,9 +239,7 @@ pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
     let method = match member.as_str() {
         "append" => {
             if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
-                return Err(Error::ScriptParse(
-                    "URLSearchParams.append requires exactly two arguments".into(),
-                ));
+                return Ok(None);
             }
             UrlSearchParamsInstanceMethod::Append
         }

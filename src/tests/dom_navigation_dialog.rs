@@ -77,6 +77,211 @@ fn get_elements_by_class_name_works() -> Result<()> {
 }
 
 #[test]
+fn document_get_elements_by_class_name_is_live() -> Result<()> {
+    let html = r#"
+        <div id='main'>
+          <span id='a' class='test red'>A</span>
+          <span id='b' class='test'>B</span>
+          <span id='c' class='red'>C</span>
+        </div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const list = document.getElementsByClassName('test');
+            const before = list.length + ':' + list[0].id + ':' + list[1].id;
+
+            document.getElementById('b').className = 'plain';
+            const afterRemove = list.length + ':' + list[0].id;
+
+            const d = document.createElement('span');
+            d.id = 'd';
+            d.className = 'test';
+            document.getElementById('main').appendChild(d);
+            const afterAdd = list.length + ':' + list[1].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRemove + '|' + afterAdd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:a:b|1:a|2:d")?;
+    Ok(())
+}
+
+#[test]
+fn element_class_name_reflects_class_attribute_and_absence() -> Result<()> {
+    let html = r#"
+        <div id='item'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const el = document.getElementById('item');
+            const initial = el.className + ':' + (el.getAttribute('class') === null);
+
+            el.className = 'active primary';
+            const afterSet = el.className + ':' + el.getAttribute('class') + ':' + el.hasAttribute('class');
+
+            el.removeAttribute('class');
+            const afterRemove = el.className + ':' + (el.getAttribute('class') === null);
+
+            document.getElementById('result').textContent =
+              initial + '|' + afterSet + '|' + afterRemove;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", ":true|active primary:active primary:true|:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_class_name_setter_coerces_to_string() -> Result<()> {
+    let html = r#"
+        <div id='item' class='active'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const el = document.getElementById('item');
+            el.className = el.className === 'active' ? 'inactive' : 'active';
+            const toggled = el.className + ':' + el.getAttribute('class');
+
+            el.className = null;
+            const coerced = el.className + ':' + el.getAttribute('class');
+
+            document.getElementById('result').textContent = toggled + '|' + coerced;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "inactive:inactive|null:null")?;
+    Ok(())
+}
+
+#[test]
+fn svg_element_class_name_reflects_class_attribute_as_string() -> Result<()> {
+    let html = r#"
+        <svg id='icon'></svg>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const icon = document.getElementById('icon');
+            icon.setAttribute('class', 'from-attr');
+            const fromAttr = icon.className;
+
+            icon.className = 'from-prop';
+            const fromProp = icon.getAttribute('class');
+
+            document.getElementById('result').textContent = fromAttr + ':' + fromProp;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "from-attr:from-prop")?;
+    Ok(())
+}
+
+#[test]
+fn element_get_elements_by_class_name_scopes_to_descendants_and_multiple_classes() -> Result<()> {
+    let html = r#"
+        <div id='main' class='test'>
+          <p id='inside' class='test'>hello</p>
+          <section><p id='deep' class='test red'>world</p></section>
+        </div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parent = document.getElementById('main');
+            const list = parent.getElementsByClassName('test');
+            const multi = parent.getElementsByClassName('test red');
+
+            document.getElementById('result').textContent = [
+              list.length,
+              list[0].id,
+              list[1].id,
+              multi.length,
+              multi[0].id
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:inside:deep:1:deep")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_elements_by_class_name_empty_string_returns_empty_collection() -> Result<()> {
+    let html = r#"
+        <div class='test'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const list = document.getElementsByClassName('');
+            document.getElementById('result').textContent =
+              list.length + ':' + (list[0] === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "0:true")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_get_elements_by_class_name_is_live() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML(
+              '<div id="root"><p id="a" class="x y">A</p><p id="b" class="x">B</p></div>'
+            );
+            const list = parsed.getElementsByClassName('x');
+            const root = parsed.getElementById('root');
+            const before = list.length + ':' + list[0].id + ':' + list[1].id;
+
+            parsed.getElementById('b').setAttribute('class', 'none');
+            const afterRemove = list.length + ':' + list[0].id;
+
+            const c = parsed.createElement('p');
+            c.id = 'c';
+            c.className = 'x';
+            root.appendChild(c);
+            const afterAdd = list.length + ':' + list[1].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRemove + '|' + afterAdd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:a:b|1:a|2:c")?;
+    Ok(())
+}
+
+#[test]
 fn get_elements_by_tag_name_works() -> Result<()> {
     let html = r#"
         <ul>
@@ -103,6 +308,129 @@ fn get_elements_by_tag_name_works() -> Result<()> {
 }
 
 #[test]
+fn document_get_elements_by_tag_name_is_live_and_lowercases_argument() -> Result<()> {
+    let html = r#"
+        <p id='a'>A</p>
+        <p id='b'>B</p>
+        <div id='host'><p id='c'>C</p></div>
+        <button id='run'>run</button>
+        <div id='result'></div>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const list = document.getElementsByTagName('P');
+            const before = list.length + ':' + list[0].id + ':' + list[1].id + ':' + list[2].id;
+
+            document.getElementById('b').remove();
+            const afterRemove = list.length + ':' + list[0].id + ':' + list[1].id;
+
+            const added = document.createElement('P');
+            added.id = 'd';
+            document.getElementById('host').appendChild(added);
+            const afterAdd = list.length + ':' + list[2].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRemove + '|' + afterAdd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "3:a:b:c|2:a:c|3:d")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_elements_by_tag_name_wildcard_returns_all_elements_in_tree_order() -> Result<()> {
+    let html = r#"
+        <div id='a'><span id='b'></span></div>
+        <section id='c'><p id='d'></p></section>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const all = document.getElementsByTagName('*');
+            const ids = [];
+            for (const el of all) {
+              if (el.id) ids.push(el.id);
+            }
+            document.getElementById('result').textContent = ids.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "a,b,c,d,run,result")?;
+    Ok(())
+}
+
+#[test]
+fn element_get_elements_by_tag_name_scopes_descendants_and_is_live() -> Result<()> {
+    let html = r#"
+        <div id='main'>
+          <p id='p1'></p>
+          <section id='sec'><p id='p2'></p></section>
+        </div>
+        <p id='outside'></p>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const main = document.getElementById('main');
+            const all = main.getElementsByTagName('*');
+            const ps = main.getElementsByTagName('p');
+            const before = all.length + ':' + ps.length;
+
+            const added = document.createElement('span');
+            added.id = 'new-node';
+            document.getElementById('sec').appendChild(added);
+            const after = all.length + ':' + all[3].id + ':' + ps.length;
+
+            document.getElementById('result').textContent = before + '|' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "3:2|4:new-node:2")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_get_elements_by_tag_name_is_live() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML('<div id="root"><p id="a"></p><p id="b"></p></div>');
+            const root = parsed.getElementById('root');
+            const list = parsed.getElementsByTagName('P');
+            const before = list.length + ':' + list[0].id + ':' + list[1].id;
+
+            parsed.getElementById('b').remove();
+            const afterRemove = list.length + ':' + list[0].id;
+
+            const c = parsed.createElement('p');
+            c.id = 'c';
+            root.appendChild(c);
+            const afterAdd = list.length + ':' + list[1].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRemove + '|' + afterAdd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:a:b|1:a|2:c")?;
+    Ok(())
+}
+
+#[test]
 fn get_elements_by_name_works() -> Result<()> {
     let html = r#"
         <input id='a' name='target' value='one'>
@@ -125,6 +453,217 @@ fn get_elements_by_name_works() -> Result<()> {
 }
 
 #[test]
+fn document_get_elements_by_name_includes_matching_named_elements() -> Result<()> {
+    let html = r#"
+        <input id='u1' name='up'>
+        <object id='u2' name='up'></object>
+        <div id='u3' name='up'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const matches = document.getElementsByName('up');
+            document.getElementById('result').textContent = [
+              matches.length,
+              matches[0].tagName,
+              matches[1].tagName,
+              matches[2].tagName
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "3:INPUT:OBJECT:DIV")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_elements_by_name_is_live() -> Result<()> {
+    let html = r#"
+        <input id='u1' name='up'>
+        <div id='u2' name='up'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const matches = document.getElementsByName('up');
+            const before = matches.length + ':' + matches[0].id + ':' + matches[1].id;
+
+            document.getElementById('u2').setAttribute('name', 'down');
+            const afterRename = matches.length + ':' + matches[0].id;
+
+            const added = document.createElement('input');
+            added.id = 'u3';
+            added.setAttribute('name', 'up');
+            document.body.appendChild(added);
+            const afterAdd = matches.length + ':' + matches[1].id;
+
+            document.getElementById('u1').remove();
+            const afterRemove = matches.length + ':' + matches[0].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRename + '|' + afterAdd + '|' + afterRemove;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:u1:u2|1:u1|2:u3|1:u3")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_get_elements_by_name_is_live() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML(
+              '<div id="root"><input id="a" name="up"><div id="b" name="up"></div></div>'
+            );
+            const root = parsed.getElementById('root');
+            const matches = parsed.getElementsByName('up');
+            const before = matches.length + ':' + matches[0].id + ':' + matches[1].id;
+
+            parsed.getElementById('b').setAttribute('name', 'down');
+            const afterRename = matches.length + ':' + matches[0].id;
+
+            const added = parsed.createElement('span');
+            added.id = 'c';
+            added.setAttribute('name', 'up');
+            root.appendChild(added);
+            const afterAdd = matches.length + ':' + matches[1].id;
+
+            document.getElementById('result').textContent =
+              before + '|' + afterRename + '|' + afterAdd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:a:b|1:a|2:c")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_element_by_id_is_case_sensitive_and_returns_null_for_missing() -> Result<()> {
+    let html = r#"
+        <div id='main'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              document.getElementById('main') !== null,
+              document.getElementById('Main') === null,
+              document.getElementById('missing') === null
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_element_by_id_does_not_find_detached_nodes_until_connected() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const detached = document.createElement('div');
+            detached.id = 'ghost';
+            const before = document.getElementById('ghost') === null;
+
+            document.body.appendChild(detached);
+            const after = document.getElementById('ghost');
+
+            document.getElementById('result').textContent = [
+              before,
+              after !== null,
+              after === detached
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn document_get_element_by_id_returns_first_element_in_document_order_for_duplicates() -> Result<()>
+{
+    let html = r#"
+        <div id='first'></div>
+        <div id='second'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const first = document.getElementById('first');
+            const second = document.getElementById('second');
+            second.id = 'dup';
+            first.id = 'dup';
+
+            const found = document.getElementById('dup');
+            const which = found === first ? 'first' : (found === second ? 'second' : 'none');
+
+            document.getElementById('result').textContent =
+              which + ':' + document.querySelectorAll('#dup').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "first:2")?;
+    Ok(())
+}
+
+#[test]
+fn get_element_by_id_is_not_available_on_element_nodes() -> Result<()> {
+    let html = r#"
+        <div id='parent-id'>
+          <p>hello word1</p>
+          <p id='test1'>hello word2</p>
+          <p>hello word3</p>
+          <p>hello word4</p>
+        </div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parentDOM = document.getElementById('parent-id');
+            parentDOM.getElementById('test1');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("not a function"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn class_list_add_remove_multiple_arguments_work() -> Result<()> {
     let html = r#"
         <div id='box' class='base'></div>
@@ -143,6 +682,64 @@ fn class_list_add_remove_multiple_arguments_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "alpha beta")?;
+    Ok(())
+}
+
+#[test]
+fn class_list_assignment_forwards_to_class_attribute_value() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.classList = 'foo bar';
+            const first = box.className + ':' + box.getAttribute('class') + ':' + box.classList.length;
+
+            box.className = 'solo';
+            const second = box.classList.length + ':' + box.classList.contains('solo');
+
+            box.classList = null;
+            const third = box.className + ':' + box.getAttribute('class') + ':' + box.classList.length;
+
+            document.getElementById('result').textContent = first + '|' + second + '|' + third;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "foo bar:foo bar:2|1:true|null:null:1")?;
+    Ok(())
+}
+
+#[test]
+fn class_list_replace_method_updates_tokens() -> Result<()> {
+    let html = r#"
+        <div id='box' class='foo baz'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.classList.replace('foo', 'bar');
+            const first = box.className + ':' + box.classList.contains('bar') + ':' + box.classList.contains('foo');
+
+            box.classList.replace('missing', 'next');
+            const second = box.className;
+
+            box.classList.replace('bar', 'baz');
+            const third = box.className;
+
+            document.getElementById('result').textContent = first + '|' + second + '|' + third;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "bar baz:true:false|bar baz|baz")?;
     Ok(())
 }
 
@@ -241,6 +838,42 @@ fn document_core_properties_and_collections_work() -> Result<()> {
 }
 
 #[test]
+fn element_constructor_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <input id='field' />
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const field = document.getElementById('field');
+
+            document.getElementById('result').textContent = [
+              typeof Element,
+              window.Element === Element,
+              box instanceof Element,
+              box instanceof HTMLElement,
+              box instanceof HTMLInputElement,
+              field instanceof Element,
+              field instanceof HTMLElement,
+              field instanceof HTMLInputElement,
+              document instanceof Element
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "function:true:true:true:false:true:true:true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_title_assignment_and_body_chain_target_work() -> Result<()> {
     let html = r#"
         <html id='doc'>
@@ -272,6 +905,946 @@ fn document_title_assignment_and_body_chain_target_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "Updated:head:doc:ready:doc:doc")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_element_member_call_supports_dynamic_tag_name() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const tag = 'section';
+            const node = document.createElement(tag);
+            node.id = 'dynamic-node';
+            node.textContent = 'ok';
+            document.body.appendChild(node);
+            const tail = document.body.lastElementChild;
+
+            document.getElementById('result').textContent =
+              node.tagName + ':' +
+              (document.getElementById('dynamic-node') === node) + ':' +
+              tail.id;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "SECTION:true:dynamic-node")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_element_supports_options_is_and_legacy_string() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const modern = document.createElement('ul', { is: 'expanding-list' });
+            const legacy = document.createElement('ul', 'legacy-list');
+            const plain = document.createElement('ul', {});
+
+            document.getElementById('result').textContent = [
+              modern.getAttribute('is'),
+              legacy.getAttribute('is'),
+              plain.getAttribute('is') === null
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "expanding-list:legacy-list:true")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_element_null_local_name_is_stringified() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const el = document.createElement(null);
+            document.getElementById('result').textContent = el.tagName + ':' + el.localName;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "NULL:null")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_create_element_supports_options_is() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML('<div id="root"></div>');
+            const node = parsed.createElement('ul', { is: 'expanding-list' });
+            parsed.getElementById('root').appendChild(node);
+
+            document.getElementById('result').textContent =
+              node.getAttribute('is') + ':' +
+              parsed.querySelector('ul').getAttribute('is');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "expanding-list:expanding-list")?;
+    Ok(())
+}
+
+#[test]
+fn document_constructor_and_static_parse_html_methods_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const fresh = new Document();
+            const called = Document();
+
+            const safe = Document.parseHTML(
+              '<div id="x" onclick="evil()"><script id="s">x</script><a id="a" href="javascript:alert(1)">go</a></div>'
+            );
+            const unsafe = Document.parseHTMLUnsafe(
+              '<div id="x" onclick="evil()"><script id="s">x</script><a id="a" href="javascript:alert(1)">go</a></div>'
+            );
+
+            const made = fresh.createElement('span');
+            made.appendChild(fresh.createTextNode('<b>x</b>'));
+
+            document.getElementById('result').textContent = [
+              typeof Document,
+              fresh !== document,
+              fresh.body === null,
+              called.body === null,
+              safe.querySelectorAll('#s').length,
+              safe.querySelector('#x').hasAttribute('onclick'),
+              safe.querySelector('#a').hasAttribute('href'),
+              unsafe.querySelectorAll('#s').length,
+              unsafe.querySelector('#x').hasAttribute('onclick'),
+              unsafe.querySelector('#a').hasAttribute('href'),
+              made.textContent
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "function:true:true:true:0:false:false:1:true:true:<b>x</b>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn element_set_attribute_sets_updates_and_coerces_values() -> Result<()> {
+    let html = r#"
+        <div>
+          <button id="hello_button" type="button">Some Text</button>
+          <button id="run">run</button>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const helloButton = document.getElementById('hello_button');
+            helloButton.setAttribute('NAME', 'helloButton');
+            helloButton.innerText = helloButton.getAttribute('name');
+
+            helloButton.setAttribute('data-count', 42);
+            helloButton.setAttribute('data-null', null);
+            helloButton.setAttribute('disabled', 'disabled');
+            const disabledAfterSet = helloButton.disabled;
+            helloButton.removeAttribute('disabled');
+
+            document.getElementById('result').textContent = [
+              helloButton.getAttribute('name'),
+              helloButton.innerText,
+              helloButton.getAttribute('data-count'),
+              helloButton.getAttribute('data-null'),
+              disabledAfterSet,
+              helloButton.disabled
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "helloButton:helloButton:42:null:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_remove_attribute_removes_existing_attribute_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <div id='box' disabled data-keep='v'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const ret = box.removeAttribute('DISABLED');
+            const retMissing = box.removeAttribute('missing');
+            document.getElementById('result').textContent = [
+              String(ret),
+              String(retMissing),
+              box.hasAttribute('disabled'),
+              box.getAttribute('data-keep')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "undefined:undefined:false:v")?;
+    Ok(())
+}
+
+#[test]
+fn element_remove_attribute_is_noop_when_attribute_is_absent() -> Result<()> {
+    let html = r#"
+        <div id='box' data-flag='on'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.removeAttribute('not-there');
+            document.getElementById('result').textContent = [
+              box.getAttribute('data-flag'),
+              box.hasAttribute('not-there')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "on:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_remove_attribute_rejects_non_single_argument_count() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('box').removeAttribute('id', 'extra');
+          });
+        </script>
+        "#;
+
+    match Harness::from_html(html) {
+        Err(Error::ScriptParse(message)) => {
+            assert!(
+                message.contains("removeAttribute requires exactly one argument"),
+                "unexpected parse error message: {message}"
+            );
+        }
+        other => panic!("expected parse error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_remove_removes_connected_node_and_is_noop_when_called_again() -> Result<()> {
+    let html = r#"
+        <div id='div-01'>Here is div-01</div>
+        <div id='div-02'>Here is div-02</div>
+        <div id='div-03'>Here is div-03</div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const element = document.getElementById('div-02');
+            const first = element.remove();
+            const second = element.remove();
+            document.getElementById('result').textContent = [
+              String(first),
+              String(second),
+              document.getElementById('div-02') === null,
+              document.getElementsByTagName('div').length
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "undefined:undefined:true:2")?;
+    Ok(())
+}
+
+#[test]
+fn element_remove_rejects_arguments_in_expression_context() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const out = document.getElementById('box').remove(1);
+            document.getElementById('box').textContent = String(out);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("remove takes no arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_get_attribute_lowercases_argument_and_returns_null_when_missing() -> Result<()> {
+    let html = r#"
+        <div id='box' data-count='42'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            document.getElementById('result').textContent = [
+              box.getAttribute('ID'),
+              box.getAttribute('DATA-COUNT'),
+              box.getAttribute('missing') === null
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "box:42:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_get_attribute_hides_nonce_but_nonce_property_still_returns_value() -> Result<()> {
+    let html = r#"
+        <script id='s' nonce='abc123'></script>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const s = document.getElementById('s');
+            document.getElementById('result').textContent = [
+              s.getAttribute('nonce') === '',
+              s.nonce,
+              s.getAttribute('NONCE') === '',
+              s.getAttribute('missing') === null
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:abc123:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_has_attribute_returns_boolean_and_is_case_insensitive() -> Result<()> {
+    let html = r#"
+        <div id='box' data-flag='on'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            document.getElementById('result').textContent = [
+              box.hasAttribute('data-flag'),
+              box.hasAttribute('DATA-FLAG'),
+              box.hasAttribute('missing')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_has_attribute_coerces_non_string_arguments() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.setAttribute('null', 'v1');
+            box.setAttribute('undefined', 'v2');
+            box.setAttribute('true', 'v3');
+
+            document.getElementById('result').textContent = [
+              box.hasAttribute(null),
+              box.hasAttribute(undefined),
+              box.hasAttribute(true),
+              box.hasAttribute(false)
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_has_attribute_rejects_non_single_argument_count() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('box').hasAttribute('id', 'extra');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("hasAttribute requires exactly one argument"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_has_attributes_returns_boolean_for_attribute_presence() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const empty = document.createElement('div');
+            const withOne = document.createElement('div');
+            withOne.setAttribute('data-flag', 'on');
+            const beforeRemove = withOne.hasAttributes();
+            withOne.removeAttribute('data-flag');
+            const afterRemove = withOne.hasAttributes();
+
+            empty.id = 'tmp';
+            const idOnly = empty.hasAttributes();
+
+            document.getElementById('result').textContent = [
+              document.createElement('span').hasAttributes(),
+              beforeRemove,
+              afterRemove,
+              idOnly
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:false:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_has_attributes_rejects_arguments() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('box').hasAttributes('extra');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("hasAttributes takes no arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_toggle_attribute_toggles_and_lowercases_attribute_name() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const first = box.toggleAttribute('DATA-FLAG');
+            const firstHas = box.hasAttribute('data-flag');
+            const firstEmpty = box.getAttribute('data-flag') === '';
+            const second = box.toggleAttribute('data-flag');
+            document.getElementById('result').textContent = [
+              first,
+              firstHas,
+              firstEmpty,
+              second,
+              box.hasAttribute('data-flag')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_toggle_attribute_force_argument_controls_presence() -> Result<()> {
+    let html = r#"
+        <input id='box'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const add = box.toggleAttribute('disabled', true);
+            const addAgain = box.toggleAttribute('disabled', true);
+            const remove = box.toggleAttribute('disabled', false);
+            const removeAgain = box.toggleAttribute('disabled', false);
+            document.getElementById('result').textContent = [
+              add,
+              addAgain,
+              remove,
+              removeAgain,
+              box.hasAttribute('disabled')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:false:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn element_toggle_attribute_rejects_invalid_name() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const bad = '1bad';
+            document.getElementById('box').toggleAttribute(bad);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("InvalidCharacterError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_set_attribute_rejects_invalid_name_literal_argument() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('box').setAttribute('1bad', 'x');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("InvalidCharacterError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_set_attribute_rejects_invalid_name_dynamic_argument() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const bad = '1bad';
+            document.getElementById('box').setAttribute(bad, 'x');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("InvalidCharacterError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn document_create_attribute_and_set_attribute_node_work() -> Result<()> {
+    let html = r#"
+        <div id='div1'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const node = document.getElementById('div1');
+
+            const first = document.createAttribute('MY_ATTR');
+            const firstName = first.name;
+            const firstOwnerBefore = first.ownerElement === null;
+            first.value = 'newVal';
+            const replacedFirst = node.setAttributeNode(first);
+
+            const second = document.createAttribute('my_attr');
+            second.value = 'newer';
+            const replacedSecond = node.setAttributeNode(second);
+
+            document.getElementById('result').textContent = [
+              firstName,
+              firstOwnerBefore,
+              node.getAttribute('my_attr'),
+              replacedFirst === null,
+              replacedSecond !== null ? replacedSecond.value : 'none',
+              second.ownerElement === node
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "my_attr:true:newer:true:newVal:true")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_create_attribute_method_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML('<div id="x"></div>');
+            const attr = parsed.createAttribute('DATA_X');
+            attr.value = 'ok';
+            const target = parsed.querySelector('#x');
+            target.setAttributeNode(attr);
+
+            document.getElementById('result').textContent =
+              parsed.querySelector('#x').getAttribute('data_x') + ':' +
+              attr.name;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "ok:data_x")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_attribute_rejects_invalid_name() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.createAttribute('1bad');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("InvalidCharacterError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn document_create_document_fragment_builds_offscreen_tree_and_appends_children() -> Result<()> {
+    let html = r#"
+        <ul id='ul'></ul>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const element = document.getElementById('ul');
+            const fragment = document.createDocumentFragment();
+            const browsers = ['Firefox', 'Chrome', 'Opera', 'Safari'];
+
+            browsers.forEach((browser) => {
+              const li = document.createElement('li');
+              li.textContent = browser;
+              fragment.appendChild(li);
+            });
+
+            const beforeAppend = fragment.childNodes.length;
+            element.appendChild(fragment);
+
+            document.getElementById('result').textContent = [
+              fragment.nodeType,
+              fragment.nodeName,
+              beforeAppend,
+              fragment.childNodes.length,
+              element.children.length,
+              element.firstElementChild.textContent,
+              element.lastElementChild.textContent
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "11:#document-fragment:4:0:4:Firefox:Safari")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_create_document_fragment_method_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML('<div id="root"></div>');
+            const fragment = parsed.createDocumentFragment();
+            const child = parsed.createElement('span');
+            child.textContent = 'A';
+            fragment.appendChild(child);
+
+            const root = parsed.getElementById('root');
+            const returned = root.appendChild(fragment);
+
+            document.getElementById('result').textContent = [
+              fragment.nodeType,
+              returned === fragment,
+              fragment.childNodes.length,
+              root.childNodes.length,
+              root.firstChild.textContent
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "11:true:0:1:A")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_range_defaults_to_document_and_setters_work() -> Result<()> {
+    let html = r#"
+        <p id='host'></p>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const range = document.createRange();
+            const initial = [
+              range.startContainer.nodeType,
+              range.startOffset,
+              range.endContainer.nodeType,
+              range.endOffset
+            ].join(':');
+
+            const text = document.createTextNode('ABCDE');
+            document.getElementById('host').appendChild(text);
+            range.setStart(text, 1);
+            range.setEnd(text, 4);
+
+            const after = [
+              range.startContainer === text,
+              range.startOffset,
+              range.endContainer === text,
+              range.endOffset
+            ].join(':');
+
+            document.getElementById('result').textContent = initial + '|' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "9:0:9:0|true:1:true:4")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_create_range_method_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML('<p id="x">abcde</p>');
+            const range = parsed.createRange();
+            const parsedDocNode = parsed.documentElement.parentNode;
+            const initial = range.startContainer === parsedDocNode && range.endContainer === parsedDocNode;
+
+            const text = parsed.getElementById('x').firstChild;
+            range.setStart(text, 2);
+            range.setEnd(text, 5);
+
+            document.getElementById('result').textContent = [
+              initial,
+              range.startContainer === text,
+              range.startOffset,
+              range.endContainer === text,
+              range.endOffset
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:2:true:5")?;
+    Ok(())
+}
+
+#[test]
+fn document_append_allows_new_document_root_element() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const doc = new Document();
+            const htmlRoot = document.createElement('html');
+            const returned = doc.append(htmlRoot);
+            document.getElementById('result').textContent = [
+              returned === undefined,
+              doc.querySelectorAll('html').length,
+              doc.documentElement === htmlRoot
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:1:true")?;
+    Ok(())
+}
+
+#[test]
+fn document_append_throws_hierarchy_request_error_for_existing_root_element() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const htmlRoot = document.createElement('html');
+            document.append(htmlRoot);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("HierarchyRequestError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn document_append_throws_hierarchy_request_error_for_string_argument() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.append('text');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("HierarchyRequestError"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
     Ok(())
 }
 
@@ -407,6 +1980,264 @@ fn location_mock_pages_load_on_navigation_and_reload() -> Result<()> {
             },
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn document_visibilitychange_fires_before_mock_page_navigation() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.setItem('vis-log', '');
+          document.addEventListener('visibilitychange', (event) => {
+            localStorage.setItem(
+              'vis-log',
+              document.visibilityState + ':' +
+              document.hidden + ':' +
+              event.type + ':' +
+              event.cancelable
+            );
+          });
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent =
+            (localStorage.getItem('vis-log') || 'none') + '|' +
+            document.visibilityState + ':' + document.hidden;
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text("#result", "hidden:true:visibilitychange:false|visible:false")?;
+    Ok(())
+}
+
+#[test]
+fn document_onvisibilitychange_property_fires_before_mock_page_navigation() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.setItem('vis-on', '');
+          document.onvisibilitychange = (event) => {
+            localStorage.setItem('vis-on', event.type + ':' + event.cancelable);
+          };
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent = localStorage.getItem('vis-on') || 'none';
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text("#result", "visibilitychange:false")?;
+    Ok(())
+}
+
+#[test]
+fn document_dom_content_loaded_fires_after_initial_scripts() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const log = [];
+          log.push('start:' + document.readyState);
+          document.addEventListener('DOMContentLoaded', (event) => {
+            log.push('event:' + event.type + ':' + event.cancelable + ':' + document.readyState);
+            document.getElementById('result').textContent = log.join('|');
+          });
+          log.push('end:' + document.readyState);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "start:loading|end:loading|event:DOMContentLoaded:false:interactive",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_dom_content_loaded_ready_state_guard_pattern_works() -> Result<()> {
+    let html = r#"
+        <button id='late'>late</button>
+        <p id='result'></p>
+        <script>
+          let setupCalls = 0;
+          function setup() {
+            setupCalls = setupCalls + 1;
+          }
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setup);
+          } else {
+            setup();
+          }
+
+          document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('result').textContent =
+              'init:' + setupCalls + ':' + document.readyState;
+          });
+
+          document.getElementById('late').addEventListener('click', () => {
+            let lateCalls = 0;
+            function lateSetup() {
+              lateCalls = lateCalls + 1;
+            }
+
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', lateSetup);
+            } else {
+              lateSetup();
+            }
+
+            document.getElementById('result').textContent =
+              'late:' + setupCalls + ':' + lateCalls + ':' + document.readyState;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.assert_text("#result", "init:1:interactive")?;
+    h.click("#late")?;
+    h.assert_text("#result", "late:1:1:complete")?;
+    Ok(())
+}
+
+#[test]
+fn document_on_dom_content_loaded_property_does_not_fire() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          let addCalls = 0;
+          let propCalls = 0;
+
+          document.ondomcontentloaded = () => {
+            propCalls = propCalls + 1;
+          };
+
+          document.addEventListener('DOMContentLoaded', () => {
+            addCalls = addCalls + 1;
+            document.getElementById('result').textContent =
+              'add:' + addCalls + ':prop:' + propCalls;
+          });
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "add:1:prop:0")?;
+    Ok(())
+}
+
+#[test]
+fn document_dom_content_loaded_fires_for_mock_page_navigation() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          document.addEventListener('DOMContentLoaded', (event) => {
+            document.getElementById('result').textContent =
+              event.type + ':' + event.cancelable + ':' + document.readyState;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text("#result", "DOMContentLoaded:false:interactive")?;
+    Ok(())
+}
+
+#[test]
+fn document_selectionchange_event_fires_when_text_selection_changes() -> Result<()> {
+    let html = r#"
+        <input id='field' value='hello'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const field = document.getElementById('field');
+          const logs = [];
+
+          document.addEventListener('selectionchange', (event) => {
+            logs.push(
+              event.type + ':' +
+              event.cancelable + ':' +
+              field.selectionStart + '-' + field.selectionEnd + ':' +
+              field.selectionDirection
+            );
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            field.setSelectionRange(1, 4, 'forward');
+            field.setSelectionRange(1, 4, 'forward');
+            field.selectionStart = 2;
+            field.selectionEnd = 3;
+            field.selectionDirection = 'backward';
+            field.selectionDirection = 'backward';
+            field.select();
+
+            document.getElementById('result').textContent =
+              logs.length + '|' + logs.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "5|selectionchange:false:1-4:forward,selectionchange:false:2-4:none,selectionchange:false:2-3:none,selectionchange:false:2-3:backward,selectionchange:false:0-5:none",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_onselectionchange_property_assignment_works() -> Result<()> {
+    let html = r#"
+        <input id='field' value='hello'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          let calls = 0;
+          document.onselectionchange = (event) => {
+            calls = calls + 1;
+            document.getElementById('result').textContent =
+              calls + ':' + event.type + ':' + event.cancelable;
+          };
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('field').select();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:selectionchange:false")?;
     Ok(())
 }
 
@@ -1037,6 +2868,481 @@ fn element_scroll_into_view_accepts_optional_argument() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#trigger")?;
     h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_into_view_accepts_boolean_argument_in_expression_context() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>target</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const ret = document.getElementById('trigger').scrollIntoView(false);
+            document.getElementById('result').textContent = String(ret === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_into_view_accepts_options_argument_in_expression_context() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>target</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const ret = document.getElementById('trigger').scrollIntoView({
+              behavior: 'smooth',
+              block: 'end',
+              inline: 'nearest',
+              container: 'nearest'
+            });
+            document.getElementById('result').textContent = String(ret === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn element_animate_returns_animation_object_and_respects_id_option() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const animation = document.getElementById('box').animate(
+              [
+                { transform: 'rotate(0deg) scale(1)' },
+                { transform: 'rotate(360deg) scale(0)' }
+              ],
+              { duration: 2000, iterations: 1, id: 'spin' }
+            );
+            document.getElementById('result').textContent =
+              typeof animation + ':' +
+              animation.id + ':' +
+              animation.playState + ':' +
+              String(animation.currentTime) + ':' +
+              String(typeof animation.play === 'function') + ':' +
+              String(String(animation) === '[object Animation]');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "object:spin:running:0:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_animate_accepts_numeric_options_argument() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const animation = document.getElementById('box').animate(
+              { transform: 'translateX(300px)' },
+              1000
+            );
+            document.getElementById('result').textContent =
+              String(animation.options) + ':' +
+              String(animation.id === '') + ':' +
+              animation.playState + ':' +
+              String(animation.timeline === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "1000:true:running:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_animate_applies_timeline_and_range_options() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const timeline = { kind: 'view' };
+            const animation = document.getElementById('box').animate(
+              { opacity: [0, 1], transform: ['scaleX(0)', 'scaleX(1)'] },
+              {
+                fill: 'both',
+                duration: 1,
+                timeline,
+                rangeStart: 'cover 0%',
+                rangeEnd: 'cover 100%'
+              }
+            );
+            document.getElementById('result').textContent =
+              String(animation.timeline === timeline) + ':' +
+              animation.rangeStart + ':' +
+              animation.rangeEnd;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:cover 0%:cover 100%")?;
+    Ok(())
+}
+
+#[test]
+fn element_animate_rejects_zero_arguments() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('box').animate();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("animate requires one or two arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_scroll_by_accepts_xy_arguments_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const first = target.scrollBy(300, 300);
+            const second = target.scrollBy(-50, 20);
+            out.textContent = String(first === undefined && second === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:sese")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_by_accepts_options_argument() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const ret = document.getElementById('target').scrollBy({
+              top: 100,
+              left: 100,
+              behavior: 'smooth'
+            });
+            out.textContent = String(ret === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:se")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_by_rejects_more_than_two_arguments() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('target').scrollBy(1, 2, 3);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("supports zero, one, or two arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_scroll_to_accepts_xy_arguments_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const first = target.scrollTo(0, 1000);
+            const second = target.scrollTo(10, 20);
+            out.textContent = String(first === undefined && second === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:sese")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_to_accepts_options_argument() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const ret = document.getElementById('target').scrollTo({
+              top: 100,
+              left: 100,
+              behavior: 'smooth'
+            });
+            out.textContent = String(ret === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:se")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_to_is_alias_for_scroll() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const fromScroll = target.scroll({ top: 55, left: 44, behavior: 'auto' });
+            const fromScrollTo = target.scrollTo({ top: 55, left: 44, behavior: 'auto' });
+            out.textContent =
+              String(fromScroll === undefined && fromScrollTo === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:ses")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_to_rejects_more_than_two_arguments() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('target').scrollTo(1, 2, 3);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("supports zero, one, or two arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_scroll_accepts_xy_arguments_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const first = target.scroll(0, 1000);
+            const second = target.scroll(10, 20);
+            out.textContent = String(first === undefined && second === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:sese")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_accepts_options_argument() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const ret = document.getElementById('target').scroll({
+              top: 100,
+              left: 100,
+              behavior: 'smooth'
+            });
+            out.textContent = String(ret === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:se")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_is_alias_for_scroll_to() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', () => {
+            out.textContent = out.textContent + 'e';
+          });
+          document.getElementById('trigger').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const fromScrollTo = target.scrollTo({ top: 55, left: 44, behavior: 'auto' });
+            const fromScroll = target.scroll({ top: 55, left: 44, behavior: 'auto' });
+            out.textContent =
+              String(fromScrollTo === undefined && fromScroll === undefined) + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "true:ses")?;
+    Ok(())
+}
+
+#[test]
+fn element_scroll_rejects_more_than_two_arguments() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='target'></div>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            document.getElementById('target').scroll(1, 2, 3);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("supports zero, one, or two arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
     Ok(())
 }
 
@@ -1808,5 +4114,169 @@ fn do_while_loop_supports_break_and_continue() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "23")?;
+    Ok(())
+}
+
+#[test]
+fn document_scroll_event_fires_from_scroll_methods() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', (event) => {
+            out.textContent = out.textContent + event.type.charAt(0);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            target.scrollIntoView();
+            target.scroll();
+            target.scrollTo(1, 2);
+            target.scrollBy({ top: 4 });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "ssss")?;
+    Ok(())
+}
+
+#[test]
+fn document_onscroll_property_assignment_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          let calls = 0;
+          document.onscroll = (event) => {
+            calls = calls + 1;
+            document.getElementById('result').textContent = calls + ':' + event.type;
+          };
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('target').scrollIntoView();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:scroll")?;
+    Ok(())
+}
+
+#[test]
+fn document_onscroll_assignment_via_alias_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          const doc = document;
+          const before = doc.onscroll === null;
+          doc.onscroll = (event) => {
+            out.textContent = out.textContent + event.type.charAt(0);
+          };
+          const after = typeof doc.onscroll === 'function';
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('target').scroll();
+            out.textContent = before + ':' + after + ':' + out.textContent;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:s")?;
+    Ok(())
+}
+
+#[test]
+fn document_scrollend_event_fires_after_scroll_when_position_changes() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.addEventListener('scroll', () => {
+            out.textContent = out.textContent + 's';
+          });
+          document.addEventListener('scrollend', (event) => {
+            out.textContent = out.textContent + (event.type === 'scrollend' ? 'e' : '?');
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            target.scrollTo(1, 2);
+            target.scrollBy({ top: 4 });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "sese")?;
+    Ok(())
+}
+
+#[test]
+fn document_onscrollend_property_assignment_works() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          let calls = 0;
+          document.onscrollend = (event) => {
+            calls = calls + 1;
+            document.getElementById('result').textContent =
+              calls + ':' + event.type + ':' + event.cancelable;
+          };
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('target').scrollBy(0, 5);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:scrollend:false")?;
+    Ok(())
+}
+
+#[test]
+fn document_scrollend_does_not_fire_when_scroll_position_does_not_change() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='target'></div>
+        <p id='result'></p>
+        <script>
+          let calls = 0;
+          document.addEventListener('scrollend', () => {
+            calls = calls + 1;
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            target.scrollTo(0, 0);
+            target.scrollBy(0, 0);
+            target.scrollBy({ left: 0, top: 0 });
+            document.getElementById('result').textContent = String(calls);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "0")?;
     Ok(())
 }

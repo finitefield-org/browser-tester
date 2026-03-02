@@ -125,7 +125,7 @@ fn script_attributes_roundtrip_and_role_override_work() -> Result<()> {
     h.click("#run")?;
     h.assert_text(
         "#result",
-        ":SCRIPT:/scripts/app.js:true:true:true:anonymous:origin:high:sha256-abc:abc123:render:https://a.example/register-source:utf-8:javascript|true:true:strict-origin:low:|none:none|:true",
+        ":SCRIPT:/scripts/app.js:true:true:true:anonymous:origin:high:sha256-abc::render:https://a.example/register-source:utf-8:javascript|true:true:strict-origin:low:|none:none|:true",
     )?;
     Ok(())
 }

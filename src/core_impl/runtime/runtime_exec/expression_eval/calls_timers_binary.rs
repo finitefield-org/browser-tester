@@ -673,6 +673,17 @@ impl Harness {
                                 return Ok(value);
                             }
                         }
+                        let is_range_object = {
+                            let entries = object.borrow();
+                            Self::is_range_object(&entries)
+                        };
+                        if is_range_object {
+                            if let Some(value) =
+                                self.eval_range_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
 
                         let is_iterator_constructor = {
                             let entries = object.borrow();
@@ -868,6 +879,11 @@ impl Harness {
                             .resolve_dom_query_list_runtime(target, env)?
                             .unwrap_or_default();
                         Ok(Self::new_static_node_list_value(nodes))
+                    } else if matches!(target, DomQuery::ById(_)) {
+                        Ok(self
+                            .resolve_dom_query_runtime(target, env)?
+                            .map(Value::Node)
+                            .unwrap_or(Value::Null))
                     } else {
                         let node = self.resolve_dom_query_required_runtime(target, env)?;
                         Ok(Value::Node(node))

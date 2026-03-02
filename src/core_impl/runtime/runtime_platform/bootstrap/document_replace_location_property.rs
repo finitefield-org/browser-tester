@@ -32,10 +32,15 @@ impl Harness {
         self.script_runtime.next_event_target_listener_slot = 0;
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
+        self.dom_runtime.document_ready_state = "loading".to_string();
+        self.dom_runtime.document_visibility_state = "visible".to_string();
+        self.dom_runtime.document_scroll_x = 0;
+        self.dom_runtime.document_scroll_y = 0;
         self.initialize_global_bindings();
         for script in scripts {
             self.compile_and_register_script(&script.code, script.is_module)?;
         }
+        self.finalize_document_ready_state_with_dom_content_loaded()?;
         Ok(())
     }
 

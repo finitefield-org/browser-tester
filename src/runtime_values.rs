@@ -270,6 +270,9 @@ impl PartialEq for SymbolValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LiveNodeListSource {
     ChildNodes { parent: NodeId },
+    DescendantsByClassNames { root: NodeId, class_names: Vec<String> },
+    DescendantsByName { root: NodeId, name: String },
+    DescendantsByTagName { root: NodeId, tag_name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +293,35 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::ChildNodes { parent }),
+        }
+    }
+
+    pub(crate) fn live_descendants_by_class_names(
+        root: NodeId,
+        class_names: Vec<String>,
+        nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::DescendantsByClassNames { root, class_names }),
+        }
+    }
+
+    pub(crate) fn live_descendants_by_name(root: NodeId, name: String, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::DescendantsByName { root, name }),
+        }
+    }
+
+    pub(crate) fn live_descendants_by_tag_name(
+        root: NodeId,
+        tag_name: String,
+        nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::DescendantsByTagName { root, tag_name }),
         }
     }
 }
@@ -626,16 +658,22 @@ impl Value {
                     }
                     serialize_url_search_params_pairs(&pairs)
                 } else {
-                    let is_readable_stream = matches!(
-                        entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
-                        Some(Value::Bool(true))
-                    );
-                    if is_readable_stream {
-                        "[object ReadableStream]".into()
-                    } else {
-                        "[object Object]".into()
-                    }
+                let is_readable_stream = matches!(
+                    entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                );
+                let is_animation = matches!(
+                    entries.get_entry(INTERNAL_ANIMATION_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                );
+                if is_readable_stream {
+                    "[object ReadableStream]".into()
+                } else if is_animation {
+                    "[object Animation]".into()
+                } else {
+                    "[object Object]".into()
                 }
+            }
             }
             Self::Promise(_) => "[object Promise]".into(),
             Self::Map(_) => "[object Map]".into(),
@@ -990,6 +1028,7 @@ pub(crate) enum ClassListMethod {
     Add,
     Remove,
     Toggle,
+    Replace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

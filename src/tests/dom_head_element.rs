@@ -77,3 +77,65 @@ fn document_keeps_single_head_element_when_multiple_heads_exist() -> Result<()> 
     h.assert_text("#result", "1:first:yes:yes:no")?;
     Ok(())
 }
+
+#[test]
+fn document_head_matches_query_selector_and_assignment_is_ignored() -> Result<()> {
+    let html = r#"
+        <!doctype html>
+        <head id='my-document-head'>
+          <title>Example: using document.head</title>
+        </head>
+        <body>
+          <button id='run'>run</button>
+          <p id='result'></p>
+          <script>
+            document.getElementById('run').addEventListener('click', () => {
+              const theHead = document.head;
+              const beforeId = theHead.id;
+              const sameNode = theHead === document.querySelector('head');
+
+              const replacement = document.createElement('head');
+              replacement.id = 'replacement';
+              document.head = replacement;
+
+              const afterHead = document.head;
+              document.getElementById('result').textContent = [
+                beforeId,
+                sameNode,
+                afterHead.id,
+                afterHead === theHead
+              ].join(':');
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "my-document-head:true:my-document-head:true")?;
+    Ok(())
+}
+
+#[test]
+fn parsed_document_head_property_is_available() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const parsed = Document.parseHTML(
+              '<html><head id="parsed-head"><title>x</title></head><body></body></html>'
+            );
+            document.getElementById('result').textContent = [
+              parsed.head.id,
+              parsed.head === parsed.querySelector('head')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "parsed-head:true")?;
+    Ok(())
+}

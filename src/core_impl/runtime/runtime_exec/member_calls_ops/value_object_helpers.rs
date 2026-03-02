@@ -470,12 +470,20 @@ impl Harness {
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value < 0 { None } else { Some(value) }
+        if value < 0 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value <= 0 { None } else { Some(value) }
+        if value <= 0 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     pub(crate) fn col_span_value(&self, node: NodeId) -> i64 {
@@ -515,6 +523,121 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_EVENT_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn is_attr_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_ATTR_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_range_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_RANGE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn new_attr_object_value(name: &str, value: &str, owner: Option<NodeId>) -> Value {
+        Self::new_object_value(vec![
+            (INTERNAL_ATTR_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("name".to_string(), Value::String(name.to_string())),
+            ("value".to_string(), Value::String(value.to_string())),
+            (
+                "ownerElement".to_string(),
+                owner.map(Value::Node).unwrap_or(Value::Null),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_range_object_value(root: NodeId) -> Value {
+        Self::new_object_value(vec![
+            (INTERNAL_RANGE_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_RANGE_START_CONTAINER_KEY.to_string(),
+                Value::Node(root),
+            ),
+            (
+                INTERNAL_RANGE_START_OFFSET_KEY.to_string(),
+                Value::Number(0),
+            ),
+            (
+                INTERNAL_RANGE_END_CONTAINER_KEY.to_string(),
+                Value::Node(root),
+            ),
+            (INTERNAL_RANGE_END_OFFSET_KEY.to_string(), Value::Number(0)),
+            ("startContainer".to_string(), Value::Node(root)),
+            ("startOffset".to_string(), Value::Number(0)),
+            ("endContainer".to_string(), Value::Node(root)),
+            ("endOffset".to_string(), Value::Number(0)),
+            (
+                "setStart".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setEnd".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_animation_object_value(
+        id: String,
+        keyframes: Value,
+        options: Value,
+        timeline: Value,
+        range_start: Value,
+        range_end: Value,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (INTERNAL_ANIMATION_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("id".to_string(), Value::String(id)),
+            ("playState".to_string(), Value::String("running".to_string())),
+            ("currentTime".to_string(), Value::Number(0)),
+            ("startTime".to_string(), Value::Number(0)),
+            ("pending".to_string(), Value::Bool(false)),
+            ("timeline".to_string(), timeline),
+            ("rangeStart".to_string(), range_start),
+            ("rangeEnd".to_string(), range_end),
+            ("keyframes".to_string(), keyframes),
+            ("options".to_string(), options),
+            ("cancel".to_string(), Self::new_builtin_placeholder_function()),
+            ("finish".to_string(), Self::new_builtin_placeholder_function()),
+            ("pause".to_string(), Self::new_builtin_placeholder_function()),
+            ("play".to_string(), Self::new_builtin_placeholder_function()),
+            ("reverse".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "updatePlaybackRate".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "commitStyles".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("persist".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "Symbol.toStringTag".to_string(),
+                Value::String("Animation".to_string()),
+            ),
+        ])
+    }
+
+    pub(crate) fn create_element_is_option_from_arg(arg: Option<&Value>) -> Option<String> {
+        let arg = arg?;
+        match arg {
+            Value::Undefined | Value::Null => None,
+            // Legacy compatibility: allow passing a string as the custom element name.
+            Value::String(value) => Some(value.clone()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                match Self::object_get_entry(&entries, "is") {
+                    Some(Value::Undefined) | Some(Value::Null) | None => None,
+                    Some(value) => Some(value.as_string()),
+                }
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn canvas_dimension_default(name: &str) -> i64 {
@@ -719,6 +842,35 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_document_parse_html_callable(sanitize: bool) -> Value {
+        let kind = if sanitize {
+            "document_parse_html"
+        } else {
+            "document_parse_html_unsafe"
+        };
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String(kind.to_string()),
+        )])
+    }
+
+    pub(crate) fn new_document_constructor_value() -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("document_constructor".to_string()),
+            ),
+            (
+                "parseHTML".to_string(),
+                Self::new_document_parse_html_callable(true),
+            ),
+            (
+                "parseHTMLUnsafe".to_string(),
+                Self::new_document_parse_html_callable(false),
+            ),
+        ])
+    }
+
     pub(crate) fn new_fetch_callable_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -895,6 +1047,9 @@ impl Harness {
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
+                "document_constructor" => "document_constructor",
+                "document_parse_html" => "document_parse_html",
+                "document_parse_html_unsafe" => "document_parse_html_unsafe",
                 "fetch_function" => "fetch_function",
                 "window_close_function" => "window_close_function",
                 "request_constructor" => "request_constructor",
@@ -928,7 +1083,11 @@ impl Harness {
                 out.push(ch);
             }
         }
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
@@ -1001,17 +1160,13 @@ impl Harness {
                     "childElementCount" => {
                         Ok(Value::Number(self.dom.child_element_count(*node) as i64))
                     }
-                    "firstChild" => Ok(self
-                        .dom
-                        .nodes[node.0]
+                    "firstChild" => Ok(self.dom.nodes[node.0]
                         .children
                         .first()
                         .copied()
                         .map(Value::Node)
                         .unwrap_or(Value::Null)),
-                    "lastChild" => Ok(self
-                        .dom
-                        .nodes[node.0]
+                    "lastChild" => Ok(self.dom.nodes[node.0]
                         .children
                         .last()
                         .copied()
@@ -1512,7 +1667,22 @@ impl Harness {
                             .document_element()
                             .map(Value::Node)
                             .unwrap_or(Value::Null),
+                        "readyState" => {
+                            Value::String(self.dom_runtime.document_ready_state.clone())
+                        }
                         "cookie" => Value::String(self.document_cookie_string()),
+                        "hidden" => {
+                            Value::Bool(self.dom_runtime.document_visibility_state == "hidden")
+                        }
+                        "visibilityState" => {
+                            Value::String(self.dom_runtime.document_visibility_state.clone())
+                        }
+                        _ if key.starts_with("on") => self
+                            .dom_runtime
+                            .node_expando_props
+                            .get(&(self.dom.root, key.to_string()))
+                            .cloned()
+                            .unwrap_or(Value::Null),
                         _ => Value::Undefined,
                     };
                     if !matches!(value, Value::Undefined) {

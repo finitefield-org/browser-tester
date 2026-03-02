@@ -117,11 +117,10 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL" | "HTMLElement"
-            | "HTMLInputElement"
-            | "DOMParser" | "Node" | "NodeFilter" => {
-                Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
-            }
+            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL"
+            | "Element" | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Document"
+            | "Node"
+            | "NodeFilter" => Err(Error::ScriptRuntime(format!("window.{key} is read-only"))),
             "location" => self.set_location_property("href", value),
             "localStorage" => {
                 Self::object_set_entry(
@@ -220,6 +219,10 @@ impl Harness {
         key: &str,
         value: Value,
     ) -> Result<()> {
+        if self.set_node_event_handler_property(self.dom.root, key, value.clone())? {
+            return Ok(());
+        }
+
         match key {
             "cookie" => {
                 let raw = value.as_string();
@@ -227,6 +230,7 @@ impl Harness {
                 self.sync_document_cookie_property();
                 Ok(())
             }
+            "head" => Ok(()),
             "textContent" => Ok(()),
             _ => {
                 Self::object_set_entry(&mut document_object.borrow_mut(), key.to_string(), value);
@@ -364,7 +368,7 @@ impl Harness {
                     self.dom.remove_attr(node, "hidden")?;
                 }
             }
-            "className" => self.dom.set_attr(node, "class", &value.as_string())?,
+            "className" | "classList" => self.dom.set_attr(node, "class", &value.as_string())?,
             "id" => self.dom.set_attr(node, "id", &value.as_string())?,
             "slot" => self.dom.set_attr(node, "slot", &value.as_string())?,
             "role" => self.dom.set_attr(node, "role", &value.as_string())?,
@@ -631,7 +635,15 @@ impl Harness {
         match container {
             Value::Object(object) => {
                 let key = self.property_key_to_storage_key(key_value);
-                let (is_location, is_history, is_window, is_navigator, is_document, is_url, is_storage) = {
+                let (
+                    is_location,
+                    is_history,
+                    is_window,
+                    is_navigator,
+                    is_document,
+                    is_url,
+                    is_storage,
+                ) = {
                     let entries = object.borrow();
                     (
                         Self::is_location_object(&entries),
