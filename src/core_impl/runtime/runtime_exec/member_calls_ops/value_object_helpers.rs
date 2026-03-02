@@ -648,6 +648,34 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_fetch_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("fetch_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_close_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_close_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_request_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("request_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_headers_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("headers_constructor".to_string()),
+        )])
+    }
+
     pub(crate) fn new_dom_parser_instance_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_DOM_PARSER_OBJECT_KEY.to_string(),
@@ -793,6 +821,10 @@ impl Harness {
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
+                "fetch_function" => "fetch_function",
+                "window_close_function" => "window_close_function",
+                "request_constructor" => "request_constructor",
+                "headers_constructor" => "headers_constructor",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
@@ -1166,6 +1198,15 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if let Some(value) = self.fetch_response_property_from_entries(&entries, key) {
+                    return Ok(value);
+                }
+                if let Some(value) = self.fetch_request_property_from_entries(&entries, key) {
+                    return Ok(value);
+                }
+                if let Some(value) = self.headers_property_from_entries(&entries, key) {
+                    return Ok(value);
+                }
                 if matches!(
                     Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
                     Some(Value::Bool(true))
@@ -1338,6 +1379,7 @@ impl Harness {
                             .document_element()
                             .map(Value::Node)
                             .unwrap_or(Value::Null),
+                        "cookie" => Value::String(self.document_cookie_string()),
                         _ => Value::Undefined,
                     };
                     if !matches!(value, Value::Undefined) {

@@ -1,6 +1,47 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn default_fetch_status_text(status: i64) -> String {
+        match status {
+            100 => "Continue",
+            101 => "Switching Protocols",
+            200 => "OK",
+            201 => "Created",
+            202 => "Accepted",
+            203 => "Non-Authoritative Information",
+            204 => "No Content",
+            205 => "Reset Content",
+            206 => "Partial Content",
+            300 => "Multiple Choices",
+            301 => "Moved Permanently",
+            302 => "Found",
+            303 => "See Other",
+            304 => "Not Modified",
+            307 => "Temporary Redirect",
+            308 => "Permanent Redirect",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            408 => "Request Timeout",
+            409 => "Conflict",
+            410 => "Gone",
+            413 => "Payload Too Large",
+            415 => "Unsupported Media Type",
+            418 => "I'm a teapot",
+            422 => "Unprocessable Content",
+            429 => "Too Many Requests",
+            500 => "Internal Server Error",
+            501 => "Not Implemented",
+            502 => "Bad Gateway",
+            503 => "Service Unavailable",
+            504 => "Gateway Timeout",
+            _ => "",
+        }
+        .to_string()
+    }
+
     pub fn set_trace_stderr(&mut self, enabled: bool) {
         self.trace_state.to_stderr = enabled;
     }
@@ -35,9 +76,25 @@ impl Harness {
     }
 
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
-        self.platform_mocks
-            .fetch_mocks
-            .insert(url.to_string(), body.to_string());
+        self.platform_mocks.fetch_mocks.insert(
+            url.to_string(),
+            FetchMockResponse {
+                status: 200,
+                status_text: "OK".to_string(),
+                body: body.to_string(),
+            },
+        );
+    }
+
+    pub fn set_fetch_mock_response(&mut self, url: &str, status: i64, body: &str) {
+        self.platform_mocks.fetch_mocks.insert(
+            url.to_string(),
+            FetchMockResponse {
+                status,
+                status_text: Self::default_fetch_status_text(status),
+                body: body.to_string(),
+            },
+        );
     }
 
     pub fn set_clipboard_text(&mut self, text: &str) {

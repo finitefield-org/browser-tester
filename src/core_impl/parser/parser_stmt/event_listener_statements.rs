@@ -1,4 +1,18 @@
 use super::*;
+
+fn is_cookie_store_target(target: &DomQuery) -> bool {
+    match target {
+        DomQuery::Var(name) => name == "cookieStore",
+        DomQuery::VarPath { base, path } => {
+            (base == "window" || base == "globalThis")
+                && path.len() == 1
+                && path[0] == "cookieStore"
+        }
+        DomQuery::Index { target, .. } => is_cookie_store_target(target),
+        _ => false,
+    }
+}
+
 pub(crate) fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -6,6 +20,9 @@ pub(crate) fn parse_dispatch_event_stmt(stmt: &str) -> Result<Option<Stmt>> {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
+    if is_cookie_store_target(&target) {
+        return Ok(None);
+    }
 
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
@@ -132,6 +149,9 @@ pub(crate) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         Ok(target) => target,
         Err(_) => return Ok(None),
     };
+    if is_cookie_store_target(&target) {
+        return Ok(None);
+    }
 
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {

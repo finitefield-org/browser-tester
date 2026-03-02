@@ -117,6 +117,9 @@ pub(crate) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let Some(target) = cursor.parse_identifier() else {
         return Ok(None);
     };
+    if target == "cookieStore" {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
         return Ok(None);
@@ -203,6 +206,9 @@ pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
     let Some(target) = cursor.parse_identifier() else {
         return Ok(None);
     };
+    if target == "cookieStore" {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
         return Ok(None);
@@ -241,9 +247,7 @@ pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
         }
         "getAll" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse(
-                    "URLSearchParams.getAll requires exactly one argument".into(),
-                ));
+                return Ok(None);
             }
             UrlSearchParamsInstanceMethod::GetAll
         }
@@ -280,6 +284,9 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
     let Some(target) = cursor.parse_identifier() else {
         return Ok(None);
     };
+    if target == "cookieStore" {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
         return Ok(None);

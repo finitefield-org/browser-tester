@@ -439,6 +439,19 @@ impl Harness {
                     ));
                 }
                 Some(Value::Object(entries)) => {
+                    if Self::is_cookie_store_object(&entries.borrow()) {
+                        let mut evaluated_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                        }
+                        if let Some(value) = self.eval_cookie_store_member_call(
+                            entries,
+                            "getAll",
+                            &evaluated_args,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
                     if !Self::is_url_search_params_object(&entries.borrow()) {
                         return Err(Error::ScriptRuntime(format!(
                             "variable '{}' is not a FormData instance",

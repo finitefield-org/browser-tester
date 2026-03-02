@@ -535,6 +535,12 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             DomProp::NodeEventHandler(event_name.to_ascii_lowercase())
         }
         _ => {
+            if matches!(target, DomQuery::DocumentRoot)
+                && head == "cookie"
+                && nested.is_none()
+            {
+                return Ok(None);
+            }
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {
                 return Ok(None);
             }

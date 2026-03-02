@@ -711,6 +711,14 @@ impl Harness {
                         }
                         Ok(Self::new_dom_parser_instance_value())
                     }
+                    "fetch_function" => self.eval_fetch_call_from_values(args),
+                    "window_close_function" => {
+                        self.browser_apis.window_closed = true;
+                        self.sync_window_runtime_properties();
+                        Ok(Value::Undefined)
+                    }
+                    "request_constructor" => self.new_fetch_request_value_from_call_args(args),
+                    "headers_constructor" => self.new_headers_value_from_call_args(args),
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }
             }

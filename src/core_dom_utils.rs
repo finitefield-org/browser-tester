@@ -47,6 +47,22 @@ pub(crate) const INTERNAL_CLIPBOARD_READ_TEXT_DEFAULT_KEY: &str =
     "\u{0}\u{0}bt_clipboard:read_text_default";
 pub(crate) const INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY: &str =
     "\u{0}\u{0}bt_clipboard:write_text_default";
+pub(crate) const INTERNAL_COOKIE_STORE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cookie_store";
+pub(crate) const INTERNAL_CACHE_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache_storage";
+pub(crate) const INTERNAL_CACHE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache";
+pub(crate) const INTERNAL_CACHE_NAME_KEY: &str = "\u{0}\u{0}bt_cache:name";
+pub(crate) const INTERNAL_FETCH_RESPONSE_OBJECT_KEY: &str = "\u{0}\u{0}bt_fetch:response";
+pub(crate) const INTERNAL_FETCH_RESPONSE_BODY_KEY: &str = "\u{0}\u{0}bt_fetch:response:body";
+pub(crate) const INTERNAL_FETCH_RESPONSE_STATUS_KEY: &str = "\u{0}\u{0}bt_fetch:response:status";
+pub(crate) const INTERNAL_FETCH_RESPONSE_STATUS_TEXT_KEY: &str =
+    "\u{0}\u{0}bt_fetch:response:status_text";
+pub(crate) const INTERNAL_FETCH_RESPONSE_URL_KEY: &str = "\u{0}\u{0}bt_fetch:response:url";
+pub(crate) const INTERNAL_FETCH_REQUEST_OBJECT_KEY: &str = "\u{0}\u{0}bt_fetch:request";
+pub(crate) const INTERNAL_FETCH_REQUEST_INPUT_KEY: &str = "\u{0}\u{0}bt_fetch:request:input";
+pub(crate) const INTERNAL_FETCH_REQUEST_URL_KEY: &str = "\u{0}\u{0}bt_fetch:request:url";
+pub(crate) const INTERNAL_FETCH_REQUEST_METHOD_KEY: &str = "\u{0}\u{0}bt_fetch:request:method";
+pub(crate) const INTERNAL_HEADERS_OBJECT_KEY: &str = "\u{0}\u{0}bt_fetch:headers";
+pub(crate) const INTERNAL_HEADERS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_fetch:headers:entries";
 pub(crate) const INTERNAL_DOM_PARSER_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_parser";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parsed_document";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =

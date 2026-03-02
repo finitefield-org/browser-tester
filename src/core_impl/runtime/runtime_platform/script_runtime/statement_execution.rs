@@ -1943,6 +1943,12 @@ impl Harness {
                                             }
                                             RuntimeStaticInitializer::Block(handler) => {
                                                 let mut block_env = static_env.clone();
+                                                let scope_depth =
+                                                    Self::env_scope_depth(&block_env).saturating_add(1);
+                                                block_env.insert(
+                                                    INTERNAL_SCOPE_DEPTH_KEY.to_string(),
+                                                    Value::Number(scope_depth),
+                                                );
                                                 let mut local_var_names =
                                                     Self::collect_var_declared_names(
                                                         &handler.stmts,

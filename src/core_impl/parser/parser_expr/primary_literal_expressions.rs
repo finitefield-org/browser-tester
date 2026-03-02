@@ -223,7 +223,7 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(value) = parse_fetch_expr(src)? {
-        return Ok(Expr::Fetch(Box::new(value)));
+        return Ok(value);
     }
 
     if let Some(expr) = parse_match_media_expr(src)? {

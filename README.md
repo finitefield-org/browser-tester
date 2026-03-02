@@ -94,6 +94,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::from_html_with_local_storage(html, &[("key", "value"), ...])`
   - `Harness::from_html_with_url_and_local_storage(url, html, &[("key", "value"), ...])`
   - `Harness::set_fetch_mock(url, body)`
+  - `Harness::set_fetch_mock_response(url, status, body)`
   - `Harness::set_clipboard_text(text)`
   - `Harness::clipboard_text()`
   - `Harness::set_clipboard_read_error(Some("NotAllowedError"))`
@@ -445,6 +446,13 @@ Unsupported selectors must return explicit errors (no silent ignore).
 - Clipboard API: `navigator.clipboard` (read-only),
   `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
   (test hooks: `set_clipboard_read_error`, `set_clipboard_write_error`, `clear_clipboard_errors`)
+- Cookie APIs: `document.cookie`,
+  `cookieStore.set()`, `cookieStore.get()`, `cookieStore.getAll()`, `cookieStore.delete()`,
+  and `cookieStore` `change` event listeners (`addEventListener`/`removeEventListener`)
+- Cache APIs (secure context only): `window.caches`,
+  `caches.open(name)`, `caches.has(name)`, `caches.delete(name)`, `caches.keys()`, `caches.match(request)`,
+  and `Cache` methods `match(request)`, `put(request, response)`, `delete(request)`, `keys()`,
+  `add(request)`, `addAll(requests)` (with deterministic `fetch` mocks in tests)
 - URLSearchParams API: `new URLSearchParams(init)`, `size`,
   `append(name, value)`, `delete(name[, value])`, `entries()`, `forEach(callback[, thisArg])`,
   `get(name)`, `getAll(name)`, `has(name[, value])`, `keys()`, `set(name, value)`,
@@ -458,7 +466,7 @@ Unsupported selectors must return explicit errors (no silent ignore).
 - Window API (core subset): `window`, `self`, `top`, `parent`, `frames`,
   `window.length`, `window.closed`, `window.document`, `document.defaultView`,
   `window.navigator`, `window.clientInformation`, `window.origin`, `window.isSecureContext`,
-  `window.localStorage` (assignable for test stubs)
+  `window.cookieStore` (secure context only), `window.localStorage` (assignable for test stubs)
 - Timers: `setTimeout(callback, delayMs?)` / `setInterval(callback, delayMs?)`
   (returns timer ID. No real-time waiting; execute via `harness.advance_time(ms)` / `harness.flush()`),
   `clearTimeout(timerId)` / `clearInterval(timerId)`,
@@ -625,6 +633,7 @@ impl Harness {
 
     // Mock / browser-like globals
     pub fn set_fetch_mock(&mut self, url: &str, body: &str);
+    pub fn set_fetch_mock_response(&mut self, url: &str, status: i64, body: &str);
     pub fn set_clipboard_text(&mut self, text: &str);
     pub fn clipboard_text(&self) -> String;
     pub fn set_clipboard_read_error(&mut self, error: Option<&str>);

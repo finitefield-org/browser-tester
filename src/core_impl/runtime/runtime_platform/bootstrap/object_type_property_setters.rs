@@ -89,6 +89,13 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_document_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_storage_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_STORAGE_OBJECT_KEY),
@@ -117,7 +124,9 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "URL" | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Node" | "NodeFilter" => {
+            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL" | "HTMLElement"
+            | "HTMLInputElement"
+            | "DOMParser" | "Node" | "NodeFilter" => {
                 Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
             }
             "location" => self.set_location_property("href", value),
@@ -207,6 +216,26 @@ impl Harness {
                     key.to_string(),
                     value,
                 );
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn set_document_property(
+        &mut self,
+        document_object: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        match key {
+            "cookie" => {
+                let raw = value.as_string();
+                let _ = self.set_cookie_from_document_assignment(&raw);
+                self.sync_document_cookie_property();
+                Ok(())
+            }
+            _ => {
+                Self::object_set_entry(&mut document_object.borrow_mut(), key.to_string(), value);
                 Ok(())
             }
         }
@@ -603,13 +632,14 @@ impl Harness {
         match container {
             Value::Object(object) => {
                 let key = self.property_key_to_storage_key(key_value);
-                let (is_location, is_history, is_window, is_navigator, is_url, is_storage) = {
+                let (is_location, is_history, is_window, is_navigator, is_document, is_url, is_storage) = {
                     let entries = object.borrow();
                     (
                         Self::is_location_object(&entries),
                         Self::is_history_object(&entries),
                         Self::is_window_object(&entries),
                         Self::is_navigator_object(&entries),
+                        Self::is_document_object(&entries),
                         Self::is_url_object(&entries),
                         Self::is_storage_object(&entries),
                     )
@@ -628,6 +658,10 @@ impl Harness {
                 }
                 if is_navigator {
                     self.set_navigator_property(object, &key, value)?;
+                    return Ok(());
+                }
+                if is_document {
+                    self.set_document_property(object, &key, value)?;
                     return Ok(());
                 }
                 if is_url {

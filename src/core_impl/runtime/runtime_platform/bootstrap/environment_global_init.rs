@@ -114,6 +114,8 @@ impl Harness {
             .url_constructor_properties
             .borrow_mut()
             .clear();
+        self.sync_cookie_store_object();
+        self.sync_cache_storage_object();
         let local_storage_items = {
             let entries = self.browser_apis.local_storage_object.borrow();
             if Self::is_storage_object(&entries) {
@@ -209,6 +211,12 @@ impl Harness {
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
         let iterator_constructor = self.new_iterator_constructor_value();
+        let cookie_store = self.cookie_store_global_value();
+        let caches = self.cache_storage_global_value();
+        let fetch_callable = Self::new_fetch_callable_value();
+        let close_callable = Self::new_window_close_callable_value();
+        let request_constructor = Self::new_request_constructor_value();
+        let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
@@ -238,6 +246,11 @@ impl Harness {
             &string_constructor,
             &boolean_constructor,
             &iterator_constructor,
+            &cookie_store,
+            &caches,
+            &fetch_callable,
+            &request_constructor,
+            &headers_constructor,
             &url_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
@@ -245,6 +258,7 @@ impl Harness {
             &node_constants,
             &node_filter_constants,
             &local_storage,
+            &close_callable,
         );
 
         let window = Value::Object(self.dom_runtime.window_object.clone());
@@ -269,6 +283,21 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Iterator".to_string(), iterator_constructor);
+        self.script_runtime
+            .env
+            .insert("cookieStore".to_string(), cookie_store);
+        self.script_runtime
+            .env
+            .insert("caches".to_string(), caches);
+        self.script_runtime
+            .env
+            .insert("fetch".to_string(), fetch_callable);
+        self.script_runtime
+            .env
+            .insert("Request".to_string(), request_constructor);
+        self.script_runtime
+            .env
+            .insert("Headers".to_string(), headers_constructor);
         self.script_runtime
             .env
             .insert("URL".to_string(), url_constructor);

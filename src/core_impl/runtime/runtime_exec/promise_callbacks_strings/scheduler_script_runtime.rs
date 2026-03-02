@@ -315,8 +315,13 @@ impl Harness {
                     .platform_mocks
                     .fetch_mocks
                     .get(&cache_key)
-                    .cloned()
-                    .or_else(|| self.platform_mocks.fetch_mocks.get(specifier).cloned())
+                    .map(|mock| mock.body.clone())
+                    .or_else(|| {
+                        self.platform_mocks
+                            .fetch_mocks
+                            .get(specifier)
+                            .map(|mock| mock.body.clone())
+                    })
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!(
                             "module source mock not found for import: {specifier}"

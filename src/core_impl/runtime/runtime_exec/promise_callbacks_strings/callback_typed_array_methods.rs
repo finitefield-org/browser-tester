@@ -27,6 +27,17 @@ impl Harness {
                 )));
             };
 
+            if let Some(value) = self.eval_cache_storage_typed_array_method_dispatch(
+                target_value,
+                method,
+                args,
+                env,
+                event_param,
+                event,
+            )? {
+                return Ok(value);
+            }
+
             if let Value::Map(map) = target_value {
                 return match method {
                     TypedArrayInstanceMethod::Set => {
@@ -130,6 +141,19 @@ impl Harness {
             }
 
             if let Value::Object(entries) = target_value {
+                if Self::is_cookie_store_object(&entries.borrow()) {
+                    if matches!(method, TypedArrayInstanceMethod::Set) {
+                        let mut evaluated_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                        }
+                        if let Some(value) =
+                            self.eval_cookie_store_member_call(entries, "set", &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                    }
+                }
                 if Self::is_url_search_params_object(&entries.borrow()) {
                     return match method {
                         TypedArrayInstanceMethod::Set => {

@@ -230,6 +230,30 @@ fn window_read_only_core_properties_are_rejected() {
 }
 
 #[test]
+fn window_closed_reflects_close_calls() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = window.closed;
+            window.close();
+            const afterFirst = window.closed;
+            window.close();
+            const afterSecond = window.closed;
+            document.getElementById('result').textContent =
+              String(before) + ':' + String(afterFirst) + ':' + String(afterSecond);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:true")?;
+    Ok(())
+}
+
+#[test]
 fn html_entities_in_text_nodes_are_decoded() -> Result<()> {
     let html = "<p id='result'>&lt;A &amp; B&gt;&nbsp;&copy;</p>";
     let h = Harness::from_html(html)?;

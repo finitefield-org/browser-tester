@@ -2072,9 +2072,18 @@ fn fetch_uses_registered_mock_response_and_records_calls() -> Result<()> {
         <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            const first = fetch('/api/message');
-            const second = window.fetch('/api/message');
-            document.getElementById('result').textContent = first + ':' + second;
+            const request = new Request('/api/message', {
+              method: 'GET',
+              headers: new Headers({ 'Accept': 'text/plain' }),
+            });
+            Promise.all([
+              fetch('/api/message').then((response) => response.text()),
+              window.fetch('/api/message').then((response) => response.text()),
+              fetch(request).then((response) => response.text()),
+              window.fetch('/api/message', { method: 'POST' }).then((response) => response.text()),
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join(':');
+            });
           });
         </script>
         "#;
@@ -2082,33 +2091,377 @@ fn fetch_uses_registered_mock_response_and_records_calls() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.set_fetch_mock("/api/message", "ok");
     h.click("#btn")?;
-    h.assert_text("#result", "ok:ok")?;
+    h.assert_text("#result", "ok:ok:ok:ok")?;
     assert_eq!(
         h.take_fetch_calls(),
-        vec!["/api/message".to_string(), "/api/message".to_string()]
+        vec![
+            "/api/message".to_string(),
+            "/api/message".to_string(),
+            "/api/message".to_string(),
+            "/api/message".to_string(),
+        ]
     );
     Ok(())
 }
 
 #[test]
-fn fetch_without_mock_returns_runtime_error() -> Result<()> {
+fn fetch_without_mock_rejects_promise_with_type_error() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
+        <p id='result'></p>
         <script>
           document.getElementById('btn').addEventListener('click', () => {
-            fetch('/api/missing');
+            fetch('/api/missing')
+              .then(() => {
+                document.getElementById('result').textContent = 'ok';
+              })
+              .catch((reason) => {
+                document.getElementById('result').textContent = String(reason);
+              });
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
-    let err = h
-        .click("#btn")
-        .expect_err("fetch without mock should fail with runtime error");
-    match err {
-        Error::ScriptRuntime(msg) => assert!(msg.contains("fetch mock not found")),
-        other => panic!("unexpected fetch error: {other:?}"),
-    }
+    h.click("#btn")?;
+    h.assert_text("#result", "TypeError: Failed to fetch")?;
+    Ok(())
+}
+
+#[test]
+fn fetch_resolves_http_error_status_and_exposes_response_metadata() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            fetch('/api/missing')
+              .then((response) => {
+                document.getElementById('result').textContent =
+                  response.ok + ':' + response.status + ':' + response.statusText;
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_fetch_mock_response("/api/missing", 404, "not found");
+    h.click("#btn")?;
+    h.assert_text("#result", "false:404:Not Found")?;
+    assert_eq!(h.take_fetch_calls(), vec!["/api/missing".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn cookie_store_set_get_get_all_and_delete_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            await cookieStore.set('cookie1', 'cookie1-value');
+            await cookieStore.set({
+              name: 'cookie2',
+              value: 'cookie2-value',
+              expires: Date.now() + 24 * 60 * 60 * 1000,
+              partitioned: true
+            });
+
+            const cookie1 = await cookieStore.get('cookie1');
+            const cookie2 = await cookieStore.get({ name: 'cookie2' });
+            const allBefore = await cookieStore.getAll();
+            const namedByString = await cookieStore.getAll('cookie2');
+            const namedByObject = await cookieStore.getAll({ name: 'cookie2' });
+
+            await cookieStore.delete('cookie1');
+
+            const allAfter = await cookieStore.getAll();
+            const namesAfter = allAfter.map((cookie) => cookie.name).join(',');
+            document.getElementById('result').textContent =
+              cookie1.name + ':' +
+              cookie1.value + ':' +
+              cookie2.partitioned + ':' +
+              allBefore.length + ':' +
+              namedByString.length + ':' +
+              namedByObject.length + ':' +
+              namesAfter;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "cookie1:cookie1-value:true:2:1:1:cookie2")?;
+    Ok(())
+}
+
+#[test]
+fn cookie_store_alias_variable_calls_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const store = cookieStore;
+            await store.set('cookie1', 'cookie1-value');
+            const one = await store.get('cookie1');
+            const named = await store.getAll('cookie1');
+            await store.delete('cookie1');
+            const after = await cookieStore.get('cookie1');
+            document.getElementById('result').textContent =
+              one.value + ':' + named.length + ':' + (after === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "cookie1-value:1:true")?;
+    Ok(())
+}
+
+#[test]
+fn cookie_store_integrates_with_document_cookie() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            document.cookie = 'favorite_food=tripe; SameSite=None; Secure';
+            await cookieStore.set('cookie1', 'cookie1-value');
+            const favorite = await cookieStore.get('favorite_food');
+            const raw = document.cookie;
+            document.getElementById('result').textContent =
+              favorite.name + ':' +
+              favorite.value + ':' +
+              raw.includes('favorite_food=tripe') + ':' +
+              raw.includes('cookie1=cookie1-value');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/path", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "favorite_food:tripe:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn cookie_store_change_event_fires_for_set_and_delete() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          let log = [];
+          cookieStore.addEventListener('change', (event) => {
+            const changed = event.changed.map((cookie) => cookie.name).join(',');
+            const deleted = event.deleted.map((cookie) => cookie.name).join(',');
+            log.push(changed + '|' + deleted);
+          });
+
+          document.getElementById('btn').addEventListener('click', async () => {
+            await cookieStore.set('cookie1', 'value1');
+            await cookieStore.delete('cookie1');
+            document.getElementById('result').textContent = log.join(';');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "cookie1|;|cookie1")?;
+    Ok(())
+}
+
+#[test]
+fn cookie_store_is_available_only_in_secure_context() -> Result<()> {
+    let insecure = Harness::from_html(
+        r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent = typeof cookieStore;
+        </script>
+        "#,
+    )?;
+    insecure.assert_text("#result", "undefined")?;
+
+    let secure = Harness::from_html_with_url(
+        "https://app.local/",
+        r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent =
+            typeof cookieStore + ':' + (cookieStore === window.cookieStore);
+        </script>
+        "#,
+    )?;
+    secure.assert_text("#result", "object:true")?;
+    Ok(())
+}
+
+#[test]
+fn cache_storage_is_available_only_in_secure_context() -> Result<()> {
+    let insecure = Harness::from_html(
+        r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent = typeof caches;
+        </script>
+        "#,
+    )?;
+    insecure.assert_text("#result", "undefined")?;
+
+    let secure = Harness::from_html_with_url(
+        "https://app.local/",
+        r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent =
+            typeof caches + ':' + (caches === window.caches);
+        </script>
+        "#,
+    )?;
+    secure.assert_text("#result", "object:true")?;
+    Ok(())
+}
+
+#[test]
+fn cache_storage_open_has_keys_and_delete_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const v1 = await caches.open('v1');
+            const v1Again = await caches.open('v1');
+            await caches.open('v2');
+
+            const hasV1 = await caches.has('v1');
+            const hasV2 = await caches.has('v2');
+            const names = await caches.keys();
+            const deletedV1 = await caches.delete('v1');
+            const deletedMissing = await caches.delete('missing');
+            const hasV1AfterDelete = await caches.has('v1');
+
+            document.getElementById('result').textContent =
+              (v1 === v1Again) + ':' +
+              hasV1 + ':' +
+              hasV2 + ':' +
+              names.join(',') + ':' +
+              deletedV1 + ':' +
+              deletedMissing + ':' +
+              hasV1AfterDelete;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:v1,v2:true:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn cache_storage_match_and_cache_put_delete_keys_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const cache = await caches.open('v1');
+            const network = await fetch('/api/cached');
+            await cache.put('/api/cached', network.clone());
+
+            const fromCache = await cache.match('/api/cached');
+            const fromStorage = await caches.match('/api/cached');
+            const bodyCache = fromCache ? await fromCache.text() : 'none';
+            const bodyStorage = fromStorage ? await fromStorage.text() : 'none';
+
+            const keysBeforeDelete = await cache.keys();
+            const keyUrl = keysBeforeDelete[0].url;
+            const deleted = await cache.delete('/api/cached');
+            const afterDelete = await cache.match('/api/cached');
+
+            document.getElementById('result').textContent =
+              bodyCache + ':' +
+              bodyStorage + ':' +
+              keyUrl + ':' +
+              deleted + ':' +
+              (afterDelete === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.set_fetch_mock("/api/cached", "payload");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "payload:payload:https://app.local/api/cached:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn cache_storage_and_cache_alias_variables_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const storage = caches;
+            const cache = await storage.open('alias');
+            const response = await fetch('/api/alias');
+            await cache.put('/api/alias', response);
+
+            const hasAlias = await storage.has('alias');
+            const names = await storage.keys();
+            const deleted = await cache.delete('/api/alias');
+            const keysAfterDelete = await cache.keys();
+
+            document.getElementById('result').textContent =
+              hasAlias + ':' +
+              names.join(',') + ':' +
+              deleted + ':' +
+              keysAfterDelete.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.set_fetch_mock("/api/alias", "ok");
+    h.click("#btn")?;
+    h.assert_text("#result", "true:alias:true:0")?;
+    Ok(())
+}
+
+#[test]
+fn cache_add_and_add_all_work_with_fetch_mocks() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const cache = await caches.open('v1');
+            await cache.add('/a');
+            await cache.addAll(['/b', '/c']);
+
+            const a = await (await cache.match('/a')).text();
+            const b = await (await cache.match('/b')).text();
+            const c = await (await cache.match('/c')).text();
+
+            document.getElementById('result').textContent =
+              a + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.set_fetch_mock("/a", "A");
+    h.set_fetch_mock("/b", "B");
+    h.set_fetch_mock("/c", "C");
+    h.click("#btn")?;
+    h.assert_text("#result", "A:B:C")?;
     Ok(())
 }
 
@@ -2576,7 +2929,7 @@ fn global_function_arity_errors_have_stable_messages() {
         ),
         (
             "<script>fetch();</script>",
-            "fetch requires exactly one argument",
+            "fetch requires one or two arguments",
         ),
         (
             "<script>matchMedia();</script>",

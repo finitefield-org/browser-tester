@@ -545,6 +545,76 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        let is_fetch_response_object = {
+                            let entries = object.borrow();
+                            Self::is_fetch_response_object(&entries)
+                        };
+                        if is_fetch_response_object {
+                            if let Some(value) = self.eval_fetch_response_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        let is_fetch_request_object = {
+                            let entries = object.borrow();
+                            Self::is_fetch_request_object(&entries)
+                        };
+                        if is_fetch_request_object {
+                            if let Some(value) =
+                                self.eval_fetch_request_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
+                        let is_headers_object = {
+                            let entries = object.borrow();
+                            Self::is_headers_object(&entries)
+                        };
+                        if is_headers_object {
+                            if let Some(value) =
+                                self.eval_headers_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
+                        let is_cookie_store_object = {
+                            let entries = object.borrow();
+                            Self::is_cookie_store_object(&entries)
+                        };
+                        if is_cookie_store_object {
+                            if let Some(value) =
+                                self.eval_cookie_store_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
+                        let is_cache_storage_object = {
+                            let entries = object.borrow();
+                            Self::is_cache_storage_object(&entries)
+                        };
+                        if is_cache_storage_object {
+                            if let Some(value) = self.eval_cache_storage_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        let is_cache_object = {
+                            let entries = object.borrow();
+                            Self::is_cache_object(&entries)
+                        };
+                        if is_cache_object {
+                            if let Some(value) =
+                                self.eval_cache_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
                         let is_import_meta_object = {
                             let entries = object.borrow();
                             matches!(

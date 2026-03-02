@@ -706,7 +706,7 @@ pub(crate) struct PlatformMockState {
     pub(crate) clipboard_text: String,
     pub(crate) clipboard_read_error: Option<String>,
     pub(crate) clipboard_write_error: Option<String>,
-    pub(crate) fetch_mocks: HashMap<String, String>,
+    pub(crate) fetch_mocks: HashMap<String, FetchMockResponse>,
     pub(crate) fetch_calls: Vec<String>,
     pub(crate) match_media_mocks: HashMap<String, bool>,
     pub(crate) match_media_calls: Vec<String>,
@@ -716,6 +716,34 @@ pub(crate) struct PlatformMockState {
     pub(crate) default_confirm_response: bool,
     pub(crate) prompt_responses: VecDeque<Option<String>>,
     pub(crate) default_prompt_response: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FetchMockResponse {
+    pub(crate) status: i64,
+    pub(crate) status_text: String,
+    pub(crate) body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CookieRecord {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) domain: Option<String>,
+    pub(crate) path: String,
+    pub(crate) expires_ms: Option<i64>,
+    pub(crate) secure: bool,
+    pub(crate) same_site: Option<String>,
+    pub(crate) partitioned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheEntryRecord {
+    pub(crate) request_url: String,
+    pub(crate) response_url: String,
+    pub(crate) response_status: i64,
+    pub(crate) response_status_text: String,
+    pub(crate) response_body: String,
 }
 
 #[derive(Debug)]
@@ -747,6 +775,14 @@ pub(crate) struct BrowserApiState {
     pub(crate) url_objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
     pub(crate) url_constructor_properties: Rc<RefCell<ObjectValue>>,
     pub(crate) local_storage_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) cookie_store_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) cache_storage_object: Rc<RefCell<ObjectValue>>,
+    pub(crate) caches_by_name: HashMap<String, Rc<RefCell<ObjectValue>>>,
+    pub(crate) cache_names_in_order: Vec<String>,
+    pub(crate) cache_entries_by_name: HashMap<String, Vec<CacheEntryRecord>>,
+    pub(crate) window_closed: bool,
+    pub(crate) cookies: Vec<CookieRecord>,
+    pub(crate) cookie_store_change_listeners: Vec<Value>,
     pub(crate) next_blob_url_id: usize,
     pub(crate) blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
     pub(crate) downloads: Vec<DownloadArtifact>,
@@ -759,6 +795,14 @@ impl Default for BrowserApiState {
             url_objects: HashMap::new(),
             url_constructor_properties: Rc::new(RefCell::new(ObjectValue::default())),
             local_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
+            cookie_store_object: Rc::new(RefCell::new(ObjectValue::default())),
+            cache_storage_object: Rc::new(RefCell::new(ObjectValue::default())),
+            caches_by_name: HashMap::new(),
+            cache_names_in_order: Vec::new(),
+            cache_entries_by_name: HashMap::new(),
+            window_closed: false,
+            cookies: Vec::new(),
+            cookie_store_change_listeners: Vec::new(),
             next_blob_url_id: 1,
             blob_url_objects: HashMap::new(),
             downloads: Vec::new(),

@@ -1469,3 +1469,25 @@ fn focus_accepts_optional_options_argument() -> browser_tester::Result<()> {
     harness.assert_text("#result", "focused")?;
     Ok(())
 }
+
+#[test]
+fn fetch_with_options_object_parses_in_async_function() -> browser_tester::Result<()> {
+    let html = r#"
+    <div>
+      <button id="run">run</button>
+      <script>
+        async function run() {
+          const response = await fetch("https://example.com", {
+            method: "GET",
+            headers: { "Accept": "text/html" }
+          });
+          void response;
+        }
+        document.getElementById("run").addEventListener("click", run);
+      </script>
+    </div>
+    "#;
+
+    let _harness = Harness::from_html(html)?;
+    Ok(())
+}

@@ -559,7 +559,10 @@ pub(crate) enum Expr {
     StringValueOf(Box<Expr>),
     StringToString(Box<Expr>),
     StructuredClone(Box<Expr>),
-    Fetch(Box<Expr>),
+    Fetch {
+        request: Box<Expr>,
+        options: Option<Box<Expr>>,
+    },
     MatchMedia(Box<Expr>),
     MatchMediaProp {
         query: Box<Expr>,

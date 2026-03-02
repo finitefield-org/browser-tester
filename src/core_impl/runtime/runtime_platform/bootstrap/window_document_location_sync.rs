@@ -24,7 +24,7 @@ impl Harness {
     }
 
     pub(crate) fn document_builtin_keys() -> &'static [&'static str] {
-        &["defaultView", "location", "URL", "documentURI"]
+        &["defaultView", "location", "URL", "documentURI", "cookie"]
     }
 
     pub(crate) fn sync_document_object(&mut self) {
@@ -60,6 +60,10 @@ impl Harness {
                 "documentURI".to_string(),
                 Value::String(self.document_url.clone()),
             ),
+            (
+                "cookie".to_string(),
+                Value::String(self.document_cookie_string()),
+            ),
         ];
         entries.extend(extras);
         *self.dom_runtime.document_object.borrow_mut() = entries.into();
@@ -74,6 +78,7 @@ impl Harness {
             "frames",
             "length",
             "closed",
+            "close",
             "location",
             "history",
             "navigator",
@@ -86,6 +91,11 @@ impl Harness {
             "String",
             "Boolean",
             "Iterator",
+            "cookieStore",
+            "caches",
+            "fetch",
+            "Request",
+            "Headers",
             "URL",
             "HTMLElement",
             "HTMLInputElement",
@@ -103,6 +113,11 @@ impl Harness {
         string_constructor: &Value,
         boolean_constructor: &Value,
         iterator_constructor: &Value,
+        cookie_store: &Value,
+        caches: &Value,
+        fetch_callable: &Value,
+        request_constructor: &Value,
+        headers_constructor: &Value,
         url_constructor: &Value,
         html_element_constructor: &Value,
         html_input_element_constructor: &Value,
@@ -110,6 +125,7 @@ impl Harness {
         node_constants: &Value,
         node_filter_constants: &Value,
         local_storage: &Value,
+        close_callable: &Value,
     ) {
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
@@ -142,7 +158,11 @@ impl Harness {
             ("parent".to_string(), window_ref.clone()),
             ("frames".to_string(), window_ref),
             ("length".to_string(), Value::Number(0)),
-            ("closed".to_string(), Value::Bool(false)),
+            (
+                "closed".to_string(),
+                Value::Bool(self.browser_apis.window_closed),
+            ),
+            ("close".to_string(), close_callable.clone()),
             (
                 "location".to_string(),
                 Value::Object(self.dom_runtime.location_object.clone()),
@@ -170,6 +190,11 @@ impl Harness {
             ("String".to_string(), string_constructor.clone()),
             ("Boolean".to_string(), boolean_constructor.clone()),
             ("Iterator".to_string(), iterator_constructor.clone()),
+            ("cookieStore".to_string(), cookie_store.clone()),
+            ("caches".to_string(), caches.clone()),
+            ("fetch".to_string(), fetch_callable.clone()),
+            ("Request".to_string(), request_constructor.clone()),
+            ("Headers".to_string(), headers_constructor.clone()),
             ("URL".to_string(), url_constructor.clone()),
             ("HTMLElement".to_string(), html_element_constructor.clone()),
             (
@@ -186,6 +211,15 @@ impl Harness {
     }
 
     pub(crate) fn sync_window_runtime_properties(&mut self) {
+        let cookie_store = self.cookie_store_global_value();
+        let caches = self.cache_storage_global_value();
+        self.script_runtime
+            .env
+            .insert("cookieStore".to_string(), cookie_store.clone());
+        self.script_runtime
+            .env
+            .insert("caches".to_string(), caches.clone());
+
         let mut entries = self.dom_runtime.window_object.borrow_mut();
         Self::object_set_entry(
             &mut entries,
@@ -197,6 +231,13 @@ impl Harness {
             "isSecureContext".to_string(),
             Value::Bool(self.window_is_secure_context()),
         );
+        Self::object_set_entry(
+            &mut entries,
+            "closed".to_string(),
+            Value::Bool(self.browser_apis.window_closed),
+        );
+        Self::object_set_entry(&mut entries, "cookieStore".to_string(), cookie_store);
+        Self::object_set_entry(&mut entries, "caches".to_string(), caches);
     }
 
     pub(crate) fn location_builtin_keys() -> &'static [&'static str] {

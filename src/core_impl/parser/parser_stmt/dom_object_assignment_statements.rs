@@ -1,6 +1,27 @@
 use super::*;
 use crate::core_impl::parser::parser_expr::collect_top_level_char_positions;
 
+fn is_window_alias_target(target: &DomQuery) -> bool {
+    const WINDOW_ALIASES: &[&str] = &["window", "self", "top", "parent", "frames"];
+    match target {
+        DomQuery::Var(name) => WINDOW_ALIASES.iter().any(|alias| alias == name),
+        DomQuery::VarPath { base, path } => {
+            WINDOW_ALIASES.iter().any(|alias| alias == base)
+                && path
+                    .iter()
+                    .all(|segment| WINDOW_ALIASES.iter().any(|alias| alias == segment))
+        }
+        _ => false,
+    }
+}
+
+fn is_window_alias_close_call(stmt: &str) -> bool {
+    let stmt = stmt.trim_start();
+    ["window", "self", "top", "parent", "frames"]
+        .iter()
+        .any(|base| stmt.starts_with(&format!("{base}.close")))
+}
+
 pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -80,6 +101,14 @@ pub(crate) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
         "requestClose" => (DomMethod::RequestClose, true),
         _ => return Ok(None),
     };
+
+    // `window.close()` should be treated as a regular callable member access,
+    // not as `<dialog>.close()`.
+    if method_name == "close"
+        && (is_window_alias_target(&target) || is_window_alias_close_call(stmt))
+    {
+        return Ok(None);
+    }
 
     cursor.skip_ws();
     let args = cursor.read_balanced_block(b'(', b')')?;

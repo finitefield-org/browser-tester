@@ -174,6 +174,17 @@ impl Harness {
             .get(target)
             .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
 
+        if let Some(value) = self.eval_cache_storage_map_method_dispatch(
+            target_value,
+            method,
+            args,
+            env,
+            event_param,
+            event,
+        )? {
+            return Ok(value);
+        }
+
         if let Value::Set(set) = target_value {
             let set = set.clone();
             return match method {
@@ -431,6 +442,27 @@ impl Harness {
 
         if let Value::Object(entries) = target_value {
             let entries = entries.clone();
+            if Self::is_cookie_store_object(&entries.borrow()) {
+                let member = match method {
+                    MapInstanceMethod::Get => "get",
+                    MapInstanceMethod::Delete => "delete",
+                    _ => {
+                        return Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a Map",
+                            target
+                        )));
+                    }
+                };
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                }
+                if let Some(value) =
+                    self.eval_cookie_store_member_call(&entries, member, &evaluated_args)?
+                {
+                    return Ok(value);
+                }
+            }
             if Self::is_storage_object(&entries.borrow()) {
                 return match method {
                     MapInstanceMethod::Clear => {
@@ -749,6 +781,17 @@ impl Harness {
         let target_value = env
             .get(target)
             .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+
+        if let Some(value) = self.eval_cache_storage_set_method_dispatch(
+            target_value,
+            method,
+            args,
+            env,
+            event_param,
+            event,
+        )? {
+            return Ok(value);
+        }
 
         if let Value::WeakSet(weak_set) = target_value {
             let weak_set = weak_set.clone();

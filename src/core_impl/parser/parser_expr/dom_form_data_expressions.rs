@@ -33,6 +33,9 @@ pub(crate) fn parse_form_data_get_all_length_expr(
     let Some(source) = parse_form_data_source(&mut cursor)? else {
         return Ok(None);
     };
+    if matches!(&source, FormDataSource::Var(name) if name == "cookieStore") {
+        return Ok(None);
+    }
 
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
@@ -101,6 +104,9 @@ pub(crate) fn parse_form_data_method_expr(
     let Some(source) = parse_form_data_source(&mut cursor)? else {
         return Ok(None);
     };
+    if matches!(&source, FormDataSource::Var(name) if name == "cookieStore") {
+        return Ok(None);
+    }
 
     cursor.skip_ws();
     if !cursor.consume_byte(b'.') {
