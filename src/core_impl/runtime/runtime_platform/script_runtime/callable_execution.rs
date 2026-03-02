@@ -1226,12 +1226,40 @@ impl Harness {
                             .generator_yield_stack
                             .push(yields.clone());
                     }
+                    let mut non_tdz_shadowed = Self::collect_var_declared_names(
+                        &function.handler.stmts,
+                    );
+                    non_tdz_shadowed.extend(
+                        function
+                            .handler
+                            .params
+                            .iter()
+                            .map(|param| param.name.clone()),
+                    );
+                    non_tdz_shadowed.extend(
+                        Self::collect_function_decls(&function.handler.stmts)
+                            .into_keys(),
+                    );
+                    if let Some(expression_name) = function.expression_name.as_ref() {
+                        non_tdz_shadowed.insert(expression_name.clone());
+                    }
+
+                    let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
+                    if pushed_non_tdz_scope {
+                        this.script_runtime.tdz_scope_stack.push(TdzScopeFrame {
+                            declared: non_tdz_shadowed,
+                            pending: HashSet::new(),
+                        });
+                    }
                     let flow = this.execute_stmts(
                         &function.handler.stmts,
                         &event_param,
                         &mut call_event,
                         &mut body_env,
                     );
+                    if pushed_non_tdz_scope {
+                        this.script_runtime.tdz_scope_stack.pop();
+                    }
                     if yield_collector.is_some() {
                         let _ = this.script_runtime.generator_yield_stack.pop();
                     }

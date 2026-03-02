@@ -157,7 +157,7 @@ impl Harness {
         out
     }
 
-    fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
+    pub(super) fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
         let mut out = HashSet::new();
         for stmt in stmts {
             Self::collect_var_declared_names_from_stmt(stmt, &mut out);

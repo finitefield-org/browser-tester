@@ -65,3 +65,55 @@ fn scheduling_timers_at_i64_max_now_does_not_overflow() -> Result<()> {
     harness.assert_text("#result", "ti")?;
     Ok(())
 }
+
+#[test]
+fn nested_map_callback_with_const_binding_does_not_trigger_false_tdz() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <pre id='out'></pre>
+        <script>
+          function parseDelimiterCell(cell) {
+            const raw = String(cell == null ? '' : cell).trim();
+            const match = raw.match(/^(:)?(-{3,})(:)?$/);
+            if (!match) return { valid: false, align: 'none', dashes: 3 };
+            const left = !!match[1];
+            const right = !!match[3];
+            let align = 'none';
+            if (left && right) align = 'center';
+            else if (left) align = 'left';
+            else if (right) align = 'right';
+            return { valid: true, align, dashes: match[2].length };
+          }
+
+          function isDelimiterRow(cells) {
+            if (!Array.isArray(cells) || cells.length === 0) return false;
+            return cells.every((cell) => parseDelimiterCell(cell).valid);
+          }
+
+          function formatBlock(block) {
+            const rows = block.rows.map((row) => row.slice());
+            const formatted = rows.map((row) => {
+              const delimiter = isDelimiterRow(row);
+              const cells = row.map((cell, idx) => {
+                if (delimiter) return idx === 0 ? ':---' : '---:';
+                return cell;
+              });
+              return '| ' + cells.join(' | ') + ' |';
+            });
+            return formatted.join('\n');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const out = formatBlock({
+              rows: [['a', 'bb'], ['---', '---'], ['1', '22']]
+            });
+            document.getElementById('out').textContent = out;
+          });
+        </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "| a | bb |\n| :--- | ---: |\n| 1 | 22 |")?;
+    Ok(())
+}

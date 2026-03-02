@@ -1665,3 +1665,19 @@ fn parse_error_reports_line_column_and_nearby_source_for_string_literal_expectat
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn create_text_node_accepts_member_expression_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='root'></div>
+    <script>
+      const part = { text: 'abc' };
+      const node = document.createTextNode(part.text);
+      document.getElementById('root').appendChild(node);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#root", "abc")?;
+    Ok(())
+}
