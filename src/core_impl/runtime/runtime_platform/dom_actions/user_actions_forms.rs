@@ -576,12 +576,44 @@ impl Harness {
     }
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
-        let target = self.select_one(selector)?;
+        let target = self.resolve_dispatch_target(selector)?;
         self.with_script_env(|this, env| {
             stacker::grow(32 * 1024 * 1024, || {
                 let _ = this.dispatch_event_with_env(target, event, env, false)?;
                 Ok(())
             })
         })
+    }
+
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event: &str,
+        init: KeyboardEventInit,
+    ) -> Result<()> {
+        let target = self.resolve_dispatch_target(selector)?;
+        self.with_script_env(move |this, env| {
+            stacker::grow(32 * 1024 * 1024, || {
+                let mut dispatched = EventState::new_untrusted(event, target, this.scheduler.now_ms);
+                dispatched.key = Some(init.key.clone());
+                dispatched.code = init.code.clone();
+                dispatched.ctrl_key = init.ctrl_key;
+                dispatched.meta_key = init.meta_key;
+                dispatched.shift_key = init.shift_key;
+                dispatched.alt_key = init.alt_key;
+                dispatched.repeat = init.repeat;
+                dispatched.is_composing = init.is_composing;
+                let _ = this.dispatch_prepared_event_with_env(dispatched, env)?;
+                Ok(())
+            })
+        })
+    }
+
+    fn resolve_dispatch_target(&self, selector: &str) -> Result<NodeId> {
+        let selector = selector.trim();
+        if matches!(selector, "window" | "document" | "window.document") {
+            return Ok(self.dom.root);
+        }
+        self.select_one(selector)
     }
 }

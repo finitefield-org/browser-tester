@@ -125,6 +125,28 @@ impl Harness {
             ),
             ("timeStamp".to_string(), Value::Number(event.time_stamp_ms)),
             (
+                "key".to_string(),
+                event
+                    .key
+                    .as_ref()
+                    .map(|value| Value::String(value.clone()))
+                    .unwrap_or(Value::Undefined),
+            ),
+            (
+                "code".to_string(),
+                event
+                    .code
+                    .as_ref()
+                    .map(|value| Value::String(value.clone()))
+                    .unwrap_or(Value::Undefined),
+            ),
+            ("ctrlKey".to_string(), Value::Bool(event.ctrl_key)),
+            ("metaKey".to_string(), Value::Bool(event.meta_key)),
+            ("shiftKey".to_string(), Value::Bool(event.shift_key)),
+            ("altKey".to_string(), Value::Bool(event.alt_key)),
+            ("repeat".to_string(), Value::Bool(event.repeat)),
+            ("isComposing".to_string(), Value::Bool(event.is_composing)),
+            (
                 "state".to_string(),
                 event.state.as_ref().cloned().unwrap_or(Value::Undefined),
             ),

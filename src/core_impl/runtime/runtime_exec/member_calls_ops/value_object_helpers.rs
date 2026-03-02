@@ -896,6 +896,37 @@ impl Harness {
 
                 match key {
                     "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
+                    "childNodes" => Ok(Value::NodeList(self.dom.nodes[node.0].children.clone())),
+                    "children" => Ok(Value::NodeList(self.dom.child_elements(*node))),
+                    "childElementCount" => {
+                        Ok(Value::Number(self.dom.child_element_count(*node) as i64))
+                    }
+                    "firstChild" => Ok(self
+                        .dom
+                        .nodes[node.0]
+                        .children
+                        .first()
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "lastChild" => Ok(self
+                        .dom
+                        .nodes[node.0]
+                        .children
+                        .last()
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "firstElementChild" => Ok(self
+                        .dom
+                        .first_element_child(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "lastElementChild" => Ok(self
+                        .dom
+                        .last_element_child(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
                     "content"
                         if self
                             .dom

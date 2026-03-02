@@ -67,7 +67,7 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
     let start = cursor.pos();
     if let Some(name) = cursor.parse_identifier() {
         cursor.skip_ws();
-        if matches!(cursor.peek(), Some(b',') | Some(b')')) {
+        if matches!(cursor.peek(), Some(b',') | Some(b')') | None) {
             return Ok(ListenerCallbackParseResult::Reference(name));
         }
         cursor.set_pos(start);
@@ -81,6 +81,18 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
 
     let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
     Ok(ListenerCallbackParseResult::Inline { params, body })
+}
+
+fn parse_listener_callback_src(src: &str) -> Result<ListenerCallbackParseResult> {
+    let mut cursor = Cursor::new(src.trim());
+    let callback = parse_listener_callback_arg(&mut cursor)?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported add/removeEventListener callback argument: {src}"
+        )));
+    }
+    Ok(callback)
 }
 
 pub(crate) fn build_listener_reference_handler(callback_name: &str) -> Result<ScriptHandler> {
@@ -142,6 +154,31 @@ pub(crate) fn parse_listener_capture_from_options_object(src: &str) -> Result<Op
     Ok(capture)
 }
 
+fn parse_listener_capture_arg(src: &str) -> Result<bool> {
+    let src = src.trim();
+    if src == "true" {
+        return Ok(true);
+    }
+    if src == "false" {
+        return Ok(false);
+    }
+    if src.starts_with('{') {
+        let mut cursor = Cursor::new(src);
+        let options_src = cursor.read_balanced_block(b'{', b'}')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return Err(Error::ScriptParse(
+                "add/removeEventListener third argument must be true/false or options object"
+                    .into(),
+            ));
+        }
+        return Ok(parse_listener_capture_from_options_object(&options_src)?.unwrap_or(false));
+    }
+    Err(Error::ScriptParse(
+        "add/removeEventListener third argument must be true/false or options object".into(),
+    ))
+}
+
 pub(crate) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let mut cursor = Cursor::new(stmt);
@@ -167,36 +204,21 @@ pub(crate) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         _ => return Ok(None),
     };
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let event_type = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b',')?;
-    cursor.skip_ws();
-    let callback = parse_listener_callback_arg(&mut cursor)?;
-
-    cursor.skip_ws();
-    let capture = if cursor.consume_byte(b',') {
-        cursor.skip_ws();
-        if cursor.consume_ascii("true") {
-            true
-        } else if cursor.consume_ascii("false") {
-            false
-        } else if cursor.peek() == Some(b'{') {
-            let options_src = cursor.read_balanced_block(b'{', b'}')?;
-            parse_listener_capture_from_options_object(&options_src)?.unwrap_or(false)
-        } else {
-            return Err(Error::ScriptParse(
-                "add/removeEventListener third argument must be true/false or options object"
-                    .into(),
-            ));
-        }
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() < 2 || args.len() > 3 {
+        return Err(Error::ScriptParse(format!(
+            "add/removeEventListener requires 2 or 3 arguments: {stmt}"
+        )));
+    }
+    let event_type = parse_expr(args[0].trim())?;
+    let callback = parse_listener_callback_src(args[1].trim())?;
+    let capture = if args.len() == 3 {
+        parse_listener_capture_arg(args[2])?
     } else {
         false
     };
 
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
     cursor.skip_ws();
     cursor.consume_byte(b';');
     cursor.skip_ws();

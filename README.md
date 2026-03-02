@@ -86,6 +86,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `location` navigation can load mocked HTML for a target URL.
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
 - `navigator.clipboard` read/write rejection paths can be injected deterministically for tests.
+- `navigator.clipboard` can also be replaced in script (`navigator.clipboard = { ... }`) for local stubs.
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
@@ -232,6 +233,37 @@ fn main() -> browser_tester::Result<()> {
     h.set_clipboard_text("seeded");
     h.click("#run")?;
     h.assert_text("#out", "seeded")?;
+    Ok(())
+}
+```
+
+Clipboard object override example (script-side):
+
+```rust
+use browser_tester::Harness;
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        navigator.clipboard = {
+          readText: () => Promise.resolve('stubbed-read'),
+          writeText: () => Promise.resolve('stubbed-write'),
+        };
+        document.getElementById('run').addEventListener('click', () => {
+          navigator.clipboard.writeText('x')
+            .then(() => navigator.clipboard.readText())
+            .then((text) => {
+              document.getElementById('out').textContent = text;
+            });
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "stubbed-read")?;
     Ok(())
 }
 ```
@@ -443,7 +475,7 @@ Unsupported selectors must return explicit errors (no silent ignore).
 - History API: `history.length`, `history.state`, `history.scrollRestoration`,
   `history.back()`, `history.forward()`, `history.go([delta])`,
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
-- Clipboard API: `navigator.clipboard` (read-only),
+- Clipboard API: `navigator.clipboard` (assignable for test stubs),
   `navigator.clipboard.readText()`, `navigator.clipboard.writeText(text)`
   (test hooks: `set_clipboard_read_error`, `set_clipboard_write_error`, `clear_clipboard_errors`)
 - Cookie APIs: `document.cookie`,
@@ -607,6 +639,12 @@ impl Harness {
     pub fn blur(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()>;
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event: &str,
+        init: KeyboardEventInit,
+    ) -> Result<()>;
     pub fn dump_dom(&self, selector: &str) -> Result<String>;
 
     // Trace
@@ -656,6 +694,20 @@ impl Harness {
     pub fn assert_value(&self, selector: &str, expected: &str) -> Result<()>;
     pub fn assert_checked(&self, selector: &str, expected: bool) -> Result<()>;
     pub fn assert_exists(&self, selector: &str) -> Result<()>;
+}
+```
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyboardEventInit {
+    pub key: String,
+    pub code: Option<String>,
+    pub ctrl_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+    pub alt_key: bool,
+    pub repeat: bool,
+    pub is_composing: bool,
 }
 ```
 

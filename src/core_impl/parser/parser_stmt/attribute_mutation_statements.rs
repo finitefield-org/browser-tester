@@ -167,10 +167,10 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     };
 
     let class_names = match method {
-        ClassListMethod::Toggle => vec![parse_string_literal_exact(args[0].trim())?],
+        ClassListMethod::Toggle => vec![parse_expr(args[0].trim())?],
         _ => args
             .iter()
-            .map(|arg| parse_string_literal_exact(arg.trim()))
+            .map(|arg| parse_expr(arg.trim()))
             .collect::<Result<Vec<_>>>()?,
     };
 

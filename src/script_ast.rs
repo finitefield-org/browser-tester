@@ -1167,7 +1167,7 @@ pub(crate) enum Stmt {
     ClassListCall {
         target: DomQuery,
         method: ClassListMethod,
-        class_names: Vec<String>,
+        class_names: Vec<Expr>,
         force: Option<Expr>,
     },
     ClassListForEach {
@@ -1303,7 +1303,7 @@ pub(crate) enum Stmt {
     ListenerMutation {
         target: DomQuery,
         op: ListenerRegistrationOp,
-        event_type: String,
+        event_type: Expr,
         capture: bool,
         handler: ScriptHandler,
     },

@@ -2597,20 +2597,31 @@ fn navigator_clipboard_write_text_and_window_alias_work() -> Result<()> {
 }
 
 #[test]
-fn navigator_clipboard_property_is_read_only() {
-    let err = Harness::from_html(
-        r#"
+fn navigator_clipboard_property_can_be_overridden_for_stubbing() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
         <script>
-          navigator.clipboard = null;
-        </script>
-        "#,
-    )
-    .expect_err("navigator.clipboard should be read-only");
+          navigator.clipboard = {
+            readText: function() { return Promise.resolve('stubbed-read'); },
+            writeText: function(_value) { return Promise.resolve('stubbed-write'); },
+          };
 
-    match err {
-        Error::ScriptRuntime(msg) => assert_eq!(msg, "navigator.clipboard is read-only"),
-        other => panic!("unexpected error: {other:?}"),
-    }
+          document.getElementById('btn').addEventListener('click', () => {
+            navigator.clipboard.writeText('saved')
+              .then(() => navigator.clipboard.readText())
+              .then((value) => {
+                document.getElementById('result').textContent = value;
+              });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "stubbed-read")?;
+    assert_eq!(h.clipboard_text(), "");
+    Ok(())
 }
 
 #[test]

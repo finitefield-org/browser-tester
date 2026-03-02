@@ -1,4 +1,4 @@
-use browser_tester::Harness;
+use browser_tester::{Error, Harness, KeyboardEventInit};
 
 #[test]
 fn regex_charclass_quote_does_not_break_balancer() -> browser_tester::Result<()> {
@@ -1490,4 +1490,178 @@ fn fetch_with_options_object_parses_in_async_function() -> browser_tester::Resul
 
     let _harness = Harness::from_html(html)?;
     Ok(())
+}
+
+#[test]
+fn class_list_add_accepts_member_expression_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="out" class="base"></div>
+    <div id="result"></div>
+    <script>
+      const out = document.getElementById("out");
+      const meta = { levelClass: "strong" };
+      out.classList.add(meta.levelClass);
+      document.getElementById("result").textContent = out.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "base strong")?;
+    Ok(())
+}
+
+#[test]
+fn class_list_add_accepts_identifier_argument_after_includes_guard() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="out"></div>
+    <div id="result"></div>
+    <script>
+      const kind = "success";
+      const out = document.getElementById("out");
+      if (["success", "warn", "error"].includes(kind)) {
+        out.classList.add(kind);
+      }
+      document.getElementById("result").textContent =
+        String(out.classList.contains("success")) + ":" + out.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:success")?;
+    Ok(())
+}
+
+#[test]
+fn dom_parser_body_child_nodes_is_array_like() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const parser = new DOMParser();
+      const doc = parser.parseFromString("<article><p>A</p><p>B</p></article>", "text/html");
+      const hasChildNodes = !!(doc.body && doc.body.childNodes);
+      const len = doc.body.childNodes.length;
+      const arr = Array.from(doc.body.childNodes);
+      document.getElementById("result").textContent =
+        String(hasChildNodes) + "|" + String(len > 0) + "|" + String(arr.length === len);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_keyboard_populates_key_and_modifier_fields() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      window.addEventListener("keydown", (event) => {
+        document.getElementById("result").textContent = [
+          event.type,
+          event.key,
+          event.code,
+          event.ctrlKey,
+          event.metaKey,
+          event.shiftKey,
+          event.altKey,
+          event.repeat,
+          event.isComposing,
+          event.isTrusted,
+          event.bubbles,
+          event.cancelable
+        ].join(":");
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.dispatch_keyboard(
+        "window",
+        "keydown",
+        KeyboardEventInit {
+            key: "Enter".into(),
+            code: Some("Enter".into()),
+            ctrl_key: true,
+            shift_key: true,
+            repeat: true,
+            ..Default::default()
+        },
+    )?;
+    harness.assert_text(
+        "#result",
+        "keydown:Enter:Enter:true:false:true:false:true:false:false:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_keyboard_targets_selected_element_without_bubbling() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="root">
+      <input id="field">
+    </div>
+    <div id="result"></div>
+    <script>
+      document.getElementById("root").addEventListener("keydown", () => {
+        document.getElementById("result").textContent = "root";
+      });
+      document.getElementById("field").addEventListener("keydown", (event) => {
+        document.getElementById("result").textContent =
+          event.target.id + ":" + event.currentTarget.id + ":" + event.key;
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.dispatch_keyboard(
+        "#field",
+        "keydown",
+        KeyboardEventInit {
+            key: "Escape".into(),
+            ..Default::default()
+        },
+    )?;
+    harness.assert_text("#result", "field:field:Escape")?;
+    Ok(())
+}
+
+#[test]
+fn add_event_listener_accepts_dynamic_event_type_expression() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="btn">run</button>
+    <div id="result"></div>
+    <script>
+      const eventName = "click";
+      const btn = document.getElementById("btn");
+      btn.addEventListener(eventName, () => {
+        document.getElementById("result").textContent = "ok";
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#btn")?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn parse_error_reports_line_column_and_nearby_source_for_string_literal_expectation() {
+    let html = r#"
+    <script type="module">
+      import value from someModule;
+    </script>
+    "#;
+
+    let err = Harness::from_html(html).expect_err("invalid module specifier should fail parsing");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("expected string literal"));
+            assert!(msg.contains("line"));
+            assert!(msg.contains("column"));
+            assert!(msg.contains("near `"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

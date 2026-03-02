@@ -45,10 +45,7 @@ impl<'a> Cursor<'a> {
         if self.consume_byte(b) {
             Ok(())
         } else {
-            Err(Error::ScriptParse(format!(
-                "expected '{}' at {}",
-                b as char, self.i
-            )))
+            Err(self.parse_error_at(format!("expected '{}' at {}", b as char, self.i), self.i))
         }
     }
 
@@ -70,10 +67,7 @@ impl<'a> Cursor<'a> {
         if self.consume_ascii(token) {
             Ok(())
         } else {
-            Err(Error::ScriptParse(format!(
-                "expected '{}' at {}",
-                token, self.i
-            )))
+            Err(self.parse_error_at(format!("expected '{}' at {}", token, self.i), self.i))
         }
     }
 
@@ -116,6 +110,67 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    fn parse_error_at(&self, message: String, pos: usize) -> Error {
+        let clamped = pos.min(self.src.len());
+        let (line, column) = Self::line_column_at(self.src, clamped);
+        let snippet = Self::snippet_around(self.src, clamped);
+        Error::ScriptParse(format!(
+            "{message} (line {line}, column {column}, near `{snippet}`)"
+        ))
+    }
+
+    fn line_column_at(src: &str, pos: usize) -> (usize, usize) {
+        let clamped = pos.min(src.len());
+        let mut line = 1usize;
+        let mut line_start = 0usize;
+        for (idx, ch) in src.char_indices() {
+            if idx >= clamped {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                line_start = idx + 1;
+            }
+        }
+        let column = src[line_start..clamped].chars().count() + 1;
+        (line, column)
+    }
+
+    fn clamp_left_boundary(src: &str, mut idx: usize) -> usize {
+        idx = idx.min(src.len());
+        while idx > 0 && !src.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
+    fn clamp_right_boundary(src: &str, mut idx: usize) -> usize {
+        idx = idx.min(src.len());
+        while idx < src.len() && !src.is_char_boundary(idx) {
+            idx += 1;
+        }
+        idx
+    }
+
+    fn snippet_around(src: &str, pos: usize) -> String {
+        let clamped = pos.min(src.len());
+        let start = Self::clamp_left_boundary(src, clamped.saturating_sub(24));
+        let end = Self::clamp_right_boundary(src, clamped.saturating_add(24));
+        let mut snippet = src
+            .get(start..end)
+            .unwrap_or_default()
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        if start > 0 {
+            snippet = format!("...{snippet}");
+        }
+        if end < src.len() {
+            snippet.push_str("...");
+        }
+        snippet
+    }
+
     pub(super) fn parse_identifier(&mut self) -> Option<String> {
         let bytes = self.bytes();
         let start = self.i;
@@ -137,12 +192,12 @@ impl<'a> Cursor<'a> {
     pub(super) fn parse_string_literal(&mut self) -> Result<String> {
         let quote = self
             .peek()
-            .ok_or_else(|| Error::ScriptParse("expected string literal".into()))?;
+            .ok_or_else(|| self.parse_error_at("expected string literal".into(), self.i))?;
         if quote != b'\'' && quote != b'"' {
-            return Err(Error::ScriptParse(format!(
-                "expected string literal at {}",
-                self.i
-            )));
+            return Err(self.parse_error_at(
+                format!("expected string literal at {}", self.i),
+                self.i,
+            ));
         }
 
         self.i += 1;
@@ -163,14 +218,16 @@ impl<'a> Cursor<'a> {
                 let raw = self
                     .src
                     .get(start..self.i)
-                    .ok_or_else(|| Error::ScriptParse("invalid string literal".into()))?;
+                    .ok_or_else(|| {
+                        self.parse_error_at("invalid string literal".into(), self.i)
+                    })?;
                 self.i += 1;
                 return Ok(unescape_string(raw));
             }
             self.i += 1;
         }
 
-        Err(Error::ScriptParse("unclosed string literal".into()))
+        Err(self.parse_error_at("unclosed string literal".into(), start))
     }
 
     pub(super) fn read_until_byte(&mut self, b: u8) -> Result<String> {

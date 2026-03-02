@@ -28,6 +28,18 @@ pub struct MockPage {
     pub(crate) harness: Harness,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyboardEventInit {
+    pub key: String,
+    pub code: Option<String>,
+    pub ctrl_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+    pub alt_key: bool,
+    pub repeat: bool,
+    pub is_composing: bool,
+}
+
 impl MockWindow {
     pub(crate) fn with_current_harness_mut<R>(
         &mut self,
@@ -142,6 +154,15 @@ impl MockWindow {
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
         self.with_current_harness_mut(|page| page.dispatch(selector, event))
+    }
+
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event: &str,
+        init: KeyboardEventInit,
+    ) -> Result<()> {
+        self.with_current_harness_mut(move |page| page.dispatch_keyboard(selector, event, init))
     }
 
     pub fn assert_text(&mut self, selector: &str, expected: &str) -> Result<()> {

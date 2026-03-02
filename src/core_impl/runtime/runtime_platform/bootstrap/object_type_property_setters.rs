@@ -109,15 +109,8 @@ impl Harness {
         key: &str,
         value: Value,
     ) -> Result<()> {
-        match key {
-            "clipboard" => Err(Error::ScriptRuntime(
-                "navigator.clipboard is read-only".into(),
-            )),
-            _ => {
-                Self::object_set_entry(&mut navigator_object.borrow_mut(), key.to_string(), value);
-                Ok(())
-            }
-        }
+        Self::object_set_entry(&mut navigator_object.borrow_mut(), key.to_string(), value);
+        Ok(())
     }
 
     pub(crate) fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {

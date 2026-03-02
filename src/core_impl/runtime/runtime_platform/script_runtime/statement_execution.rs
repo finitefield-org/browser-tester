@@ -3038,29 +3038,38 @@ impl Harness {
                             match method {
                                 ClassListMethod::Add => {
                                     for class_name in class_names {
-                                        self.dom.class_add(node, class_name)?;
+                                        let class_name = self
+                                            .eval_expr(class_name, env, event_param, event)?
+                                            .as_string();
+                                        self.dom.class_add(node, &class_name)?;
                                     }
                                 }
                                 ClassListMethod::Remove => {
                                     for class_name in class_names {
-                                        self.dom.class_remove(node, class_name)?;
+                                        let class_name = self
+                                            .eval_expr(class_name, env, event_param, event)?
+                                            .as_string();
+                                        self.dom.class_remove(node, &class_name)?;
                                     }
                                 }
                                 ClassListMethod::Toggle => {
                                     let class_name = class_names.first().ok_or_else(|| {
                                         Error::ScriptRuntime("toggle requires a class name".into())
                                     })?;
+                                    let class_name = self
+                                        .eval_expr(class_name, env, event_param, event)?
+                                        .as_string();
                                     if let Some(force_expr) = force {
                                         let force_value = self
                                             .eval_expr(force_expr, env, event_param, event)?
                                             .truthy();
                                         if force_value {
-                                            self.dom.class_add(node, class_name)?;
+                                            self.dom.class_add(node, &class_name)?;
                                         } else {
-                                            self.dom.class_remove(node, class_name)?;
+                                            self.dom.class_remove(node, &class_name)?;
                                         }
                                     } else {
-                                        let _ = self.dom.class_toggle(node, class_name)?;
+                                        let _ = self.dom.class_toggle(node, &class_name)?;
                                     }
                                 }
                             }
@@ -4201,6 +4210,8 @@ impl Harness {
                             handler,
                         } => {
                             let node = self.resolve_dom_query_required_runtime(target, env)?;
+                            let event_type =
+                                self.eval_expr(event_type, env, event_param, event)?.as_string();
                             match op {
                                 ListenerRegistrationOp::Add => {
                                     let captured_env = self.ensure_listener_capture_env();
@@ -4221,7 +4232,7 @@ impl Harness {
                                 }
                                 ListenerRegistrationOp::Remove => {
                                     let _ =
-                                        self.listeners.remove(node, event_type, *capture, handler);
+                                        self.listeners.remove(node, &event_type, *capture, handler);
                                 }
                             }
                         }
