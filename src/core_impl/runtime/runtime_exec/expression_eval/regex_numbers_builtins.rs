@@ -376,35 +376,50 @@ impl Harness {
                     Some(Value::ArrayBuffer(buffer)) => {
                         Ok(Value::Number(buffer.borrow().byte_length() as i64))
                     }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not a TypedArray",
-                        target
-                    ))),
+                    Some(value) => self.object_property_from_value(value, "byteLength"),
                     None => Err(Error::ScriptRuntime(format!(
                         "unknown variable: {}",
                         target
                     ))),
                 },
-                Expr::TypedArrayByteOffset(target) => {
-                    let array = self.resolve_typed_array_from_env(env, target)?;
-                    let byte_offset = if array.borrow().observed_length() == 0
-                        && array.borrow().byte_offset
-                            >= array.borrow().buffer.borrow().byte_length()
-                    {
-                        0
-                    } else {
-                        array.borrow().byte_offset
-                    };
-                    Ok(Value::Number(byte_offset as i64))
-                }
-                Expr::TypedArrayBuffer(target) => {
-                    let array = self.resolve_typed_array_from_env(env, target)?;
-                    Ok(Value::ArrayBuffer(array.borrow().buffer.clone()))
-                }
-                Expr::TypedArrayBytesPerElement(target) => {
-                    let array = self.resolve_typed_array_from_env(env, target)?;
-                    Ok(Value::Number(array.borrow().kind.bytes_per_element() as i64))
-                }
+                Expr::TypedArrayByteOffset(target) => match env.get(target) {
+                    Some(Value::TypedArray(array)) => {
+                        let byte_offset = if array.borrow().observed_length() == 0
+                            && array.borrow().byte_offset
+                                >= array.borrow().buffer.borrow().byte_length()
+                        {
+                            0
+                        } else {
+                            array.borrow().byte_offset
+                        };
+                        Ok(Value::Number(byte_offset as i64))
+                    }
+                    Some(value) => self.object_property_from_value(value, "byteOffset"),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
+                },
+                Expr::TypedArrayBuffer(target) => match env.get(target) {
+                    Some(Value::TypedArray(array)) => {
+                        Ok(Value::ArrayBuffer(array.borrow().buffer.clone()))
+                    }
+                    Some(value) => self.object_property_from_value(value, "buffer"),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
+                },
+                Expr::TypedArrayBytesPerElement(target) => match env.get(target) {
+                    Some(Value::TypedArray(array)) => {
+                        Ok(Value::Number(array.borrow().kind.bytes_per_element() as i64))
+                    }
+                    Some(value) => self.object_property_from_value(value, "BYTES_PER_ELEMENT"),
+                    None => Err(Error::ScriptRuntime(format!(
+                        "unknown variable: {}",
+                        target
+                    ))),
+                },
                 Expr::TypedArrayMethod {
                     target,
                     method,

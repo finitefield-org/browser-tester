@@ -257,12 +257,7 @@ impl Harness {
             "collation" => vec!["default", "emoji", "phonebk"],
             "currency" => vec!["EUR", "JPY", "USD"],
             "numberingsystem" => vec!["arab", "latn", "thai"],
-            "timezone" => vec![
-                "America/Los_Angeles",
-                "America/New_York",
-                "Asia/Kolkata",
-                "UTC",
-            ],
+            "timezone" => return Ok(Self::intl_supported_time_zone_values()),
             "unit" => vec![
                 "day", "hour", "meter", "minute", "month", "second", "week", "year",
             ],

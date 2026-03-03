@@ -104,3 +104,77 @@ fn input_role_reacts_to_type_list_changes_and_explicit_override_roundtrip() -> R
     )?;
     Ok(())
 }
+
+#[test]
+fn input_interface_properties_reflect_form_labels_and_multiple_state() -> Result<()> {
+    let html = r#"
+        <form id='account-form'></form>
+        <label id='email-label' for='email'>Email</label>
+        <input id='email' name='email' type='email' form='account-form' multiple required>
+        <input id='upload' type='file' multiple>
+        <input id='note' type='text'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const email = document.getElementById('email');
+            const labels = email.labels;
+            const upload = document.getElementById('upload');
+            const note = document.getElementById('note');
+
+            document.getElementById('result').textContent = [
+              email.form.id,
+              labels.length,
+              labels.item(0).id,
+              email.multiple,
+              upload.multiple,
+              note.multiple,
+              email.name,
+              email.required,
+              email.type
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "account-form:1:email-label:true:true:false:email:true:email",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn input_multiple_property_assignment_reflects_attribute() -> Result<()> {
+    let html = r#"
+        <input id='email' type='email' multiple>
+        <input id='plain' type='text'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const email = document.getElementById('email');
+            const plain = document.getElementById('plain');
+
+            const before = email.multiple + ':' + email.hasAttribute('multiple') + ':' +
+              plain.multiple + ':' + plain.hasAttribute('multiple');
+
+            email.multiple = false;
+            const middle = email.multiple + ':' + email.hasAttribute('multiple');
+
+            plain.multiple = true;
+            const after = plain.multiple + ':' + plain.hasAttribute('multiple');
+
+            document.getElementById('result').textContent =
+              before + '|' + middle + '|' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:false:false|false:false|true:true")?;
+    Ok(())
+}

@@ -117,3 +117,61 @@ fn canvas_to_data_url_returns_data_url_prefixes() -> Result<()> {
     h.assert_text("#result", "true|true")?;
     Ok(())
 }
+
+#[test]
+fn canvas_to_blob_supports_type_quality_and_fallback() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const logs = [];
+            const returned = canvas.toBlob((blob) => {
+              logs.push(blob.type);
+              logs.push(blob.size > 0);
+              logs.push(URL.createObjectURL(blob).startsWith('blob:bt-'));
+            });
+            canvas.toBlob((blob) => {
+              logs.push(blob.type);
+            }, 'image/jpeg', 0.95);
+            canvas.toBlob((blob) => {
+              logs.push(blob.type);
+            }, 'application/json');
+            document.getElementById('result').textContent =
+              (returned === undefined) + '|' + logs.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|image/png|true|true|image/jpeg|image/png")?;
+    Ok(())
+}
+
+#[test]
+fn canvas_to_blob_requires_callable_callback() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('canvas').toBlob(null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("toBlob callback must be callable"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}

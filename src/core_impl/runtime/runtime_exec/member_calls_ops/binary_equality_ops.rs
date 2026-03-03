@@ -478,6 +478,13 @@ impl Harness {
                     .map(|tag| tag.eq_ignore_ascii_case("input"))
                     .unwrap_or(false));
             }
+            if self.is_named_constructor_value(right, "HTMLSelectElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("select"))
+                    .unwrap_or(false));
+            }
         }
 
         if matches!(right, Value::BlobConstructor) {

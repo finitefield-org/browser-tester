@@ -115,34 +115,20 @@ impl Harness {
             .as_ref()
             .cloned()
             .unwrap_or(Value::Node(event.current_target));
-        let clipboard_data = if event.event_type.eq_ignore_ascii_case("paste") {
-            Self::new_clipboard_data_object_value(event.clipboard_data.as_deref().unwrap_or(""))
+        let clipboard_data = if event.event_type.eq_ignore_ascii_case("paste")
+            || event.event_type.eq_ignore_ascii_case("copy")
+            || event.event_type.eq_ignore_ascii_case("cut")
+        {
+            if let Some(object) = &event.clipboard_data_object {
+                Value::Object(object.clone())
+            } else {
+                Self::new_clipboard_data_object_value(event.clipboard_data.as_deref().unwrap_or(""))
+            }
         } else {
             Value::Undefined
         };
         let data_transfer = if Self::event_exposes_data_transfer(&event.event_type) {
-            Self::new_object_value(vec![
-                ("dropEffect".to_string(), Value::String("none".to_string())),
-                (
-                    "effectAllowed".to_string(),
-                    Value::String("all".to_string()),
-                ),
-                ("files".to_string(), Self::new_array_value(Vec::new())),
-                ("items".to_string(), Self::new_array_value(Vec::new())),
-                ("types".to_string(), Self::new_array_value(Vec::new())),
-                (
-                    "getData".to_string(),
-                    Self::new_builtin_placeholder_function(),
-                ),
-                (
-                    "setData".to_string(),
-                    Self::new_builtin_placeholder_function(),
-                ),
-                (
-                    "clearData".to_string(),
-                    Self::new_builtin_placeholder_function(),
-                ),
-            ])
+            Self::new_data_transfer_object_value(&event.event_type)
         } else {
             Value::Undefined
         };
@@ -227,43 +213,52 @@ impl Harness {
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        let handler = match callback {
-            TimerCallback::Inline(handler) => handler.clone(),
+        match callback {
             TimerCallback::Reference(name) => {
-                let value = env
+                let callable = env
                     .get(name)
                     .cloned()
                     .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {name}")))?;
-                let Value::Function(function) = value else {
+                if !self.is_callable_value(&callable) {
                     return Err(Error::ScriptRuntime(format!(
                         "timer callback '{name}' is not a function"
                     )));
-                };
-                function.handler.clone()
-            }
-        };
-        let event_param = handler
-            .first_event_param()
-            .map(|event_param| event_param.to_string());
-        self.with_callback_scope_depth(env, |this, callback_env| {
-            this.with_isolated_loop_control_scope(|this| {
-                this.bind_handler_params(
-                    &handler,
-                    callback_args,
-                    callback_env,
-                    &event_param,
-                    event,
-                )?;
-                let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
-                callback_env.remove(INTERNAL_RETURN_SLOT);
-                match flow {
-                    ExecFlow::Continue => Ok(()),
-                    ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
-                    ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
-                    ExecFlow::Return => Ok(()),
                 }
-            })
-        })
+                let _ = self.execute_callable_value_with_env(
+                    &callable,
+                    callback_args,
+                    event,
+                    Some(env),
+                )?;
+                Ok(())
+            }
+            TimerCallback::Inline(handler) => {
+                let handler = handler.clone();
+                let event_param = handler
+                    .first_event_param()
+                    .map(|event_param| event_param.to_string());
+                self.with_callback_scope_depth(env, |this, callback_env| {
+                    this.with_isolated_loop_control_scope(|this| {
+                        this.bind_handler_params(
+                            &handler,
+                            callback_args,
+                            callback_env,
+                            &event_param,
+                            event,
+                        )?;
+                        let flow =
+                            this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+                        callback_env.remove(INTERNAL_RETURN_SLOT);
+                        match flow {
+                            ExecFlow::Continue => Ok(()),
+                            ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
+                            ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
+                            ExecFlow::Return => Ok(()),
+                        }
+                    })
+                })
+            }
+        }
     }
 
     fn run_script_microtask_handler(

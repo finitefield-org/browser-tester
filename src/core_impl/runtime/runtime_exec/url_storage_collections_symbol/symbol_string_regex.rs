@@ -209,18 +209,26 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
+        self.eval_string_static_method_from_values(method, &evaluated_args)
+    }
+
+    pub(crate) fn eval_string_static_method_from_values(
+        &mut self,
+        method: StringStaticMethod,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
         match method {
             StringStaticMethod::FromCharCode => {
                 let mut out = String::with_capacity(evaluated_args.len());
-                for value in &evaluated_args {
-                    let unit = (Self::value_to_i64(&value) as i128).rem_euclid(1 << 16) as u16;
+                for value in evaluated_args {
+                    let unit = Self::to_u16_for_string_from_char_code(value);
                     out.push(crate::js_regex::internalize_utf16_code_unit(unit));
                 }
                 Ok(Value::String(out))
             }
             StringStaticMethod::FromCodePoint => {
                 let mut out = String::new();
-                for value in &evaluated_args {
+                for value in evaluated_args {
                     let n = Self::coerce_number_for_global(&value);
                     if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
                     {
@@ -278,6 +286,14 @@ impl Harness {
                 Ok(Value::String(out))
             }
         }
+    }
+
+    pub(crate) fn to_u16_for_string_from_char_code(value: &Value) -> u16 {
+        let number = Self::coerce_number_for_global(value);
+        if !number.is_finite() {
+            return 0;
+        }
+        number.trunc().rem_euclid(65_536.0) as u16
     }
 
     pub(crate) fn eval_regexp_static_method(

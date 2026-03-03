@@ -143,6 +143,21 @@ impl Harness {
                     )?;
                 }
             }
+            Value::TypedArray(values) => {
+                let input = self.typed_array_snapshot(&values)?;
+                for (idx, item) in input.into_iter().enumerate() {
+                    self.execute_array_callback_in_env(
+                        callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::TypedArray(values.clone()),
+                        ],
+                        env,
+                        event,
+                    )?;
+                }
+            }
             Value::Map(map) => {
                 let snapshot = map.borrow().entries.clone();
                 for (key, value) in snapshot {

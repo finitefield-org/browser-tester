@@ -97,9 +97,10 @@ pub(crate) fn parse_node_remove_stmt(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    if !args_src.trim().is_empty() {
+        return Ok(None);
+    }
     cursor.skip_ws();
     cursor.consume_byte(b';');
     cursor.skip_ws();

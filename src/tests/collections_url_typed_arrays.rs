@@ -140,6 +140,53 @@ fn string_constructor_and_static_methods_work() -> Result<()> {
 }
 
 #[test]
+fn string_from_char_code_examples_and_uint16_coercion_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sample = String.fromCharCode(189, 43, 190, 61);
+            const sampleCodes =
+              sample.charCodeAt(0) + ',' + sample.charCodeAt(1) + ',' +
+              sample.charCodeAt(2) + ',' + sample.charCodeAt(3);
+
+            const abc = String.fromCharCode(65, 66, 67);
+
+            const emDash = String.fromCharCode(0x2014);
+            const emDashFromLarge = String.fromCharCode(0x12014);
+            const emDashFromDecimal = String.fromCharCode(8212);
+            const truncationOk =
+              emDash.charCodeAt(0) === 0x2014 &&
+              emDashFromLarge === emDash &&
+              emDashFromDecimal === emDash;
+
+            const night = String.fromCharCode(0xD83C, 0xDF03);
+            const surrogateOk =
+              night.length === 2 &&
+              night.charCodeAt(0) === 0xD83C &&
+              night.charCodeAt(1) === 0xDF03;
+
+            const inf = String.fromCharCode(Infinity).charCodeAt(0);
+            const negInf = String.fromCharCode(-Infinity).charCodeAt(0);
+            const nan = String.fromCharCode(NaN).charCodeAt(0);
+            const undef = String.fromCharCode(undefined).charCodeAt(0);
+            const emptyLength = String.fromCharCode().length;
+
+            document.getElementById('result').textContent =
+              sampleCodes + '|' + abc + '|' + truncationOk + '|' + surrogateOk + '|' +
+              inf + ':' + negInf + ':' + nan + ':' + undef + ':' + emptyLength;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "189,43,190,61|ABC|true|true|0:0:0:0:0")?;
+    Ok(())
+}
+
+#[test]
 fn string_from_char_code_surrogate_code_unit_semantics_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2092,8 +2139,8 @@ fn arrow_function_with_object_destructuring_parameter_parses() -> Result<()> {
 }
 
 #[test]
-fn arrow_function_with_object_destructuring_after_prior_call_and_object_updates_parses(
-) -> Result<()> {
+fn arrow_function_with_object_destructuring_after_prior_call_and_object_updates_parses()
+-> Result<()> {
     let html = r#"
         <p id='result'></p>
         <script>

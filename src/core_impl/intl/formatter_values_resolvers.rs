@@ -211,20 +211,39 @@ impl Harness {
         ])
     }
 
-    pub(crate) fn intl_number_format_options_to_value(
-        minimum_fraction_digits: Option<usize>,
-        maximum_fraction_digits: Option<usize>,
-    ) -> Value {
-        let mut entries = Vec::new();
-        if let Some(value) = minimum_fraction_digits {
+    pub(crate) fn intl_number_format_options_to_value(options: &IntlNumberFormatOptions) -> Value {
+        let mut entries = vec![
+            ("style".to_string(), Value::String(options.style.clone())),
+            (
+                "unitDisplay".to_string(),
+                Value::String(options.unit_display.clone()),
+            ),
+            (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+        ];
+        if let Some(currency) = &options.currency {
+            entries.push(("currency".to_string(), Value::String(currency.clone())));
+        }
+        if let Some(unit) = &options.unit {
+            entries.push(("unit".to_string(), Value::String(unit.clone())));
+        }
+        if let Some(value) = options.minimum_fraction_digits {
             entries.push((
                 "minimumFractionDigits".to_string(),
                 Value::Number(value as i64),
             ));
         }
-        if let Some(value) = maximum_fraction_digits {
+        if let Some(value) = options.maximum_fraction_digits {
             entries.push((
                 "maximumFractionDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = options.maximum_significant_digits {
+            entries.push((
+                "maximumSignificantDigits".to_string(),
                 Value::Number(value as i64),
             ));
         }
@@ -234,8 +253,7 @@ impl Harness {
     pub(crate) fn new_intl_number_format_callable(
         &self,
         locale: String,
-        minimum_fraction_digits: Option<usize>,
-        maximum_fraction_digits: Option<usize>,
+        options: IntlNumberFormatOptions,
     ) -> Value {
         Self::new_object_value(vec![
             (
@@ -249,10 +267,7 @@ impl Harness {
             (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
             (
                 INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_number_format_options_to_value(
-                    minimum_fraction_digits,
-                    maximum_fraction_digits,
-                ),
+                Self::intl_number_format_options_to_value(&options),
             ),
         ])
     }
@@ -260,14 +275,9 @@ impl Harness {
     pub(crate) fn new_intl_number_formatter_value(
         &self,
         locale: String,
-        minimum_fraction_digits: Option<usize>,
-        maximum_fraction_digits: Option<usize>,
+        options: IntlNumberFormatOptions,
     ) -> Value {
-        let format = self.new_intl_number_format_callable(
-            locale.clone(),
-            minimum_fraction_digits,
-            maximum_fraction_digits,
-        );
+        let format = self.new_intl_number_format_callable(locale.clone(), options.clone());
         Self::new_object_value(vec![
             (
                 INTERNAL_INTL_KIND_KEY.to_string(),
@@ -276,10 +286,7 @@ impl Harness {
             (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
             (
                 INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_number_format_options_to_value(
-                    minimum_fraction_digits,
-                    maximum_fraction_digits,
-                ),
+                Self::intl_number_format_options_to_value(&options),
             ),
             ("format".to_string(), format),
             (
@@ -287,6 +294,50 @@ impl Harness {
                 self.intl_constructor_value("NumberFormat"),
             ),
         ])
+    }
+
+    pub(crate) fn intl_number_resolved_options_value(
+        &self,
+        locale: String,
+        options: &IntlNumberFormatOptions,
+    ) -> Value {
+        let mut entries = vec![
+            ("locale".to_string(), Value::String(locale)),
+            (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+            ("style".to_string(), Value::String(options.style.clone())),
+        ];
+        if let Some(currency) = &options.currency {
+            entries.push(("currency".to_string(), Value::String(currency.clone())));
+        }
+        if let Some(unit) = &options.unit {
+            entries.push(("unit".to_string(), Value::String(unit.clone())));
+            entries.push((
+                "unitDisplay".to_string(),
+                Value::String(options.unit_display.clone()),
+            ));
+        }
+        if let Some(value) = options.minimum_fraction_digits {
+            entries.push((
+                "minimumFractionDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = options.maximum_fraction_digits {
+            entries.push((
+                "maximumFractionDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = options.maximum_significant_digits {
+            entries.push((
+                "maximumSignificantDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn resolve_intl_formatter(
@@ -321,7 +372,7 @@ impl Harness {
     pub(crate) fn resolve_intl_number_format_options(
         &self,
         value: &Value,
-    ) -> Result<(String, Option<usize>, Option<usize>)> {
+    ) -> Result<(String, IntlNumberFormatOptions)> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl.NumberFormat method requires an Intl.NumberFormat instance".into(),
@@ -350,9 +401,69 @@ impl Harness {
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
         let options = Self::object_get_entry(&entries, INTERNAL_INTL_OPTIONS_KEY);
-        let (minimum_fraction_digits, maximum_fraction_digits) =
-            Self::parse_number_to_locale_string_fraction_digits(options.as_ref())?;
-        Ok((locale, minimum_fraction_digits, maximum_fraction_digits))
+        let options = self.intl_number_format_options_from_internal(options.as_ref(), &locale);
+        Ok((locale, options))
+    }
+
+    pub(crate) fn intl_number_format_options_from_internal(
+        &self,
+        value: Option<&Value>,
+        locale: &str,
+    ) -> IntlNumberFormatOptions {
+        let mut options = IntlNumberFormatOptions {
+            style: "decimal".to_string(),
+            currency: None,
+            unit: None,
+            unit_display: "short".to_string(),
+            numbering_system: Self::intl_default_numbering_system_for_locale(locale),
+            minimum_fraction_digits: None,
+            maximum_fraction_digits: None,
+            maximum_significant_digits: None,
+        };
+
+        let Some(Value::Object(entries)) = value else {
+            return options;
+        };
+        let entries = entries.borrow();
+        let string_option = |key: &str| -> Option<String> {
+            match Self::object_get_entry(&entries, key) {
+                Some(Value::String(value)) => Some(value),
+                _ => None,
+            }
+        };
+        let number_option = |key: &str| -> Option<usize> {
+            match Self::object_get_entry(&entries, key) {
+                Some(Value::Number(value)) if value >= 0 => Some(value as usize),
+                _ => None,
+            }
+        };
+
+        if let Some(value) = string_option("style") {
+            options.style = value;
+        }
+        if let Some(value) = string_option("currency") {
+            options.currency = Some(value);
+        }
+        if let Some(value) = string_option("unit") {
+            options.unit = Some(value);
+        }
+        if let Some(value) = string_option("unitDisplay") {
+            options.unit_display = value;
+        }
+        if let Some(value) = string_option("numberingSystem") {
+            options.numbering_system = value;
+        }
+        if let Some(value) = number_option("minimumFractionDigits") {
+            options.minimum_fraction_digits = Some(value);
+        }
+        if let Some(value) = number_option("maximumFractionDigits") {
+            options.maximum_fraction_digits = Some(value);
+        }
+        if let Some(value) = number_option("maximumSignificantDigits") {
+            options.maximum_significant_digits = Some(value);
+        }
+
+        options
     }
 
     pub(crate) fn resolve_intl_date_time_options(

@@ -683,6 +683,28 @@ fn date_instance_method_member_call_supports_constructor_expression_target() -> 
 }
 
 #[test]
+fn date_get_utc_full_year_handles_timezone_boundaries() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date1 = new Date('1975-12-31T23:15:30+11:00');
+            const date2 = new Date('1975-12-31T23:15:30-11:00');
+            const direct = new Date('1975-12-31T23:15:30-11:00').getUTCFullYear();
+            document.getElementById('result').textContent =
+              date1.getUTCFullYear() + ':' + date2.getUTCFullYear() + ':' + direct;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "1975:1976:1976")?;
+    Ok(())
+}
+
+#[test]
 fn date_parse_invalid_input_returns_nan_and_utc_normalizes_overflow() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -763,6 +785,10 @@ fn date_method_arity_errors_have_stable_messages() {
         (
             "<script>const d = new Date(); d.toISOString(1);</script>",
             "toISOString does not take arguments",
+        ),
+        (
+            "<script>const d = new Date(); d.getUTCFullYear(1);</script>",
+            "getUTCFullYear does not take arguments",
         ),
     ];
 
@@ -1361,7 +1387,7 @@ fn intl_supported_values_of_examples_work() -> Result<()> {
     h.click("#btn")?;
     h.assert_text(
             "#result",
-            "gregory,islamic-umalqura,japanese|default,emoji,phonebk|EUR,JPY,USD|arab,latn,thai|America/Los_Angeles,America/New_York,Asia/Kolkata,UTC|day,hour,meter,minute,month,second,week,year",
+            "gregory,islamic-umalqura,japanese|default,emoji,phonebk|EUR,JPY,USD|arab,latn,thai|Africa/Cairo,America/Los_Angeles,America/New_York,Asia/Jerusalem,Asia/Kolkata,Asia/Seoul,Asia/Shanghai,Asia/Tokyo,Australia/Sydney,Europe/Berlin,Europe/London,Europe/Paris,UTC|day,hour,meter,minute,month,second,week,year",
         )?;
 
     let html_error = r#"
@@ -1501,6 +1527,234 @@ fn intl_date_time_format_supported_locales_and_resolved_options_work() -> Result
             "#result",
             "id,en-GB|ja-JP-u-ca-japanese:japanese:arab:America/Los_Angeles:short|Intl.DateTimeFormat|٢٠/١٢/٢٠١٢",
         )?;
+    Ok(())
+}
+
+#[test]
+fn intl_date_time_format_using_locales_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date(Date.UTC(2012, 11, 20, 3, 0, 0));
+            const us = new Intl.DateTimeFormat('en-US').format(date);
+            const gb = new Intl.DateTimeFormat('en-GB').format(date);
+            const ko = new Intl.DateTimeFormat('ko-KR').format(date);
+            const ar = new Intl.DateTimeFormat('ar-EG').format(date);
+            const ja = new Intl.DateTimeFormat('ja-JP-u-ca-japanese').format(date);
+            const fallback = new Intl.DateTimeFormat(['ban', 'id']).format(date);
+            document.getElementById('result').textContent =
+              us + '|' + gb + '|' + ko + '|' + ar + '|' + ja + '|' + fallback;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "12/20/2012|20/12/2012|2012. 12. 20.|٢٠/١٢/٢٠١٢|24/12/20|20/12/2012",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_date_time_format_using_options_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date(Date.UTC(2012, 11, 20, 3, 0, 0, 200));
+
+            let options = {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            };
+            const de = new Intl.DateTimeFormat('de-DE', options).format(date);
+
+            options.timeZone = 'UTC';
+            options.timeZoneName = 'short';
+            const usWithUtc = new Intl.DateTimeFormat('en-US', options).format(date);
+
+            options = {
+              hour: 'numeric',
+              minute: 'numeric',
+              second: 'numeric',
+              timeZone: 'Australia/Sydney',
+              timeZoneName: 'short',
+            };
+            const au = new Intl.DateTimeFormat('en-AU', options).format(date);
+
+            options.fractionalSecondDigits = 3;
+            const auPrecise = new Intl.DateTimeFormat('en-AU', options).format(date);
+
+            options = {
+              year: 'numeric',
+              month: 'numeric',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: 'numeric',
+              second: 'numeric',
+              hour12: false,
+              timeZone: 'America/Los_Angeles',
+            };
+            const us24 = new Intl.DateTimeFormat('en-US', options).format(date);
+            const defaultLocale = new Intl.DateTimeFormat(undefined, options).format(date);
+
+            const dayPeriod = new Intl.DateTimeFormat('en-US', {
+              hour: 'numeric',
+              dayPeriod: 'short',
+              timeZone: 'UTC',
+            }).format(new Date(Date.UTC(2020, 11, 20, 22, 0, 0)));
+
+            const constructorOk =
+              Intl.DateTimeFormat.prototype.constructor === Intl.DateTimeFormat;
+
+            document.getElementById('result').textContent =
+              de + '|' + usWithUtc + '|' + au + '|' + auPrecise + '|' + us24 + '|' +
+              defaultLocale + '|' + dayPeriod + '|' + constructorOk;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "Donnerstag, 20. Dezember 2012|Thursday, December 20, 2012, GMT|2:00:00 pm AEDT|2:00:00.200 pm AEDT|12/19/2012, 19:00:00|12/19/2012, 19:00:00|10 at night|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_try_it_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const number = 123456.789;
+            const de = new Intl.NumberFormat('de-DE', {
+              style: 'currency',
+              currency: 'EUR',
+            }).format(number);
+            const ja = new Intl.NumberFormat('ja-JP', {
+              style: 'currency',
+              currency: 'JPY',
+            }).format(number);
+            const enIn = new Intl.NumberFormat('en-IN', {
+              maximumSignificantDigits: 3,
+            }).format(number);
+            document.getElementById('result').textContent = de + '|' + ja + '|' + enIn;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "123.456,79 €|￥123,457|1,23,000")?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_using_locales_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const number = 123456.789;
+            const de = new Intl.NumberFormat('de-DE').format(number);
+            const ar = new Intl.NumberFormat('ar-EG').format(number);
+            const enIn = new Intl.NumberFormat('en-IN').format(number);
+            const hanidec = new Intl.NumberFormat('zh-Hans-CN-u-nu-hanidec').format(number);
+            const fallback = new Intl.NumberFormat(['ban', 'id']).format(number);
+            document.getElementById('result').textContent =
+              de + '|' + ar + '|' + enIn + '|' + hanidec + '|' + fallback;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "123.456,789|١٢٣٬٤٥٦٫٧٨٩|1,23,456.789|一二三,四五六.七八九|123.456,789",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_instance_methods_and_static_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nf = new Intl.NumberFormat('de-DE', {
+              style: 'currency',
+              currency: 'EUR',
+            });
+            const fmt = nf.format;
+            const fromGetter = fmt(1234.5);
+            const parts = nf.formatToParts(1234.5);
+            const range = nf.formatRange(1, 2);
+            const rangeParts = nf.formatRangeToParts(1, 2);
+            const partsOk =
+              JSON.stringify(parts).includes('"type":"integer"') &&
+              JSON.stringify(parts).includes('"type":"currency"');
+            const rangePartsOk =
+              JSON.stringify(rangeParts).includes('"source":"startRange"') &&
+              JSON.stringify(rangeParts).includes('"source":"endRange"');
+            const supported = Intl.NumberFormat.supportedLocalesOf(['ban', 'id', 'en-IN', 'fr']).join(',');
+            const ro = nf.resolvedOptions();
+            const tag = Intl.NumberFormat.prototype[Symbol.toStringTag];
+            const ctor = nf.constructor === Intl.NumberFormat;
+            document.getElementById('result').textContent =
+              supported + '|' + fromGetter + '|' + partsOk + ':' + range + ':' + rangePartsOk + '|' +
+              ro.locale + ':' + ro.numberingSystem + ':' + ro.style + ':' + ro.currency + ':' +
+              ro.maximumFractionDigits + '|' + tag + '|' + ctor;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "id,en-IN|1.234,50 €|true:1,00 € - 2,00 €:true|de-DE:latn:currency:EUR:2|Intl.NumberFormat|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_unit_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const speed = new Intl.NumberFormat('pt-PT', {
+              style: 'unit',
+              unit: 'kilometer-per-hour',
+            }).format(50);
+            const litres = (16).toLocaleString('en-GB', {
+              style: 'unit',
+              unit: 'liter',
+              unitDisplay: 'long',
+            });
+            document.getElementById('result').textContent = speed + '|' + litres;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "50 km/h|16 litres")?;
     Ok(())
 }
 

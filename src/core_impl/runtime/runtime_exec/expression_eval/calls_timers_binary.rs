@@ -340,6 +340,45 @@ impl Harness {
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
 
+                    if member == "dispatchEvent" {
+                        if evaluated_args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "dispatchEvent requires exactly one argument".into(),
+                            ));
+                        }
+                        let event_payload = evaluated_args[0].clone();
+                        if let Value::Node(node) = &receiver {
+                            let dispatched =
+                                self.dispatch_dom_event_payload(*node, event_payload)?;
+                            return Ok(Value::Bool(!dispatched.default_prevented));
+                        }
+                        if let Value::Object(object) = &receiver {
+                            let (is_document_object, is_event_target_object) = {
+                                let entries = object.borrow();
+                                (
+                                    matches!(
+                                        Self::object_get_entry(
+                                            &entries,
+                                            INTERNAL_DOCUMENT_OBJECT_KEY
+                                        ),
+                                        Some(Value::Bool(true))
+                                    ),
+                                    Self::is_event_target_object(&entries),
+                                )
+                            };
+                            if is_document_object {
+                                let dispatched =
+                                    self.dispatch_dom_event_payload(self.dom.root, event_payload)?;
+                                return Ok(Value::Bool(!dispatched.default_prevented));
+                            }
+                            if is_event_target_object {
+                                let dispatched =
+                                    self.dispatch_event_target(object.clone(), event_payload)?;
+                                return Ok(Value::Bool(!dispatched.default_prevented));
+                            }
+                        }
+                    }
+
                     if matches!(member.as_str(), "call" | "apply" | "bind")
                         && self.is_callable_value(&receiver)
                     {
@@ -550,9 +589,12 @@ impl Harness {
                         {
                             return Ok(value);
                         }
-                        if let Some(value) =
-                            self.eval_clipboard_data_member_call(object, member, &evaluated_args)?
-                        {
+                        if let Some(value) = self.eval_clipboard_data_member_call(
+                            object,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
                             return Ok(value);
                         }
                         let is_fetch_response_object = {
@@ -970,12 +1012,7 @@ impl Harness {
                     Ok(Value::Number(id))
                 }
                 Expr::RequestAnimationFrame { callback } => {
-                    const FRAME_DELAY_MS: i64 = 16;
-                    let callback_args = vec![Value::Number(
-                        self.scheduler.now_ms.saturating_add(FRAME_DELAY_MS),
-                    )];
-                    let id =
-                        self.schedule_timeout(callback.clone(), FRAME_DELAY_MS, callback_args, env);
+                    let id = self.schedule_animation_frame(callback.clone(), env);
                     Ok(Value::Number(id))
                 }
                 Expr::QueueMicrotask { handler } => {

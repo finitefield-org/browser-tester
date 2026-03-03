@@ -251,13 +251,12 @@ impl Harness {
             ["month", "day", "year"]
         };
 
+        let month_is_text = month
+            .as_ref()
+            .is_some_and(|m| m.chars().all(|ch| ch.is_ascii_alphabetic()));
         let separator = if family == "de" {
             "."
-        } else if family == "en"
-            && month
-                .as_ref()
-                .is_some_and(|m| m.chars().all(|ch| ch.is_ascii_alphabetic()))
-        {
+        } else if family == "en" && month_is_text {
             " "
         } else {
             "/"
@@ -275,9 +274,26 @@ impl Harness {
                 continue;
             };
             if !first {
+                let custom_separator = if family == "de" && month_is_text {
+                    if key == "month" {
+                        ". "
+                    } else if key == "year" {
+                        " "
+                    } else {
+                        separator
+                    }
+                } else if family == "en"
+                    && Self::intl_locale_region(locale) == Some("US")
+                    && month_is_text
+                    && key == "year"
+                {
+                    ", "
+                } else {
+                    separator
+                };
                 parts.push(IntlPart {
                     part_type: "literal".to_string(),
-                    value: separator.to_string(),
+                    value: custom_separator.to_string(),
                 });
             }
             first = false;
@@ -379,10 +395,7 @@ impl Harness {
                     value: ":".to_string(),
                 });
             }
-            let minute_text = match options.minute.as_deref() {
-                Some("2-digit") => format!("{:02}", components.minute),
-                _ => components.minute.to_string(),
-            };
+            let minute_text = format!("{:02}", components.minute);
             parts.push(IntlPart {
                 part_type: "minute".to_string(),
                 value: minute_text,
@@ -396,10 +409,7 @@ impl Harness {
                     value: ":".to_string(),
                 });
             }
-            let second_text = match options.second.as_deref() {
-                Some("2-digit") => format!("{:02}", components.second),
-                _ => components.second.to_string(),
-            };
+            let second_text = format!("{:02}", components.second);
             parts.push(IntlPart {
                 part_type: "second".to_string(),
                 value: second_text,
@@ -453,10 +463,12 @@ impl Harness {
         }
 
         if let Some(style) = options.time_zone_name.as_deref() {
-            parts.push(IntlPart {
-                part_type: "literal".to_string(),
-                value: " ".to_string(),
-            });
+            if has_hour || has_minute || has_second {
+                parts.push(IntlPart {
+                    part_type: "literal".to_string(),
+                    value: " ".to_string(),
+                });
+            }
             parts.push(IntlPart {
                 part_type: "timeZoneName".to_string(),
                 value: Self::intl_time_zone_name(

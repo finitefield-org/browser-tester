@@ -106,6 +106,11 @@ impl Harness {
                     let date = self.resolve_date_from_env(env, target)?;
                     Ok(Value::String(Self::format_iso_8601_utc(*date.borrow())))
                 }
+                Expr::DateGetUTCFullYear(target) => {
+                    let date = self.resolve_date_from_env(env, target)?;
+                    let (year, ..) = Self::date_components_utc(*date.borrow());
+                    Ok(Value::Number(year))
+                }
                 Expr::DateGetFullYear(target) => {
                     let date = self.resolve_date_from_env(env, target)?;
                     let (year, ..) = Self::date_components_utc(*date.borrow());
@@ -173,15 +178,9 @@ impl Harness {
                                 .as_ref()
                                 .map(|value| self.eval_expr(value, env, event_param, event))
                                 .transpose()?;
-                            let (minimum_fraction_digits, maximum_fraction_digits) =
-                                Self::parse_number_to_locale_string_fraction_digits(
-                                    options.as_ref(),
-                                )?;
-                            Ok(self.new_intl_number_formatter_value(
-                                locale,
-                                minimum_fraction_digits,
-                                maximum_fraction_digits,
-                            ))
+                            let options = self
+                                .intl_number_format_options_from_value(&locale, options.as_ref())?;
+                            Ok(self.new_intl_number_formatter_value(locale, options))
                         }
                         IntlFormatterKind::DisplayNames => {
                             let options = options
@@ -248,23 +247,12 @@ impl Harness {
                     };
                     match kind {
                         IntlFormatterKind::NumberFormat => {
-                            let (locale, minimum_fraction_digits, maximum_fraction_digits) =
+                            let (locale, options) =
                                 self.resolve_intl_number_format_options(&formatter)?;
                             let number = Self::coerce_number_for_global(&value);
-                            if minimum_fraction_digits.is_none()
-                                && maximum_fraction_digits.is_none()
-                            {
-                                Ok(Value::String(Self::intl_format_number_for_locale(
-                                    number, &locale,
-                                )))
-                            } else {
-                                Ok(Value::String(Self::format_number_to_locale_string(
-                                    number,
-                                    &locale,
-                                    minimum_fraction_digits,
-                                    maximum_fraction_digits,
-                                )))
-                            }
+                            Ok(Value::String(self.intl_format_number_with_options(
+                                number, &locale, &options,
+                            )))
                         }
                         IntlFormatterKind::DateTimeFormat => {
                             let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
@@ -318,13 +306,9 @@ impl Harness {
                             Ok(self.new_intl_date_time_format_callable(locale, options))
                         }
                         IntlFormatterKind::NumberFormat => {
-                            let (locale, minimum_fraction_digits, maximum_fraction_digits) =
+                            let (locale, options) =
                                 self.resolve_intl_number_format_options(&formatter)?;
-                            Ok(self.new_intl_number_format_callable(
-                                locale,
-                                minimum_fraction_digits,
-                                maximum_fraction_digits,
-                            ))
+                            Ok(self.new_intl_number_format_callable(locale, options))
                         }
                         IntlFormatterKind::DurationFormat => {
                             let (_, options) = self.resolve_intl_duration_options(&formatter)?;
@@ -415,8 +399,19 @@ impl Harness {
                         let parts = self.intl_format_list_to_parts(&locale, &options, &value)?;
                         Ok(self.intl_date_time_parts_to_value(&parts, None))
                     }
+                    IntlFormatterKind::NumberFormat => {
+                        let (_, options) = self.resolve_intl_number_format_options(&formatter)?;
+                        let value = if let Some(value) = value {
+                            self.eval_expr(value, env, event_param, event)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let number = Self::coerce_number_for_global(&value);
+                        let parts = self.intl_number_format_to_parts(number, &locale, &options);
+                        Ok(self.intl_date_time_parts_to_value(&parts, None))
+                    }
                     _ => Err(Error::ScriptRuntime(
-                        "Intl formatter formatToParts requires an Intl.DateTimeFormat, Intl.DurationFormat, or Intl.ListFormat instance"
+                        "Intl formatter formatToParts requires an Intl.DateTimeFormat, Intl.DurationFormat, Intl.ListFormat, or Intl.NumberFormat instance"
                             .into(),
                     )),
                 }
@@ -428,20 +423,30 @@ impl Harness {
                 } => {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
                     let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
-                    if kind != IntlFormatterKind::DateTimeFormat {
-                        return Err(Error::ScriptRuntime(
-                        "Intl.DateTimeFormat.formatRange requires an Intl.DateTimeFormat instance"
-                            .into(),
-                    ));
-                    }
-                    let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
                     let start = self.eval_expr(start, env, event_param, event)?;
                     let end = self.eval_expr(end, env, event_param, event)?;
-                    let start_ms = self.coerce_date_timestamp_ms(&start);
-                    let end_ms = self.coerce_date_timestamp_ms(&end);
-                    Ok(Value::String(self.intl_format_date_time_range(
-                        start_ms, end_ms, &locale, &options,
-                    )))
+                    match kind {
+                        IntlFormatterKind::DateTimeFormat => {
+                            let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                            let start_ms = self.coerce_date_timestamp_ms(&start);
+                            let end_ms = self.coerce_date_timestamp_ms(&end);
+                            Ok(Value::String(self.intl_format_date_time_range(
+                                start_ms, end_ms, &locale, &options,
+                            )))
+                        }
+                        IntlFormatterKind::NumberFormat => {
+                            let (_, options) = self.resolve_intl_number_format_options(&formatter)?;
+                            let start = Self::coerce_number_for_global(&start);
+                            let end = Self::coerce_number_for_global(&end);
+                            Ok(Value::String(self.intl_format_number_range(
+                                start, end, &locale, &options,
+                            )))
+                        }
+                        _ => Err(Error::ScriptRuntime(
+                            "Intl formatter formatRange requires an Intl.DateTimeFormat or Intl.NumberFormat instance"
+                                .into(),
+                        )),
+                    }
                 }
                 Expr::IntlDateTimeFormatRangeToParts {
                     formatter,
@@ -450,20 +455,31 @@ impl Harness {
                 } => {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
                     let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
-                    if kind != IntlFormatterKind::DateTimeFormat {
-                        return Err(Error::ScriptRuntime(
-                        "Intl.DateTimeFormat.formatRangeToParts requires an Intl.DateTimeFormat instance"
-                            .into(),
-                    ));
-                    }
-                    let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
                     let start = self.eval_expr(start, env, event_param, event)?;
                     let end = self.eval_expr(end, env, event_param, event)?;
-                    let start_ms = self.coerce_date_timestamp_ms(&start);
-                    let end_ms = self.coerce_date_timestamp_ms(&end);
-                    let (parts, sources) = self
-                        .intl_format_date_time_range_to_parts(start_ms, end_ms, &locale, &options);
-                    Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+                    match kind {
+                        IntlFormatterKind::DateTimeFormat => {
+                            let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
+                            let start_ms = self.coerce_date_timestamp_ms(&start);
+                            let end_ms = self.coerce_date_timestamp_ms(&end);
+                            let (parts, sources) = self.intl_format_date_time_range_to_parts(
+                                start_ms, end_ms, &locale, &options,
+                            );
+                            Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+                        }
+                        IntlFormatterKind::NumberFormat => {
+                            let (_, options) = self.resolve_intl_number_format_options(&formatter)?;
+                            let start = Self::coerce_number_for_global(&start);
+                            let end = Self::coerce_number_for_global(&end);
+                            let (parts, sources) = self
+                                .intl_format_number_range_to_parts(start, end, &locale, &options);
+                            Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+                        }
+                        _ => Err(Error::ScriptRuntime(
+                            "Intl formatter formatRangeToParts requires an Intl.DateTimeFormat or Intl.NumberFormat instance"
+                                .into(),
+                        )),
+                    }
                 }
                 Expr::IntlDateTimeResolvedOptions { formatter } => {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
@@ -513,9 +529,11 @@ impl Harness {
                             let (_, options) = self.resolve_intl_segmenter_options(&formatter)?;
                             Ok(self.intl_segmenter_resolved_options_value(locale, &options))
                         }
-                        IntlFormatterKind::NumberFormat => Err(Error::ScriptRuntime(
-                            "Intl.NumberFormat.resolvedOptions is not implemented".into(),
-                        )),
+                        IntlFormatterKind::NumberFormat => {
+                            let (_, options) =
+                                self.resolve_intl_number_format_options(&formatter)?;
+                            Ok(self.intl_number_resolved_options_value(locale, &options))
+                        }
                     }
                 }
                 Expr::IntlDisplayNamesOf {
@@ -656,6 +674,19 @@ impl Harness {
                         let locales = self.intl_collect_locales(&locales)?;
                         let supported =
                             Self::intl_supported_locales(IntlFormatterKind::ListFormat, locales);
+                        Ok(Self::new_array_value(supported))
+                    }
+                    IntlStaticMethod::NumberFormatSupportedLocalesOf => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                            "Intl.NumberFormat.supportedLocalesOf requires locales and optional options"
+                                .into(),
+                        ));
+                        }
+                        let locales = self.eval_expr(&args[0], env, event_param, event)?;
+                        let locales = self.intl_collect_locales(&locales)?;
+                        let supported =
+                            Self::intl_supported_locales(IntlFormatterKind::NumberFormat, locales);
                         Ok(Self::new_array_value(supported))
                     }
                     IntlStaticMethod::PluralRulesSupportedLocalesOf => {

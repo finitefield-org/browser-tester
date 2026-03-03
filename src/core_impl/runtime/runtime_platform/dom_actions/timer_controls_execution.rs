@@ -214,10 +214,15 @@ impl Harness {
         self.scheduler.running_timer_id = Some(task.id);
         self.scheduler.running_timer_canceled = false;
         let mut event = EventState::new("timeout", self.dom.root, self.scheduler.now_ms);
+        let callback_args = if matches!(task.kind, ScheduledTaskKind::AnimationFrame) {
+            vec![Value::Number(self.scheduler.now_ms)]
+        } else {
+            task.callback_args.clone()
+        };
         self.run_in_task_context(|this| {
             this.execute_timer_task_callback(
                 &task.callback,
-                &task.callback_args,
+                &callback_args,
                 &mut event,
                 &mut task.env,
             )
@@ -236,6 +241,7 @@ impl Harness {
                     id: task.id,
                     due_at,
                     order,
+                    kind: task.kind,
                     interval_ms: Some(delay_ms),
                     callback: task.callback,
                     callback_args: task.callback_args,

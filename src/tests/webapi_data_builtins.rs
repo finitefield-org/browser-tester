@@ -54,6 +54,37 @@ fn regexp_constructor_and_global_sticky_exec_work() -> Result<()> {
 }
 
 #[test]
+fn regexp_exec_accepts_missing_argument_and_coerces_inputs_to_string() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const missing = /undefined/.exec();
+            const explicit = /undefined/.exec(undefined);
+            const fromNumber = /42/.exec(42);
+            const fromNull = /null/.exec(null);
+
+            const global = /undefined/g;
+            const g1 = global.exec();
+            const li1 = global.lastIndex;
+            const g2 = global.exec();
+            const li2 = global.lastIndex;
+
+            document.getElementById('result').textContent =
+              missing[0] + ':' + explicit[0] + ':' + fromNumber[0] + ':' + fromNull[0] + '|' +
+              g1[0] + ':' + li1 + ':' + String(g2 === null) + ':' + li2;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:undefined:42:null|undefined:9:true:0")?;
+    Ok(())
+}
+
+#[test]
 fn regex_parse_and_runtime_errors_are_reported() -> Result<()> {
     let parse_err = Harness::from_html("<script>const re = /a/gg;</script>")
         .expect_err("duplicate regex flags should fail during parse");
@@ -2798,6 +2829,74 @@ fn request_animation_frame_and_cancel_animation_frame_work() -> Result<()> {
     h.assert_text("#result", "")?;
     h.advance_time(1)?;
     h.assert_text("#result", "R16")?;
+    Ok(())
+}
+
+#[test]
+fn request_animation_frame_callbacks_queued_for_same_frame_share_timestamp() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            requestAnimationFrame((ts) => {
+              out.textContent = out.textContent + 'A' + ts + '|';
+            });
+            setTimeout(() => {
+              requestAnimationFrame((ts) => {
+                out.textContent = out.textContent + 'B' + ts;
+              });
+            }, 1);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+
+    h.advance_time(1)?;
+    h.assert_text("#result", "")?;
+
+    h.advance_time(15)?;
+    h.assert_text("#result", "A16|B16")?;
+    Ok(())
+}
+
+#[test]
+fn request_animation_frame_is_one_shot_and_requires_reregistration() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            let count = 0;
+            function step(ts) {
+              count += 1;
+              out.textContent = out.textContent + count + ':' + ts + '|';
+              if (count < 3) {
+                requestAnimationFrame(step);
+              }
+            }
+            requestAnimationFrame(step);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+
+    h.advance_time(16)?;
+    h.assert_text("#result", "1:16|")?;
+
+    h.advance_time(16)?;
+    h.assert_text("#result", "1:16|2:32|")?;
+
+    h.advance_time(16)?;
+    h.assert_text("#result", "1:16|2:32|3:48|")?;
     Ok(())
 }
 

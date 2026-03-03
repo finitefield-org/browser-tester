@@ -491,10 +491,7 @@ impl Harness {
                                 .unwrap_or(Value::Undefined))
                         }
                     }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
+                    Some(other) => self.object_property_from_value(other, "length"),
                     None => Err(Error::ScriptRuntime(format!(
                         "unknown variable: {}",
                         target

@@ -282,7 +282,56 @@ impl Dom {
     }
 
     pub(crate) fn sync_select_value(&mut self, select_node: NodeId) -> Result<()> {
-        let value = self.select_value_from_options(select_node)?;
+        let tag = self
+            .tag_name(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+        if !tag.eq_ignore_ascii_case("select") {
+            return Err(Error::ScriptRuntime(
+                "select value target is not a select".into(),
+            ));
+        }
+
+        let mut options = Vec::new();
+        self.collect_select_options(select_node, &mut options);
+        if options.is_empty() {
+            let element = self
+                .element_mut(select_node)
+                .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
+            element.value.clear();
+            return Ok(());
+        }
+
+        let multiple = self.attr(select_node, "multiple").is_some();
+        let mut selected_indices = options
+            .iter()
+            .enumerate()
+            .filter_map(|(index, option)| self.attr(*option, "selected").map(|_| index))
+            .collect::<Vec<_>>();
+
+        if !multiple {
+            let keep = selected_indices.first().copied().unwrap_or(0);
+            for (index, option) in options.iter().enumerate() {
+                let option_element = self.element_mut(*option).ok_or_else(|| {
+                    Error::ScriptRuntime("option target is not an element".into())
+                })?;
+                if index == keep {
+                    option_element
+                        .attrs
+                        .insert("selected".to_string(), "true".to_string());
+                } else {
+                    option_element.attrs.remove("selected");
+                }
+            }
+            selected_indices.clear();
+            selected_indices.push(keep);
+        }
+
+        let value = selected_indices
+            .first()
+            .copied()
+            .map(|index| self.option_effective_value(options[index]))
+            .transpose()?
+            .unwrap_or_default();
         let element = self
             .element_mut(select_node)
             .ok_or_else(|| Error::ScriptRuntime("select target is not an element".into()))?;
@@ -306,12 +355,19 @@ impl Dom {
             return Ok(String::new());
         }
 
-        let selected = options
+        if let Some(selected) = options
             .iter()
             .copied()
             .find(|option| self.attr(*option, "selected").is_some())
-            .unwrap_or(options[0]);
-        self.option_effective_value(selected)
+        {
+            return self.option_effective_value(selected);
+        }
+
+        if self.attr(select_node, "multiple").is_some() {
+            Ok(String::new())
+        } else {
+            self.option_effective_value(options[0])
+        }
     }
 
     pub(crate) fn collect_select_options(&self, node: NodeId, out: &mut Vec<NodeId>) {

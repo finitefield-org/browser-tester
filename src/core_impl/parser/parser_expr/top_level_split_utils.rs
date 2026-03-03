@@ -64,6 +64,8 @@ pub(crate) fn split_top_level_by_ops<'a>(
                             || prev == Some(b'>')
                             || next == Some(b'<')
                             || next == Some(b'>')
+                            || prev == Some(b'=')
+                            || next == Some(b'=')
                         {
                             continue;
                         }

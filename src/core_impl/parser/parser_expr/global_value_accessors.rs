@@ -422,9 +422,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
     let method = match member.as_str() {
         "add" => {
             if args.len() != 1 || args[0].trim().is_empty() {
-                return Err(Error::ScriptParse(
-                    "Set.add requires exactly one argument".into(),
-                ));
+                return Ok(None);
             }
             SetInstanceMethod::Add
         }

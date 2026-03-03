@@ -1,6 +1,37 @@
 use super::*;
 
 impl Harness {
+    fn untrusted_event_default_flags(event_type: &str) -> (bool, bool) {
+        if event_type.eq_ignore_ascii_case("paste")
+            || event_type.eq_ignore_ascii_case("copy")
+            || event_type.eq_ignore_ascii_case("cut")
+        {
+            return (true, true);
+        }
+        (false, false)
+    }
+
+    fn prepare_clipboard_event_payload(
+        &self,
+        event_type: &str,
+    ) -> Option<(String, Rc<RefCell<ObjectValue>>)> {
+        if event_type.eq_ignore_ascii_case("paste") {
+            let text = self.platform_mocks.clipboard_text.clone();
+            let value = Self::new_clipboard_data_object_value(&text);
+            if let Value::Object(object) = value {
+                return Some((text, object));
+            }
+            return None;
+        }
+        if event_type.eq_ignore_ascii_case("copy") || event_type.eq_ignore_ascii_case("cut") {
+            let value = Self::new_clipboard_data_object_value("");
+            if let Value::Object(object) = value {
+                return Some((String::new(), object));
+            }
+        }
+        None
+    }
+
     pub(crate) fn dispatch_event(
         &mut self,
         target: NodeId,
@@ -18,14 +49,21 @@ impl Harness {
         env: &mut HashMap<String, Value>,
         trusted: bool,
     ) -> Result<EventState> {
-        let event = if trusted {
+        let mut event = if trusted {
             EventState::new(event_type, target, self.scheduler.now_ms)
         } else {
             EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
-        let mut event = event;
-        if event_type.eq_ignore_ascii_case("paste") {
-            event.clipboard_data = Some(self.platform_mocks.clipboard_text.clone());
+        if !trusted {
+            let (bubbles, cancelable) = Self::untrusted_event_default_flags(event_type);
+            event.bubbles = bubbles;
+            event.cancelable = cancelable;
+        }
+        if let Some((clipboard_text, clipboard_data_object)) =
+            self.prepare_clipboard_event_payload(event_type)
+        {
+            event.clipboard_data = Some(clipboard_text);
+            event.clipboard_data_object = Some(clipboard_data_object);
         }
         self.dispatch_prepared_event_with_env(event, env)
     }
@@ -47,8 +85,11 @@ impl Harness {
         } else {
             EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
-        if event_type.eq_ignore_ascii_case("paste") {
-            event.clipboard_data = Some(self.platform_mocks.clipboard_text.clone());
+        if let Some((clipboard_text, clipboard_data_object)) =
+            self.prepare_clipboard_event_payload(event_type)
+        {
+            event.clipboard_data = Some(clipboard_text);
+            event.clipboard_data_object = Some(clipboard_data_object);
         }
         event.bubbles = bubbles;
         event.cancelable = cancelable;

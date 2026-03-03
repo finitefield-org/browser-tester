@@ -162,6 +162,7 @@ impl Harness {
             id,
             due_at,
             order,
+            kind: ScheduledTaskKind::Timeout,
             interval_ms: None,
             callback,
             callback_args,
@@ -189,6 +190,7 @@ impl Harness {
             id,
             due_at,
             order,
+            kind: ScheduledTaskKind::Interval,
             interval_ms: Some(interval_ms),
             callback,
             callback_args,
@@ -197,6 +199,39 @@ impl Harness {
         self.trace_timer_line(format!(
             "[timer] schedule interval id={} due_at={} interval_ms={}",
             id, due_at, interval_ms
+        ));
+        id
+    }
+
+    pub(crate) fn schedule_animation_frame(
+        &mut self,
+        callback: TimerCallback,
+        env: &HashMap<String, Value>,
+    ) -> i64 {
+        const FRAME_DELAY_MS: i64 = 16;
+        let now = self.scheduler.now_ms;
+        let remainder = now.rem_euclid(FRAME_DELAY_MS);
+        let advance = if remainder == 0 {
+            FRAME_DELAY_MS
+        } else {
+            FRAME_DELAY_MS - remainder
+        };
+        let due_at = now.saturating_add(advance);
+        let id = self.scheduler.allocate_timer_id();
+        let order = self.scheduler.allocate_task_order();
+        self.scheduler.task_queue.push(ScheduledTask {
+            id,
+            due_at,
+            order,
+            kind: ScheduledTaskKind::AnimationFrame,
+            interval_ms: None,
+            callback,
+            callback_args: Vec::new(),
+            env: ScriptEnv::from_snapshot(env),
+        });
+        self.trace_timer_line(format!(
+            "[timer] schedule animation frame id={} due_at={} now_ms={}",
+            id, due_at, now
         ));
         id
     }

@@ -950,6 +950,22 @@ fn ternary_with_object_literal_branches_parses() -> browser_tester::Result<()> {
 }
 
 #[test]
+fn ternary_false_branch_can_be_zero_arg_arrow_function() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const usePrimary = false;
+      const matcher = usePrimary ? (() => false) : () => true;
+      document.getElementById("result").textContent = String(matcher());
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
 fn nested_parenthesized_division_in_multiplication_parses() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>

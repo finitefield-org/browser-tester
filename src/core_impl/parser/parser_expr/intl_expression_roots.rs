@@ -1200,6 +1200,83 @@ pub(crate) fn parse_intl_expr(src: &str) -> Result<Option<Expr>> {
             }));
         }
 
+        if cursor.consume_byte(b'.') {
+            cursor.skip_ws();
+            let Some(number_format_member) = cursor.parse_identifier() else {
+                return Ok(None);
+            };
+            cursor.skip_ws();
+
+            if number_format_member == "prototype" {
+                if !cursor.consume_byte(b'[') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("Symbol") {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_byte(b'.') {
+                    return Ok(None);
+                }
+                cursor.skip_ws();
+                if !cursor.consume_ascii("toStringTag") {
+                    return Ok(None);
+                }
+                if let Some(next) = cursor.peek() {
+                    if is_ident_char(next) {
+                        return Ok(None);
+                    }
+                }
+                cursor.skip_ws();
+                cursor.expect_byte(b']')?;
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::String("Intl.NumberFormat".to_string())));
+            }
+
+            if number_format_member == "supportedLocalesOf" {
+                if cursor.peek() != Some(b'(') {
+                    return Ok(None);
+                }
+                let args_src = cursor.read_balanced_block(b'(', b')')?;
+                let raw_args = split_top_level_by_char(&args_src, b',');
+                let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+                    Vec::new()
+                } else {
+                    raw_args
+                };
+                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.NumberFormat.supportedLocalesOf requires locales and optional options"
+                            .into(),
+                    ));
+                }
+                if args.len() == 2 && args[1].trim().is_empty() {
+                    return Err(Error::ScriptParse(
+                        "Intl.NumberFormat.supportedLocalesOf options cannot be empty".into(),
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(args.len());
+                parsed.push(parse_expr(args[0].trim())?);
+                if args.len() == 2 {
+                    parsed.push(parse_expr(args[1].trim())?);
+                }
+                cursor.skip_ws();
+                if !cursor.eof() {
+                    return Ok(None);
+                }
+                return Ok(Some(Expr::IntlStaticMethod {
+                    method: IntlStaticMethod::NumberFormatSupportedLocalesOf,
+                    args: parsed,
+                }));
+            }
+
+            return Ok(None);
+        }
+
         if cursor.peek() != Some(b'(') {
             return Ok(None);
         }

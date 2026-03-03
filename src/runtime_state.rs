@@ -316,6 +316,7 @@ pub(crate) fn ensure_hash_prefix(value: &str) -> String {
 #[derive(Debug, Clone)]
 pub(crate) struct Listener {
     pub(crate) capture: bool,
+    pub(crate) is_event_handler_property: bool,
     pub(crate) handler: ScriptHandler,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
     pub(crate) captured_pending_function_decls:
@@ -336,17 +337,22 @@ impl ListenerStore {
             .entry(event)
             .or_default();
 
-        // Match browser semantics: dedupe only when the same callback reference
-        // is re-registered for the same type/capture pair.
-        if let Some(new_callback_ref) = listener.handler.listener_callback_reference() {
-            if listeners.iter().any(|existing| {
-                existing.capture == listener.capture
-                    && existing
-                        .handler
-                        .listener_callback_reference()
-                        .is_some_and(|existing_ref| existing_ref == new_callback_ref)
-            }) {
-                return;
+        // Match browser semantics: dedupe only when addEventListener() re-registers
+        // the same callback reference for the same type/capture pair.
+        // Event handler properties (onclick, oninput, ...) are a separate slot and
+        // must not be deduped against addEventListener listeners.
+        if !listener.is_event_handler_property {
+            if let Some(new_callback_ref) = listener.handler.listener_callback_reference() {
+                if listeners.iter().any(|existing| {
+                    !existing.is_event_handler_property
+                        && existing.capture == listener.capture
+                        && existing
+                            .handler
+                            .listener_callback_reference()
+                            .is_some_and(|existing_ref| existing_ref == new_callback_ref)
+                }) {
+                    return;
+                }
             }
         }
 
@@ -367,9 +373,40 @@ impl ListenerStore {
             return false;
         };
 
+        if let Some(pos) = listeners.iter().position(|listener| {
+            !listener.is_event_handler_property
+                && listener.capture == capture
+                && listener.handler == *handler
+        }) {
+            listeners.remove(pos);
+            if listeners.is_empty() {
+                events.remove(event);
+            }
+            if events.is_empty() {
+                self.map.remove(&node_id);
+            }
+            return true;
+        }
+
+        false
+    }
+
+    pub(crate) fn remove_event_handler_property(
+        &mut self,
+        node_id: NodeId,
+        event: &str,
+        handler: &ScriptHandler,
+    ) -> bool {
+        let Some(events) = self.map.get_mut(&node_id) else {
+            return false;
+        };
+        let Some(listeners) = events.get_mut(event) else {
+            return false;
+        };
+
         if let Some(pos) = listeners
             .iter()
-            .position(|listener| listener.capture == capture && listener.handler == *handler)
+            .position(|listener| listener.is_event_handler_property && listener.handler == *handler)
         {
             listeners.remove(pos);
             if listeners.is_empty() {
@@ -378,6 +415,30 @@ impl ListenerStore {
             if events.is_empty() {
                 self.map.remove(&node_id);
             }
+            return true;
+        }
+
+        false
+    }
+
+    pub(crate) fn replace_event_handler_property(
+        &mut self,
+        node_id: NodeId,
+        event: &str,
+        previous_handler: &ScriptHandler,
+        listener: Listener,
+    ) -> bool {
+        let Some(events) = self.map.get_mut(&node_id) else {
+            return false;
+        };
+        let Some(listeners) = events.get_mut(event) else {
+            return false;
+        };
+
+        if let Some(pos) = listeners.iter().position(|existing| {
+            existing.is_event_handler_property && existing.handler == *previous_handler
+        }) {
+            listeners[pos] = listener;
             return true;
         }
 
@@ -425,6 +486,7 @@ pub(crate) struct EventState {
     pub(crate) repeat: bool,
     pub(crate) is_composing: bool,
     pub(crate) clipboard_data: Option<String>,
+    pub(crate) clipboard_data_object: Option<Rc<RefCell<ObjectValue>>>,
     pub(crate) propagation_stopped: bool,
     pub(crate) immediate_propagation_stopped: bool,
 }
@@ -456,6 +518,7 @@ impl EventState {
             repeat: false,
             is_composing: false,
             clipboard_data: None,
+            clipboard_data_object: None,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
@@ -482,11 +545,19 @@ pub(crate) struct ParseOutput {
     pub(crate) scripts: Vec<ScriptSource>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScheduledTaskKind {
+    Timeout,
+    Interval,
+    AnimationFrame,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ScheduledTask {
     pub(crate) id: i64,
     pub(crate) due_at: i64,
     pub(crate) order: i64,
+    pub(crate) kind: ScheduledTaskKind,
     pub(crate) interval_ms: Option<i64>,
     pub(crate) callback: TimerCallback,
     pub(crate) callback_args: Vec<Value>,

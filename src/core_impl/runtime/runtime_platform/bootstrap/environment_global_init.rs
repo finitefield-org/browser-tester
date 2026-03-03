@@ -208,22 +208,60 @@ impl Harness {
         let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag);
         Self::object_set_entry(
             &mut intl_entries,
-            to_string_tag_key,
+            to_string_tag_key.clone(),
             Value::String("Intl".to_string()),
         );
         let intl = Self::new_object_value(intl_entries);
+        if let Value::Object(intl_entries) = &intl {
+            for (constructor_name, tag_name) in [
+                ("Collator", "Intl.Collator"),
+                ("DateTimeFormat", "Intl.DateTimeFormat"),
+                ("DisplayNames", "Intl.DisplayNames"),
+                ("DurationFormat", "Intl.DurationFormat"),
+                ("ListFormat", "Intl.ListFormat"),
+                ("Locale", "Intl.Locale"),
+                ("NumberFormat", "Intl.NumberFormat"),
+                ("PluralRules", "Intl.PluralRules"),
+                ("RelativeTimeFormat", "Intl.RelativeTimeFormat"),
+                ("Segmenter", "Intl.Segmenter"),
+            ] {
+                let constructor = {
+                    let entries = intl_entries.borrow();
+                    Self::object_get_entry(&entries, constructor_name)
+                };
+                let Some(Value::Function(constructor_fn)) = constructor else {
+                    continue;
+                };
+                let mut prototype = constructor_fn.prototype_object.borrow_mut();
+                Self::object_set_entry(
+                    &mut prototype,
+                    "constructor".to_string(),
+                    Value::Function(constructor_fn.clone()),
+                );
+                Self::object_set_entry(
+                    &mut prototype,
+                    to_string_tag_key.clone(),
+                    Value::String(tag_name.to_string()),
+                );
+            }
+        }
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
         let event_target_constructor = Self::new_event_target_constructor_value();
         let event_constructor = Self::new_event_constructor_value();
         let custom_event_constructor = Self::new_custom_event_constructor_value();
+        let mouse_event_constructor = Self::new_mouse_event_constructor_value();
         let iterator_constructor = self.new_iterator_constructor_value();
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
         let fetch_callable = Self::new_fetch_callable_value();
         let close_callable = Self::new_window_close_callable_value();
         let worker_constructor = Self::new_worker_constructor_value();
+        let data_transfer_constructor = Self::new_data_transfer_constructor_value();
         let text_encoder_constructor = Self::new_text_encoder_constructor_value();
+        let text_decoder_constructor = Self::new_text_decoder_constructor_value();
+        let text_encoder_stream_constructor = Self::new_text_encoder_stream_constructor_value();
+        let text_decoder_stream_constructor = Self::new_text_decoder_stream_constructor_value();
         let decode_uri_callable = Self::new_global_decode_uri_callable(false);
         let decode_uri_component_callable = Self::new_global_decode_uri_callable(true);
         let create_image_bitmap_callable = Self::new_create_image_bitmap_callable();
@@ -234,6 +272,7 @@ impl Harness {
         let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
+        let html_select_element_constructor = Self::new_builtin_placeholder_function();
         let dom_parser_constructor = Self::new_dom_parser_constructor_value();
         let document_constructor = Self::new_document_constructor_value();
         let node_constants = Self::new_object_value(vec![
@@ -291,6 +330,7 @@ impl Harness {
             &event_target_constructor,
             &event_constructor,
             &custom_event_constructor,
+            &mouse_event_constructor,
             &iterator_constructor,
             &cookie_store,
             &caches,
@@ -298,9 +338,15 @@ impl Harness {
             &request_constructor,
             &headers_constructor,
             &url_constructor,
+            &data_transfer_constructor,
+            &text_encoder_constructor,
+            &text_decoder_constructor,
+            &text_encoder_stream_constructor,
+            &text_decoder_stream_constructor,
             &element_constructor,
             &html_element_constructor,
             &html_input_element_constructor,
+            &html_select_element_constructor,
             &dom_parser_constructor,
             &document_constructor,
             &node_constants,
@@ -337,8 +383,33 @@ impl Harness {
             );
             Self::object_set_entry(
                 &mut window_entries,
+                "DataTransfer".to_string(),
+                data_transfer_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
                 "TextEncoder".to_string(),
                 text_encoder_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextDecoder".to_string(),
+                text_decoder_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextEncoderStream".to_string(),
+                text_encoder_stream_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextDecoderStream".to_string(),
+                text_decoder_stream_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLSelectElement".to_string(),
+                html_select_element_constructor.clone(),
             );
         }
 
@@ -375,6 +446,9 @@ impl Harness {
             .insert("CustomEvent".to_string(), custom_event_constructor);
         self.script_runtime
             .env
+            .insert("MouseEvent".to_string(), mouse_event_constructor);
+        self.script_runtime
+            .env
             .insert("Iterator".to_string(), iterator_constructor);
         self.script_runtime
             .env
@@ -388,7 +462,21 @@ impl Harness {
             .insert("Worker".to_string(), worker_constructor);
         self.script_runtime
             .env
+            .insert("DataTransfer".to_string(), data_transfer_constructor);
+        self.script_runtime
+            .env
             .insert("TextEncoder".to_string(), text_encoder_constructor);
+        self.script_runtime
+            .env
+            .insert("TextDecoder".to_string(), text_decoder_constructor);
+        self.script_runtime.env.insert(
+            "TextEncoderStream".to_string(),
+            text_encoder_stream_constructor,
+        );
+        self.script_runtime.env.insert(
+            "TextDecoderStream".to_string(),
+            text_decoder_stream_constructor,
+        );
         self.script_runtime
             .env
             .insert("decodeURI".to_string(), decode_uri_callable);
@@ -421,6 +509,10 @@ impl Harness {
         self.script_runtime.env.insert(
             "HTMLInputElement".to_string(),
             html_input_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLSelectElement".to_string(),
+            html_select_element_constructor,
         );
         self.script_runtime
             .env

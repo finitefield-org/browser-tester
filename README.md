@@ -88,6 +88,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `navigator.clipboard` read/write rejection paths can be injected deterministically for tests.
 - `navigator.clipboard.write([new ClipboardItem({ ... })])` payloads can be captured deterministically.
 - `navigator.clipboard` can also be replaced in script (`navigator.clipboard = { ... }`) for local stubs.
+- Trusted clipboard user actions can be simulated with `Harness::copy(selector)` / `Harness::paste(selector)`.
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
@@ -676,6 +677,8 @@ impl Harness {
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()>;
     pub fn click(&mut self, selector: &str) -> Result<()>;
     pub fn press_enter(&mut self, selector: &str) -> Result<()>;
+    pub fn copy(&mut self, selector: &str) -> Result<()>;
+    pub fn paste(&mut self, selector: &str) -> Result<()>;
     pub fn focus(&mut self, selector: &str) -> Result<()>;
     pub fn blur(&mut self, selector: &str) -> Result<()>;
     pub fn submit(&mut self, selector: &str) -> Result<()>;

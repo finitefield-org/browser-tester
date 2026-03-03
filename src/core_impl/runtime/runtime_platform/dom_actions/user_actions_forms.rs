@@ -489,6 +489,20 @@ impl Harness {
         })
     }
 
+    pub fn copy(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        stacker::grow(32 * 1024 * 1024, || {
+            self.with_script_env_always(|this, env| this.copy_node_with_env(target, env))
+        })
+    }
+
+    pub fn paste(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        stacker::grow(32 * 1024 * 1024, || {
+            self.with_script_env_always(|this, env| this.paste_node_with_env(target, env))
+        })
+    }
+
     pub(crate) fn press_enter_with_env(
         &mut self,
         target: NodeId,
@@ -509,6 +523,123 @@ impl Harness {
             self.click_node_with_env(target, env)?;
         }
         let _ = self.dispatch_event_with_env(target, "keyup", env, true)?;
+        Ok(())
+    }
+
+    fn text_slice_by_char_range(text: &str, start: usize, end: usize) -> String {
+        text.chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect()
+    }
+
+    fn selected_text_for_copy(&self, node: NodeId) -> Result<Option<String>> {
+        if !self.node_supports_text_selection(node) {
+            return Ok(None);
+        }
+        let value = self.dom.value(node)?;
+        let text_len = value.chars().count();
+        let start = self.dom.selection_start(node)?.min(text_len);
+        let end = self.dom.selection_end(node)?.min(text_len);
+        if end <= start {
+            return Ok(None);
+        }
+        Ok(Some(Self::text_slice_by_char_range(&value, start, end)))
+    }
+
+    fn clipboard_plain_text_from_event(event: &EventState) -> Option<String> {
+        let object = event.clipboard_data_object.as_ref()?;
+        let entries = object.borrow();
+        let store = match Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_STORE_KEY) {
+            Some(Value::Object(store)) => store,
+            _ => return None,
+        };
+        Self::object_get_entry(&store.borrow(), "text/plain").map(|value| value.as_string())
+    }
+
+    pub(crate) fn copy_node_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+
+        let outcome = self.dispatch_event_with_env(target, "copy", env, true)?;
+        if outcome.default_prevented {
+            if let Some(text) = Self::clipboard_plain_text_from_event(&outcome) {
+                self.platform_mocks.clipboard_text = text;
+            }
+            return Ok(());
+        }
+
+        if let Some(selected) = self.selected_text_for_copy(target)? {
+            self.platform_mocks.clipboard_text = selected;
+        }
+        Ok(())
+    }
+
+    fn paste_contenteditable_host(&self, node: NodeId) -> Option<NodeId> {
+        let mut cursor = Some(node);
+        while let Some(current) = cursor {
+            let Some(raw) = self.dom.attr(current, "contenteditable") else {
+                cursor = self.dom.parent(current);
+                continue;
+            };
+            let normalized = raw.trim().to_ascii_lowercase();
+            if normalized.is_empty() || normalized == "true" || normalized == "plaintext-only" {
+                return Some(current);
+            }
+            if normalized == "false" {
+                return None;
+            }
+            cursor = self.dom.parent(current);
+        }
+        None
+    }
+
+    pub(crate) fn paste_node_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+
+        let outcome = self.dispatch_event_with_env(target, "paste", env, true)?;
+        if outcome.default_prevented {
+            return Ok(());
+        }
+
+        let pasted_text = outcome
+            .clipboard_data
+            .unwrap_or_else(|| self.platform_mocks.clipboard_text.clone());
+
+        if self.node_supports_text_selection(target) {
+            if self.dom.readonly(target) {
+                return Ok(());
+            }
+            let before = self.dom.value(target)?;
+            self.set_node_range_text(target, &[Value::String(pasted_text)])?;
+            let after = self.dom.value(target)?;
+            if after != before {
+                self.dispatch_event_with_env(target, "input", env, true)?;
+            }
+            return Ok(());
+        }
+
+        if let Some(host) = self.paste_contenteditable_host(target) {
+            let before = self.dom.text_content(host);
+            let mut after = before.clone();
+            after.push_str(&pasted_text);
+            self.dom.set_text_content(host, &after)?;
+            if after != before {
+                self.dispatch_event_with_env(host, "input", env, true)?;
+            }
+        }
+
         Ok(())
     }
 

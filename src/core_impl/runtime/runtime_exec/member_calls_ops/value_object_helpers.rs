@@ -567,6 +567,30 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_data_transfer_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_DATA_TRANSFER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_data_transfer_item_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_data_transfer_item_list_value(array: &ArrayValue) -> bool {
+        matches!(
+            Self::object_get_entry(
+                &array.properties,
+                INTERNAL_DATA_TRANSFER_ITEM_LIST_OBJECT_KEY
+            ),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_clipboard_item_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY),
@@ -594,11 +618,14 @@ impl Harness {
     }
 
     pub(crate) fn new_clipboard_data_object_value(text: &str) -> Value {
+        let mut store = ObjectValue::default();
         let types = if text.is_empty() {
             Vec::new()
         } else {
+            store.set_entry("text/plain".to_string(), Value::String(text.to_string()));
             vec![Value::String("text/plain".to_string())]
         };
+        let store = Value::Object(Rc::new(RefCell::new(store)));
         Self::new_object_value(vec![
             (
                 INTERNAL_CLIPBOARD_DATA_OBJECT_KEY.to_string(),
@@ -608,6 +635,7 @@ impl Harness {
                 INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
                 Value::String(text.to_string()),
             ),
+            (INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(), store),
             (
                 "getData".to_string(),
                 Self::new_builtin_placeholder_function(),
@@ -622,6 +650,168 @@ impl Harness {
             ),
             ("types".to_string(), Self::new_array_value(types)),
         ])
+    }
+
+    pub(crate) fn new_data_transfer_object_value(event_type: &str) -> Value {
+        let value = Self::new_clipboard_data_object_value("");
+        if let Value::Object(owner) = &value {
+            let mut entries = owner.borrow_mut();
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_DATA_TRANSFER_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY.to_string(),
+                Value::String(event_type.to_ascii_lowercase()),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "dropEffect".to_string(),
+                Value::String("none".to_string()),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "effectAllowed".to_string(),
+                Value::String("all".to_string()),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "files".to_string(),
+                Self::new_array_value(Vec::new()),
+            );
+            let items =
+                Self::new_data_transfer_item_list_value(owner.clone(), event_type, Vec::new());
+            Self::object_set_entry(&mut entries, "items".to_string(), items);
+            Self::object_set_entry(
+                &mut entries,
+                "setDragImage".to_string(),
+                Self::new_builtin_placeholder_function(),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "addElement".to_string(),
+                Self::new_builtin_placeholder_function(),
+            );
+        }
+        value
+    }
+
+    pub(crate) fn new_data_transfer_item_string_value(format: &str, data: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY.to_string(),
+                Value::String("string".to_string()),
+            ),
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_TYPE_KEY.to_string(),
+                Value::String(format.to_string()),
+            ),
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_DATA_KEY.to_string(),
+                Value::String(data.to_string()),
+            ),
+            ("kind".to_string(), Value::String("string".to_string())),
+            ("type".to_string(), Value::String(format.to_string())),
+            (
+                "getAsFile".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getAsFileSystemHandle".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getAsString".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "webkitGetAsEntry".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_data_transfer_item_file_value(format: &str, file: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY.to_string(),
+                Value::String("file".to_string()),
+            ),
+            (
+                INTERNAL_DATA_TRANSFER_ITEM_TYPE_KEY.to_string(),
+                Value::String(format.to_string()),
+            ),
+            (INTERNAL_DATA_TRANSFER_ITEM_DATA_KEY.to_string(), file),
+            ("kind".to_string(), Value::String("file".to_string())),
+            ("type".to_string(), Value::String(format.to_string())),
+            (
+                "getAsFile".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getAsFileSystemHandle".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getAsString".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "webkitGetAsEntry".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_data_transfer_item_list_value(
+        owner: Rc<RefCell<ObjectValue>>,
+        event_type: &str,
+        items: Vec<Value>,
+    ) -> Value {
+        let value = Self::new_array_value(items);
+        if let Value::Array(list) = &value {
+            Self::set_array_property(
+                list,
+                INTERNAL_DATA_TRANSFER_ITEM_LIST_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::set_array_property(
+                list,
+                INTERNAL_DATA_TRANSFER_ITEM_LIST_OWNER_KEY.to_string(),
+                Value::Object(owner),
+            );
+            Self::set_array_property(
+                list,
+                INTERNAL_DATA_TRANSFER_ITEM_LIST_EVENT_TYPE_KEY.to_string(),
+                Value::String(event_type.to_ascii_lowercase()),
+            );
+            Self::set_array_property(
+                list,
+                "add".to_string(),
+                Self::new_builtin_placeholder_function(),
+            );
+            Self::set_array_property(
+                list,
+                "remove".to_string(),
+                Self::new_builtin_placeholder_function(),
+            );
+            Self::set_array_property(
+                list,
+                "clear".to_string(),
+                Self::new_builtin_placeholder_function(),
+            );
+        }
+        value
     }
 
     fn new_named_node_map_iterator_callable(owner: NodeId) -> Value {
@@ -979,6 +1169,25 @@ impl Harness {
         constructor
     }
 
+    pub(crate) fn new_mouse_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("mouse_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
     pub(crate) fn new_dom_parser_constructor_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -1064,11 +1273,87 @@ impl Harness {
         )])
     }
 
-    pub(crate) fn new_text_encoder_constructor_value() -> Value {
+    pub(crate) fn new_data_transfer_constructor_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
-            Value::String("text_encoder_constructor".to_string()),
+            Value::String("data_transfer_constructor".to_string()),
         )])
+    }
+
+    pub(crate) fn new_text_encoder_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("text_encoder_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_text_decoder_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("text_decoder_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_text_encoder_stream_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("text_encoder_stream_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_text_decoder_stream_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("text_decoder_stream_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
     }
 
     pub(crate) fn new_text_encoder_encode_callable() -> Value {
@@ -1078,12 +1363,241 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_text_encoder_encode_into_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_encode_into".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_encoding_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_get_encoding".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_decode_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_decode".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_encoding_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_get_encoding".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_fatal_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_get_fatal".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_ignore_bom_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_get_ignore_bom".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_stream_encoding_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_stream_get_encoding".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_stream_readable_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_stream_get_readable".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_stream_writable_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_stream_get_writable".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_stream_encoding_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_stream_get_encoding".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_stream_fatal_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_stream_get_fatal".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_stream_ignore_bom_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_stream_get_ignore_bom".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_stream_readable_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_stream_get_readable".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_decoder_stream_writable_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_decoder_stream_get_writable".to_string()),
+        )])
+    }
+
     pub(crate) fn new_text_encoder_instance_value() -> Value {
         Self::new_object_value(vec![
-            ("encoding".to_string(), Value::String("utf-8".to_string())),
+            (
+                Self::object_getter_storage_key("encoding"),
+                Self::new_text_encoder_encoding_getter_callable(),
+            ),
             (
                 "encode".to_string(),
                 Self::new_text_encoder_encode_callable(),
+            ),
+            (
+                "encodeInto".to_string(),
+                Self::new_text_encoder_encode_into_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_text_decoder_instance_value(
+        encoding: &str,
+        fatal: bool,
+        ignore_bom: bool,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_TEXT_DECODER_ENCODING_KEY.to_string(),
+                Value::String(encoding.to_string()),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_FATAL_KEY.to_string(),
+                Value::Bool(fatal),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_IGNORE_BOM_KEY.to_string(),
+                Value::Bool(ignore_bom),
+            ),
+            (
+                Self::object_getter_storage_key("encoding"),
+                Self::new_text_decoder_encoding_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("fatal"),
+                Self::new_text_decoder_fatal_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("ignoreBOM"),
+                Self::new_text_decoder_ignore_bom_getter_callable(),
+            ),
+            (
+                "decode".to_string(),
+                Self::new_text_decoder_decode_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_text_encoder_stream_instance_value(
+        readable: Value,
+        writable: Value,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_TEXT_ENCODER_STREAM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_TEXT_ENCODER_STREAM_READABLE_KEY.to_string(),
+                readable,
+            ),
+            (
+                INTERNAL_TEXT_ENCODER_STREAM_WRITABLE_KEY.to_string(),
+                writable,
+            ),
+            (
+                Self::object_getter_storage_key("encoding"),
+                Self::new_text_encoder_stream_encoding_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("readable"),
+                Self::new_text_encoder_stream_readable_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("writable"),
+                Self::new_text_encoder_stream_writable_getter_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_text_decoder_stream_instance_value(
+        encoding: &str,
+        fatal: bool,
+        ignore_bom: bool,
+        readable: Value,
+        writable: Value,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_TEXT_DECODER_STREAM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_STREAM_ENCODING_KEY.to_string(),
+                Value::String(encoding.to_string()),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_STREAM_FATAL_KEY.to_string(),
+                Value::Bool(fatal),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_STREAM_IGNORE_BOM_KEY.to_string(),
+                Value::Bool(ignore_bom),
+            ),
+            (
+                INTERNAL_TEXT_DECODER_STREAM_READABLE_KEY.to_string(),
+                readable,
+            ),
+            (
+                INTERNAL_TEXT_DECODER_STREAM_WRITABLE_KEY.to_string(),
+                writable,
+            ),
+            (
+                Self::object_getter_storage_key("encoding"),
+                Self::new_text_decoder_stream_encoding_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("fatal"),
+                Self::new_text_decoder_stream_fatal_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("ignoreBOM"),
+                Self::new_text_decoder_stream_ignore_bom_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("readable"),
+                Self::new_text_decoder_stream_readable_getter_callable(),
+            ),
+            (
+                Self::object_getter_storage_key("writable"),
+                Self::new_text_decoder_stream_writable_getter_callable(),
             ),
         ])
     }
@@ -1162,6 +1676,27 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("function_bind".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_string_static_from_char_code_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("string_static_from_char_code".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_string_static_from_code_point_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("string_static_from_code_point".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_string_static_raw_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("string_static_raw".to_string()),
         )])
     }
 
@@ -1285,6 +1820,7 @@ impl Harness {
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
+                "mouse_event_constructor" => "mouse_event_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
                 "document_constructor" => "document_constructor",
                 "document_parse_html" => "document_parse_html",
@@ -1296,14 +1832,35 @@ impl Harness {
                 "clipboard_write" => "clipboard_write",
                 "headers_constructor" => "headers_constructor",
                 "worker_constructor" => "worker_constructor",
+                "data_transfer_constructor" => "data_transfer_constructor",
                 "text_encoder_constructor" => "text_encoder_constructor",
+                "text_decoder_constructor" => "text_decoder_constructor",
+                "text_encoder_stream_constructor" => "text_encoder_stream_constructor",
+                "text_decoder_stream_constructor" => "text_decoder_stream_constructor",
+                "text_encoder_get_encoding" => "text_encoder_get_encoding",
                 "text_encoder_encode" => "text_encoder_encode",
+                "text_encoder_encode_into" => "text_encoder_encode_into",
+                "text_decoder_get_encoding" => "text_decoder_get_encoding",
+                "text_decoder_get_fatal" => "text_decoder_get_fatal",
+                "text_decoder_get_ignore_bom" => "text_decoder_get_ignore_bom",
+                "text_decoder_decode" => "text_decoder_decode",
+                "text_encoder_stream_get_encoding" => "text_encoder_stream_get_encoding",
+                "text_encoder_stream_get_readable" => "text_encoder_stream_get_readable",
+                "text_encoder_stream_get_writable" => "text_encoder_stream_get_writable",
+                "text_decoder_stream_get_encoding" => "text_decoder_stream_get_encoding",
+                "text_decoder_stream_get_fatal" => "text_decoder_stream_get_fatal",
+                "text_decoder_stream_get_ignore_bom" => "text_decoder_stream_get_ignore_bom",
+                "text_decoder_stream_get_readable" => "text_decoder_stream_get_readable",
+                "text_decoder_stream_get_writable" => "text_decoder_stream_get_writable",
                 "worker_main_post_message" => "worker_main_post_message",
                 "worker_context_post_message" => "worker_context_post_message",
                 "worker_terminate" => "worker_terminate",
                 "global_decode_uri" => "global_decode_uri",
                 "global_decode_uri_component" => "global_decode_uri_component",
                 "create_image_bitmap" => "create_image_bitmap",
+                "string_static_from_char_code" => "string_static_from_char_code",
+                "string_static_from_code_point" => "string_static_from_code_point",
+                "string_static_raw" => "string_static_raw",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
@@ -1360,6 +1917,13 @@ impl Harness {
                     .tag_name(*node)
                     .map(|tag| tag.eq_ignore_ascii_case("select"))
                     .unwrap_or(false);
+                let is_input = self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("input"))
+                    .unwrap_or(false);
+                let is_form_associated_control = is_form_control(&self.dom, *node);
+                let is_labelable_control = self.is_labelable_control(*node);
                 let is_col_or_colgroup = self
                     .dom
                     .tag_name(*node)
@@ -1367,11 +1931,7 @@ impl Harness {
                         tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
                     })
                     .unwrap_or(false);
-                let select_options = || {
-                    let mut options = Vec::new();
-                    self.dom.collect_select_options(*node, &mut options);
-                    options
-                };
+                let select_options = || self.select_option_nodes(*node);
 
                 match key {
                     "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
@@ -1466,7 +2026,36 @@ impl Harness {
                     "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
                     "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
                     "required" => Ok(Value::Bool(self.dom.required(*node))),
+                    "multiple" => {
+                        if is_select || is_input {
+                            Ok(Value::Bool(self.dom.attr(*node, "multiple").is_some()))
+                        } else {
+                            Ok(Value::Undefined)
+                        }
+                    }
                     "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
+                    "autocomplete" => Ok(Value::String(
+                        self.dom.attr(*node, "autocomplete").unwrap_or_default(),
+                    )),
+                    "form" => {
+                        if is_form_associated_control {
+                            Ok(self
+                                .resolve_form_for_submit(*node)
+                                .map(Value::Node)
+                                .unwrap_or(Value::Null))
+                        } else {
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    "labels" => {
+                        if is_labelable_control {
+                            Ok(Self::new_static_node_list_value(
+                                self.labels_for_control_node(*node),
+                            ))
+                        } else {
+                            Ok(Value::Undefined)
+                        }
+                    }
                     "id" => Ok(Value::String(
                         self.dom.attr(*node, "id").unwrap_or_default(),
                     )),
@@ -1581,7 +2170,9 @@ impl Harness {
                     )),
                     "span" if is_col_or_colgroup => Ok(Value::Number(self.col_span_value(*node))),
                     "type" => {
-                        if self
+                        if is_select {
+                            Ok(Value::String(self.select_type_property_value(*node)))
+                        } else if self
                             .dom
                             .tag_name(*node)
                             .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
@@ -1690,15 +2281,55 @@ impl Harness {
                         if !is_select {
                             return Ok(Value::Undefined);
                         }
-                        let options = select_options();
-                        if options.is_empty() {
-                            return Ok(Value::Number(-1));
+                        Ok(Value::Number(self.select_selected_index_value(*node)))
+                    }
+                    "selectedOptions" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
                         }
-                        let selected = options
-                            .iter()
-                            .position(|option| self.dom.attr(*option, "selected").is_some())
-                            .unwrap_or(0);
-                        Ok(Value::Number(selected as i64))
+                        Ok(Self::new_static_node_list_value(
+                            self.select_selected_option_nodes(*node),
+                        ))
+                    }
+                    "size" => {
+                        if !is_select {
+                            return Ok(Value::Undefined);
+                        }
+                        Ok(Value::Number(self.select_size_property_value(*node)))
+                    }
+                    "validationMessage" => {
+                        let validity = self.compute_input_validity(*node)?;
+                        if validity.custom_error {
+                            Ok(Value::String(self.dom.custom_validity_message(*node)?))
+                        } else {
+                            Ok(Value::String(String::new()))
+                        }
+                    }
+                    "validity" => {
+                        let validity = self.compute_input_validity(*node)?;
+                        Ok(Self::input_validity_to_value(&validity))
+                    }
+                    "willValidate" => {
+                        let will_validate = if is_select {
+                            self.select_will_validate(*node)
+                        } else if self
+                            .dom
+                            .tag_name(*node)
+                            .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
+                        {
+                            !self.is_effectively_disabled(*node)
+                        } else if self
+                            .dom
+                            .tag_name(*node)
+                            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                        {
+                            Self::input_participates_in_constraint_validation(
+                                self.normalized_input_type(*node).as_str(),
+                            ) && !self.is_effectively_disabled(*node)
+                        } else {
+                            false
+                        };
+                        Ok(Value::Bool(will_validate))
                     }
                     "length" => {
                         if !is_select {
@@ -2260,7 +2891,18 @@ impl Harness {
                 }
                 Ok(Value::Undefined)
             }
-            Value::StringConstructor => Ok(Value::Undefined),
+            Value::StringConstructor => {
+                let value = match key {
+                    "fromCharCode" => Self::new_string_static_from_char_code_callable(),
+                    "fromCodePoint" => Self::new_string_static_from_code_point_callable(),
+                    "raw" => Self::new_string_static_raw_callable(),
+                    "call" => Self::new_function_call_callable(),
+                    "apply" => Self::new_function_apply_callable(),
+                    "bind" => Self::new_function_bind_callable(),
+                    _ => Value::Undefined,
+                };
+                Ok(value)
+            }
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
         }
     }

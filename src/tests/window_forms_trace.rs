@@ -1032,9 +1032,10 @@ fn trace_categories_can_disable_event_logs() -> Result<()> {
     h.click("#btn")?;
 
     let logs = h.take_trace_logs();
-    assert!(logs
-        .iter()
-        .any(|line| line.contains("[timer] schedule timeout id=1")));
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] schedule timeout id=1"))
+    );
     assert!(logs.iter().all(|line| !line.contains("[event]")));
     Ok(())
 }
@@ -1070,9 +1071,10 @@ fn trace_logs_capture_timer_lifecycle_when_enabled() -> Result<()> {
     h.click("#btn")?;
 
     let logs = h.take_trace_logs();
-    assert!(logs
-        .iter()
-        .any(|line| line.contains("[timer] schedule timeout id=1")));
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] schedule timeout id=1"))
+    );
     assert!(logs.iter().any(|line| line.contains("due_at=5")));
     assert!(logs.iter().any(|line| line.contains("delay_ms=5")));
 
@@ -1103,21 +1105,24 @@ fn trace_logs_capture_timer_api_summaries() -> Result<()> {
 
     h.advance_time(5)?;
     let logs = h.take_trace_logs();
-    assert!(logs
-        .iter()
-        .any(|line| line.contains("[timer] advance delta_ms=5 from=0 to=5 ran_due=1")));
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] advance delta_ms=5 from=0 to=5 ran_due=1"))
+    );
 
     assert_eq!(h.run_due_timers()?, 0);
     let logs = h.take_trace_logs();
-    assert!(logs
-        .iter()
-        .any(|line| line.contains("[timer] run_due now_ms=5 ran=0")));
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] run_due now_ms=5 ran=0"))
+    );
 
     h.flush()?;
     let logs = h.take_trace_logs();
-    assert!(logs
-        .iter()
-        .any(|line| line.contains("[timer] flush from=5 to=10 ran=1")));
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] flush from=5 to=10 ran=1"))
+    );
     Ok(())
 }
 

@@ -704,12 +704,30 @@ impl Value {
                         entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
                         Some(Value::Bool(true))
                     );
+                    let is_writable_stream = matches!(
+                        entries.get_entry(INTERNAL_WRITABLE_STREAM_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    let is_text_encoder_stream = matches!(
+                        entries.get_entry(INTERNAL_TEXT_ENCODER_STREAM_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    let is_text_decoder_stream = matches!(
+                        entries.get_entry(INTERNAL_TEXT_DECODER_STREAM_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
                     let is_animation = matches!(
                         entries.get_entry(INTERNAL_ANIMATION_OBJECT_KEY),
                         Some(Value::Bool(true))
                     );
                     if is_readable_stream {
                         "[object ReadableStream]".into()
+                    } else if is_writable_stream {
+                        "[object WritableStream]".into()
+                    } else if is_text_encoder_stream {
+                        "[object TextEncoderStream]".into()
+                    } else if is_text_decoder_stream {
+                        "[object TextDecoderStream]".into()
                     } else if is_animation {
                         "[object Animation]".into()
                     } else {
@@ -1167,6 +1185,7 @@ pub(crate) enum IntlStaticMethod {
     DisplayNamesSupportedLocalesOf,
     DurationFormatSupportedLocalesOf,
     ListFormatSupportedLocalesOf,
+    NumberFormatSupportedLocalesOf,
     PluralRulesSupportedLocalesOf,
     RelativeTimeFormatSupportedLocalesOf,
     SegmenterSupportedLocalesOf,
@@ -1262,6 +1281,18 @@ pub(crate) struct IntlDisplayNamesOptions {
 #[derive(Debug, Clone)]
 pub(crate) struct IntlDurationOptions {
     pub(crate) style: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IntlNumberFormatOptions {
+    pub(crate) style: String,
+    pub(crate) currency: Option<String>,
+    pub(crate) unit: Option<String>,
+    pub(crate) unit_display: String,
+    pub(crate) numbering_system: String,
+    pub(crate) minimum_fraction_digits: Option<usize>,
+    pub(crate) maximum_fraction_digits: Option<usize>,
+    pub(crate) maximum_significant_digits: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

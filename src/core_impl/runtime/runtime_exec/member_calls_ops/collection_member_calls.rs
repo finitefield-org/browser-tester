@@ -35,6 +35,80 @@ impl Harness {
                 }
                 Value::String(Self::format_iso_8601_utc(*value.borrow()))
             }
+            "getUTCFullYear" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCFullYear does not take arguments".into(),
+                    ));
+                }
+                let (year, ..) = Self::date_components_utc(*value.borrow());
+                Value::Number(year)
+            }
+            "getUTCMonth" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCMonth does not take arguments".into(),
+                    ));
+                }
+                let (_, month, ..) = Self::date_components_utc(*value.borrow());
+                Value::Number((month as i64) - 1)
+            }
+            "getUTCDate" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCDate does not take arguments".into(),
+                    ));
+                }
+                let (_, _, day, ..) = Self::date_components_utc(*value.borrow());
+                Value::Number(day as i64)
+            }
+            "getUTCDay" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCDay does not take arguments".into(),
+                    ));
+                }
+                let timestamp_ms = *value.borrow();
+                let days = timestamp_ms.div_euclid(86_400_000);
+                let weekday = ((days + 4).rem_euclid(7)) as i64;
+                Value::Number(weekday)
+            }
+            "getUTCHours" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCHours does not take arguments".into(),
+                    ));
+                }
+                let (_, _, _, hour, ..) = Self::date_components_utc(*value.borrow());
+                Value::Number(hour as i64)
+            }
+            "getUTCMinutes" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCMinutes does not take arguments".into(),
+                    ));
+                }
+                let (_, _, _, _, minute, ..) = Self::date_components_utc(*value.borrow());
+                Value::Number(minute as i64)
+            }
+            "getUTCSeconds" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCSeconds does not take arguments".into(),
+                    ));
+                }
+                let (_, _, _, _, _, second, _) = Self::date_components_utc(*value.borrow());
+                Value::Number(second as i64)
+            }
+            "getUTCMilliseconds" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getUTCMilliseconds does not take arguments".into(),
+                    ));
+                }
+                let (_, _, _, _, _, _, millisecond) = Self::date_components_utc(*value.borrow());
+                Value::Number(millisecond as i64)
+            }
             "getFullYear" => {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
@@ -491,6 +565,236 @@ impl Harness {
                     }
                 }
                 Self::new_array_value(out)
+            }
+            "add" => {
+                let (owner, event_type) = {
+                    let values_ref = values.borrow();
+                    let Some(meta) =
+                        Self::data_transfer_item_list_owner_and_event_type(&values_ref)
+                    else {
+                        return Ok(None);
+                    };
+                    meta
+                };
+                if !event_type.eq_ignore_ascii_case("dragstart") {
+                    Value::Null
+                } else if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "DataTransferItemList.add requires one or two arguments".into(),
+                    ));
+                } else {
+                    let mut owner_entries = owner.borrow_mut();
+                    let mut types = Self::clipboard_data_types_from_entries(&owner_entries);
+                    let store = Self::clipboard_data_store_from_entries(&owner_entries)
+                        .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
+                    let added = if evaluated_args.len() == 1 {
+                        let file = evaluated_args[0].clone();
+                        let Value::Object(file_object) = &file else {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: Failed to execute 'add' on 'DataTransferItemList': parameter 1 is not of type 'File'"
+                                    .into(),
+                            ));
+                        };
+                        {
+                            let file_entries = file_object.borrow();
+                            if !Self::is_mock_file_object(&file_entries) {
+                                return Err(Error::ScriptRuntime(
+                                    "TypeError: Failed to execute 'add' on 'DataTransferItemList': parameter 1 is not of type 'File'"
+                                        .into(),
+                                ));
+                            }
+                        }
+                        if let Some(Value::Array(files)) =
+                            Self::object_get_entry(&owner_entries, "files")
+                        {
+                            files.borrow_mut().push(file.clone());
+                        } else {
+                            Self::object_set_entry(
+                                &mut owner_entries,
+                                "files".to_string(),
+                                Self::new_array_value(vec![file.clone()]),
+                            );
+                        }
+                        let mime_type = {
+                            let file_entries = file_object.borrow();
+                            Self::object_get_entry(&file_entries, "type")
+                                .map(|value| value.as_string())
+                                .unwrap_or_default()
+                        };
+                        Self::new_data_transfer_item_file_value(&mime_type, file)
+                    } else {
+                        let data = evaluated_args[0].as_string();
+                        let format =
+                            Self::normalize_clipboard_data_format(&evaluated_args[1].as_string());
+                        if format.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DataTransferItemList.add requires a non-empty type for string data"
+                                    .into(),
+                            ));
+                        }
+                        if !types.iter().any(|item| item == &format) {
+                            types.push(format.clone());
+                        }
+                        Self::object_set_entry(
+                            &mut store.borrow_mut(),
+                            format.clone(),
+                            Value::String(data.clone()),
+                        );
+                        Self::object_set_entry(
+                            &mut owner_entries,
+                            "types".to_string(),
+                            Self::new_array_value(
+                                types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
+                            ),
+                        );
+                        Self::object_set_entry(
+                            &mut owner_entries,
+                            INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
+                            Value::Object(store.clone()),
+                        );
+                        if format == "text/plain" {
+                            Self::object_set_entry(
+                                &mut owner_entries,
+                                INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                                Value::String(data.clone()),
+                            );
+                        }
+                        Self::new_data_transfer_item_string_value(&format, &data)
+                    };
+                    let items = Self::data_transfer_items_from_types_and_store(
+                        owner.clone(),
+                        &owner_entries,
+                        &event_type,
+                        &types,
+                        &store,
+                    );
+                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    added
+                }
+            }
+            "remove" => {
+                let (owner, event_type) = {
+                    let values_ref = values.borrow();
+                    let Some(meta) =
+                        Self::data_transfer_item_list_owner_and_event_type(&values_ref)
+                    else {
+                        return Ok(None);
+                    };
+                    meta
+                };
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "DataTransferItemList.remove requires exactly one index argument".into(),
+                    ));
+                }
+                if !event_type.eq_ignore_ascii_case("dragstart") {
+                    Value::Undefined
+                } else {
+                    let index = Self::value_to_i64(&evaluated_args[0]);
+                    if index < 0 {
+                        return Ok(Some(Value::Undefined));
+                    }
+                    let mut owner_entries = owner.borrow_mut();
+                    let mut types = Self::clipboard_data_types_from_entries(&owner_entries);
+                    let store = Self::clipboard_data_store_from_entries(&owner_entries)
+                        .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
+                    let index = index as usize;
+                    if index < types.len() {
+                        let removed = types.remove(index);
+                        store.borrow_mut().delete_entry(&removed);
+                    } else if let Some(file_index) = index.checked_sub(types.len()) {
+                        if let Some(Value::Array(files)) =
+                            Self::object_get_entry(&owner_entries, "files")
+                        {
+                            if file_index < files.borrow().len() {
+                                files.borrow_mut().remove(file_index);
+                            }
+                        }
+                    }
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        "types".to_string(),
+                        Self::new_array_value(
+                            types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
+                        ),
+                    );
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
+                        Value::Object(store.clone()),
+                    );
+                    let text = Self::object_get_entry(&store.borrow(), "text/plain")
+                        .map(|value| value.as_string())
+                        .unwrap_or_default();
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                        Value::String(text),
+                    );
+                    let items = Self::data_transfer_items_from_types_and_store(
+                        owner.clone(),
+                        &owner_entries,
+                        &event_type,
+                        &types,
+                        &store,
+                    );
+                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    Value::Undefined
+                }
+            }
+            "clear" => {
+                let (owner, event_type) = {
+                    let values_ref = values.borrow();
+                    let Some(meta) =
+                        Self::data_transfer_item_list_owner_and_event_type(&values_ref)
+                    else {
+                        return Ok(None);
+                    };
+                    meta
+                };
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "DataTransferItemList.clear does not take arguments".into(),
+                    ));
+                }
+                if !event_type.eq_ignore_ascii_case("dragstart") {
+                    Value::Undefined
+                } else {
+                    let mut owner_entries = owner.borrow_mut();
+                    let types = Vec::<String>::new();
+                    let store = Self::clipboard_data_store_from_entries(&owner_entries)
+                        .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
+                    store.borrow_mut().clear();
+                    if let Some(Value::Array(files)) =
+                        Self::object_get_entry(&owner_entries, "files")
+                    {
+                        files.borrow_mut().clear();
+                    }
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        "types".to_string(),
+                        Self::new_array_value(Vec::new()),
+                    );
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
+                        Value::Object(store.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                        Value::String(String::new()),
+                    );
+                    let items = Self::data_transfer_items_from_types_and_store(
+                        owner.clone(),
+                        &owner_entries,
+                        &event_type,
+                        &types,
+                        &store,
+                    );
+                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    Value::Undefined
+                }
             }
             "push" => {
                 let mut values_ref = values.borrow_mut();
@@ -970,20 +1274,218 @@ impl Harness {
         }
     }
 
+    fn normalize_clipboard_data_format(raw: &str) -> String {
+        let normalized = raw.trim().to_ascii_lowercase();
+        if normalized == "text" {
+            "text/plain".to_string()
+        } else {
+            normalized
+        }
+    }
+
+    fn clipboard_data_types_from_entries(entries: &impl ObjectEntryLookup) -> Vec<String> {
+        let Some(Value::Array(types)) = Self::object_get_entry(entries, "types") else {
+            return Vec::new();
+        };
+        types
+            .borrow()
+            .iter()
+            .map(|value| value.as_string())
+            .collect::<Vec<_>>()
+    }
+
+    fn clipboard_data_store_from_entries(
+        entries: &impl ObjectEntryLookup,
+    ) -> Option<Rc<RefCell<ObjectValue>>> {
+        match Self::object_get_entry(entries, INTERNAL_CLIPBOARD_DATA_STORE_KEY) {
+            Some(Value::Object(store)) => Some(store),
+            _ => None,
+        }
+    }
+
+    fn data_transfer_item_list_owner_and_event_type(
+        values: &ArrayValue,
+    ) -> Option<(Rc<RefCell<ObjectValue>>, String)> {
+        if !Self::is_data_transfer_item_list_value(values) {
+            return None;
+        }
+        let owner = match Self::object_get_entry(
+            &values.properties,
+            INTERNAL_DATA_TRANSFER_ITEM_LIST_OWNER_KEY,
+        ) {
+            Some(Value::Object(owner)) => owner,
+            _ => return None,
+        };
+        let mut event_type = Self::object_get_entry(
+            &values.properties,
+            INTERNAL_DATA_TRANSFER_ITEM_LIST_EVENT_TYPE_KEY,
+        )
+        .map(|value| value.as_string().to_ascii_lowercase())
+        .unwrap_or_default();
+        if event_type.is_empty() {
+            let owner_entries = owner.borrow();
+            event_type =
+                Self::object_get_entry(&owner_entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                    .map(|value| value.as_string().to_ascii_lowercase())
+                    .unwrap_or_default();
+        }
+        Some((owner, event_type))
+    }
+
+    fn data_transfer_items_from_entries(
+        entries: &impl ObjectEntryLookup,
+        types: &[String],
+        store: &Rc<RefCell<ObjectValue>>,
+    ) -> Vec<Value> {
+        let store_entries = store.borrow();
+        let mut items = types
+            .iter()
+            .map(|format| {
+                let data = Self::object_get_entry(&store_entries, format)
+                    .map(|value| value.as_string())
+                    .unwrap_or_default();
+                Self::new_data_transfer_item_string_value(format, &data)
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(Value::Array(files)) = Self::object_get_entry(entries, "files") {
+            for file in files.borrow().iter() {
+                let Value::Object(file_object) = file else {
+                    continue;
+                };
+                let file_entries = file_object.borrow();
+                if !Self::is_mock_file_object(&file_entries) {
+                    continue;
+                }
+                let mime_type = Self::object_get_entry(&file_entries, "type")
+                    .map(|value| value.as_string())
+                    .unwrap_or_default();
+                items.push(Self::new_data_transfer_item_file_value(
+                    &mime_type,
+                    file.clone(),
+                ));
+            }
+        }
+
+        items
+    }
+
+    fn data_transfer_items_from_types_and_store(
+        owner: Rc<RefCell<ObjectValue>>,
+        entries: &impl ObjectEntryLookup,
+        event_type: &str,
+        types: &[String],
+        store: &Rc<RefCell<ObjectValue>>,
+    ) -> Value {
+        let items = Self::data_transfer_items_from_entries(entries, types, store);
+        if let Some(Value::Array(item_list)) = Self::object_get_entry(entries, "items") {
+            let is_item_list = {
+                let item_list_ref = item_list.borrow();
+                Self::is_data_transfer_item_list_value(&item_list_ref)
+            };
+            if is_item_list {
+                let mut item_list_ref = item_list.borrow_mut();
+                item_list_ref.elements = items;
+                Self::object_set_entry(
+                    &mut item_list_ref.properties,
+                    INTERNAL_DATA_TRANSFER_ITEM_LIST_OWNER_KEY.to_string(),
+                    Value::Object(owner),
+                );
+                Self::object_set_entry(
+                    &mut item_list_ref.properties,
+                    INTERNAL_DATA_TRANSFER_ITEM_LIST_EVENT_TYPE_KEY.to_string(),
+                    Value::String(event_type.to_ascii_lowercase()),
+                );
+                drop(item_list_ref);
+                return Value::Array(item_list);
+            }
+        }
+        Self::new_data_transfer_item_list_value(owner, event_type, items)
+    }
+
     pub(crate) fn eval_clipboard_data_member_call(
         &mut self,
         object: &Rc<RefCell<ObjectValue>>,
         member: &str,
         evaluated_args: &[Value],
+        event: &EventState,
     ) -> Result<Option<Value>> {
         let entries = object.borrow();
-        if !Self::is_clipboard_data_object(&entries) {
+        let is_clipboard_data = Self::is_clipboard_data_object(&entries);
+        let is_data_transfer_item = Self::is_data_transfer_item_object(&entries);
+        drop(entries);
+
+        if !is_clipboard_data && !is_data_transfer_item {
             return Ok(None);
         }
-        let text = Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_TEXT_KEY)
-            .map(|value| value.as_string())
-            .unwrap_or_default();
-        drop(entries);
+
+        if is_data_transfer_item {
+            let value = match member {
+                "getAsFile" => {
+                    if !evaluated_args.is_empty() {
+                        return Err(Error::ScriptRuntime(
+                            "DataTransferItem.getAsFile does not take arguments".into(),
+                        ));
+                    }
+                    let entries = object.borrow();
+                    let kind =
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY)
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                    if kind == "file" {
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_ITEM_DATA_KEY)
+                            .unwrap_or(Value::Null)
+                    } else {
+                        Value::Null
+                    }
+                }
+                "getAsFileSystemHandle" => {
+                    if !evaluated_args.is_empty() {
+                        return Err(Error::ScriptRuntime(
+                            "DataTransferItem.getAsFileSystemHandle does not take arguments".into(),
+                        ));
+                    }
+                    Value::Promise(self.promise_resolve_value_as_promise(Value::Null)?)
+                }
+                "webkitGetAsEntry" => {
+                    if !evaluated_args.is_empty() {
+                        return Err(Error::ScriptRuntime(
+                            "DataTransferItem.webkitGetAsEntry does not take arguments".into(),
+                        ));
+                    }
+                    Value::Null
+                }
+                "getAsString" => {
+                    if evaluated_args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "DataTransferItem.getAsString requires exactly one callback argument"
+                                .into(),
+                        ));
+                    }
+                    let callback = evaluated_args[0].clone();
+                    if !self.is_callable_value(&callback) {
+                        return Err(Error::ScriptRuntime(
+                            "DataTransferItem.getAsString callback must be callable".into(),
+                        ));
+                    }
+                    let entries = object.borrow();
+                    let kind =
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY)
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                    if kind == "string" {
+                        let data =
+                            Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_ITEM_DATA_KEY)
+                                .map(|value| value.as_string())
+                                .unwrap_or_default();
+                        self.execute_callback_value(&callback, &[Value::String(data)], event)?;
+                    }
+                    Value::Undefined
+                }
+                _ => return Ok(None),
+            };
+            return Ok(Some(value));
+        }
 
         let value = match member {
             "getData" => {
@@ -992,9 +1494,29 @@ impl Harness {
                         "clipboardData.getData requires exactly one format argument".into(),
                     ));
                 }
-                let format = evaluated_args[0].as_string().to_ascii_lowercase();
-                if format == "text/plain" || format == "text" {
-                    Value::String(text)
+                let format = Self::normalize_clipboard_data_format(&evaluated_args[0].as_string());
+                let entries = object.borrow();
+                if Self::is_data_transfer_object(&entries)
+                    && !matches!(
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                            .map(|value| value.as_string().to_ascii_lowercase())
+                            .as_deref(),
+                        Some("dragstart" | "drop")
+                    )
+                {
+                    return Ok(Some(Value::String(String::new())));
+                }
+                if let Some(store) = Self::clipboard_data_store_from_entries(&entries) {
+                    if let Some(value) = Self::object_get_entry(&store.borrow(), &format) {
+                        return Ok(Some(Value::String(value.as_string())));
+                    }
+                }
+                let fallback_text =
+                    Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_TEXT_KEY)
+                        .map(|value| value.as_string())
+                        .unwrap_or_default();
+                if format == "text/plain" {
+                    Value::String(fallback_text)
                 } else {
                     Value::String(String::new())
                 }
@@ -1005,7 +1527,56 @@ impl Harness {
                         "clipboardData.setData requires exactly two arguments".into(),
                     ));
                 }
-                Value::Bool(false)
+                let format = Self::normalize_clipboard_data_format(&evaluated_args[0].as_string());
+                let data = evaluated_args[1].as_string();
+                let mut entries = object.borrow_mut();
+
+                let mut types = Self::clipboard_data_types_from_entries(&entries);
+                if !types.iter().any(|item| item == &format) {
+                    types.push(format.clone());
+                }
+                Self::object_set_entry(
+                    &mut entries,
+                    "types".to_string(),
+                    Self::new_array_value(
+                        types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
+                    ),
+                );
+
+                let store = Self::clipboard_data_store_from_entries(&entries)
+                    .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
+                Self::object_set_entry(
+                    &mut store.borrow_mut(),
+                    format.clone(),
+                    Value::String(data.clone()),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
+                    Value::Object(store.clone()),
+                );
+                if Self::is_data_transfer_object(&entries) {
+                    let event_type =
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                    let items = Self::data_transfer_items_from_types_and_store(
+                        object.clone(),
+                        &entries,
+                        &event_type,
+                        &types,
+                        &store,
+                    );
+                    Self::object_set_entry(&mut entries, "items".to_string(), items);
+                }
+                if format == "text/plain" {
+                    Self::object_set_entry(
+                        &mut entries,
+                        INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                        Value::String(data),
+                    );
+                }
+                Value::Undefined
             }
             "clearData" => {
                 if evaluated_args.len() > 1 {
@@ -1013,6 +1584,147 @@ impl Harness {
                         "clipboardData.clearData supports at most one argument".into(),
                     ));
                 }
+
+                let mut entries = object.borrow_mut();
+                let writable = if Self::is_data_transfer_object(&entries) {
+                    matches!(
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                            .map(|value| value.as_string().to_ascii_lowercase())
+                            .as_deref(),
+                        Some("dragstart")
+                    )
+                } else {
+                    true
+                };
+                if !writable {
+                    return Ok(Some(Value::Undefined));
+                }
+
+                let mut types = Self::clipboard_data_types_from_entries(&entries);
+                let store = Self::clipboard_data_store_from_entries(&entries)
+                    .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
+
+                if let Some(format_arg) = evaluated_args.first() {
+                    let format = Self::normalize_clipboard_data_format(&format_arg.as_string());
+                    if format.is_empty() {
+                        types.clear();
+                        store.borrow_mut().clear();
+                    } else {
+                        types.retain(|item| item != &format);
+                        store.borrow_mut().delete_entry(&format);
+                    }
+                } else {
+                    types.clear();
+                    store.borrow_mut().clear();
+                }
+
+                Self::object_set_entry(
+                    &mut entries,
+                    "types".to_string(),
+                    Self::new_array_value(
+                        types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
+                    ),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
+                    Value::Object(store.clone()),
+                );
+                if Self::is_data_transfer_object(&entries) {
+                    let event_type =
+                        Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                    let items = Self::data_transfer_items_from_types_and_store(
+                        object.clone(),
+                        &entries,
+                        &event_type,
+                        &types,
+                        &store,
+                    );
+                    Self::object_set_entry(&mut entries, "items".to_string(), items);
+                }
+                let text = Self::object_get_entry(&store.borrow(), "text/plain")
+                    .map(|value| value.as_string())
+                    .unwrap_or_default();
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                    Value::String(text),
+                );
+                Value::Undefined
+            }
+            "setDragImage" => {
+                if evaluated_args.len() != 3 {
+                    return Err(Error::ScriptRuntime(
+                        "dataTransfer.setDragImage requires exactly three arguments".into(),
+                    ));
+                }
+                let mut entries = object.borrow_mut();
+                if !Self::is_data_transfer_object(&entries) {
+                    return Ok(None);
+                }
+                let writable = matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY)
+                        .map(|value| value.as_string().to_ascii_lowercase())
+                        .as_deref(),
+                    Some("dragstart")
+                );
+                if !writable {
+                    return Ok(Some(Value::Undefined));
+                }
+                let image = match evaluated_args.first() {
+                    Some(Value::Node(node)) if self.dom.element(*node).is_some() => *node,
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "TypeError: Failed to execute 'setDragImage': parameter 1 is not of type 'Element'"
+                                .into(),
+                        ))
+                    }
+                };
+                let x = Self::value_to_i64(&evaluated_args[1]);
+                let y = Self::value_to_i64(&evaluated_args[2]);
+                Self::object_set_entry(
+                    &mut entries,
+                    "\0\0bt_data_transfer:drag_image".to_string(),
+                    Value::Node(image),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "\0\0bt_data_transfer:drag_image_x".to_string(),
+                    Value::Number(x),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "\0\0bt_data_transfer:drag_image_y".to_string(),
+                    Value::Number(y),
+                );
+                Value::Undefined
+            }
+            "addElement" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "dataTransfer.addElement requires exactly one argument".into(),
+                    ));
+                }
+                let mut entries = object.borrow_mut();
+                if !Self::is_data_transfer_object(&entries) {
+                    return Ok(None);
+                }
+                let element = match evaluated_args.first() {
+                    Some(Value::Node(node)) if self.dom.element(*node).is_some() => *node,
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "TypeError: Failed to execute 'addElement': parameter 1 is not of type 'Element'"
+                                .into(),
+                        ))
+                    }
+                };
+                Self::object_set_entry(
+                    &mut entries,
+                    "\0\0bt_data_transfer:drag_source_override".to_string(),
+                    Value::Node(element),
+                );
                 Value::Undefined
             }
             _ => return Ok(None),

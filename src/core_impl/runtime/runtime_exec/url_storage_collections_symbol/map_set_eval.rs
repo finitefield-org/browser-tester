@@ -571,6 +571,20 @@ impl Harness {
         }
 
         let Value::Map(map) = target_value else {
+            if method == MapInstanceMethod::Clear {
+                return self.eval_expr(
+                    &Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.to_string())),
+                        member: "clear".to_string(),
+                        args: args.to_vec(),
+                        optional: false,
+                        optional_call: false,
+                    },
+                    env,
+                    event_param,
+                    event,
+                );
+            }
             if matches!(method, MapInstanceMethod::Get | MapInstanceMethod::Has) {
                 return Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not a FormData instance",
@@ -832,6 +846,20 @@ impl Harness {
         }
 
         let Value::Set(set) = target_value else {
+            if method == SetInstanceMethod::Add {
+                return self.eval_expr(
+                    &Expr::MemberCall {
+                        target: Box::new(Expr::Var(target.to_string())),
+                        member: "add".to_string(),
+                        args: args.to_vec(),
+                        optional: false,
+                        optional_call: false,
+                    },
+                    env,
+                    event_param,
+                    event,
+                );
+            }
             return Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not a Set",
                 target

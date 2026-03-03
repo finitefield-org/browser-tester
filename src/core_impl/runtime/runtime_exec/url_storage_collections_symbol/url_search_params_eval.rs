@@ -107,10 +107,29 @@ impl Harness {
                         "URL.createObjectURL requires exactly one argument".into(),
                     ));
                 }
-                let Value::Blob(blob) = args[0].clone() else {
-                    return Err(Error::ScriptRuntime(
-                        "URL.createObjectURL requires a Blob argument".into(),
-                    ));
+                let blob = match args[0].clone() {
+                    Value::Blob(blob) => blob,
+                    Value::Object(entries) => {
+                        let entries = entries.borrow();
+                        if !Self::is_mock_file_object(&entries) {
+                            return Err(Error::ScriptRuntime(
+                                "URL.createObjectURL requires a Blob argument".into(),
+                            ));
+                        }
+                        match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
+                            Some(Value::Blob(blob)) => blob,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "URL.createObjectURL requires a Blob argument".into(),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "URL.createObjectURL requires a Blob argument".into(),
+                        ));
+                    }
                 };
                 let object_url = self.browser_apis.allocate_blob_url();
                 self.browser_apis

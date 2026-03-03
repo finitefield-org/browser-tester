@@ -307,10 +307,14 @@ impl Harness {
                         DomProp::BodyDeprecatedAttr(attr_name) => Ok(Value::String(
                             self.dom.attr(node, attr_name).unwrap_or_default(),
                         )),
-                        DomProp::ClientWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
-                        DomProp::ClientHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
-                        DomProp::ClientLeft => Ok(Value::Number(self.dom.offset_left(node)?)),
-                        DomProp::ClientTop => Ok(Value::Number(self.dom.offset_top(node)?)),
+                        DomProp::ClientWidth => {
+                            Ok(Value::Number(self.client_width_property_value(node)?))
+                        }
+                        DomProp::ClientHeight => {
+                            Ok(Value::Number(self.client_height_property_value(node)?))
+                        }
+                        DomProp::ClientLeft => Ok(Value::Number(self.dom.client_left(node)?)),
+                        DomProp::ClientTop => Ok(Value::Number(self.dom.client_top(node)?)),
                         DomProp::CurrentCssZoom => Ok(Value::Number(1)),
                         DomProp::Dataset(key) => {
                             Ok(Value::String(self.dom.dataset_get(node, key)?))
@@ -559,9 +563,46 @@ impl Harness {
                             self.dom.attr(node, "target").unwrap_or_default(),
                         )),
                         DomProp::AnchorText => Ok(Value::String(self.dom.text_content(node))),
-                        DomProp::AnchorType => Ok(Value::String(
-                            self.dom.attr(node, "type").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorType => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                            {
+                                let normalized = self
+                                    .dom
+                                    .attr(node, "type")
+                                    .map(|value| value.trim().to_string())
+                                    .filter(|value| !value.is_empty())
+                                    .map(|value| {
+                                        if value.eq_ignore_ascii_case("reset") {
+                                            "reset".to_string()
+                                        } else if value.eq_ignore_ascii_case("button") {
+                                            "button".to_string()
+                                        } else {
+                                            "submit".to_string()
+                                        }
+                                    })
+                                    .unwrap_or_else(|| "submit".to_string());
+                                Ok(Value::String(normalized))
+                            } else if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                            {
+                                Ok(Value::String(self.normalized_input_type(node)))
+                            } else if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+                            {
+                                Ok(Value::String(self.select_type_property_value(node)))
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "type").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorUsername => {
                             Ok(Value::String(self.anchor_location_parts(node).username))
                         }
@@ -883,6 +924,64 @@ impl Harness {
             })?;
 
         Ok(Some((clipboard, callee)))
+    }
+
+    fn viewport_inner_height_value(&self) -> i64 {
+        const DEFAULT_INNER_HEIGHT: f64 = 768.0;
+        let window = self.dom_runtime.window_object.borrow();
+        let raw_value = Self::object_get_entry(&window, "innerHeight");
+        let parsed = match raw_value {
+            Some(Value::Number(value)) => Some(value as f64),
+            Some(Value::Float(value)) if value.is_finite() => Some(value),
+            Some(Value::String(value)) => value.parse::<f64>().ok(),
+            _ => None,
+        }
+        .unwrap_or(DEFAULT_INNER_HEIGHT);
+        if !parsed.is_finite() {
+            return DEFAULT_INNER_HEIGHT as i64;
+        }
+        parsed.max(0.0).trunc() as i64
+    }
+
+    fn viewport_inner_width_value(&self) -> i64 {
+        const DEFAULT_INNER_WIDTH: f64 = 1024.0;
+        let window = self.dom_runtime.window_object.borrow();
+        let raw_value = Self::object_get_entry(&window, "innerWidth");
+        let parsed = match raw_value {
+            Some(Value::Number(value)) => Some(value as f64),
+            Some(Value::Float(value)) if value.is_finite() => Some(value),
+            Some(Value::String(value)) => value.parse::<f64>().ok(),
+            _ => None,
+        }
+        .unwrap_or(DEFAULT_INNER_WIDTH);
+        if !parsed.is_finite() {
+            return DEFAULT_INNER_WIDTH as i64;
+        }
+        parsed.max(0.0).trunc() as i64
+    }
+
+    fn client_width_property_value(&self, node: NodeId) -> Result<i64> {
+        let is_document_html_element = self.dom.document_element() == Some(node)
+            && self
+                .dom
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("html"));
+        if is_document_html_element {
+            return Ok(self.viewport_inner_width_value());
+        }
+        self.dom.client_width(node)
+    }
+
+    fn client_height_property_value(&self, node: NodeId) -> Result<i64> {
+        let is_document_html_element = self.dom.document_element() == Some(node)
+            && self
+                .dom
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("html"));
+        if is_document_html_element {
+            return Ok(self.viewport_inner_height_value());
+        }
+        self.dom.client_height(node)
     }
 
     pub(crate) fn node_type_number(&self, node: NodeId) -> i64 {

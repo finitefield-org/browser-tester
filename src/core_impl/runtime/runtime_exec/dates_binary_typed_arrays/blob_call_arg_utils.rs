@@ -30,6 +30,13 @@ impl Harness {
         ])
     }
 
+    pub(crate) fn new_writable_stream_placeholder_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_WRITABLE_STREAM_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])
+    }
+
     pub(crate) fn new_uint8_typed_array_from_bytes(bytes: &[u8]) -> Value {
         let buffer = Rc::new(RefCell::new(ArrayBufferValue {
             bytes: bytes.to_vec(),

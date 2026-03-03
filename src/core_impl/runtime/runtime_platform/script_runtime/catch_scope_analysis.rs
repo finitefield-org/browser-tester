@@ -425,14 +425,33 @@ impl Harness {
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
-        let Some(frame) = self.script_runtime.listener_capture_env_stack.last() else {
-            return;
-        };
-        let Some(shared_env) = frame.shared_env.as_ref() else {
-            return;
-        };
-        if Rc::strong_count(shared_env) > 1 {
-            *shared_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
+            let Some(shared_env) = frame.shared_env.as_ref() else {
+                continue;
+            };
+            if Rc::strong_count(shared_env) <= 1 {
+                continue;
+            }
+            let snapshot = shared_env.borrow().to_map();
+            let mut next_snapshot = snapshot.clone();
+            let mut changed = false;
+            for (name, previous) in &snapshot {
+                if Self::is_internal_env_key(name) {
+                    continue;
+                }
+                let Some(next) = env.get(name) else {
+                    continue;
+                };
+                if self.strict_equal(previous, next) {
+                    continue;
+                }
+                next_snapshot.insert(name.clone(), next.clone());
+                changed = true;
+            }
+            if changed {
+                *shared_env.borrow_mut() = ScriptEnv::from_snapshot(&next_snapshot);
+            }
+            break;
         }
     }
 }

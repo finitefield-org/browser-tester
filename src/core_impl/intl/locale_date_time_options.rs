@@ -133,7 +133,10 @@ impl Harness {
                 matches!(Self::intl_locale_family(locale), "en" | "de")
             }
             IntlFormatterKind::NumberFormat => {
-                matches!(Self::intl_locale_family(locale), "en" | "de")
+                matches!(
+                    Self::intl_locale_family(locale),
+                    "en" | "de" | "id" | "ar" | "ja" | "zh" | "pt"
+                )
             }
             IntlFormatterKind::PluralRules => {
                 matches!(Self::intl_locale_family(locale), "en" | "ar")
@@ -218,54 +221,8 @@ impl Harness {
     }
 
     pub(crate) fn intl_format_number_for_locale(value: f64, locale: &str) -> String {
-        if !value.is_finite() {
-            return Self::format_number_default(value);
-        }
-
-        let family = Self::intl_locale_family(locale);
-        let (group_sep, decimal_sep) = if family == "de" {
-            ('.', ',')
-        } else {
-            (',', '.')
-        };
-
-        let mut rendered = Self::format_number_default(value.abs());
-        if rendered.contains('e') {
-            if decimal_sep != '.' {
-                rendered = rendered.replacen('.', &decimal_sep.to_string(), 1);
-            }
-            if value.is_sign_negative() {
-                return format!("-{rendered}");
-            }
-            return rendered;
-        }
-
-        let mut parts = rendered.splitn(2, '.');
-        let integer = parts.next().unwrap_or_default();
-        let fraction = parts.next();
-
-        let mut grouped = String::new();
-        for (index, ch) in integer.chars().rev().enumerate() {
-            if index > 0 && index % 3 == 0 {
-                grouped.push(group_sep);
-            }
-            grouped.push(ch);
-        }
-        let mut grouped_integer = grouped.chars().rev().collect::<String>();
-        if grouped_integer.is_empty() {
-            grouped_integer.push('0');
-        }
-
-        if let Some(fraction) = fraction {
-            grouped_integer.push(decimal_sep);
-            grouped_integer.push_str(fraction);
-        }
-
-        if value.is_sign_negative() && grouped_integer != "0" {
-            format!("-{grouped_integer}")
-        } else {
-            grouped_integer
-        }
+        let rendered = Self::format_number_default(value);
+        Self::format_preformatted_number_for_locale(&rendered, locale, None)
     }
 
     pub(crate) fn intl_locale_unicode_extension_value(locale: &str, key: &str) -> Option<String> {
@@ -648,21 +605,55 @@ impl Harness {
         }
     }
 
+    pub(crate) fn intl_time_zone_registry() -> &'static [(&'static str, i64)] {
+        &[
+            ("UTC", 0),
+            ("Africa/Cairo", 2 * 60),
+            ("America/Los_Angeles", -8 * 60),
+            ("America/New_York", -5 * 60),
+            ("Asia/Jerusalem", 2 * 60),
+            ("Asia/Kolkata", 5 * 60 + 30),
+            ("Asia/Seoul", 9 * 60),
+            ("Asia/Shanghai", 8 * 60),
+            ("Asia/Tokyo", 9 * 60),
+            ("Australia/Sydney", 11 * 60),
+            ("Europe/Berlin", 60),
+            ("Europe/London", 0),
+            ("Europe/Paris", 60),
+        ]
+    }
+
+    pub(crate) fn intl_supported_time_zone_values() -> Vec<String> {
+        let mut values = Self::intl_time_zone_registry()
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect::<Vec<_>>();
+        values.sort();
+        values.dedup();
+        values
+    }
+
     pub(crate) fn intl_normalize_time_zone(input: &str) -> Option<String> {
-        let normalized = input.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "utc" | "etc/utc" | "gmt" => Some("UTC".to_string()),
-            "australia/sydney" => Some("Australia/Sydney".to_string()),
-            "america/los_angeles" => Some("America/Los_Angeles".to_string()),
-            _ => None,
+        let trimmed = input.trim();
+        if matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "utc" | "etc/utc" | "gmt" | "etc/gmt"
+        ) {
+            return Some("UTC".to_string());
         }
+        Self::intl_time_zone_registry()
+            .iter()
+            .find_map(|(canonical, _)| {
+                canonical
+                    .eq_ignore_ascii_case(trimmed)
+                    .then(|| (*canonical).to_string())
+            })
     }
 
     pub(crate) fn intl_time_zone_offset_minutes(time_zone: &str, _timestamp_ms: i64) -> i64 {
-        match time_zone {
-            "Australia/Sydney" => 11 * 60,
-            "America/Los_Angeles" => -8 * 60,
-            _ => 0,
-        }
+        Self::intl_time_zone_registry()
+            .iter()
+            .find_map(|(name, offset)| (*name == time_zone).then_some(*offset))
+            .unwrap_or(0)
     }
 }

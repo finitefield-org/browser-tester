@@ -40,8 +40,8 @@ fn element_has_pointer_capture_tracks_owner_per_pointer_id() -> Result<()> {
 }
 
 #[test]
-fn element_has_pointer_capture_reflects_release_pointer_capture_and_pointer_id_coercion(
-) -> Result<()> {
+fn element_has_pointer_capture_reflects_release_pointer_capture_and_pointer_id_coercion()
+-> Result<()> {
     let html = r#"
         <div id='target'></div>
         <div id='other'></div>

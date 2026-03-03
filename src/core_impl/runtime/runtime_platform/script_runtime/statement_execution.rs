@@ -625,7 +625,10 @@ impl Harness {
         Ok(None)
     }
 
-    fn event_target_listener_node_id(&mut self, object: &Rc<RefCell<ObjectValue>>) -> NodeId {
+    pub(crate) fn event_target_listener_node_id(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+    ) -> NodeId {
         let object_id = Rc::as_ptr(object) as usize;
         if let Some(node_id) = self
             .script_runtime
@@ -645,7 +648,7 @@ impl Harness {
         node_id
     }
 
-    fn event_dispatch_payload_from_value(
+    pub(crate) fn event_dispatch_payload_from_value(
         &self,
         value: &Value,
     ) -> Result<(String, Option<Value>, bool, bool)> {
@@ -666,7 +669,7 @@ impl Harness {
         Ok((value.as_string(), None, false, false))
     }
 
-    fn dispatch_event_target_with_env(
+    pub(crate) fn dispatch_event_target_with_env(
         &mut self,
         target_object: Rc<RefCell<ObjectValue>>,
         event_payload: Value,
@@ -676,7 +679,7 @@ impl Harness {
             self.event_dispatch_payload_from_value(&event_payload)?;
         if event_type.is_empty() {
             return Err(Error::ScriptRuntime(
-                "dispatchEvent requires non-empty event type".into(),
+                "InvalidStateError: dispatchEvent requires non-empty event type".into(),
             ));
         }
 
@@ -699,6 +702,47 @@ impl Harness {
         self.invoke_listeners(node_id, &mut event, env, false)?;
 
         Ok(event)
+    }
+
+    pub(crate) fn dispatch_event_target(
+        &mut self,
+        target_object: Rc<RefCell<ObjectValue>>,
+        event_payload: Value,
+    ) -> Result<EventState> {
+        self.with_script_env(|this, env| {
+            this.dispatch_event_target_with_env(target_object.clone(), event_payload.clone(), env)
+        })
+    }
+
+    pub(crate) fn dispatch_dom_event_payload_with_env(
+        &mut self,
+        target_node: NodeId,
+        event_payload: Value,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        let (event_type, detail, bubbles, cancelable) =
+            self.event_dispatch_payload_from_value(&event_payload)?;
+        if event_type.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "InvalidStateError: dispatchEvent requires non-empty event type".into(),
+            ));
+        }
+
+        let mut event = EventState::new_untrusted(&event_type, target_node, self.scheduler.now_ms);
+        event.detail = detail;
+        event.bubbles = bubbles;
+        event.cancelable = cancelable;
+        self.dispatch_prepared_event_with_env(event, env)
+    }
+
+    pub(crate) fn dispatch_dom_event_payload(
+        &mut self,
+        target_node: NodeId,
+        event_payload: Value,
+    ) -> Result<EventState> {
+        self.with_script_env(|this, env| {
+            this.dispatch_dom_event_payload_with_env(target_node, event_payload.clone(), env)
+        })
     }
 
     fn private_accessor_get_key() -> &'static str {
@@ -3061,7 +3105,13 @@ impl Harness {
                                     self.dom.set_text_content(node, &value.as_string())?
                                 }
                                 DomProp::AnchorType => {
-                                    self.dom.set_attr(node, "type", &value.as_string())?
+                                    if !self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+                                    {
+                                        self.dom.set_attr(node, "type", &value.as_string())?
+                                    }
                                 }
                                 DomProp::AnchorUsername => {
                                     self.set_anchor_url_property(node, "username", value.clone())?
@@ -4505,6 +4555,7 @@ impl Harness {
                                             event_type.clone(),
                                             Listener {
                                                 capture: *capture,
+                                                is_event_handler_property: false,
                                                 handler: handler.clone(),
                                                 captured_env,
                                                 captured_pending_function_decls: self
@@ -4536,6 +4587,7 @@ impl Harness {
                                         event_type.clone(),
                                         Listener {
                                             capture: *capture,
+                                            is_event_handler_property: false,
                                             handler: handler.clone(),
                                             captured_env,
                                             captured_pending_function_decls: self
@@ -4586,11 +4638,11 @@ impl Harness {
                             }
                         }
                         Stmt::DispatchEvent { target, event_type } => {
+                            let event_payload =
+                                self.eval_expr(event_type, env, event_param, event)?;
                             if let Some(target_object) =
                                 self.resolve_event_target_object_for_query(target, env)?
                             {
-                                let event_payload =
-                                    self.eval_expr(event_type, env, event_param, event)?;
                                 let _ = self.dispatch_event_target_with_env(
                                     target_object,
                                     event_payload,
@@ -4600,15 +4652,8 @@ impl Harness {
                             }
 
                             let node = self.resolve_dom_query_required_runtime(target, env)?;
-                            let event_name = self
-                                .eval_expr(event_type, env, event_param, event)?
-                                .as_string();
-                            if event_name.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "dispatchEvent requires non-empty event type".into(),
-                                ));
-                            }
-                            let _ = self.dispatch_event_with_env(node, &event_name, env, false)?;
+                            let _ =
+                                self.dispatch_dom_event_payload_with_env(node, event_payload, env)?;
                         }
                         Stmt::Expr(expr) => {
                             let _ = self.eval_expr(expr, env, event_param, event)?;
@@ -4635,10 +4680,24 @@ impl Harness {
         }
 
         let runtime_snapshot = self.script_runtime.env.to_map();
-        for (name, runtime_value) in runtime_snapshot {
+        let Some(Value::Array(sync_names)) = env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) else {
+            return;
+        };
+        let sync_names = sync_names
+            .borrow()
+            .iter()
+            .filter_map(|entry| match entry {
+                Value::String(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for name in sync_names {
             if Self::is_internal_env_key(&name) {
                 continue;
             }
+            let Some(runtime_value) = runtime_snapshot.get(&name).cloned() else {
+                continue;
+            };
             let should_update = match env.get(&name) {
                 Some(current) => !self.strict_equal(current, &runtime_value),
                 None => true,

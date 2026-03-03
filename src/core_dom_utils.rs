@@ -59,6 +59,24 @@ pub(crate) const INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY: &str =
     "\u{0}\u{0}bt_clipboard:write_text_default";
 pub(crate) const INTERNAL_CLIPBOARD_DATA_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard:data";
 pub(crate) const INTERNAL_CLIPBOARD_DATA_TEXT_KEY: &str = "\u{0}\u{0}bt_clipboard:data:text";
+pub(crate) const INTERNAL_CLIPBOARD_DATA_STORE_KEY: &str = "\u{0}\u{0}bt_clipboard:data:store";
+pub(crate) const INTERNAL_DATA_TRANSFER_OBJECT_KEY: &str = "\u{0}\u{0}bt_data_transfer:object";
+pub(crate) const INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:event_type";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item:object";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item:kind";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_TYPE_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item:type";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_DATA_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item:data";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_LIST_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item_list:object";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_LIST_OWNER_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item_list:owner";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_LIST_EVENT_TYPE_KEY: &str =
+    "\u{0}\u{0}bt_data_transfer:item_list:event_type";
 pub(crate) const INTERNAL_CLIPBOARD_ITEM_KEY_PREFIX: &str = "\u{0}\u{0}bt_clipboard_item:";
 pub(crate) const INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard_item:object";
 pub(crate) const INTERNAL_MOCK_FILE_KEY_PREFIX: &str = "\u{0}\u{0}bt_mock_file:";
@@ -99,6 +117,29 @@ pub(crate) const INTERNAL_RANGE_START_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:sta
 pub(crate) const INTERNAL_RANGE_END_CONTAINER_KEY: &str = "\u{0}\u{0}bt_range:end_container";
 pub(crate) const INTERNAL_RANGE_END_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:end_offset";
 pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
+pub(crate) const INTERNAL_WRITABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_writable_stream";
+pub(crate) const INTERNAL_TEXT_DECODER_ENCODING_KEY: &str = "\u{0}\u{0}bt_text_decoder:encoding";
+pub(crate) const INTERNAL_TEXT_DECODER_FATAL_KEY: &str = "\u{0}\u{0}bt_text_decoder:fatal";
+pub(crate) const INTERNAL_TEXT_DECODER_IGNORE_BOM_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder:ignore_bom";
+pub(crate) const INTERNAL_TEXT_ENCODER_STREAM_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_text_encoder_stream:object";
+pub(crate) const INTERNAL_TEXT_ENCODER_STREAM_READABLE_KEY: &str =
+    "\u{0}\u{0}bt_text_encoder_stream:readable";
+pub(crate) const INTERNAL_TEXT_ENCODER_STREAM_WRITABLE_KEY: &str =
+    "\u{0}\u{0}bt_text_encoder_stream:writable";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:object";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_ENCODING_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:encoding";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_FATAL_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:fatal";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_IGNORE_BOM_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:ignore_bom";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_READABLE_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:readable";
+pub(crate) const INTERNAL_TEXT_DECODER_STREAM_WRITABLE_KEY: &str =
+    "\u{0}\u{0}bt_text_decoder_stream:writable";
 pub(crate) const INTERNAL_IMPORT_META_OBJECT_KEY: &str = "\u{0}\u{0}bt_import_meta:object";
 pub(crate) const INTERNAL_NEW_TARGET_KEY: &str = "\u{0}\u{0}bt_new_target";
 pub(crate) const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";

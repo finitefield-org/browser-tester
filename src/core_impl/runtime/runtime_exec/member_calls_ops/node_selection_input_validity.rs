@@ -253,6 +253,162 @@ impl Harness {
         Ok(Self::new_array_value(vec![rect]))
     }
 
+    pub(crate) fn is_select_element(&self, node: NodeId) -> bool {
+        self.dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+    }
+
+    pub(crate) fn select_option_nodes(&self, select_node: NodeId) -> Vec<NodeId> {
+        if !self.is_select_element(select_node) {
+            return Vec::new();
+        }
+        let mut options = Vec::new();
+        self.dom.collect_select_options(select_node, &mut options);
+        options
+    }
+
+    pub(crate) fn select_selected_index_value(&self, select_node: NodeId) -> i64 {
+        let options = self.select_option_nodes(select_node);
+        if options.is_empty() {
+            return -1;
+        }
+        options
+            .iter()
+            .position(|option| self.dom.attr(*option, "selected").is_some())
+            .map(|index| index as i64)
+            .unwrap_or(-1)
+    }
+
+    pub(crate) fn select_selected_option_nodes(&self, select_node: NodeId) -> Vec<NodeId> {
+        self.select_option_nodes(select_node)
+            .iter()
+            .copied()
+            .filter(|option| self.dom.attr(*option, "selected").is_some())
+            .collect::<Vec<_>>()
+    }
+
+    pub(crate) fn select_named_item(&self, select_node: NodeId, key: &str) -> Option<NodeId> {
+        if key.is_empty() {
+            return None;
+        }
+        let options = self.select_option_nodes(select_node);
+        options
+            .iter()
+            .copied()
+            .into_iter()
+            .find(|option| self.dom.attr(*option, "id").is_some_and(|id| id == key))
+            .or_else(|| {
+                options.iter().copied().find(|option| {
+                    self.dom
+                        .attr(*option, "name")
+                        .is_some_and(|name| name == key)
+                })
+            })
+    }
+
+    pub(crate) fn set_select_selected_index(
+        &mut self,
+        select_node: NodeId,
+        selected_index: i64,
+    ) -> Result<()> {
+        if !self.is_select_element(select_node) {
+            return Err(Error::ScriptRuntime(
+                "selectedIndex target is not a select".into(),
+            ));
+        }
+
+        let options = self.select_option_nodes(select_node);
+        let selected_position = usize::try_from(selected_index)
+            .ok()
+            .filter(|index| *index < options.len());
+        let selected_value = selected_position
+            .map(|index| self.dom.option_effective_value(options[index]))
+            .transpose()?
+            .unwrap_or_default();
+
+        for (index, option) in options.iter().enumerate() {
+            let option_element = self.dom.element_mut(*option).ok_or_else(|| {
+                Error::ScriptRuntime("selectedIndex option target is not an element".into())
+            })?;
+            if Some(index) == selected_position {
+                option_element
+                    .attrs
+                    .insert("selected".to_string(), "true".to_string());
+            } else {
+                option_element.attrs.remove("selected");
+            }
+        }
+
+        let select_element = self
+            .dom
+            .element_mut(select_node)
+            .ok_or_else(|| Error::ScriptRuntime("selectedIndex target is not an element".into()))?;
+        select_element.value = selected_value;
+        Ok(())
+    }
+
+    pub(crate) fn set_select_length(&mut self, select_node: NodeId, next_len: usize) -> Result<()> {
+        if !self.is_select_element(select_node) {
+            return Err(Error::ScriptRuntime("length target is not a select".into()));
+        }
+
+        let options = self.select_option_nodes(select_node);
+        if next_len < options.len() {
+            for option in options.iter().skip(next_len).rev() {
+                self.dom.remove_node(*option)?;
+            }
+        } else if next_len > options.len() {
+            for _ in options.len()..next_len {
+                let option = self.dom.create_detached_element("option".to_string());
+                self.dom.append_child(select_node, option)?;
+            }
+        }
+        self.dom.sync_select_value(select_node)
+    }
+
+    pub(crate) fn select_size_property_value(&self, select_node: NodeId) -> i64 {
+        self.dom
+            .attr(select_node, "size")
+            .and_then(|raw| Self::parse_non_negative_int(&raw))
+            .filter(|size| *size > 0)
+            .unwrap_or_else(|| {
+                if self.dom.attr(select_node, "multiple").is_some() {
+                    4
+                } else {
+                    1
+                }
+            })
+    }
+
+    pub(crate) fn select_type_property_value(&self, select_node: NodeId) -> String {
+        if self.dom.attr(select_node, "multiple").is_some() {
+            "select-multiple".to_string()
+        } else {
+            "select-one".to_string()
+        }
+    }
+
+    pub(crate) fn select_will_validate(&self, select_node: NodeId) -> bool {
+        self.is_select_element(select_node) && !self.is_effectively_disabled(select_node)
+    }
+
+    pub(crate) fn labels_for_control_node(&self, control: NodeId) -> Vec<NodeId> {
+        if !self.is_labelable_control(control) {
+            return Vec::new();
+        }
+        self.dom
+            .all_element_nodes()
+            .into_iter()
+            .filter(|node| {
+                self.dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("label"))
+            })
+            .filter(|label| self.resolve_label_control(*label) == Some(control))
+            .collect::<Vec<_>>()
+    }
+
     fn parse_set_html_unsafe_tag_set(value: &Value) -> Result<std::collections::HashSet<String>> {
         match value {
             Value::Array(items) => Ok(items
@@ -1444,6 +1600,7 @@ impl Harness {
                             event_type,
                             Listener {
                                 capture,
+                                is_event_handler_property: false,
                                 handler: function.handler.clone(),
                                 captured_env: function.captured_env.clone(),
                                 captured_pending_function_decls: function
@@ -1511,7 +1668,7 @@ impl Harness {
         node: NodeId,
         member: &str,
         evaluated_args: &[Value],
-        _event: &EventState,
+        event: &EventState,
     ) -> Result<Option<Value>> {
         match member {
             "addEventListener" => {
@@ -1529,6 +1686,7 @@ impl Harness {
                             event_type,
                             Listener {
                                 capture,
+                                is_event_handler_property: false,
                                 handler: function.handler.clone(),
                                 captured_env: function.captured_env.clone(),
                                 captured_pending_function_decls: function
@@ -1564,6 +1722,15 @@ impl Harness {
                         "removeEventListener callback must be a function".into(),
                     )),
                 }
+            }
+            "click" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "click does not take arguments".into(),
+                    ));
+                }
+                self.click_node(node)?;
+                Ok(Some(Value::Undefined))
             }
             "attachShadow" => {
                 if evaluated_args.len() != 1 {
@@ -2367,21 +2534,128 @@ impl Harness {
                 let cloned = self.clone_dom_node(node, deep)?;
                 Ok(Some(Value::Node(cloned)))
             }
+            "add" => {
+                if !self.is_select_element(node) {
+                    return Ok(None);
+                }
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "add on HTMLSelectElement requires one or two arguments".into(),
+                    ));
+                }
+                let option = match evaluated_args.first() {
+                    Some(Value::Node(option)) => *option,
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "TypeError: Failed to execute 'add' on 'HTMLSelectElement': parameter 1 is not of type 'HTMLElement'"
+                                .into(),
+                        ));
+                    }
+                };
+                let option_tag = self.dom.tag_name(option).unwrap_or_default();
+                if !option_tag.eq_ignore_ascii_case("option")
+                    && !option_tag.eq_ignore_ascii_case("optgroup")
+                {
+                    return Err(Error::ScriptRuntime(
+                        "TypeError: Failed to execute 'add' on 'HTMLSelectElement': parameter 1 is not of type 'HTMLElement'"
+                            .into(),
+                    ));
+                }
+
+                let before = match evaluated_args.get(1) {
+                    None | Some(Value::Undefined) | Some(Value::Null) => None,
+                    Some(Value::Node(candidate)) if self.dom.parent(*candidate) == Some(node) => {
+                        Some(*candidate)
+                    }
+                    Some(value) => self
+                        .value_as_index(value)
+                        .and_then(|index| self.select_option_nodes(node).get(index).copied()),
+                };
+
+                if let Some(before) = before {
+                    self.dom.insert_before(node, option, before)?;
+                } else {
+                    self.dom.append_child(node, option)?;
+                }
+                self.dom.sync_select_value(node)?;
+                Ok(Some(Value::Undefined))
+            }
+            "item" => {
+                if !self.is_select_element(node) {
+                    return Ok(None);
+                }
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "item on HTMLSelectElement requires exactly one index argument".into(),
+                    ));
+                }
+                let index = Self::value_to_i64(&evaluated_args[0]);
+                if index < 0 {
+                    return Ok(Some(Value::Null));
+                }
+                Ok(Some(
+                    self.select_option_nodes(node)
+                        .get(index as usize)
+                        .copied()
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "namedItem" => {
+                if !self.is_select_element(node) {
+                    return Ok(None);
+                }
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "namedItem on HTMLSelectElement requires exactly one name argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                Ok(Some(
+                    self.select_named_item(node, &name)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
             "remove" => {
-                if !evaluated_args.is_empty() {
+                if self.is_select_element(node) {
+                    match evaluated_args.len() {
+                        0 => {}
+                        1 => {
+                            let index = Self::value_to_i64(&evaluated_args[0]);
+                            if index >= 0 {
+                                if let Some(option) =
+                                    self.select_option_nodes(node).get(index as usize).copied()
+                                {
+                                    self.dom.remove_node(option)?;
+                                }
+                                self.dom.sync_select_value(node)?;
+                            }
+                            return Ok(Some(Value::Undefined));
+                        }
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "remove on HTMLSelectElement supports at most one index argument"
+                                    .into(),
+                            ));
+                        }
+                    }
+                } else if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime("remove takes no arguments".into()));
                 }
-                if let Some(active) = self.dom.active_element() {
-                    if active == node || self.dom.is_descendant_of(active, node) {
-                        self.dom.set_active_element(None);
+                if evaluated_args.is_empty() {
+                    if let Some(active) = self.dom.active_element() {
+                        if active == node || self.dom.is_descendant_of(active, node) {
+                            self.dom.set_active_element(None);
+                        }
                     }
-                }
-                if let Some(active_pseudo) = self.dom.active_pseudo_element() {
-                    if active_pseudo == node || self.dom.is_descendant_of(active_pseudo, node) {
-                        self.dom.set_active_pseudo_element(None);
+                    if let Some(active_pseudo) = self.dom.active_pseudo_element() {
+                        if active_pseudo == node || self.dom.is_descendant_of(active_pseudo, node) {
+                            self.dom.set_active_pseudo_element(None);
+                        }
                     }
+                    self.dom.remove_node(node)?;
                 }
-                self.dom.remove_node(node)?;
                 Ok(Some(Value::Undefined))
             }
             "focus" => {
@@ -2405,6 +2679,12 @@ impl Harness {
                     ));
                 }
                 let pointer_id = Self::value_to_i64(&evaluated_args[0]);
+                if pointer_id <= 0 {
+                    return Err(Error::ScriptRuntime(
+                        "NotFoundError: Failed to execute 'setPointerCapture': No active pointer with the given id"
+                            .into(),
+                    ));
+                }
                 self.dom_runtime
                     .pointer_capture_targets
                     .insert(pointer_id, node);
@@ -2516,6 +2796,47 @@ impl Harness {
                     }
                 };
                 Ok(Some(Value::String(format!("data:{mime};base64,{payload}"))))
+            }
+            "toBlob" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 3 {
+                    return Err(Error::ScriptRuntime(
+                        "toBlob requires one to three arguments".into(),
+                    ));
+                }
+                let is_canvas = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+                if !is_canvas {
+                    return Ok(None);
+                }
+                let callback = evaluated_args[0].clone();
+                if !self.is_callable_value(&callback) {
+                    return Err(Error::ScriptRuntime(
+                        "toBlob callback must be callable".into(),
+                    ));
+                }
+                let mime = evaluated_args
+                    .get(1)
+                    .map(Value::as_string)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "image/png".to_string());
+                let mime = if mime.eq_ignore_ascii_case("image/png")
+                    || mime.eq_ignore_ascii_case("image/jpeg")
+                    || mime.eq_ignore_ascii_case("image/webp")
+                {
+                    mime.to_ascii_lowercase()
+                } else {
+                    "image/png".to_string()
+                };
+                let bytes = match mime.as_str() {
+                    "image/jpeg" => vec![0xFF, 0xD8, 0xFF, 0xD9],
+                    "image/webp" => b"RIFFWEBP".to_vec(),
+                    _ => vec![0x89, b'P', b'N', b'G'],
+                };
+                let blob = Self::new_blob_value(bytes, mime);
+                self.execute_callback_value(&callback, &[blob], event)?;
+                Ok(Some(Value::Undefined))
             }
             "getElementsByClassName" => {
                 if evaluated_args.len() != 1 {
@@ -3652,6 +3973,15 @@ impl Harness {
                 || validity.step_mismatch
                 || validity.bad_input
                 || validity.custom_error);
+            return Ok(validity);
+        }
+        if tag_name.eq_ignore_ascii_case("select") {
+            let value = self.dom.value(node)?;
+            if self.dom.required(node) && value.is_empty() {
+                validity.value_missing = true;
+            }
+            validity.custom_error = !self.dom.custom_validity_message(node)?.is_empty();
+            validity.valid = !(validity.value_missing || validity.custom_error);
             return Ok(validity);
         }
         if !tag_name.eq_ignore_ascii_case("input") {

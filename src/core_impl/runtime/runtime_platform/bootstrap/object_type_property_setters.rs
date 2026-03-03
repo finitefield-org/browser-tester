@@ -118,8 +118,10 @@ impl Harness {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
             | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL" | "Element"
-            | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Document" | "Node"
-            | "NodeFilter" => Err(Error::ScriptRuntime(format!("window.{key} is read-only"))),
+            | "DataTransfer" | "HTMLElement" | "HTMLInputElement" | "HTMLSelectElement"
+            | "DOMParser" | "Document" | "Node" | "NodeFilter" => {
+                Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
+            }
             "location" => self.set_location_property("href", value),
             "localStorage" => {
                 Self::object_set_entry(
@@ -180,6 +182,60 @@ impl Harness {
                     pairs.push((key.to_string(), value.as_string()));
                 }
                 Self::set_storage_pairs(&mut entries, &pairs);
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn set_data_transfer_object_property(
+        &mut self,
+        data_transfer_object: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        let key_lower = key.to_ascii_lowercase();
+        match key_lower.as_str() {
+            "dropeffect" => {
+                let next = match value.as_string().to_ascii_lowercase().as_str() {
+                    "none" | "copy" | "link" | "move" => value.as_string().to_ascii_lowercase(),
+                    _ => "none".to_string(),
+                };
+                Self::object_set_entry(
+                    &mut data_transfer_object.borrow_mut(),
+                    "dropEffect".to_string(),
+                    Value::String(next),
+                );
+                Ok(())
+            }
+            "effectallowed" => {
+                let normalized = match value.as_string().to_ascii_lowercase().as_str() {
+                    "none" => Some("none"),
+                    "copy" => Some("copy"),
+                    "copylink" => Some("copyLink"),
+                    "copymove" => Some("copyMove"),
+                    "link" => Some("link"),
+                    "linkmove" => Some("linkMove"),
+                    "move" => Some("move"),
+                    "all" => Some("all"),
+                    "uninitialized" => Some("uninitialized"),
+                    _ => None,
+                };
+                if let Some(next) = normalized {
+                    Self::object_set_entry(
+                        &mut data_transfer_object.borrow_mut(),
+                        "effectAllowed".to_string(),
+                        Value::String(next.to_string()),
+                    );
+                }
+                Ok(())
+            }
+            "files" | "items" | "types" => Ok(()),
+            _ => {
+                Self::object_set_entry(
+                    &mut data_transfer_object.borrow_mut(),
+                    key.to_string(),
+                    value,
+                );
                 Ok(())
             }
         }
@@ -252,30 +308,40 @@ impl Harness {
         }
 
         let event_type = raw_event_type.to_ascii_lowercase();
-        if let Some(previous_handler) = self
+        let previous_handler = self
             .dom_runtime
             .node_event_handler_props
-            .remove(&(node, event_type.clone()))
-        {
-            let _ = self
-                .listeners
-                .remove(node, &event_type, false, &previous_handler);
-        }
+            .remove(&(node, event_type.clone()));
 
         if let Value::Function(function) = value {
             let handler = function.handler.clone();
-            self.listeners.add(
-                node,
-                event_type.clone(),
-                Listener {
-                    capture: false,
-                    handler: handler.clone(),
-                    captured_env: function.captured_env.clone(),
-                    captured_pending_function_decls: function
-                        .captured_pending_function_decls
-                        .clone(),
-                },
-            );
+            let listener = Listener {
+                capture: false,
+                is_event_handler_property: true,
+                handler: handler.clone(),
+                captured_env: function.captured_env.clone(),
+                captured_pending_function_decls: function.captured_pending_function_decls.clone(),
+            };
+
+            let replaced = previous_handler.as_ref().is_some_and(|previous| {
+                self.listeners.replace_event_handler_property(
+                    node,
+                    &event_type,
+                    previous,
+                    listener.clone(),
+                )
+            });
+            if !replaced {
+                if let Some(previous_handler) = previous_handler.as_ref() {
+                    let _ = self.listeners.remove_event_handler_property(
+                        node,
+                        &event_type,
+                        previous_handler,
+                    );
+                }
+                self.listeners.add(node, event_type.clone(), listener);
+            }
+
             self.dom_runtime
                 .node_event_handler_props
                 .insert((node, event_type), handler);
@@ -283,6 +349,13 @@ impl Harness {
                 .node_expando_props
                 .insert((node, key.to_string()), Value::Function(function));
         } else {
+            if let Some(previous_handler) = previous_handler {
+                let _ = self.listeners.remove_event_handler_property(
+                    node,
+                    &event_type,
+                    &previous_handler,
+                );
+            }
             self.dom_runtime
                 .node_expando_props
                 .insert((node, key.to_string()), Value::Null);
@@ -310,6 +383,12 @@ impl Harness {
             return Ok(());
         }
 
+        let is_select = self.is_select_element(node);
+        let is_input = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"));
+
         match key {
             "textContent" | "innerText" | "text" => {
                 self.dom.set_text_content(node, &value.as_string())?
@@ -336,6 +415,13 @@ impl Harness {
                 self.dom.set_outer_html(node, &html)?
             }
             "value" => self.dom.set_value(node, &value.as_string())?,
+            "selectedIndex" if is_select => {
+                self.set_select_selected_index(node, Self::value_to_i64(&value))?
+            }
+            "length" if is_select => {
+                let next_len = Self::value_to_i64(&value).max(0) as usize;
+                self.set_select_length(node, next_len)?;
+            }
             "files" => {}
             "checked" => self.dom.set_checked(node, value.truthy())?,
             "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
@@ -362,6 +448,13 @@ impl Harness {
                     self.dom.set_attr(node, "required", "true")?;
                 } else {
                     self.dom.remove_attr(node, "required")?;
+                }
+            }
+            "multiple" if is_select || is_input => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "multiple", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "multiple")?;
                 }
             }
             "disabled" => {
@@ -400,6 +493,9 @@ impl Harness {
                 .dom
                 .set_attr(node, "autocapitalize", &value.as_string())?,
             "autocorrect" => self.dom.set_attr(node, "autocorrect", &value.as_string())?,
+            "autocomplete" => self
+                .dom
+                .set_attr(node, "autocomplete", &value.as_string())?,
             "contentEditable" | "contenteditable" => {
                 self.dom
                     .set_attr(node, "contenteditable", &value.as_string())?
@@ -549,6 +645,11 @@ impl Harness {
             "rel" => self.dom.set_attr(node, "rel", &value.as_string())?,
             "search" => self.set_anchor_url_property(node, "search", value.clone())?,
             "target" => self.dom.set_attr(node, "target", &value.as_string())?,
+            "size" if is_select => {
+                let size = Self::value_to_i64(&value).max(0);
+                self.dom.set_attr(node, "size", &size.to_string())?
+            }
+            "type" if is_select => {}
             "type" => self.dom.set_attr(node, "type", &value.as_string())?,
             "kind"
                 if self
@@ -658,6 +759,7 @@ impl Harness {
                     is_document,
                     is_url,
                     is_storage,
+                    is_data_transfer,
                 ) = {
                     let entries = object.borrow();
                     (
@@ -668,6 +770,7 @@ impl Harness {
                         Self::is_document_object(&entries),
                         Self::is_url_object(&entries),
                         Self::is_storage_object(&entries),
+                        Self::is_data_transfer_object(&entries),
                     )
                 };
                 if is_location {
@@ -696,6 +799,10 @@ impl Harness {
                 }
                 if is_storage {
                     self.set_storage_object_property(object, &key, value)?;
+                    return Ok(());
+                }
+                if is_data_transfer {
+                    self.set_data_transfer_object_property(object, &key, value)?;
                     return Ok(());
                 }
                 let (own_setter, own_getter, own_data, mut prototype) = {

@@ -1056,6 +1056,14 @@ pub(crate) fn parse_date_method_expr(src: &str) -> Result<Option<Expr>> {
             }
             Expr::DateToIsoString(target)
         }
+        "getUTCFullYear" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse(
+                    "getUTCFullYear does not take arguments".into(),
+                ));
+            }
+            Expr::DateGetUTCFullYear(target)
+        }
         "getFullYear" => {
             if !args.is_empty() {
                 return Err(Error::ScriptParse(

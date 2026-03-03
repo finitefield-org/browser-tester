@@ -38,6 +38,7 @@ pub(crate) enum Expr {
         value: Box<Expr>,
     },
     DateToIsoString(String),
+    DateGetUTCFullYear(String),
     DateGetFullYear(String),
     DateGetMonth(String),
     DateGetDate(String),
