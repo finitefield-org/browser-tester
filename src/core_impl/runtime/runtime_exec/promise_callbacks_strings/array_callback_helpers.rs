@@ -1,6 +1,13 @@
 use super::*;
 
 impl Harness {
+    fn callback_non_tdz_shadowed_names(callback: &ScriptHandler) -> HashSet<String> {
+        let mut names = Self::collect_var_declared_names(&callback.stmts);
+        names.extend(callback.params.iter().map(|param| param.name.clone()));
+        names.extend(Self::collect_function_decls(&callback.stmts).into_keys());
+        names
+    }
+
     pub(crate) fn execute_array_callback(
         &mut self,
         callback: &ScriptHandler,
@@ -20,12 +27,24 @@ impl Harness {
                 &event_param,
                 &callback_event,
             )?;
-            match this.execute_stmts(
+            let non_tdz_shadowed = Self::callback_non_tdz_shadowed_names(callback);
+            let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
+            if pushed_non_tdz_scope {
+                this.script_runtime.tdz_scope_stack.push(TdzScopeFrame {
+                    declared: non_tdz_shadowed,
+                    pending: HashSet::new(),
+                });
+            }
+            let flow = this.execute_stmts(
                 &callback.stmts,
                 &event_param,
                 &mut callback_event,
                 &mut callback_env,
-            )? {
+            );
+            if pushed_non_tdz_scope {
+                this.script_runtime.tdz_scope_stack.pop();
+            }
+            match flow? {
                 ExecFlow::Continue | ExecFlow::Return => {}
                 ExecFlow::Break(label) => return Err(Self::break_flow_error(&label)),
                 ExecFlow::ContinueLoop(label) => return Err(Self::continue_flow_error(&label)),
@@ -54,7 +73,19 @@ impl Harness {
         let event_param = None;
         let result = self.with_isolated_loop_control_scope(|this| {
             this.bind_handler_params(callback, args, env, &event_param, &callback_event)?;
-            this.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env)
+            let non_tdz_shadowed = Self::callback_non_tdz_shadowed_names(callback);
+            let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
+            if pushed_non_tdz_scope {
+                this.script_runtime.tdz_scope_stack.push(TdzScopeFrame {
+                    declared: non_tdz_shadowed,
+                    pending: HashSet::new(),
+                });
+            }
+            let flow = this.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env);
+            if pushed_non_tdz_scope {
+                this.script_runtime.tdz_scope_stack.pop();
+            }
+            flow
         });
         env.remove(INTERNAL_RETURN_SLOT);
 

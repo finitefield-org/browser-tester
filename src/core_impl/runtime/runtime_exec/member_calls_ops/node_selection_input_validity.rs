@@ -1,6 +1,478 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+enum SetHtmlUnsafeSanitizer {
+    None,
+    Default,
+    Config(SetHtmlUnsafeSanitizerConfig),
+}
+
+#[derive(Debug, Clone, Default)]
+struct SetHtmlUnsafeSanitizerConfig {
+    allowed_elements: Option<std::collections::HashSet<String>>,
+    removed_elements: std::collections::HashSet<String>,
+}
+
 impl Harness {
+    fn local_name_from_qualified_name(name: &str) -> &str {
+        name.rsplit_once(':')
+            .map(|(_, local_name)| local_name)
+            .unwrap_or(name)
+    }
+
+    fn attribute_namespace_uri_for_qualified_name(
+        &self,
+        owner: NodeId,
+        qualified_name: &str,
+    ) -> Option<String> {
+        const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+        const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
+        const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+
+        let element = self.dom.element(owner)?;
+        let Some((prefix, _)) = qualified_name.split_once(':') else {
+            return if qualified_name.eq_ignore_ascii_case("xmlns") {
+                Some(XMLNS_NS.to_string())
+            } else {
+                None
+            };
+        };
+
+        if prefix.eq_ignore_ascii_case("xml") {
+            return Some(XML_NS.to_string());
+        }
+        if prefix.eq_ignore_ascii_case("xmlns") {
+            return Some(XMLNS_NS.to_string());
+        }
+
+        let xmlns_attr_name = format!("xmlns:{prefix}");
+        if let Some(uri) = element.attrs.get(&xmlns_attr_name) {
+            return Some(uri.clone());
+        }
+        if let Some((_, uri)) = element
+            .attrs
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&xmlns_attr_name))
+        {
+            return Some(uri.clone());
+        }
+
+        if prefix.eq_ignore_ascii_case("xlink") {
+            return Some(XLINK_NS.to_string());
+        }
+
+        None
+    }
+
+    fn get_attribute_node_ns_value(
+        &self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+        local_name: &str,
+    ) -> Value {
+        let Some(element) = self.dom.element(node) else {
+            return Value::Null;
+        };
+
+        let mut matches = element
+            .attrs
+            .iter()
+            .filter_map(|(qualified_name, value)| {
+                let candidate_local_name = Self::local_name_from_qualified_name(qualified_name);
+                if !candidate_local_name.eq_ignore_ascii_case(local_name) {
+                    return None;
+                }
+                let candidate_namespace =
+                    self.attribute_namespace_uri_for_qualified_name(node, qualified_name);
+                let namespace_matches = match (namespace_uri, candidate_namespace.as_deref()) {
+                    (None, None) => true,
+                    (Some(expected), Some(actual)) => expected == actual,
+                    _ => false,
+                };
+                if !namespace_matches {
+                    return None;
+                }
+                Some((qualified_name.clone(), value.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+        matches
+            .into_iter()
+            .next()
+            .map(|(name, value)| Self::new_attr_object_value(&name, &value, Some(node)))
+            .unwrap_or(Value::Null)
+    }
+
+    fn get_attribute_ns_value(
+        &self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+        local_name: &str,
+    ) -> Value {
+        let Some(element) = self.dom.element(node) else {
+            return Value::Null;
+        };
+
+        let mut matches = element
+            .attrs
+            .iter()
+            .filter_map(|(qualified_name, value)| {
+                let candidate_local_name = Self::local_name_from_qualified_name(qualified_name);
+                if !candidate_local_name.eq_ignore_ascii_case(local_name) {
+                    return None;
+                }
+                let candidate_namespace =
+                    self.attribute_namespace_uri_for_qualified_name(node, qualified_name);
+                let namespace_matches = match (namespace_uri, candidate_namespace.as_deref()) {
+                    (None, None) => true,
+                    (Some(expected), Some(actual)) => expected == actual,
+                    _ => false,
+                };
+                if !namespace_matches {
+                    return None;
+                }
+                Some((qualified_name.clone(), value.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+        matches
+            .into_iter()
+            .next()
+            .map(|(_, value)| Value::String(value))
+            .unwrap_or(Value::Null)
+    }
+
+    fn has_attribute_ns_value(
+        &self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+        local_name: &str,
+    ) -> bool {
+        !matches!(
+            self.get_attribute_ns_value(node, namespace_uri, local_name),
+            Value::Null
+        )
+    }
+
+    fn remove_attribute_ns(
+        &mut self,
+        node: NodeId,
+        namespace_uri: Option<&str>,
+        local_name: &str,
+    ) -> Result<()> {
+        let mut matches = {
+            let Some(element) = self.dom.element(node) else {
+                return Err(Error::ScriptRuntime(
+                    "removeAttributeNS target is not an element".into(),
+                ));
+            };
+            element
+                .attrs
+                .keys()
+                .filter_map(|qualified_name| {
+                    let candidate_local_name = Self::local_name_from_qualified_name(qualified_name);
+                    if !candidate_local_name.eq_ignore_ascii_case(local_name) {
+                        return None;
+                    }
+                    let candidate_namespace =
+                        self.attribute_namespace_uri_for_qualified_name(node, qualified_name);
+                    let namespace_matches = match (namespace_uri, candidate_namespace.as_deref()) {
+                        (None, None) => true,
+                        (Some(expected), Some(actual)) => expected == actual,
+                        _ => false,
+                    };
+                    if !namespace_matches {
+                        return None;
+                    }
+                    Some(qualified_name.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+
+        matches.sort();
+        if let Some(name) = matches.into_iter().next() {
+            self.dom.remove_attr(node, &name)?;
+        }
+        Ok(())
+    }
+
+    fn get_bounding_client_rect_value(&self, node: NodeId) -> Result<Value> {
+        let left = self
+            .dom
+            .offset_left(node)?
+            .saturating_sub(self.dom_runtime.document_scroll_x);
+        let top = self
+            .dom
+            .offset_top(node)?
+            .saturating_sub(self.dom_runtime.document_scroll_y);
+        let width = self.dom.offset_width(node)?;
+        let height = self.dom.offset_height(node)?;
+        let right = left.saturating_add(width);
+        let bottom = top.saturating_add(height);
+
+        Ok(Self::new_object_value(vec![
+            ("x".to_string(), Value::Number(left)),
+            ("y".to_string(), Value::Number(top)),
+            ("left".to_string(), Value::Number(left)),
+            ("top".to_string(), Value::Number(top)),
+            ("right".to_string(), Value::Number(right)),
+            ("bottom".to_string(), Value::Number(bottom)),
+            ("width".to_string(), Value::Number(width)),
+            ("height".to_string(), Value::Number(height)),
+        ]))
+    }
+
+    fn node_has_client_rects(&self, node: NodeId) -> bool {
+        let Some(element) = self.dom.element(node) else {
+            return false;
+        };
+        if !self.dom.is_connected(node) {
+            return false;
+        }
+        if element.tag_name.eq_ignore_ascii_case("area") {
+            return false;
+        }
+        if element.attrs.contains_key("hidden") {
+            return false;
+        }
+        let display = parse_style_declarations(element.attrs.get("style").map(String::as_str))
+            .into_iter()
+            .find(|(name, _)| name == "display")
+            .map(|(_, value)| value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        display != "none"
+    }
+
+    fn get_client_rects_value(&self, node: NodeId) -> Result<Value> {
+        if !self.node_has_client_rects(node) {
+            return Ok(Self::new_array_value(Vec::new()));
+        }
+        let rect = self.get_bounding_client_rect_value(node)?;
+        Ok(Self::new_array_value(vec![rect]))
+    }
+
+    fn parse_set_html_unsafe_tag_set(value: &Value) -> Result<std::collections::HashSet<String>> {
+        match value {
+            Value::Array(items) => Ok(items
+                .borrow()
+                .iter()
+                .map(Value::as_string)
+                .map(|entry| entry.to_ascii_lowercase())
+                .collect()),
+            _ => Err(Error::ScriptRuntime(
+                "TypeError: Failed to execute 'setHTMLUnsafe': sanitizer config entries must be arrays"
+                    .into(),
+            )),
+        }
+    }
+
+    fn parse_set_html_unsafe_sanitizer(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<SetHtmlUnsafeSanitizer> {
+        let Some(options) = options else {
+            return Ok(SetHtmlUnsafeSanitizer::None);
+        };
+        let Value::Object(entries) = options else {
+            return Err(Error::ScriptRuntime(
+                "TypeError: Failed to execute 'setHTMLUnsafe': options must be an object".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let Some(sanitizer) = Self::object_get_entry(&entries, "sanitizer") else {
+            return Ok(SetHtmlUnsafeSanitizer::None);
+        };
+        match sanitizer {
+            Value::Undefined => Ok(SetHtmlUnsafeSanitizer::None),
+            Value::String(value) => {
+                if value == "default" {
+                    Ok(SetHtmlUnsafeSanitizer::Default)
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "TypeError: Failed to execute 'setHTMLUnsafe': options.sanitizer string must be 'default'"
+                            .into(),
+                    ))
+                }
+            }
+            Value::Object(config_entries) => {
+                let config_entries = config_entries.borrow();
+                let allowed_raw = Self::object_get_entry(&config_entries, "elements");
+                let removed_raw = Self::object_get_entry(&config_entries, "removeElements");
+                if allowed_raw.is_some() && removed_raw.is_some() {
+                    return Err(Error::ScriptRuntime(
+                        "TypeError: Failed to execute 'setHTMLUnsafe': sanitizer config cannot include both elements and removeElements"
+                            .into(),
+                    ));
+                }
+                let allowed_elements = allowed_raw
+                    .as_ref()
+                    .map(Self::parse_set_html_unsafe_tag_set)
+                    .transpose()?;
+                let removed_elements = removed_raw
+                    .as_ref()
+                    .map(Self::parse_set_html_unsafe_tag_set)
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(SetHtmlUnsafeSanitizer::Config(
+                    SetHtmlUnsafeSanitizerConfig {
+                        allowed_elements,
+                        removed_elements,
+                    },
+                ))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "TypeError: Failed to execute 'setHTMLUnsafe': options.sanitizer must be a Sanitizer, SanitizerConfig, or 'default'"
+                    .into(),
+            )),
+        }
+    }
+
+    fn apply_set_html_unsafe_config_sanitizer_to_subtree(
+        &mut self,
+        node: NodeId,
+        config: &SetHtmlUnsafeSanitizerConfig,
+    ) -> Result<()> {
+        let mut stack = self.dom.nodes[node.0].children.clone();
+        while let Some(current) = stack.pop() {
+            let remove_current = self.dom.tag_name(current).is_some_and(|tag| {
+                let tag = tag.to_ascii_lowercase();
+                config.removed_elements.contains(&tag)
+                    || config
+                        .allowed_elements
+                        .as_ref()
+                        .is_some_and(|allowed| !allowed.contains(&tag))
+            });
+
+            if remove_current {
+                if let Some(parent) = self.dom.parent(current) {
+                    self.dom.remove_child(parent, current)?;
+                }
+                continue;
+            }
+
+            let mut children = self.dom.nodes[current.0].children.clone();
+            children.reverse();
+            stack.extend(children);
+        }
+        Ok(())
+    }
+
+    fn parse_declarative_shadow_root_mode(value: &str) -> Option<ShadowRootMode> {
+        match value {
+            "open" => Some(ShadowRootMode::Open),
+            "closed" => Some(ShadowRootMode::Closed),
+            _ => None,
+        }
+    }
+
+    fn apply_single_declarative_shadow_root_template(&mut self, template: NodeId) -> Result<()> {
+        if !self
+            .dom
+            .tag_name(template)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("template"))
+        {
+            return Ok(());
+        }
+        let Some(mode_value) = self.dom.attr(template, "shadowrootmode") else {
+            return Ok(());
+        };
+        let Some(mode) = Self::parse_declarative_shadow_root_mode(&mode_value.to_ascii_lowercase())
+        else {
+            return Ok(());
+        };
+        let Some(host) = self.dom.parent(template) else {
+            return Ok(());
+        };
+        if self.dom.element(host).is_none() || self.is_document_fragment_node(host) {
+            return Ok(());
+        }
+
+        if let Some(existing) = self.dom_runtime.shadow_roots.get(&host).copied() {
+            self.dom.remove_child(host, template)?;
+            self.dom.append_child(existing.root, template)?;
+            return Ok(());
+        }
+        if !self.can_attach_shadow_root_to_host(host) {
+            return Ok(());
+        }
+
+        let root = self
+            .dom
+            .create_detached_element("#document-fragment".to_string());
+        self.dom_runtime.shadow_roots.insert(
+            host,
+            ShadowRootRecord {
+                root,
+                mode,
+                serializable: false,
+            },
+        );
+
+        let children = self.dom.nodes[template.0].children.clone();
+        for child in children {
+            self.dom.remove_child(template, child)?;
+            self.dom.append_child(root, child)?;
+        }
+        self.dom.remove_child(host, template)?;
+        Ok(())
+    }
+
+    fn apply_declarative_shadow_roots_in_subtree(&mut self, node: NodeId) -> Result<()> {
+        let mut templates = Vec::new();
+        let mut stack = self.dom.nodes[node.0].children.clone();
+        stack.reverse();
+        while let Some(current) = stack.pop() {
+            if self
+                .dom
+                .tag_name(current)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("template"))
+                && self.dom.attr(current, "shadowrootmode").is_some()
+            {
+                templates.push(current);
+            }
+            let mut children = self.dom.nodes[current.0].children.clone();
+            children.reverse();
+            stack.extend(children);
+        }
+
+        for template in templates {
+            self.apply_single_declarative_shadow_root_template(template)?;
+        }
+        Ok(())
+    }
+
+    fn eval_set_html_unsafe_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
+            return Err(Error::ScriptRuntime(
+                "setHTMLUnsafe requires one or two arguments".into(),
+            ));
+        }
+        if self.dom.element(node).is_none() || self.is_document_fragment_node(node) {
+            return Err(Error::ScriptRuntime(
+                "TypeError: setHTMLUnsafe target must be an Element".into(),
+            ));
+        }
+
+        let input = evaluated_args[0].as_string();
+        let sanitizer = self.parse_set_html_unsafe_sanitizer(evaluated_args.get(1))?;
+        match sanitizer {
+            SetHtmlUnsafeSanitizer::None => self.dom.set_inner_html_unsafe(node, &input)?,
+            SetHtmlUnsafeSanitizer::Default => self.dom.set_inner_html(node, &input)?,
+            SetHtmlUnsafeSanitizer::Config(config) => {
+                self.dom.set_inner_html_unsafe(node, &input)?;
+                self.apply_set_html_unsafe_config_sanitizer_to_subtree(node, &config)?;
+            }
+        }
+        self.apply_declarative_shadow_roots_in_subtree(node)?;
+        Ok(Value::Undefined)
+    }
+
     fn hierarchy_request_error() -> Error {
         Error::ScriptRuntime(
             "HierarchyRequestError: The operation would yield an incorrect node tree.".into(),
@@ -22,6 +494,262 @@ impl Harness {
             return;
         }
         out.push(node);
+    }
+
+    fn shadow_root_mode_from_attach_options(&self, options: &Value) -> Result<ShadowRootMode> {
+        let Value::Object(entries) = options else {
+            return Err(Error::ScriptRuntime(
+                "TypeError: attachShadow options must be an object".into(),
+            ));
+        };
+
+        let mode_value = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "mode")
+        };
+        let mode_value = mode_value.ok_or_else(|| {
+            Error::ScriptRuntime("TypeError: attachShadow options.mode is required".into())
+        })?;
+        match mode_value.as_string().as_str() {
+            "open" => Ok(ShadowRootMode::Open),
+            "closed" => Ok(ShadowRootMode::Closed),
+            _ => Err(Error::ScriptRuntime(
+                "TypeError: attachShadow options.mode must be 'open' or 'closed'".into(),
+            )),
+        }
+    }
+
+    fn shadow_root_serializable_from_attach_options(&self, options: &Value) -> bool {
+        let Value::Object(entries) = options else {
+            return false;
+        };
+        let entries = entries.borrow();
+        Self::object_get_entry(&entries, "serializable")
+            .map(|value| value.truthy())
+            .unwrap_or(false)
+    }
+
+    fn is_autonomous_custom_element_name(tag_name: &str) -> bool {
+        tag_name.contains('-')
+    }
+
+    fn can_attach_shadow_root_to_host(&self, node: NodeId) -> bool {
+        let Some(element) = self.dom.element(node) else {
+            return false;
+        };
+
+        if element.namespace_uri.as_deref() != Some("http://www.w3.org/1999/xhtml") {
+            return false;
+        }
+
+        let tag_name = element.tag_name.to_ascii_lowercase();
+        if Self::is_autonomous_custom_element_name(&tag_name) {
+            return true;
+        }
+
+        matches!(
+            tag_name.as_str(),
+            "article"
+                | "aside"
+                | "blockquote"
+                | "body"
+                | "div"
+                | "footer"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "header"
+                | "main"
+                | "nav"
+                | "p"
+                | "section"
+                | "span"
+        )
+    }
+
+    pub(crate) fn shadow_root_property_value(&self, node: NodeId) -> Value {
+        self.dom_runtime
+            .shadow_roots
+            .get(&node)
+            .and_then(|record| {
+                if record.mode == ShadowRootMode::Open {
+                    Some(record.root)
+                } else {
+                    None
+                }
+            })
+            .map(Value::Node)
+            .unwrap_or(Value::Null)
+    }
+
+    fn attach_shadow_root(&mut self, node: NodeId, options: &Value) -> Result<NodeId> {
+        if self.dom.element(node).is_none() {
+            return Err(Error::ScriptRuntime(
+                "attachShadow target is not an element".into(),
+            ));
+        }
+        if !self.can_attach_shadow_root_to_host(node) {
+            return Err(Error::ScriptRuntime(
+                "NotSupportedError: shadow root cannot be attached to this element".into(),
+            ));
+        }
+        if self.dom_runtime.shadow_roots.contains_key(&node) {
+            return Err(Error::ScriptRuntime(
+                "NotSupportedError: shadow root already attached".into(),
+            ));
+        }
+        let mode = self.shadow_root_mode_from_attach_options(options)?;
+        let serializable = self.shadow_root_serializable_from_attach_options(options);
+        let root = self
+            .dom
+            .create_detached_element("#document-fragment".to_string());
+        self.dom_runtime.shadow_roots.insert(
+            node,
+            ShadowRootRecord {
+                root,
+                mode,
+                serializable,
+            },
+        );
+        Ok(root)
+    }
+
+    fn parse_get_html_options(&self, options: Option<&Value>) -> (bool, Vec<NodeId>) {
+        let Some(Value::Object(entries)) = options else {
+            return (false, Vec::new());
+        };
+        let entries = entries.borrow();
+        let include_serializable = Self::object_get_entry(&entries, "serializableShadowRoots")
+            .map(|value| value.truthy())
+            .unwrap_or(false);
+        let explicit_shadow_roots = match Self::object_get_entry(&entries, "shadowRoots") {
+            Some(Value::Array(values)) => values
+                .borrow()
+                .iter()
+                .filter_map(|value| match value {
+                    Value::Node(node) => Some(*node),
+                    _ => None,
+                })
+                .filter(|node| {
+                    self.dom_runtime
+                        .shadow_roots
+                        .values()
+                        .any(|record| record.root == *node)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        (include_serializable, explicit_shadow_roots)
+    }
+
+    fn dump_node_for_get_html(
+        &self,
+        node_id: NodeId,
+        include_serializable_shadow_roots: bool,
+        explicit_shadow_roots: &[NodeId],
+    ) -> String {
+        match &self.dom.nodes[node_id.0].node_type {
+            NodeType::Document => {
+                let mut out = String::new();
+                for child in &self.dom.nodes[node_id.0].children {
+                    out.push_str(&self.dump_node_for_get_html(
+                        *child,
+                        include_serializable_shadow_roots,
+                        explicit_shadow_roots,
+                    ));
+                }
+                out
+            }
+            NodeType::Text(text) => escape_html_text_for_serialization(text),
+            NodeType::Element(element) => {
+                let mut out = String::new();
+                out.push('<');
+                out.push_str(&element.tag_name);
+                let mut attrs = element.attrs.iter().collect::<Vec<_>>();
+                attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                for (key, value) in attrs {
+                    out.push(' ');
+                    out.push_str(key);
+                    out.push_str("=\"");
+                    out.push_str(&escape_html_attr_for_serialization(value));
+                    out.push('"');
+                }
+                out.push('>');
+
+                if crate::core_impl::html::is_void_tag(&element.tag_name) {
+                    return out;
+                }
+
+                if let Some(record) = self.dom_runtime.shadow_roots.get(&node_id) {
+                    let include_shadow_root = explicit_shadow_roots.contains(&record.root)
+                        || (include_serializable_shadow_roots && record.serializable);
+                    if include_shadow_root {
+                        let mode = match record.mode {
+                            ShadowRootMode::Open => "open",
+                            ShadowRootMode::Closed => "closed",
+                        };
+                        out.push_str("<template shadowrootmode=\"");
+                        out.push_str(mode);
+                        out.push_str("\">");
+                        for child in &self.dom.nodes[record.root.0].children {
+                            out.push_str(&self.dump_node_for_get_html(
+                                *child,
+                                include_serializable_shadow_roots,
+                                explicit_shadow_roots,
+                            ));
+                        }
+                        out.push_str("</template>");
+                    }
+                }
+
+                let raw_text_container = element.tag_name.eq_ignore_ascii_case("script")
+                    || element.tag_name.eq_ignore_ascii_case("style");
+                for child in &self.dom.nodes[node_id.0].children {
+                    if raw_text_container {
+                        match &self.dom.nodes[child.0].node_type {
+                            NodeType::Text(text) => out.push_str(text),
+                            _ => out.push_str(&self.dump_node_for_get_html(
+                                *child,
+                                include_serializable_shadow_roots,
+                                explicit_shadow_roots,
+                            )),
+                        }
+                    } else {
+                        out.push_str(&self.dump_node_for_get_html(
+                            *child,
+                            include_serializable_shadow_roots,
+                            explicit_shadow_roots,
+                        ));
+                    }
+                }
+                out.push_str("</");
+                out.push_str(&element.tag_name);
+                out.push('>');
+                out
+            }
+        }
+    }
+
+    fn element_get_html_value(&self, node: NodeId, options: Option<&Value>) -> Result<Value> {
+        if self.dom.element(node).is_none() {
+            return Err(Error::ScriptRuntime(
+                "getHTML target is not an element".into(),
+            ));
+        }
+        let (include_serializable_shadow_roots, explicit_shadow_roots) =
+            self.parse_get_html_options(options);
+        let mut out = String::new();
+        for child in &self.dom.nodes[node.0].children {
+            out.push_str(&self.dump_node_for_get_html(
+                *child,
+                include_serializable_shadow_roots,
+                &explicit_shadow_roots,
+            ));
+        }
+        Ok(Value::String(out))
     }
 
     pub(crate) fn eval_document_append_call(
@@ -104,6 +832,429 @@ impl Harness {
         Ok(Value::Undefined)
     }
 
+    fn eval_node_after_call(&mut self, node: NodeId, evaluated_args: &[Value]) -> Result<Value> {
+        if self.dom.parent(node).is_none() {
+            return Ok(Value::Undefined);
+        }
+
+        let mut insertion_anchor = node;
+        for value in evaluated_args {
+            let (child, new_anchor) = match value {
+                Value::Node(child) => {
+                    let new_anchor = if self.is_document_fragment_node(*child) {
+                        self.dom.nodes[child.0].children.last().copied()
+                    } else {
+                        Some(*child)
+                    };
+                    (*child, new_anchor)
+                }
+                other => {
+                    let text = self.dom.create_detached_text(other.as_string());
+                    (text, Some(text))
+                }
+            };
+            self.dom.insert_after(insertion_anchor, child)?;
+            if let Some(new_anchor) = new_anchor {
+                if self.dom.parent(new_anchor).is_some() {
+                    insertion_anchor = new_anchor;
+                }
+            }
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn eval_node_before_call(&mut self, node: NodeId, evaluated_args: &[Value]) -> Result<Value> {
+        let Some(parent) = self.dom.parent(node) else {
+            return Ok(Value::Undefined);
+        };
+
+        for value in evaluated_args {
+            let child = match value {
+                Value::Node(child) => *child,
+                other => self.dom.create_detached_text(other.as_string()),
+            };
+            self.dom.insert_before(parent, child, node)?;
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn eval_node_prepend_call(&mut self, node: NodeId, evaluated_args: &[Value]) -> Result<Value> {
+        if matches!(
+            self.dom.nodes.get(node.0).map(|entry| &entry.node_type),
+            Some(NodeType::Document)
+        ) {
+            let mut nodes = Vec::new();
+            for value in evaluated_args {
+                match value {
+                    Value::Node(candidate) => {
+                        self.collect_appendable_document_nodes(*candidate, &mut nodes)
+                    }
+                    other => nodes.push(self.dom.create_detached_text(other.as_string())),
+                }
+            }
+
+            let mut existing_elements = self.dom.nodes[node.0]
+                .children
+                .iter()
+                .copied()
+                .filter(|child| {
+                    self.dom.element(*child).is_some_and(|element| {
+                        !element.tag_name.eq_ignore_ascii_case("#document-fragment")
+                    })
+                })
+                .count() as i64;
+
+            for candidate in &nodes {
+                if self.dom.parent(*candidate) == Some(node)
+                    && self.dom.element(*candidate).is_some_and(|element| {
+                        !element.tag_name.eq_ignore_ascii_case("#document-fragment")
+                    })
+                {
+                    existing_elements -= 1;
+                }
+            }
+
+            let mut prepended_elements = 0i64;
+            for candidate in &nodes {
+                match self
+                    .dom
+                    .nodes
+                    .get(candidate.0)
+                    .map(|entry| &entry.node_type)
+                {
+                    Some(NodeType::Document) | Some(NodeType::Text(_)) => {
+                        return Err(Self::hierarchy_request_error());
+                    }
+                    Some(NodeType::Element(element))
+                        if !element.tag_name.eq_ignore_ascii_case("#document-fragment") =>
+                    {
+                        prepended_elements += 1;
+                    }
+                    Some(NodeType::Element(_)) => {}
+                    None => return Err(Self::hierarchy_request_error()),
+                }
+            }
+
+            if existing_elements + prepended_elements > 1 {
+                return Err(Self::hierarchy_request_error());
+            }
+
+            for candidate in nodes.into_iter().rev() {
+                self.dom.prepend_child(node, candidate)?;
+            }
+            return Ok(Value::Undefined);
+        }
+
+        for value in evaluated_args.iter().rev() {
+            let child = match value {
+                Value::Node(child) => *child,
+                other => self.dom.create_detached_text(other.as_string()),
+            };
+            self.dom.prepend_child(node, child)?;
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn eval_node_replace_children_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        let mut replacements = Vec::with_capacity(evaluated_args.len());
+        for value in evaluated_args {
+            let child = match value {
+                Value::Node(child) => *child,
+                other => self.dom.create_detached_text(other.as_string()),
+            };
+            let Some(child_node) = self.dom.nodes.get(child.0) else {
+                return Err(Self::hierarchy_request_error());
+            };
+            if matches!(child_node.node_type, NodeType::Document)
+                || child == node
+                || self.dom.is_descendant_of(node, child)
+            {
+                return Err(Self::hierarchy_request_error());
+            }
+            replacements.push(child);
+        }
+
+        let Some(node_entry) = self.dom.nodes.get(node.0) else {
+            return Err(Self::hierarchy_request_error());
+        };
+        let existing_children = node_entry.children.clone();
+        for child in existing_children {
+            self.dom.remove_child(node, child)?;
+        }
+        for child in replacements {
+            self.dom
+                .append_child(node, child)
+                .map_err(|_| Self::hierarchy_request_error())?;
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn eval_node_replace_with_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        let Some(parent) = self.dom.parent(node) else {
+            return Ok(Value::Undefined);
+        };
+
+        let mut replacements = Vec::with_capacity(evaluated_args.len());
+        for value in evaluated_args {
+            let child = match value {
+                Value::Node(child) => *child,
+                other => self.dom.create_detached_text(other.as_string()),
+            };
+            let Some(child_node) = self.dom.nodes.get(child.0) else {
+                return Err(Self::hierarchy_request_error());
+            };
+            if matches!(child_node.node_type, NodeType::Document)
+                || child == parent
+                || self.dom.is_descendant_of(parent, child)
+            {
+                return Err(Self::hierarchy_request_error());
+            }
+            replacements.push(child);
+        }
+
+        let next_sibling = self.dom.nodes.get(parent.0).and_then(|entry| {
+            let idx = entry.children.iter().position(|child| *child == node)?;
+            entry.children.get(idx + 1).copied()
+        });
+
+        self.dom
+            .remove_child(parent, node)
+            .map_err(|_| Self::hierarchy_request_error())?;
+
+        for child in replacements {
+            if let Some(reference) = next_sibling {
+                if self.dom.parent(reference) == Some(parent) {
+                    self.dom
+                        .insert_before(parent, child, reference)
+                        .map_err(|_| Self::hierarchy_request_error())?;
+                    continue;
+                }
+            }
+            self.dom
+                .append_child(parent, child)
+                .map_err(|_| Self::hierarchy_request_error())?;
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn eval_insert_adjacent_element_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        if evaluated_args.len() != 2 {
+            return Err(Error::ScriptRuntime(
+                "insertAdjacentElement requires exactly two arguments".into(),
+            ));
+        }
+        if self.dom.element(node).is_none() || self.is_document_fragment_node(node) {
+            return Err(Error::ScriptRuntime(
+                "TypeError: insertAdjacentElement target must be an Element".into(),
+            ));
+        }
+
+        let position_text = evaluated_args[0].as_string();
+        let position = resolve_insert_adjacent_position(&position_text).map_err(|_| {
+            Error::ScriptRuntime(format!(
+                "SyntaxError: Failed to execute 'insertAdjacentElement': invalid position '{position_text}'"
+            ))
+        })?;
+
+        let element = match evaluated_args.get(1) {
+            Some(Value::Node(element))
+                if self.dom.element(*element).is_some()
+                    && !self.is_document_fragment_node(*element) =>
+            {
+                *element
+            }
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: Failed to execute 'insertAdjacentElement': parameter 2 is not of type 'Element'"
+                        .into(),
+                ));
+            }
+        };
+
+        if matches!(
+            position,
+            InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd
+        ) {
+            let Some(parent) = self.dom.parent(node) else {
+                return Ok(Value::Null);
+            };
+            if self.dom.element(parent).is_none() || self.is_document_fragment_node(parent) {
+                return Ok(Value::Null);
+            }
+        }
+
+        if self
+            .dom
+            .insert_adjacent_node(node, position, element)
+            .is_err()
+        {
+            return Ok(Value::Null);
+        }
+        Ok(Value::Node(element))
+    }
+
+    fn eval_insert_adjacent_html_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        if evaluated_args.len() != 2 {
+            return Err(Error::ScriptRuntime(
+                "insertAdjacentHTML requires exactly two arguments".into(),
+            ));
+        }
+        if self.dom.element(node).is_none() || self.is_document_fragment_node(node) {
+            return Err(Error::ScriptRuntime(
+                "TypeError: insertAdjacentHTML target must be an Element".into(),
+            ));
+        }
+
+        let position_text = evaluated_args[0].as_string();
+        let position = resolve_insert_adjacent_position(&position_text).map_err(|_| {
+            Error::ScriptRuntime(format!(
+                "SyntaxError: Failed to execute 'insertAdjacentHTML': invalid position '{position_text}'"
+            ))
+        })?;
+
+        if matches!(
+            position,
+            InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd
+        ) {
+            let Some(parent) = self.dom.parent(node) else {
+                return Err(Error::ScriptRuntime(
+                    "NoModificationAllowedError: Failed to execute 'insertAdjacentHTML' because the target has no parent element"
+                        .into(),
+                ));
+            };
+            if self.dom.element(parent).is_none() || self.is_document_fragment_node(parent) {
+                return Err(Error::ScriptRuntime(
+                    "NoModificationAllowedError: Failed to execute 'insertAdjacentHTML' on a node whose parent is not an Element"
+                        .into(),
+                ));
+            }
+        }
+
+        let input = evaluated_args[1].as_string();
+        match self.dom.insert_adjacent_html(node, position, &input) {
+            Ok(()) => Ok(Value::Undefined),
+            Err(Error::ScriptParse(message)) => {
+                Err(Error::ScriptRuntime(format!("SyntaxError: {message}")))
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    fn eval_insert_adjacent_text_call(
+        &mut self,
+        node: NodeId,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
+        if evaluated_args.len() != 2 {
+            return Err(Error::ScriptRuntime(
+                "insertAdjacentText requires exactly two arguments".into(),
+            ));
+        }
+        if self.dom.element(node).is_none() || self.is_document_fragment_node(node) {
+            return Err(Error::ScriptRuntime(
+                "TypeError: insertAdjacentText target must be an Element".into(),
+            ));
+        }
+
+        let position_text = evaluated_args[0].as_string();
+        let position = resolve_insert_adjacent_position(&position_text).map_err(|_| {
+            Error::ScriptRuntime(format!(
+                "SyntaxError: Failed to execute 'insertAdjacentText': invalid position '{position_text}'"
+            ))
+        })?;
+
+        if matches!(
+            position,
+            InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd
+        ) {
+            let Some(parent) = self.dom.parent(node) else {
+                return Ok(Value::Undefined);
+            };
+            if self.dom.element(parent).is_none() || self.is_document_fragment_node(parent) {
+                return Ok(Value::Undefined);
+            }
+        }
+
+        let text = self.dom.create_detached_text(evaluated_args[1].as_string());
+        let _ = self.dom.insert_adjacent_node(node, position, text);
+        Ok(Value::Undefined)
+    }
+
+    pub(crate) fn eval_closest_selector_value(
+        &self,
+        node: NodeId,
+        selector: &str,
+    ) -> Result<Value> {
+        match self.dom.closest(node, selector) {
+            Ok(Some(matched)) => Ok(Value::Node(matched)),
+            Ok(None) => Ok(Value::Null),
+            Err(Error::UnsupportedSelector(_)) => Err(Error::ScriptRuntime(
+                "SyntaxError: The provided selector is invalid".into(),
+            )),
+            Err(other) => Err(other),
+        }
+    }
+
+    pub(crate) fn eval_matches_selector_value(
+        &self,
+        node: NodeId,
+        selector: &str,
+    ) -> Result<Value> {
+        match self.dom.matches_selector(node, selector) {
+            Ok(matched) => Ok(Value::Bool(matched)),
+            Err(Error::UnsupportedSelector(_)) => Err(Error::ScriptRuntime(
+                "SyntaxError: The provided selector is invalid".into(),
+            )),
+            Err(other) => Err(other),
+        }
+    }
+
+    pub(crate) fn eval_query_selector_value(&self, node: NodeId, selector: &str) -> Result<Value> {
+        match self.dom.query_selector_from(&node, selector) {
+            Ok(Some(matched)) => Ok(Value::Node(matched)),
+            Ok(None) => Ok(Value::Null),
+            Err(Error::UnsupportedSelector(_)) => Err(Error::ScriptRuntime(
+                "SyntaxError: The provided selector is invalid".into(),
+            )),
+            Err(other) => Err(other),
+        }
+    }
+
+    pub(crate) fn eval_query_selector_all_value(
+        &self,
+        node: NodeId,
+        selector: &str,
+    ) -> Result<Value> {
+        match self.dom.query_selector_all_from(&node, selector) {
+            Ok(nodes) => Ok(Self::new_static_node_list_value(nodes)),
+            Err(Error::UnsupportedSelector(_)) => Err(Error::ScriptRuntime(
+                "SyntaxError: The provided selector is invalid".into(),
+            )),
+            Err(other) => Err(other),
+        }
+    }
+
     pub(crate) fn eval_document_member_call(
         &mut self,
         member: &str,
@@ -155,6 +1306,21 @@ impl Harness {
                     Self::tag_name_from_argument(&evaluated_args[0]),
                 )))
             }
+            "getElementsByTagNameNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByTagNameNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string();
+                Ok(Some(self.tag_name_ns_live_list_value(
+                    self.dom.root,
+                    namespace_uri,
+                    local_name,
+                )))
+            }
             "createElement" => {
                 if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
                     return Err(Error::ScriptRuntime(
@@ -165,6 +1331,30 @@ impl Harness {
                 let node = self.dom.create_detached_element(tag_name);
                 if let Some(is_value) =
                     Self::create_element_is_option_from_arg(evaluated_args.get(1))
+                {
+                    self.dom.set_attr(node, "is", &is_value)?;
+                }
+                Ok(Some(Value::Node(node)))
+            }
+            "createElementNS" => {
+                if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                    return Err(Error::ScriptRuntime(
+                        "createElementNS requires two or three arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let raw_tag_name = evaluated_args[1].as_string();
+                let tag_name = if namespace_uri.as_deref() == Some("http://www.w3.org/1999/xhtml") {
+                    raw_tag_name.to_ascii_lowercase()
+                } else {
+                    raw_tag_name
+                };
+                let node = self
+                    .dom
+                    .create_detached_element_with_namespace(tag_name, namespace_uri);
+                if let Some(is_value) =
+                    Self::create_element_is_option_from_arg(evaluated_args.get(2))
                 {
                     self.dom.set_attr(node, "is", &is_value)?;
                 }
@@ -224,10 +1414,7 @@ impl Harness {
                 }
                 let selector = evaluated_args[0].as_string();
                 Ok(Some(
-                    self.dom
-                        .query_selector(&selector)?
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null),
+                    self.eval_query_selector_value(self.dom.root, &selector)?,
                 ))
             }
             "querySelectorAll" => {
@@ -237,9 +1424,9 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Self::new_static_node_list_value(
-                    self.dom.query_selector_all(&selector)?,
-                )))
+                Ok(Some(
+                    self.eval_query_selector_all_value(self.dom.root, &selector)?,
+                ))
             }
             "createTreeWalker" => self.eval_create_tree_walker_call(evaluated_args),
             "addEventListener" => {
@@ -378,6 +1565,15 @@ impl Harness {
                     )),
                 }
             }
+            "attachShadow" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "attachShadow requires exactly one options argument".into(),
+                    ));
+                }
+                let root = self.attach_shadow_root(node, &evaluated_args[0])?;
+                Ok(Some(Value::Node(root)))
+            }
             "getAttribute" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -386,13 +1582,11 @@ impl Harness {
                 }
                 let name = evaluated_args[0].as_string().to_ascii_lowercase();
                 if name == "nonce" {
-                    return Ok(Some(
-                        if self.dom.attr(node, "nonce").is_some() {
-                            Value::String(String::new())
-                        } else {
-                            Value::Null
-                        },
-                    ));
+                    return Ok(Some(if self.dom.attr(node, "nonce").is_some() {
+                        Value::String(String::new())
+                    } else {
+                        Value::Null
+                    }));
                 }
                 Ok(Some(
                     self.dom
@@ -400,6 +1594,76 @@ impl Harness {
                         .map(Value::String)
                         .unwrap_or(Value::Null),
                 ))
+            }
+            "getAttributeNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "getAttributeNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string().to_ascii_lowercase();
+                Ok(Some(self.get_attribute_ns_value(
+                    node,
+                    namespace_uri.as_deref(),
+                    &local_name,
+                )))
+            }
+            "getBoundingClientRect" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getBoundingClientRect takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(self.get_bounding_client_rect_value(node)?))
+            }
+            "getClientRects" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getClientRects takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(self.get_client_rects_value(node)?))
+            }
+            "getHTML" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getHTML supports zero or one options argument".into(),
+                    ));
+                }
+                Ok(Some(
+                    self.element_get_html_value(node, evaluated_args.first())?,
+                ))
+            }
+            "getAttributeNode" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getAttributeNode requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string().to_ascii_lowercase();
+                Ok(Some(
+                    self.dom
+                        .attr(node, &name)
+                        .map(|value| Self::new_attr_object_value(&name, &value, Some(node)))
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "getAttributeNodeNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "getAttributeNodeNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string().to_ascii_lowercase();
+                Ok(Some(self.get_attribute_node_ns_value(
+                    node,
+                    namespace_uri.as_deref(),
+                    &local_name,
+                )))
             }
             "setAttribute" => {
                 if evaluated_args.len() != 2 {
@@ -415,6 +1679,66 @@ impl Harness {
                 }
                 let value = evaluated_args[1].as_string();
                 self.dom.set_attr(node, &name, &value)?;
+                Ok(Some(Value::Undefined))
+            }
+            "setAttributeNS" => {
+                if evaluated_args.len() != 3 {
+                    return Err(Error::ScriptRuntime(
+                        "setAttributeNS requires exactly three arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let qualified_name = evaluated_args[1].as_string().to_ascii_lowercase();
+                if !is_valid_qualified_attribute_name(&qualified_name) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidCharacterError: attribute name is not a valid XML name".into(),
+                    ));
+                }
+                if namespace_uri.is_none() && qualified_name.contains(':') {
+                    return Err(Error::ScriptRuntime(
+                        "NamespaceError: prefix requires a namespace".into(),
+                    ));
+                }
+                let value = evaluated_args[2].as_string();
+                let local_name =
+                    Self::local_name_from_qualified_name(&qualified_name).to_ascii_lowercase();
+                let replaced = {
+                    let Some(element) = self.dom.element(node) else {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNS target is not an element".into(),
+                        ));
+                    };
+                    let mut matches = element
+                        .attrs
+                        .iter()
+                        .filter_map(|(existing_name, _)| {
+                            let existing_local_name =
+                                Self::local_name_from_qualified_name(existing_name);
+                            if !existing_local_name.eq_ignore_ascii_case(&local_name) {
+                                return None;
+                            }
+                            let existing_namespace = self
+                                .attribute_namespace_uri_for_qualified_name(node, existing_name);
+                            let namespace_matches =
+                                match (namespace_uri.as_deref(), existing_namespace.as_deref()) {
+                                    (None, None) => true,
+                                    (Some(expected), Some(actual)) => expected == actual,
+                                    _ => false,
+                                };
+                            if !namespace_matches {
+                                return None;
+                            }
+                            Some(existing_name.clone())
+                        })
+                        .collect::<Vec<_>>();
+                    matches.sort();
+                    matches.into_iter().next()
+                };
+                if let Some(replaced_name) = replaced {
+                    self.dom.remove_attr(node, &replaced_name)?;
+                }
+                self.dom.set_attr(node, &qualified_name, &value)?;
                 Ok(Some(Value::Undefined))
             }
             "setAttributeNode" => {
@@ -480,6 +1804,169 @@ impl Harness {
                         .unwrap_or(Value::Null),
                 ))
             }
+            "setAttributeNodeNS" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "setAttributeNodeNS requires exactly one argument".into(),
+                    ));
+                }
+                let attr_object = match evaluated_args.first() {
+                    Some(Value::Object(object)) => object.clone(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNodeNS argument must be an Attr".into(),
+                        ));
+                    }
+                };
+                let (name, value, owner_element): (String, String, Option<NodeId>) = {
+                    let entries = attr_object.borrow();
+                    if !Self::is_attr_object(&entries) {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNodeNS argument must be an Attr".into(),
+                        ));
+                    }
+                    let name = Self::object_get_entry(&entries, "name")
+                        .map(|entry| entry.as_string())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let value = Self::object_get_entry(&entries, "value")
+                        .map(|entry| entry.as_string())
+                        .unwrap_or_default();
+                    let owner_element = match Self::object_get_entry(&entries, "ownerElement") {
+                        Some(Value::Node(owner)) => Some(owner),
+                        _ => None,
+                    };
+                    (name, value, owner_element)
+                };
+
+                let namespace_uri = owner_element
+                    .and_then(|owner| self.attribute_namespace_uri_for_qualified_name(owner, &name))
+                    .or_else(|| self.attribute_namespace_uri_for_qualified_name(node, &name));
+                let local_name = Self::local_name_from_qualified_name(&name).to_ascii_lowercase();
+
+                let replaced = {
+                    let Some(element) = self.dom.element(node) else {
+                        return Err(Error::ScriptRuntime(
+                            "setAttributeNodeNS target is not an element".into(),
+                        ));
+                    };
+                    let mut matches = element
+                        .attrs
+                        .iter()
+                        .filter_map(|(qualified_name, existing_value)| {
+                            let candidate_local_name =
+                                Self::local_name_from_qualified_name(qualified_name);
+                            if !candidate_local_name.eq_ignore_ascii_case(&local_name) {
+                                return None;
+                            }
+                            let candidate_namespace = self
+                                .attribute_namespace_uri_for_qualified_name(node, qualified_name);
+                            let namespace_matches =
+                                match (namespace_uri.as_deref(), candidate_namespace.as_deref()) {
+                                    (None, None) => true,
+                                    (Some(expected), Some(actual)) => expected == actual,
+                                    _ => false,
+                                };
+                            if !namespace_matches {
+                                return None;
+                            }
+                            Some((qualified_name.clone(), existing_value.clone()))
+                        })
+                        .collect::<Vec<_>>();
+                    matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+                    matches.into_iter().next()
+                };
+
+                if let Some((replaced_name, _)) = replaced.as_ref() {
+                    self.dom.remove_attr(node, replaced_name)?;
+                }
+                self.dom.set_attr(node, &name, &value)?;
+
+                {
+                    let mut entries = attr_object.borrow_mut();
+                    Self::object_set_entry(
+                        &mut entries,
+                        "name".to_string(),
+                        Value::String(name.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut entries,
+                        "value".to_string(),
+                        Value::String(value.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut entries,
+                        "ownerElement".to_string(),
+                        Value::Node(node),
+                    );
+                }
+
+                Ok(Some(
+                    replaced
+                        .map(|(old_name, old_value)| {
+                            Self::new_attr_object_value(&old_name, &old_value, None)
+                        })
+                        .unwrap_or(Value::Null),
+                ))
+            }
+            "removeAttributeNode" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "removeAttributeNode requires exactly one argument".into(),
+                    ));
+                }
+                let attr_object = match evaluated_args.first() {
+                    Some(Value::Object(object)) => object.clone(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "removeAttributeNode argument must be an Attr".into(),
+                        ));
+                    }
+                };
+                let (name, owner_matches_node): (String, bool) = {
+                    let entries = attr_object.borrow();
+                    if !Self::is_attr_object(&entries) {
+                        return Err(Error::ScriptRuntime(
+                            "removeAttributeNode argument must be an Attr".into(),
+                        ));
+                    }
+                    let name = Self::object_get_entry(&entries, "name")
+                        .map(|entry| entry.as_string())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let owner_matches_node = matches!(Self::object_get_entry(&entries, "ownerElement"), Some(Value::Node(owner)) if owner == node);
+                    (name, owner_matches_node)
+                };
+
+                let Some(current_value) = self.dom.attr(node, &name) else {
+                    return Err(Error::ScriptRuntime(
+                        "NotFoundError: Failed to execute 'removeAttributeNode': The attribute node was not found"
+                            .into(),
+                    ));
+                };
+                if !owner_matches_node {
+                    return Err(Error::ScriptRuntime(
+                        "NotFoundError: Failed to execute 'removeAttributeNode': The attribute node was not found"
+                            .into(),
+                    ));
+                }
+                self.dom.remove_attr(node, &name)?;
+                {
+                    let mut entries = attr_object.borrow_mut();
+                    Self::object_set_entry(
+                        &mut entries,
+                        "name".to_string(),
+                        Value::String(name.clone()),
+                    );
+                    Self::object_set_entry(
+                        &mut entries,
+                        "value".to_string(),
+                        Value::String(current_value),
+                    );
+                    Self::object_set_entry(&mut entries, "ownerElement".to_string(), Value::Null);
+                }
+                Ok(Some(Value::Object(attr_object)))
+            }
             "hasAttribute" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -488,6 +1975,21 @@ impl Harness {
                 }
                 let name = evaluated_args[0].as_string();
                 Ok(Some(Value::Bool(self.dom.has_attr(node, &name)?)))
+            }
+            "hasAttributeNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "hasAttributeNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string().to_ascii_lowercase();
+                Ok(Some(Value::Bool(self.has_attribute_ns_value(
+                    node,
+                    namespace_uri.as_deref(),
+                    &local_name,
+                ))))
             }
             "hasAttributes" => {
                 if !evaluated_args.is_empty() {
@@ -512,6 +2014,18 @@ impl Harness {
                 }
                 let name = evaluated_args[0].as_string();
                 self.dom.remove_attr(node, &name)?;
+                Ok(Some(Value::Undefined))
+            }
+            "removeAttributeNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "removeAttributeNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string().to_ascii_lowercase();
+                self.remove_attribute_ns(node, namespace_uri.as_deref(), &local_name)?;
                 Ok(Some(Value::Undefined))
             }
             "getAttributeNames" => {
@@ -561,9 +2075,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Value::Bool(
-                    self.dom.matches_selector(node, &selector)?,
-                )))
+                Ok(Some(self.eval_matches_selector_value(node, &selector)?))
             }
             "closest" => {
                 if evaluated_args.len() != 1 {
@@ -572,12 +2084,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(
-                    self.dom
-                        .closest(node, &selector)?
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null),
-                ))
+                Ok(Some(self.eval_closest_selector_value(node, &selector)?))
             }
             "querySelector" => {
                 if evaluated_args.len() != 1 {
@@ -586,12 +2093,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(
-                    self.dom
-                        .query_selector_from(&node, &selector)?
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null),
-                ))
+                Ok(Some(self.eval_query_selector_value(node, &selector)?))
             }
             "querySelectorAll" => {
                 if evaluated_args.len() != 1 {
@@ -600,10 +2102,28 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Self::new_static_node_list_value(
-                    self.dom.query_selector_all_from(&node, &selector)?,
-                )))
+                Ok(Some(self.eval_query_selector_all_value(node, &selector)?))
             }
+            "replaceWith" => Ok(Some(
+                self.eval_node_replace_with_call(node, evaluated_args)?,
+            )),
+            "replaceChildren" => Ok(Some(
+                self.eval_node_replace_children_call(node, evaluated_args)?,
+            )),
+            "append" => Ok(Some(self.eval_document_append_call(node, evaluated_args)?)),
+            "prepend" => Ok(Some(self.eval_node_prepend_call(node, evaluated_args)?)),
+            "after" => Ok(Some(self.eval_node_after_call(node, evaluated_args)?)),
+            "before" => Ok(Some(self.eval_node_before_call(node, evaluated_args)?)),
+            "insertAdjacentElement" => Ok(Some(
+                self.eval_insert_adjacent_element_call(node, evaluated_args)?,
+            )),
+            "insertAdjacentHTML" => Ok(Some(
+                self.eval_insert_adjacent_html_call(node, evaluated_args)?,
+            )),
+            "setHTMLUnsafe" => Ok(Some(self.eval_set_html_unsafe_call(node, evaluated_args)?)),
+            "insertAdjacentText" => Ok(Some(
+                self.eval_insert_adjacent_text_call(node, evaluated_args)?,
+            )),
             "appendChild" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -864,6 +2384,69 @@ impl Harness {
                 self.dom.remove_node(node)?;
                 Ok(Some(Value::Undefined))
             }
+            "focus" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("focus takes no arguments".into()));
+                }
+                self.focus_node(node)?;
+                Ok(Some(Value::Undefined))
+            }
+            "blur" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("blur takes no arguments".into()));
+                }
+                self.blur_node(node)?;
+                Ok(Some(Value::Undefined))
+            }
+            "setPointerCapture" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "setPointerCapture requires exactly one pointerId argument".into(),
+                    ));
+                }
+                let pointer_id = Self::value_to_i64(&evaluated_args[0]);
+                self.dom_runtime
+                    .pointer_capture_targets
+                    .insert(pointer_id, node);
+                Ok(Some(Value::Undefined))
+            }
+            "hasPointerCapture" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "hasPointerCapture requires exactly one pointerId argument".into(),
+                    ));
+                }
+                let pointer_id = Self::value_to_i64(&evaluated_args[0]);
+                let has_capture = self
+                    .dom_runtime
+                    .pointer_capture_targets
+                    .get(&pointer_id)
+                    .is_some_and(|captured_node| *captured_node == node);
+                Ok(Some(Value::Bool(has_capture)))
+            }
+            "releasePointerCapture" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "releasePointerCapture requires exactly one pointerId argument".into(),
+                    ));
+                }
+                let pointer_id = Self::value_to_i64(&evaluated_args[0]);
+                let Some(captured_node) = self
+                    .dom_runtime
+                    .pointer_capture_targets
+                    .get(&pointer_id)
+                    .copied()
+                else {
+                    return Err(Error::ScriptRuntime(
+                        "NotFoundError: Failed to execute 'releasePointerCapture': No active pointer with the given id"
+                            .into(),
+                    ));
+                };
+                if captured_node == node {
+                    self.dom_runtime.pointer_capture_targets.remove(&pointer_id);
+                }
+                Ok(Some(Value::Undefined))
+            }
             "getContext" => {
                 if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
                     return Err(Error::ScriptRuntime(
@@ -954,6 +2537,21 @@ impl Harness {
                     Self::tag_name_from_argument(&evaluated_args[0]),
                 )))
             }
+            "getElementsByTagNameNS" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "getElementsByTagNameNS requires exactly two arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let local_name = evaluated_args[1].as_string();
+                Ok(Some(self.tag_name_ns_live_list_value(
+                    node,
+                    namespace_uri,
+                    local_name,
+                )))
+            }
             "checkVisibility" => {
                 if evaluated_args.len() > 1 {
                     return Err(Error::ScriptRuntime(
@@ -1028,6 +2626,15 @@ impl Harness {
                 self.step_input_value(node, direction, count)?;
                 Ok(Some(Value::Undefined))
             }
+            "getAnimations" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getAnimations supports zero or one options argument".into(),
+                    ));
+                }
+                let subtree = Self::get_animations_subtree_option(evaluated_args.first());
+                Ok(Some(self.node_get_animations_value(node, subtree)))
+            }
             "animate" => {
                 if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
                     return Err(Error::ScriptRuntime(
@@ -1036,22 +2643,24 @@ impl Harness {
                 }
                 let options_arg = evaluated_args.get(1);
                 let id = Self::animate_id_from_options(options_arg);
-                let timeline = Self::animate_option_entry(options_arg, "timeline")
-                    .unwrap_or(Value::Null);
+                let timeline =
+                    Self::animate_option_entry(options_arg, "timeline").unwrap_or(Value::Null);
                 let range_start = Self::animate_option_entry(options_arg, "rangeStart")
                     .unwrap_or(Value::String("normal".to_string()));
                 let range_end = Self::animate_option_entry(options_arg, "rangeEnd")
                     .unwrap_or(Value::String("normal".to_string()));
                 let keyframes = evaluated_args[0].clone();
                 let options = options_arg.cloned().unwrap_or(Value::Undefined);
-                Ok(Some(Self::new_animation_object_value(
+                let animation = Self::new_animation_object_value(
                     id,
                     keyframes,
                     options,
                     timeline,
                     range_start,
                     range_end,
-                )))
+                );
+                self.register_node_animation(node, &animation);
+                Ok(Some(animation))
             }
             "scrollIntoView" => {
                 if evaluated_args.len() > 1 {
@@ -1071,8 +2680,7 @@ impl Harness {
                         "{member} supports zero, one, or two arguments"
                     )));
                 }
-                let position_changed =
-                    self.apply_document_scroll_operation(member, evaluated_args);
+                let position_changed = self.apply_document_scroll_operation(member, evaluated_args);
                 self.dispatch_document_scroll_sequence(position_changed)?;
                 Ok(Some(Value::Undefined))
             }
@@ -1251,6 +2859,39 @@ impl Harness {
         }
     }
 
+    fn get_animations_subtree_option(options: Option<&Value>) -> bool {
+        let Some(Value::Object(entries)) = options else {
+            return false;
+        };
+        let entries = entries.borrow();
+        Self::object_get_entry(&entries, "subtree")
+            .map(|value| value.truthy())
+            .unwrap_or(false)
+    }
+
+    fn register_node_animation(&mut self, target: NodeId, animation: &Value) {
+        let Value::Object(animation) = animation else {
+            return;
+        };
+        self.dom_runtime.node_animations.push(NodeAnimationRecord {
+            target,
+            animation: animation.clone(),
+        });
+    }
+
+    fn node_get_animations_value(&self, node: NodeId, subtree: bool) -> Value {
+        let animations = self
+            .dom_runtime
+            .node_animations
+            .iter()
+            .filter(|record| {
+                record.target == node || (subtree && self.dom.is_descendant_of(record.target, node))
+            })
+            .map(|record| Value::Object(record.animation.clone()))
+            .collect::<Vec<_>>();
+        Self::new_array_value(animations)
+    }
+
     pub(crate) fn apply_document_scroll_operation(&mut self, method: &str, args: &[Value]) -> bool {
         let mut next_x = self.dom_runtime.document_scroll_x;
         let mut next_y = self.dom_runtime.document_scroll_y;
@@ -1284,8 +2925,10 @@ impl Harness {
                     [] => {}
                     [single] => {
                         if matches!(single, Value::Object(_)) {
-                            delta_x = Self::scroll_offset_from_object_arg(single, "left").unwrap_or(0);
-                            delta_y = Self::scroll_offset_from_object_arg(single, "top").unwrap_or(0);
+                            delta_x =
+                                Self::scroll_offset_from_object_arg(single, "left").unwrap_or(0);
+                            delta_y =
+                                Self::scroll_offset_from_object_arg(single, "top").unwrap_or(0);
                         } else {
                             delta_x = Self::value_to_i64(single);
                         }
@@ -1302,8 +2945,8 @@ impl Harness {
             _ => return true,
         }
 
-        let changed =
-            next_x != self.dom_runtime.document_scroll_x || next_y != self.dom_runtime.document_scroll_y;
+        let changed = next_x != self.dom_runtime.document_scroll_x
+            || next_y != self.dom_runtime.document_scroll_y;
         self.dom_runtime.document_scroll_x = next_x;
         self.dom_runtime.document_scroll_y = next_y;
         changed
@@ -1333,7 +2976,9 @@ impl Harness {
         let after_start = self.dom.selection_start(node)?;
         let after_end = self.dom.selection_end(node)?;
         let after_direction = self.dom.selection_direction(node)?;
-        if before_start != after_start || before_end != after_end || before_direction != after_direction
+        if before_start != after_start
+            || before_end != after_end
+            || before_direction != after_direction
         {
             let _ = self.dispatch_document_selectionchange()?;
         }

@@ -30,6 +30,7 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "animate"
             | "append"
             | "appendChild"
+            | "attachShadow"
             | "assignedSlot"
             | "accessKey"
             | "accesskey"
@@ -82,11 +83,20 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "focus"
             | "forEach"
             | "getAttribute"
+            | "getAttributeNS"
+            | "getBoundingClientRect"
+            | "getClientRects"
+            | "getAttributeNode"
+            | "getAttributeNodeNS"
             | "getAttributeNames"
+            | "getAnimations"
+            | "getHTML"
             | "getElementsByClassName"
             | "getElementsByTagName"
+            | "getElementsByTagNameNS"
             | "hash"
             | "hasAttribute"
+            | "hasAttributeNS"
             | "hasAttributes"
             | "host"
             | "hostname"
@@ -144,6 +154,8 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "relList"
             | "remove"
             | "removeAttribute"
+            | "removeAttributeNS"
+            | "removeAttributeNode"
             | "removeChild"
             | "removeEventListener"
             | "requestClose"
@@ -151,6 +163,7 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "role"
             | "returnValue"
             | "replaceWith"
+            | "replaceChildren"
             | "reportValidity"
             | "required"
             | "reset"
@@ -175,6 +188,9 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
             | "scrollTopMax"
             | "scrollWidth"
             | "setAttribute"
+            | "setAttributeNS"
+            | "setAttributeNodeNS"
+            | "setHTMLUnsafe"
             | "shadowRoot"
             | "show"
             | "showPicker"
@@ -341,16 +357,17 @@ pub(crate) fn parse_document_or_var_target(cursor: &mut Cursor<'_>) -> Result<Do
     }
     cursor.set_pos(start);
     if cursor.consume_ascii("window") {
+        let after_window = cursor.pos();
         cursor.skip_ws();
         if cursor.consume_byte(b'.') {
             cursor.skip_ws();
             if cursor.consume_ascii("document") {
                 cursor.skip_ws();
-            } else {
-                cursor.set_pos(start + "window".len());
+                return Ok(DomQuery::DocumentRoot);
             }
+            cursor.set_pos(after_window);
         }
-        return Ok(DomQuery::DocumentRoot);
+        return Ok(DomQuery::Var("window".to_string()));
     }
     cursor.set_pos(start);
     if let Some(name) = cursor.parse_identifier() {

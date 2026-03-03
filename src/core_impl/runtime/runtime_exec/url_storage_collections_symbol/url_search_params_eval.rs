@@ -444,11 +444,9 @@ impl Harness {
                         for arg in args {
                             evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
                         }
-                        if let Some(value) = self.eval_cookie_store_member_call(
-                            entries,
-                            "getAll",
-                            &evaluated_args,
-                        )? {
+                        if let Some(value) =
+                            self.eval_cookie_store_member_call(entries, "getAll", &evaluated_args)?
+                        {
                             return Ok(value);
                         }
                     }

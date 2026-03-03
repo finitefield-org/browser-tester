@@ -26,7 +26,7 @@ pub(crate) enum Expr {
     DateNow,
     PerformanceNow,
     DateNew {
-        value: Option<Box<Expr>>,
+        args: Vec<Expr>,
     },
     DateParse(Box<Expr>),
     DateUtc {
@@ -1166,12 +1166,14 @@ pub(crate) enum Stmt {
     },
     ClassListCall {
         target: DomQuery,
+        optional: bool,
         method: ClassListMethod,
         class_names: Vec<Expr>,
         force: Option<Expr>,
     },
     ClassListForEach {
         target: DomQuery,
+        optional: bool,
         item_var: String,
         index_var: Option<String>,
         body: Vec<Stmt>,

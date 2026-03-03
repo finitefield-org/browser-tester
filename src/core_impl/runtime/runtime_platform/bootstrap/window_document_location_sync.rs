@@ -31,6 +31,7 @@ impl Harness {
             "documentURI",
             "cookie",
             "createElement",
+            "createElementNS",
             "createTextNode",
             "createAttribute",
             "createDocumentFragment",
@@ -40,6 +41,7 @@ impl Harness {
             "getElementsByClassName",
             "getElementsByName",
             "getElementsByTagName",
+            "getElementsByTagNameNS",
             "querySelector",
             "querySelectorAll",
             "createTreeWalker",
@@ -88,6 +90,10 @@ impl Harness {
                 Self::new_builtin_placeholder_function(),
             ),
             (
+                "createElementNS".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
                 "createTextNode".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
@@ -124,6 +130,10 @@ impl Harness {
                 Self::new_builtin_placeholder_function(),
             ),
             (
+                "getElementsByTagNameNS".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
                 "querySelector".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
@@ -143,6 +153,7 @@ impl Harness {
     pub(crate) fn window_builtin_keys() -> &'static [&'static str] {
         &[
             "window",
+            "globalThis",
             "self",
             "top",
             "parent",
@@ -234,6 +245,7 @@ impl Harness {
         let mut entries = vec![
             (INTERNAL_WINDOW_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("window".to_string(), window_ref.clone()),
+            ("globalThis".to_string(), window_ref.clone()),
             ("self".to_string(), window_ref.clone()),
             ("top".to_string(), window_ref.clone()),
             ("parent".to_string(), window_ref.clone()),

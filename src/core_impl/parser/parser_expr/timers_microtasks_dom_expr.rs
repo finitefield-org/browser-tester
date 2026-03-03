@@ -28,11 +28,7 @@ pub(crate) fn parse_request_animation_frame_expr(src: &str) -> Result<Option<Tim
     let mut cursor = Cursor::new(src);
     let callback = parse_request_animation_frame_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() {
-        Ok(callback)
-    } else {
-        Ok(None)
-    }
+    if cursor.eof() { Ok(callback) } else { Ok(None) }
 }
 
 pub(crate) fn parse_request_animation_frame_call(
@@ -74,11 +70,7 @@ pub(crate) fn parse_queue_microtask_expr(src: &str) -> Result<Option<ScriptHandl
     let mut cursor = Cursor::new(src);
     let handler = parse_queue_microtask_call(&mut cursor)?;
     cursor.skip_ws();
-    if cursor.eof() {
-        Ok(handler)
-    } else {
-        Ok(None)
-    }
+    if cursor.eof() { Ok(handler) } else { Ok(None) }
 }
 
 pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -695,7 +687,10 @@ pub(crate) fn parse_dom_matches_expr(src: &str) -> Result<Option<(DomQuery, Stri
         return Ok(None);
     }
     cursor.skip_ws();
-    let selector = cursor.parse_string_literal()?;
+    let selector = match cursor.parse_string_literal() {
+        Ok(selector) => selector,
+        Err(_) => return Ok(None),
+    };
     cursor.skip_ws();
     cursor.expect_byte(b')')?;
     cursor.skip_ws();

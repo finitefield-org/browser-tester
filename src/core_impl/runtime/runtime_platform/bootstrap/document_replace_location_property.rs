@@ -14,6 +14,8 @@ impl Harness {
         self.dom_runtime.node_event_handler_props.clear();
         self.dom_runtime.node_expando_props.clear();
         self.dom_runtime.live_child_nodes_lists.clear();
+        self.dom_runtime.live_children_lists.clear();
+        self.dom_runtime.live_named_node_maps.clear();
         self.script_runtime.env.clear();
         self.scheduler.task_queue.clear();
         self.scheduler.microtask_queue.clear();

@@ -103,6 +103,56 @@ fn inner_html_set_sanitizes_scripts_and_dangerous_attrs() -> Result<()> {
 }
 
 #[test]
+fn inner_html_set_null_clears_children_and_updates_id_index() -> Result<()> {
+    let html = r#"
+        <div id='box'><span id='old'>O</span><b>B</b></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            box.innerHTML = null;
+            document.getElementById('result').textContent =
+              box.innerHTML + ':' +
+              box.textContent + ':' +
+              box.childElementCount + ':' +
+              document.querySelectorAll('#old').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "::0:0")?;
+    Ok(())
+}
+
+#[test]
+fn inner_html_set_null_through_object_member_expression_clears_children() -> Result<()> {
+    let html = r#"
+        <div id='box'><span id='old'>O</span></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const holder = { box: document.getElementById('box') };
+            holder.box.innerHTML = '<i id="new">N</i>';
+            holder.box.innerHTML = null;
+            document.getElementById('result').textContent =
+              holder.box.innerHTML.length + ':' +
+              holder.box.childElementCount + ':' +
+              document.querySelectorAll('#new').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:0:0")?;
+    Ok(())
+}
+
+#[test]
 fn inner_html_getter_escapes_text_and_attr_and_keeps_void_tags() -> Result<()> {
     let html = r#"
         <div id='box'></div>

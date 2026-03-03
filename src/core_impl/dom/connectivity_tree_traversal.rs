@@ -365,10 +365,19 @@ impl Dom {
     }
 
     pub(crate) fn matches_selector_chain(&self, node_id: NodeId, steps: &[SelectorPart]) -> bool {
+        self.matches_selector_chain_in_scope(node_id, steps, None)
+    }
+
+    pub(crate) fn matches_selector_chain_in_scope(
+        &self,
+        node_id: NodeId,
+        steps: &[SelectorPart],
+        scope_root: Option<NodeId>,
+    ) -> bool {
         if steps.is_empty() {
             return false;
         }
-        if !self.matches_step(node_id, &steps[steps.len() - 1].step) {
+        if !self.matches_step_in_scope(node_id, &steps[steps.len() - 1].step, scope_root) {
             return false;
         }
 
@@ -384,7 +393,7 @@ impl Dom {
                     let Some(parent) = self.parent(current) else {
                         return false;
                     };
-                    if self.matches_step(parent, prev_step) {
+                    if self.matches_step_in_scope(parent, prev_step, scope_root) {
                         Some(parent)
                     } else {
                         None
@@ -394,7 +403,7 @@ impl Dom {
                     let mut cursor = self.parent(current);
                     let mut found = None;
                     while let Some(parent) = cursor {
-                        if self.matches_step(parent, prev_step) {
+                        if self.matches_step_in_scope(parent, prev_step, scope_root) {
                             found = Some(parent);
                             break;
                         }
@@ -404,12 +413,12 @@ impl Dom {
                 }
                 SelectorCombinator::AdjacentSibling => self
                     .previous_element_sibling(current)
-                    .filter(|sibling| self.matches_step(*sibling, prev_step)),
+                    .filter(|sibling| self.matches_step_in_scope(*sibling, prev_step, scope_root)),
                 SelectorCombinator::GeneralSibling => {
                     let mut cursor = self.previous_element_sibling(current);
                     let mut found = None;
                     while let Some(sibling) = cursor {
-                        if self.matches_step(sibling, prev_step) {
+                        if self.matches_step_in_scope(sibling, prev_step, scope_root) {
                             found = Some(sibling);
                             break;
                         }

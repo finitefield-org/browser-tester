@@ -15,6 +15,9 @@ pub(crate) fn parse_set_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     if !cursor.consume_ascii("setAttribute") {
         return Ok(None);
     }
+    if cursor.peek().is_some_and(is_ident_char) {
+        return Ok(None);
+    }
     cursor.skip_ws();
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
@@ -62,6 +65,9 @@ pub(crate) fn parse_remove_attribute_stmt(stmt: &str) -> Result<Option<Stmt>> {
     if !cursor.consume_ascii("removeAttribute") {
         return Ok(None);
     }
+    if cursor.peek().is_some_and(is_ident_char) {
+        return Ok(None);
+    }
     cursor.skip_ws();
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
@@ -95,15 +101,23 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
     };
 
     cursor.skip_ws();
-    if !cursor.consume_byte(b'.') {
+    let mut optional = if cursor.consume_ascii("?.") {
+        true
+    } else if cursor.consume_byte(b'.') {
+        false
+    } else {
         return Ok(None);
-    }
+    };
     cursor.skip_ws();
     if !cursor.consume_ascii("classList") {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
+    if cursor.consume_ascii("?.") {
+        optional = true;
+    } else {
+        cursor.expect_byte(b'.')?;
+    }
     cursor.skip_ws();
 
     let method = cursor
@@ -127,6 +141,7 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
         return Ok(Some(Stmt::ClassListForEach {
             target,
+            optional,
             item_var,
             index_var,
             body,
@@ -207,6 +222,7 @@ pub(crate) fn parse_class_list_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
     Ok(Some(Stmt::ClassListCall {
         target,
+        optional,
         method,
         class_names,
         force,

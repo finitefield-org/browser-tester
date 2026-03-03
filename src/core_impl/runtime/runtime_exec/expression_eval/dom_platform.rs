@@ -33,20 +33,10 @@ impl Harness {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
                     match prop {
                         DomProp::Attributes => {
-                            let element = self.dom.element(node).ok_or_else(|| {
+                            self.dom.element(node).ok_or_else(|| {
                                 Error::ScriptRuntime("attributes target is not an element".into())
                             })?;
-                            let mut attrs = element
-                                .attrs
-                                .iter()
-                                .map(|(name, value)| (name.clone(), Value::String(value.clone())))
-                                .collect::<Vec<_>>();
-                            attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
-                            attrs.insert(
-                                0,
-                                ("length".to_string(), Value::Number(attrs.len() as i64)),
-                            );
-                            Ok(Self::new_object_value(attrs))
+                            Ok(self.named_node_map_live_value(node))
                         }
                         DomProp::AssignedSlot => Ok(Value::Null),
                         DomProp::Value => {
@@ -171,26 +161,30 @@ impl Harness {
                         DomProp::Id => {
                             Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default()))
                         }
-                        DomProp::TagName => Ok(Value::String(
-                            self.dom
-                                .tag_name(node)
-                                .map(|name| name.to_ascii_uppercase())
-                                .unwrap_or_default(),
-                        )),
+                        DomProp::TagName => Ok(Value::String(self.element_tag_name(node))),
                         DomProp::LocalName => Ok(Value::String(
                             self.dom
                                 .tag_name(node)
-                                .map(|name| name.to_ascii_lowercase())
+                                .map(|name| {
+                                    name.rsplit_once(':')
+                                        .map(|(_, local)| local)
+                                        .unwrap_or(name)
+                                        .to_ascii_lowercase()
+                                })
                                 .unwrap_or_default(),
                         )),
-                        DomProp::NamespaceUri => {
-                            if self.dom.element(node).is_some() {
-                                Ok(Value::String("http://www.w3.org/1999/xhtml".to_string()))
-                            } else {
-                                Ok(Value::Null)
-                            }
-                        }
-                        DomProp::Prefix => Ok(Value::Null),
+                        DomProp::NamespaceUri => Ok(self
+                            .dom
+                            .element(node)
+                            .and_then(|element| element.namespace_uri.clone())
+                            .map(Value::String)
+                            .unwrap_or(Value::Null)),
+                        DomProp::Prefix => Ok(self
+                            .dom
+                            .tag_name(node)
+                            .and_then(|name| name.split_once(':').map(|(prefix, _)| prefix))
+                            .map(|prefix| Value::String(prefix.to_string()))
+                            .unwrap_or(Value::Null)),
                         DomProp::NextElementSibling => Ok(self
                             .dom
                             .next_element_sibling(node)
@@ -204,7 +198,11 @@ impl Harness {
                         DomProp::Slot => Ok(Value::String(
                             self.dom.attr(node, "slot").unwrap_or_default(),
                         )),
-                        DomProp::Role => Ok(Value::String(self.resolved_role_for_node(node))),
+                        DomProp::Role => Ok(self
+                            .dom
+                            .attr(node, "role")
+                            .map(Value::String)
+                            .unwrap_or(Value::Null)),
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
@@ -328,7 +326,7 @@ impl Harness {
                         DomProp::ScrollTop => Ok(Value::Number(self.dom.scroll_top(node)?)),
                         DomProp::ScrollLeftMax => Ok(Value::Number(0)),
                         DomProp::ScrollTopMax => Ok(Value::Number(0)),
-                        DomProp::ShadowRoot => Ok(Value::Null),
+                        DomProp::ShadowRoot => Ok(self.shadow_root_property_value(node)),
                         DomProp::ActiveElement => Ok(self
                             .dom
                             .active_element()
@@ -417,9 +415,7 @@ impl Harness {
                         DomProp::Scripts => Ok(Self::new_static_node_list_value(
                             self.dom.query_selector_all("script")?,
                         )),
-                        DomProp::Children => Ok(Self::new_static_node_list_value(
-                            self.dom.child_elements(node),
-                        )),
+                        DomProp::Children => Ok(self.child_elements_live_list_value(node)),
                         DomProp::ChildElementCount => {
                             Ok(Value::Number(self.dom.child_element_count(node) as i64))
                         }
@@ -668,13 +664,11 @@ impl Harness {
                 Expr::DocumentHasFocus => Ok(Value::Bool(self.dom.active_element().is_some())),
                 Expr::DomMatches { target, selector } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    let result = self.dom.matches_selector(node, selector)?;
-                    Ok(Value::Bool(result))
+                    self.eval_matches_selector_value(node, selector)
                 }
                 Expr::DomClosest { target, selector } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    let result = self.dom.closest(node, selector)?;
-                    Ok(result.map_or(Value::Null, Value::Node))
+                    self.eval_closest_selector_value(node, selector)
                 }
                 Expr::DomComputedStyleProperty { target, property } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -922,7 +916,9 @@ impl Harness {
         root: NodeId,
         class_names: Vec<String>,
     ) -> Value {
-        let nodes = self.dom.get_elements_by_class_names_from(&root, &class_names);
+        let nodes = self
+            .dom
+            .get_elements_by_class_names_from(&root, &class_names);
         Value::NodeList(Rc::new(RefCell::new(
             NodeListValue::live_descendants_by_class_names(root, class_names, nodes),
         )))
@@ -930,9 +926,9 @@ impl Harness {
 
     pub(crate) fn name_live_list_value(&self, root: NodeId, name: String) -> Value {
         let nodes = self.dom.get_elements_by_name_from(&root, &name);
-        Value::NodeList(Rc::new(RefCell::new(NodeListValue::live_descendants_by_name(
-            root, name, nodes,
-        ))))
+        Value::NodeList(Rc::new(RefCell::new(
+            NodeListValue::live_descendants_by_name(root, name, nodes),
+        )))
     }
 
     pub(crate) fn tag_name_from_argument(value: &Value) -> String {
@@ -944,10 +940,32 @@ impl Harness {
         }
     }
 
+    pub(crate) fn namespace_uri_from_create_element_ns_argument(value: &Value) -> Option<String> {
+        if matches!(value, Value::Null) {
+            return None;
+        }
+        let raw = value.as_string();
+        if raw.is_empty() { None } else { Some(raw) }
+    }
+
     pub(crate) fn tag_name_live_list_value(&self, root: NodeId, tag_name: String) -> Value {
         let nodes = self.dom.get_elements_by_tag_name_from(&root, &tag_name);
         Value::NodeList(Rc::new(RefCell::new(
             NodeListValue::live_descendants_by_tag_name(root, tag_name, nodes),
+        )))
+    }
+
+    pub(crate) fn tag_name_ns_live_list_value(
+        &self,
+        root: NodeId,
+        namespace_uri: Option<String>,
+        local_name: String,
+    ) -> Value {
+        let nodes =
+            self.dom
+                .get_elements_by_tag_name_ns_from(&root, namespace_uri.as_deref(), &local_name);
+        Value::NodeList(Rc::new(RefCell::new(
+            NodeListValue::live_descendants_by_tag_name_ns(root, namespace_uri, local_name, nodes),
         )))
     }
 
@@ -971,6 +989,37 @@ impl Harness {
         Value::NodeList(list)
     }
 
+    pub(crate) fn child_elements_live_list_value(&mut self, parent: NodeId) -> Value {
+        let existing = self.dom_runtime.live_children_lists.get(&parent).cloned();
+        let list = existing.unwrap_or_else(|| {
+            let list = Rc::new(RefCell::new(NodeListValue::live_child_elements(
+                parent,
+                self.dom.child_elements(parent),
+            )));
+            self.dom_runtime
+                .live_children_lists
+                .insert(parent, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
+    pub(crate) fn named_node_map_live_value(&mut self, owner: NodeId) -> Value {
+        let existing = self.dom_runtime.live_named_node_maps.get(&owner).cloned();
+        let map = existing.unwrap_or_else(|| {
+            let named_node_map = self.new_named_node_map_value(owner);
+            let Value::Object(object) = named_node_map else {
+                unreachable!("new_named_node_map_value must return an object");
+            };
+            self.dom_runtime
+                .live_named_node_maps
+                .insert(owner, object.clone());
+            object
+        });
+        Value::Object(map)
+    }
+
     pub(crate) fn refresh_node_list(&self, list: &Rc<RefCell<NodeListValue>>) {
         let source = list.borrow().live_source.clone();
         let Some(source) = source else {
@@ -985,11 +1034,19 @@ impl Harness {
                     Vec::new()
                 }
             }
+            LiveNodeListSource::ChildElements { parent } => {
+                if self.dom.is_valid_node(parent) {
+                    self.dom.child_elements(parent)
+                } else {
+                    Vec::new()
+                }
+            }
             LiveNodeListSource::DescendantsByClassNames { root, class_names } => {
                 if !self.dom.is_valid_node(root) || class_names.is_empty() {
                     Vec::new()
                 } else {
-                    self.dom.get_elements_by_class_names_from(&root, &class_names)
+                    self.dom
+                        .get_elements_by_class_names_from(&root, &class_names)
                 }
             }
             LiveNodeListSource::DescendantsByName { root, name } => {
@@ -1004,6 +1061,21 @@ impl Harness {
                     Vec::new()
                 } else {
                     self.dom.get_elements_by_tag_name_from(&root, &tag_name)
+                }
+            }
+            LiveNodeListSource::DescendantsByTagNameNs {
+                root,
+                namespace_uri,
+                local_name,
+            } => {
+                if !self.dom.is_valid_node(root) {
+                    Vec::new()
+                } else {
+                    self.dom.get_elements_by_tag_name_ns_from(
+                        &root,
+                        namespace_uri.as_deref(),
+                        &local_name,
+                    )
                 }
             }
         };
@@ -1038,7 +1110,18 @@ impl Harness {
             {
                 "#document-fragment".to_string()
             }
-            NodeType::Element(element) => element.tag_name.to_ascii_uppercase(),
+            NodeType::Element(_) => self.element_tag_name(node),
+        }
+    }
+
+    pub(crate) fn element_tag_name(&self, node: NodeId) -> String {
+        let Some(element) = self.dom.element(node) else {
+            return String::new();
+        };
+        if element.namespace_uri.as_deref() == Some("http://www.w3.org/1999/xhtml") {
+            element.tag_name.to_ascii_uppercase()
+        } else {
+            element.tag_name.clone()
         }
     }
 
@@ -1250,13 +1333,16 @@ impl Harness {
         node: NodeId,
         prefix: Option<&str>,
     ) -> Option<String> {
-        let _ = node;
+        let element = self.dom.element(node)?;
         let normalized_prefix = prefix.unwrap_or_default();
         if normalized_prefix.is_empty() {
-            Some("http://www.w3.org/1999/xhtml".to_string())
-        } else {
-            None
+            return element.namespace_uri.clone();
         }
+        element
+            .tag_name
+            .split_once(':')
+            .filter(|(node_prefix, _)| *node_prefix == normalized_prefix)
+            .and_then(|_| element.namespace_uri.clone())
     }
 
     pub(crate) fn node_lookup_prefix(
@@ -1264,15 +1350,17 @@ impl Harness {
         node: NodeId,
         namespace_uri: Option<&str>,
     ) -> Option<String> {
-        let _ = node;
+        let element = self.dom.element(node)?;
         let Some(namespace_uri) = namespace_uri else {
             return None;
         };
-        if namespace_uri == "http://www.w3.org/1999/xhtml" {
-            None
-        } else {
-            None
+        if element.namespace_uri.as_deref() != Some(namespace_uri) {
+            return None;
         }
+        element
+            .tag_name
+            .split_once(':')
+            .map(|(prefix, _)| prefix.to_string())
     }
 
     pub(crate) fn node_is_default_namespace(
@@ -1452,12 +1540,20 @@ impl Harness {
             ),
             "contentType" => Some(Value::String("text/html".to_string())),
             "URL" | "documentURI" => Some(Value::String("about:blank".to_string())),
-            "createTreeWalker" | "querySelector" | "querySelectorAll" | "getElementById"
-            | "getElementsByClassName" | "getElementsByName" | "getElementsByTagName"
-            | "createElement" | "createTextNode" | "createAttribute"
-            | "createDocumentFragment" | "createRange" | "append" => {
-                Some(Self::new_builtin_placeholder_function())
-            }
+            "createTreeWalker"
+            | "querySelector"
+            | "querySelectorAll"
+            | "getElementById"
+            | "getElementsByClassName"
+            | "getElementsByName"
+            | "getElementsByTagName"
+            | "createElement"
+            | "createElementNS"
+            | "createTextNode"
+            | "createAttribute"
+            | "createDocumentFragment"
+            | "createRange"
+            | "append" => Some(Self::new_builtin_placeholder_function()),
             _ => None,
         })
     }
@@ -1658,12 +1754,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(
-                    self.dom
-                        .query_selector_from(&root, &selector)?
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null),
-                ))
+                Ok(Some(self.eval_query_selector_value(root, &selector)?))
             }
             "querySelectorAll" => {
                 if evaluated_args.len() != 1 {
@@ -1672,9 +1763,7 @@ impl Harness {
                     ));
                 }
                 let selector = evaluated_args[0].as_string();
-                Ok(Some(Self::new_static_node_list_value(
-                    self.dom.query_selector_all_from(&root, &selector)?,
-                )))
+                Ok(Some(self.eval_query_selector_all_value(root, &selector)?))
             }
             "createTreeWalker" => self.eval_create_tree_walker_call(evaluated_args),
             "createElement" => {
@@ -1687,6 +1776,30 @@ impl Harness {
                 let node = self.dom.create_detached_element(tag_name);
                 if let Some(is_value) =
                     Self::create_element_is_option_from_arg(evaluated_args.get(1))
+                {
+                    self.dom.set_attr(node, "is", &is_value)?;
+                }
+                Ok(Some(Value::Node(node)))
+            }
+            "createElementNS" => {
+                if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                    return Err(Error::ScriptRuntime(
+                        "createElementNS requires two or three arguments".into(),
+                    ));
+                }
+                let namespace_uri =
+                    Self::namespace_uri_from_create_element_ns_argument(&evaluated_args[0]);
+                let raw_tag_name = evaluated_args[1].as_string();
+                let tag_name = if namespace_uri.as_deref() == Some("http://www.w3.org/1999/xhtml") {
+                    raw_tag_name.to_ascii_lowercase()
+                } else {
+                    raw_tag_name
+                };
+                let node = self
+                    .dom
+                    .create_detached_element_with_namespace(tag_name, namespace_uri);
+                if let Some(is_value) =
+                    Self::create_element_is_option_from_arg(evaluated_args.get(2))
                 {
                     self.dom.set_attr(node, "is", &is_value)?;
                 }
@@ -1729,7 +1842,9 @@ impl Harness {
             }
             "createRange" => {
                 if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime("createRange takes no arguments".into()));
+                    return Err(Error::ScriptRuntime(
+                        "createRange takes no arguments".into(),
+                    ));
                 }
                 Ok(Some(Self::new_range_object_value(root)))
             }
@@ -1896,7 +2011,11 @@ impl Harness {
                     internal_offset_key.to_string(),
                     Value::Number(offset),
                 );
-                Self::object_set_entry(&mut entries, container_key.to_string(), Value::Node(container));
+                Self::object_set_entry(
+                    &mut entries,
+                    container_key.to_string(),
+                    Value::Node(container),
+                );
                 Self::object_set_entry(&mut entries, offset_key.to_string(), Value::Number(offset));
 
                 Ok(Some(Value::Undefined))

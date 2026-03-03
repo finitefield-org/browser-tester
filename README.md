@@ -86,11 +86,12 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 - `location` navigation can load mocked HTML for a target URL.
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
 - `navigator.clipboard` read/write rejection paths can be injected deterministically for tests.
+- `navigator.clipboard.write([new ClipboardItem({ ... })])` payloads can be captured deterministically.
 - `navigator.clipboard` can also be replaced in script (`navigator.clipboard = { ... }`) for local stubs.
 - `localStorage` can be seeded at harness creation for deterministic initial-state tests.
 - `window.localStorage` is assignable, so script-side stubs can be injected when needed.
 - `Blob` + `URL.createObjectURL` + `<a download>.click()` flows can be captured as deterministic download artifacts.
-- `input[type="file"]` selection can be mocked with deterministic file metadata.
+- `input[type="file"]` selection can be mocked with deterministic file metadata and file bytes.
 - Main APIs:
   - `Harness::from_html_with_local_storage(html, &[("key", "value"), ...])`
   - `Harness::from_html_with_url_and_local_storage(url, html, &[("key", "value"), ...])`
@@ -101,6 +102,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::set_clipboard_read_error(Some("NotAllowedError"))`
   - `Harness::set_clipboard_write_error(Some("NotAllowedError"))`
   - `Harness::clear_clipboard_errors()`
+  - `Harness::take_clipboard_writes()`
   - `Harness::enqueue_confirm_response(bool)`
   - `Harness::enqueue_prompt_response(Option<&str>)`
   - `Harness::set_location_mock_page(url, html)`
@@ -111,10 +113,12 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::set_input_files(selector, &[MockFile { ... }, ...])`
 - For `History API` tests (`history.go(0)` / `history.back()` / `history.forward()`), you can reuse
   `set_location_mock_page()` to provide deterministic page contents for URLs in the history stack.
- - `set_input_files()` behavior:
+- `set_input_files()` behavior:
    - selection changed: dispatches `input` then `change`.
    - selection unchanged: dispatches `cancel`.
    - for non-`multiple` file inputs, only the first mocked file is selected.
+   - mocked files expose `arrayBuffer()` / `text()` / `bytes()` / `stream()` via `File`-like APIs.
+   - mocked image files can be consumed by `createImageBitmap(file)` in script.
 
 File input mock example:
 
@@ -140,13 +144,14 @@ fn main() -> browser_tester::Result<()> {
     h.set_input_files(
         "#upload",
         &[
-            MockFile::new("first.txt"),
+            MockFile::new("first.txt").with_text("hello"),
             MockFile {
                 name: "nested/second.txt".to_string(),
                 size: 7,
                 mime_type: "text/plain".to_string(),
                 last_modified: 99,
                 webkit_relative_path: "nested/second.txt".to_string(),
+                bytes: b"second!".to_vec(),
             },
         ],
     )?;
@@ -264,6 +269,41 @@ fn main() -> browser_tester::Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#out", "stubbed-read")?;
+    Ok(())
+}
+```
+
+Clipboard binary write capture example:
+
+```rust
+use browser_tester::{ClipboardPayloadArtifact, ClipboardWriteArtifact, Harness};
+
+fn main() -> browser_tester::Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <script>
+        document.getElementById('run').addEventListener('click', async () => {
+          const pngBlob = new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], {
+            type: 'image/png'
+          });
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': pngBlob })
+          ]);
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    assert_eq!(
+        h.take_clipboard_writes(),
+        vec![ClipboardWriteArtifact {
+            payloads: vec![ClipboardPayloadArtifact {
+                mime_type: "image/png".to_string(),
+                bytes: vec![137, 80, 78, 71, 1, 2, 3],
+            }],
+        }]
+    );
     Ok(())
 }
 ```
@@ -632,6 +672,7 @@ impl Harness {
 
     // Action
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()>;
+    pub fn set_select_value(&mut self, selector: &str, value: &str) -> Result<()>;
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()>;
     pub fn click(&mut self, selector: &str) -> Result<()>;
     pub fn press_enter(&mut self, selector: &str) -> Result<()>;
@@ -677,6 +718,7 @@ impl Harness {
     pub fn set_clipboard_read_error(&mut self, error: Option<&str>);
     pub fn set_clipboard_write_error(&mut self, error: Option<&str>);
     pub fn clear_clipboard_errors(&mut self);
+    pub fn take_clipboard_writes(&mut self) -> Vec<ClipboardWriteArtifact>;
     pub fn clear_fetch_mocks(&mut self);
     pub fn take_fetch_calls(&mut self) -> Vec<String>;
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool);
@@ -724,6 +766,10 @@ pub struct PendingTimer {
 - `type_text`:
   - Replace target `value`.
   - Fire `input` event.
+  - For `<select>`, behaves like choosing by `value` and then fires `input` -> `change` when value changes.
+- `set_select_value`:
+  - Sets selected option by `value` on `<select>`.
+  - Fires `input` -> `change` only when selected value changes.
 - `set_checked`:
   - Update only when value differs from existing value.
   - `input` -> `change`

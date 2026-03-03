@@ -892,16 +892,16 @@ impl Harness {
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 if Self::is_fetch_request_object(&entries) {
-                    let input = match Self::object_get_entry(&entries, INTERNAL_FETCH_REQUEST_INPUT_KEY)
-                    {
-                        Some(Value::String(input)) => input,
-                        _ => String::new(),
-                    };
-                    let url =
-                        match Self::object_get_entry(&entries, INTERNAL_FETCH_REQUEST_URL_KEY) {
-                            Some(Value::String(url)) => url,
-                            _ => self.resolve_fetch_url(&input)?,
+                    let input =
+                        match Self::object_get_entry(&entries, INTERNAL_FETCH_REQUEST_INPUT_KEY) {
+                            Some(Value::String(input)) => input,
+                            _ => String::new(),
                         };
+                    let url = match Self::object_get_entry(&entries, INTERNAL_FETCH_REQUEST_URL_KEY)
+                    {
+                        Some(Value::String(url)) => url,
+                        _ => self.resolve_fetch_url(&input)?,
+                    };
                     return Ok((input, url));
                 }
                 if Self::is_url_object(&entries) {
@@ -1005,8 +1005,14 @@ impl Harness {
             ("set".to_string(), Self::new_builtin_placeholder_function()),
             ("get".to_string(), Self::new_builtin_placeholder_function()),
             ("has".to_string(), Self::new_builtin_placeholder_function()),
-            ("append".to_string(), Self::new_builtin_placeholder_function()),
-            ("delete".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "append".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "delete".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ])
     }
 
@@ -1033,7 +1039,10 @@ impl Harness {
     ) -> Value {
         let headers_value = self.new_headers_value_from_pairs(headers);
         Self::new_object_value(vec![
-            (INTERNAL_FETCH_REQUEST_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_FETCH_REQUEST_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             (
                 INTERNAL_FETCH_REQUEST_INPUT_KEY.to_string(),
                 Value::String(input.to_string()),
@@ -1049,7 +1058,10 @@ impl Harness {
             ("url".to_string(), Value::String(url.to_string())),
             ("method".to_string(), Value::String(method.to_string())),
             ("headers".to_string(), headers_value),
-            ("clone".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "clone".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ])
     }
 
@@ -1082,7 +1094,10 @@ impl Harness {
     ) -> Value {
         let headers = self.new_headers_value_from_pairs(&[]);
         Self::new_object_value(vec![
-            (INTERNAL_FETCH_RESPONSE_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_FETCH_RESPONSE_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             (
                 INTERNAL_FETCH_RESPONSE_BODY_KEY.to_string(),
                 Value::String(body.to_string()),
@@ -1114,7 +1129,10 @@ impl Harness {
                 "arrayBuffer".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-            ("clone".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "clone".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ])
     }
 
@@ -1181,11 +1199,11 @@ impl Harness {
         request_value: &Value,
         options_value: Option<&Value>,
     ) -> Result<Value> {
-        let (input_key, request_url) = match self.fetch_request_input_and_url_from_value(request_value)
-        {
-            Ok(ok) => ok,
-            Err(_) => return self.fetch_rejected_promise("Invalid URL"),
-        };
+        let (input_key, request_url) =
+            match self.fetch_request_input_and_url_from_value(request_value) {
+                Ok(ok) => ok,
+                Err(_) => return self.fetch_rejected_promise("Invalid URL"),
+            };
 
         if let Some(options) = options_value {
             if self.fetch_options_from_value(options).is_err() {
@@ -1240,8 +1258,12 @@ impl Harness {
             return Ok(None);
         }
         let body = body.map(|value| value.as_string()).unwrap_or_default();
-        let status = status.map(|value| Self::value_to_i64(&value)).unwrap_or(200);
-        let status_text = status_text.map(|value| value.as_string()).unwrap_or_default();
+        let status = status
+            .map(|value| Self::value_to_i64(&value))
+            .unwrap_or(200);
+        let status_text = status_text
+            .map(|value| value.as_string())
+            .unwrap_or_default();
         let url = url.map(|value| value.as_string()).unwrap_or_default();
 
         match member {
@@ -1367,7 +1389,7 @@ impl Harness {
                 _ => {
                     return Err(Error::ScriptRuntime(
                         "headers object has invalid internal state".into(),
-                    ))
+                    ));
                 }
             }
         };

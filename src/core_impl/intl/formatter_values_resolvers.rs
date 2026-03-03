@@ -211,7 +211,32 @@ impl Harness {
         ])
     }
 
-    pub(crate) fn new_intl_number_format_callable(&self, locale: String) -> Value {
+    pub(crate) fn intl_number_format_options_to_value(
+        minimum_fraction_digits: Option<usize>,
+        maximum_fraction_digits: Option<usize>,
+    ) -> Value {
+        let mut entries = Vec::new();
+        if let Some(value) = minimum_fraction_digits {
+            entries.push((
+                "minimumFractionDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        if let Some(value) = maximum_fraction_digits {
+            entries.push((
+                "maximumFractionDigits".to_string(),
+                Value::Number(value as i64),
+            ));
+        }
+        Self::new_object_value(entries)
+    }
+
+    pub(crate) fn new_intl_number_format_callable(
+        &self,
+        locale: String,
+        minimum_fraction_digits: Option<usize>,
+        maximum_fraction_digits: Option<usize>,
+    ) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -222,38 +247,46 @@ impl Harness {
                 Value::String(IntlFormatterKind::NumberFormat.storage_name().to_string()),
             ),
             (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+            (
+                INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                Self::intl_number_format_options_to_value(
+                    minimum_fraction_digits,
+                    maximum_fraction_digits,
+                ),
+            ),
         ])
     }
 
-    pub(crate) fn new_intl_formatter_value(
+    pub(crate) fn new_intl_number_formatter_value(
         &self,
-        kind: IntlFormatterKind,
         locale: String,
+        minimum_fraction_digits: Option<usize>,
+        maximum_fraction_digits: Option<usize>,
     ) -> Value {
-        let mut entries = vec![
+        let format = self.new_intl_number_format_callable(
+            locale.clone(),
+            minimum_fraction_digits,
+            maximum_fraction_digits,
+        );
+        Self::new_object_value(vec![
             (
                 INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(kind.storage_name().to_string()),
+                Value::String(IntlFormatterKind::NumberFormat.storage_name().to_string()),
             ),
             (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-        ];
-        if kind == IntlFormatterKind::NumberFormat {
-            let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
-                .and_then(|value| match value {
-                    Value::String(value) => Some(value),
-                    _ => None,
-                })
-                .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
-            entries.push((
-                "format".to_string(),
-                self.new_intl_number_format_callable(locale),
-            ));
-            entries.push((
+            (
+                INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                Self::intl_number_format_options_to_value(
+                    minimum_fraction_digits,
+                    maximum_fraction_digits,
+                ),
+            ),
+            ("format".to_string(), format),
+            (
                 "constructor".to_string(),
                 self.intl_constructor_value("NumberFormat"),
-            ));
-        }
-        Self::new_object_value(entries)
+            ),
+        ])
     }
 
     pub(crate) fn resolve_intl_formatter(
@@ -283,6 +316,43 @@ impl Harness {
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
         Ok((kind, locale))
+    }
+
+    pub(crate) fn resolve_intl_number_format_options(
+        &self,
+        value: &Value,
+    ) -> Result<(String, Option<usize>, Option<usize>)> {
+        let Value::Object(entries) = value else {
+            return Err(Error::ScriptRuntime(
+                "Intl.NumberFormat method requires an Intl.NumberFormat instance".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = Self::object_get_entry(&entries, INTERNAL_INTL_KIND_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => IntlFormatterKind::from_storage_name(&value),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Error::ScriptRuntime(
+                    "Intl.NumberFormat method requires an Intl.NumberFormat instance".into(),
+                )
+            })?;
+        if kind != IntlFormatterKind::NumberFormat {
+            return Err(Error::ScriptRuntime(
+                "Intl.NumberFormat method requires an Intl.NumberFormat instance".into(),
+            ));
+        }
+        let locale = Self::object_get_entry(&entries, INTERNAL_INTL_LOCALE_KEY)
+            .and_then(|value| match value {
+                Value::String(value) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
+        let options = Self::object_get_entry(&entries, INTERNAL_INTL_OPTIONS_KEY);
+        let (minimum_fraction_digits, maximum_fraction_digits) =
+            Self::parse_number_to_locale_string_fraction_digits(options.as_ref())?;
+        Ok((locale, minimum_fraction_digits, maximum_fraction_digits))
     }
 
     pub(crate) fn resolve_intl_date_time_options(

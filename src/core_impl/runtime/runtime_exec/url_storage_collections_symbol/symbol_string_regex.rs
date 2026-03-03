@@ -41,9 +41,13 @@ impl Harness {
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_WORKER_KEY_PREFIX)
             || key.starts_with(INTERNAL_CANVAS_KEY_PREFIX)
+            || key.starts_with(INTERNAL_NAMED_NODE_MAP_KEY_PREFIX)
             || key.starts_with(INTERNAL_URL_SEARCH_PARAMS_KEY_PREFIX)
             || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_CLIPBOARD_ITEM_KEY_PREFIX)
+            || key.starts_with(INTERNAL_MOCK_FILE_KEY_PREFIX)
             || key.starts_with(INTERNAL_ITERATOR_KEY_PREFIX)
             || key.starts_with(INTERNAL_ASYNC_ITERATOR_KEY_PREFIX)
             || key.starts_with(INTERNAL_ASYNC_GENERATOR_KEY_PREFIX)
@@ -204,11 +208,11 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
+        let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
         match method {
             StringStaticMethod::FromCharCode => {
-                let mut out = String::with_capacity(args.len());
-                for arg in args {
-                    let value = self.eval_expr(arg, env, event_param, event)?;
+                let mut out = String::with_capacity(evaluated_args.len());
+                for value in &evaluated_args {
                     let unit = (Self::value_to_i64(&value) as i128).rem_euclid(1 << 16) as u16;
                     out.push(crate::js_regex::internalize_utf16_code_unit(unit));
                 }
@@ -216,8 +220,7 @@ impl Harness {
             }
             StringStaticMethod::FromCodePoint => {
                 let mut out = String::new();
-                for arg in args {
-                    let value = self.eval_expr(arg, env, event_param, event)?;
+                for value in &evaluated_args {
                     let n = Self::coerce_number_for_global(&value);
                     if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
                     {
@@ -243,12 +246,12 @@ impl Harness {
                 Ok(Value::String(out))
             }
             StringStaticMethod::Raw => {
-                if args.is_empty() {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "String.raw requires at least one argument".into(),
                     ));
                 }
-                let template = self.eval_expr(&args[0], env, event_param, event)?;
+                let template = evaluated_args[0].clone();
                 let raw = match template {
                     Value::Object(entries) => {
                         let entries = entries.borrow();
@@ -257,10 +260,11 @@ impl Harness {
                     other => other,
                 };
                 let raw_segments = self.array_like_values_from_value(&raw)?;
-                let mut substitutions = Vec::with_capacity(args.len().saturating_sub(1));
-                for arg in args.iter().skip(1) {
-                    substitutions.push(self.eval_expr(arg, env, event_param, event)?.as_string());
-                }
+                let substitutions = evaluated_args
+                    .iter()
+                    .skip(1)
+                    .map(Value::as_string)
+                    .collect::<Vec<_>>();
                 if raw_segments.is_empty() {
                     return Ok(Value::String(String::new()));
                 }

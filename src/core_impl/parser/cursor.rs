@@ -194,10 +194,9 @@ impl<'a> Cursor<'a> {
             .peek()
             .ok_or_else(|| self.parse_error_at("expected string literal".into(), self.i))?;
         if quote != b'\'' && quote != b'"' {
-            return Err(self.parse_error_at(
-                format!("expected string literal at {}", self.i),
-                self.i,
-            ));
+            return Err(
+                self.parse_error_at(format!("expected string literal at {}", self.i), self.i)
+            );
         }
 
         self.i += 1;
@@ -218,9 +217,7 @@ impl<'a> Cursor<'a> {
                 let raw = self
                     .src
                     .get(start..self.i)
-                    .ok_or_else(|| {
-                        self.parse_error_at("invalid string literal".into(), self.i)
-                    })?;
+                    .ok_or_else(|| self.parse_error_at("invalid string literal".into(), self.i))?;
                 self.i += 1;
                 return Ok(unescape_string(raw));
             }

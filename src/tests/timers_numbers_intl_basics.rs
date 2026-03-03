@@ -707,11 +707,38 @@ fn date_parse_invalid_input_returns_nan_and_utc_normalizes_overflow() -> Result<
 }
 
 #[test]
+fn date_constructor_supports_component_arguments() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const d = new Date(2026, 0, 31, 12, 34, 56, 789);
+            document.getElementById('result').textContent = [
+              d.toISOString(),
+              d.getFullYear(),
+              d.getMonth(),
+              d.getDate(),
+              d.getHours(),
+              d.getMinutes(),
+              d.getSeconds()
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2026-01-31T12:34:56.789Z:2026:0:31:12:34:56")?;
+    Ok(())
+}
+
+#[test]
 fn date_method_arity_errors_have_stable_messages() {
     let cases = [
         (
-            "<script>new Date(1, 2);</script>",
-            "new Date supports zero or one argument",
+            "<script>new Date(1, 2, 3, 4, 5, 6, 7, 8);</script>",
+            "new Date supports up to seven arguments",
         ),
         (
             "<script>Date.parse();</script>",
@@ -1195,6 +1222,32 @@ fn intl_date_time_and_number_format_examples_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "5/24/2012 26,254.39|24.5.2012 26.254,39")?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_honors_fraction_digits_options() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const v1 = 28.000000000000004;
+            const v2 = 31.799999999999997;
+            const formatter = new Intl.NumberFormat('en', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+            const format = formatter.format;
+            document.getElementById('result').textContent =
+              formatter.format(v1) + '|' + format(v2);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "28.00|31.80")?;
     Ok(())
 }
 

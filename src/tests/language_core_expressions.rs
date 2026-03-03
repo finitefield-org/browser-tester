@@ -4552,6 +4552,55 @@ fn optional_chaining_short_circuits_computed_operands_and_continuous_chains() ->
 }
 
 #[test]
+fn optional_chaining_class_list_methods_mutate_existing_dom_nodes() -> Result<()> {
+    let html = r#"
+        <div id='x' class='hidden'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const x = document.getElementById('x');
+            x?.classList.remove('hidden');
+            x?.classList.add('active');
+            x?.classList.toggle('active', true);
+            document.getElementById('result').textContent =
+              x.className + ':' +
+              String(x.classList.contains('active')) + ':' +
+              String(x.classList.contains('hidden'));
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "active:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_class_list_methods_short_circuit_for_nullish_dom_nodes() -> Result<()> {
+    let html = r#"
+        <div id='x' class='hidden'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const x = document.getElementById('missing');
+            x?.classList.remove('hidden');
+            x?.classList.toggle('active');
+            document.getElementById('result').textContent =
+              document.getElementById('x').className + ':ok';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "hidden:ok")?;
+    Ok(())
+}
+
+#[test]
 fn optional_chaining_on_undeclared_root_still_throws_reference_error() -> Result<()> {
     let html = r#"
         <p id='result'></p>

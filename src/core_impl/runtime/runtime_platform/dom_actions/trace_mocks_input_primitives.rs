@@ -137,6 +137,10 @@ impl Harness {
         std::mem::take(&mut self.browser_apis.downloads)
     }
 
+    pub fn take_clipboard_writes(&mut self) -> Vec<ClipboardWriteArtifact> {
+        std::mem::take(&mut self.browser_apis.clipboard_writes)
+    }
+
     pub fn location_reload_count(&self) -> usize {
         self.location_history.location_reload_count
     }

@@ -532,6 +532,18 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
             };
             Expr::ArrayJoin { target, separator }
         }
+        "reverse" => {
+            if !args.is_empty() {
+                return Err(Error::ScriptParse("reverse does not take arguments".into()));
+            }
+            return Ok(Some(Expr::MemberCall {
+                target: Box::new(Expr::Var(target)),
+                member: method,
+                args: Vec::new(),
+                optional: false,
+                optional_call: false,
+            }));
+        }
         "sort" => {
             if args.len() > 1 {
                 return Err(Error::ScriptParse(

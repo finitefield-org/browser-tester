@@ -470,20 +470,12 @@ impl Harness {
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value < 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value < 0 { None } else { Some(value) }
     }
 
     pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value <= 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value <= 0 { None } else { Some(value) }
     }
 
     pub(crate) fn col_span_value(&self, node: NodeId) -> i64 {
@@ -532,9 +524,59 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_named_node_map_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_NAMED_NODE_MAP_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn named_node_map_owner_node(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn named_node_map_entries(&self, owner: NodeId) -> Vec<(String, String)> {
+        let Some(element) = self.dom.element(owner) else {
+            return Vec::new();
+        };
+        let mut attrs = element
+            .attrs
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
+        attrs
+    }
+
     pub(crate) fn is_range_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_RANGE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_clipboard_data_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_CLIPBOARD_DATA_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_clipboard_item_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_mock_file_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_MOCK_FILE_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -548,6 +590,74 @@ impl Harness {
                 "ownerElement".to_string(),
                 owner.map(Value::Node).unwrap_or(Value::Null),
             ),
+        ])
+    }
+
+    pub(crate) fn new_clipboard_data_object_value(text: &str) -> Value {
+        let types = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![Value::String("text/plain".to_string())]
+        };
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CLIPBOARD_DATA_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_CLIPBOARD_DATA_TEXT_KEY.to_string(),
+                Value::String(text.to_string()),
+            ),
+            (
+                "getData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "clearData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("types".to_string(), Self::new_array_value(types)),
+        ])
+    }
+
+    fn new_named_node_map_iterator_callable(owner: NodeId) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("named_node_map_iterator".to_string()),
+            ),
+            (
+                INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY.to_string(),
+                Value::Node(owner),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_named_node_map_value(&mut self, owner: NodeId) -> Value {
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+
+        Self::new_object_value(vec![
+            (
+                INTERNAL_NAMED_NODE_MAP_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY.to_string(),
+                Value::Node(owner),
+            ),
+            (
+                iterator_key,
+                Self::new_named_node_map_iterator_callable(owner),
+            ),
+            (to_string_tag_key, Value::String("NamedNodeMap".to_string())),
         ])
     }
 
@@ -593,7 +703,10 @@ impl Harness {
         Self::new_object_value(vec![
             (INTERNAL_ANIMATION_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("id".to_string(), Value::String(id)),
-            ("playState".to_string(), Value::String("running".to_string())),
+            (
+                "playState".to_string(),
+                Value::String("running".to_string()),
+            ),
             ("currentTime".to_string(), Value::Number(0)),
             ("startTime".to_string(), Value::Number(0)),
             ("pending".to_string(), Value::Bool(false)),
@@ -602,11 +715,23 @@ impl Harness {
             ("rangeEnd".to_string(), range_end),
             ("keyframes".to_string(), keyframes),
             ("options".to_string(), options),
-            ("cancel".to_string(), Self::new_builtin_placeholder_function()),
-            ("finish".to_string(), Self::new_builtin_placeholder_function()),
-            ("pause".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "cancel".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "finish".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "pause".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             ("play".to_string(), Self::new_builtin_placeholder_function()),
-            ("reverse".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "reverse".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             (
                 "updatePlaybackRate".to_string(),
                 Self::new_builtin_placeholder_function(),
@@ -615,7 +740,10 @@ impl Harness {
                 "commitStyles".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-            ("persist".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "persist".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             (
                 "Symbol.toStringTag".to_string(),
                 Value::String("Animation".to_string()),
@@ -742,7 +870,10 @@ impl Harness {
     }
 
     pub(crate) fn mock_file_to_value(file: &MockFile) -> Value {
+        let file_blob = Self::new_blob_value(file.bytes.clone(), file.mime_type.clone());
         Self::new_object_value(vec![
+            (INTERNAL_MOCK_FILE_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (INTERNAL_MOCK_FILE_BLOB_KEY.to_string(), file_blob),
             ("name".to_string(), Value::String(file.name.clone())),
             (
                 "lastModified".to_string(),
@@ -753,6 +884,19 @@ impl Harness {
             (
                 "webkitRelativePath".to_string(),
                 Value::String(file.webkit_relative_path.clone()),
+            ),
+            (
+                "arrayBuffer".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("text".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "bytes".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "stream".to_string(),
+                Self::new_builtin_placeholder_function(),
             ),
         ])
     }
@@ -892,10 +1036,104 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_clipboard_item_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("clipboard_item_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_clipboard_write_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("clipboard_write".to_string()),
+        )])
+    }
+
     pub(crate) fn new_headers_constructor_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("headers_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_worker_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("worker_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_encode_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("text_encoder_encode".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_text_encoder_instance_value() -> Value {
+        Self::new_object_value(vec![
+            ("encoding".to_string(), Value::String("utf-8".to_string())),
+            (
+                "encode".to_string(),
+                Self::new_text_encoder_encode_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn new_worker_main_post_message_callable(worker: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("worker_main_post_message".to_string()),
+            ),
+            (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
+        ])
+    }
+
+    pub(crate) fn new_worker_context_post_message_callable(worker: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("worker_context_post_message".to_string()),
+            ),
+            (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
+        ])
+    }
+
+    pub(crate) fn new_worker_terminate_callable(worker: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("worker_terminate".to_string()),
+            ),
+            (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
+        ])
+    }
+
+    pub(crate) fn new_global_decode_uri_callable(component: bool) -> Value {
+        let kind = if component {
+            "global_decode_uri_component"
+        } else {
+            "global_decode_uri"
+        };
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String(kind.to_string()),
+        )])
+    }
+
+    pub(crate) fn new_create_image_bitmap_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("create_image_bitmap".to_string()),
         )])
     }
 
@@ -1032,6 +1270,7 @@ impl Harness {
                 "intl_segmenter_segments_iterator" => "intl_segmenter_segments_iterator",
                 "intl_segmenter_iterator_next" => "intl_segmenter_iterator_next",
                 "readable_stream_async_iterator" => "readable_stream_async_iterator",
+                "named_node_map_iterator" => "named_node_map_iterator",
                 "iterator_self" => "iterator_self",
                 "async_iterator_next" => "async_iterator_next",
                 "async_iterator_return" => "async_iterator_return",
@@ -1053,7 +1292,18 @@ impl Harness {
                 "fetch_function" => "fetch_function",
                 "window_close_function" => "window_close_function",
                 "request_constructor" => "request_constructor",
+                "clipboard_item_constructor" => "clipboard_item_constructor",
+                "clipboard_write" => "clipboard_write",
                 "headers_constructor" => "headers_constructor",
+                "worker_constructor" => "worker_constructor",
+                "text_encoder_constructor" => "text_encoder_constructor",
+                "text_encoder_encode" => "text_encoder_encode",
+                "worker_main_post_message" => "worker_main_post_message",
+                "worker_context_post_message" => "worker_context_post_message",
+                "worker_terminate" => "worker_terminate",
+                "global_decode_uri" => "global_decode_uri",
+                "global_decode_uri_component" => "global_decode_uri_component",
+                "create_image_bitmap" => "create_image_bitmap",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
@@ -1083,11 +1333,7 @@ impl Harness {
                 out.push(ch);
             }
         }
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
@@ -1154,9 +1400,14 @@ impl Harness {
                         .unwrap_or(Value::Null)),
                     "isConnected" => Ok(Value::Bool(self.dom.is_connected(*node))),
                     "childNodes" => Ok(self.child_nodes_live_list_value(*node)),
-                    "children" => Ok(Self::new_static_node_list_value(
-                        self.dom.child_elements(*node),
-                    )),
+                    "attributes" => {
+                        if self.dom.element(*node).is_some() {
+                            Ok(self.named_node_map_live_value(*node))
+                        } else {
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    "children" => Ok(self.child_elements_live_list_value(*node)),
                     "childElementCount" => {
                         Ok(Value::Number(self.dom.child_element_count(*node) as i64))
                     }
@@ -1182,6 +1433,17 @@ impl Harness {
                         .last_element_child(*node)
                         .map(Value::Node)
                         .unwrap_or(Value::Null)),
+                    "nextElementSibling" => Ok(self
+                        .dom
+                        .next_element_sibling(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "previousElementSibling" => Ok(self
+                        .dom
+                        .previous_element_sibling(*node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null)),
+                    "shadowRoot" => Ok(self.shadow_root_property_value(*node)),
                     "content"
                         if self
                             .dom
@@ -1381,16 +1643,41 @@ impl Harness {
                     )),
                     "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
                     "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
-                    "tagName" => Ok(Value::String(
+                    "tagName" => Ok(Value::String(self.element_tag_name(*node))),
+                    "localName" => Ok(Value::String(
                         self.dom
                             .tag_name(*node)
-                            .unwrap_or_default()
-                            .to_ascii_uppercase(),
+                            .map(|name| {
+                                name.rsplit_once(':')
+                                    .map(|(_, local)| local)
+                                    .unwrap_or(name)
+                                    .to_ascii_lowercase()
+                            })
+                            .unwrap_or_default(),
                     )),
+                    "namespaceURI" => Ok(self
+                        .dom
+                        .element(*node)
+                        .and_then(|element| element.namespace_uri.clone())
+                        .map(Value::String)
+                        .unwrap_or(Value::Null)),
+                    "prefix" => Ok(self
+                        .dom
+                        .tag_name(*node)
+                        .and_then(|name| name.split_once(':').map(|(prefix, _)| prefix))
+                        .map(|prefix| Value::String(prefix.to_string()))
+                        .unwrap_or(Value::Null)),
                     "className" => Ok(Value::String(
                         self.dom.attr(*node, "class").unwrap_or_default(),
                     )),
-                    "role" => Ok(Value::String(self.resolved_role_for_node(*node))),
+                    "slot" => Ok(Value::String(
+                        self.dom.attr(*node, "slot").unwrap_or_default(),
+                    )),
+                    "role" => Ok(self
+                        .dom
+                        .attr(*node, "role")
+                        .map(Value::String)
+                        .unwrap_or(Value::Null)),
                     "baseURI" => Ok(Value::String(self.document_base_url())),
                     "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
                     "options" => {
@@ -1484,6 +1771,29 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if Self::is_attr_object(&entries) {
+                    let value = match key {
+                        "ownerElement" => {
+                            Self::object_get_entry(&entries, "ownerElement").unwrap_or(Value::Null)
+                        }
+                        "name" => Self::object_get_entry(&entries, "name")
+                            .unwrap_or_else(|| Value::String(String::new())),
+                        "value" => Self::object_get_entry(&entries, "value")
+                            .unwrap_or_else(|| Value::String(String::new())),
+                        "nodeType" => Value::Number(2),
+                        "nodeName" => Self::object_get_entry(&entries, "name")
+                            .unwrap_or_else(|| Value::String(String::new())),
+                        "nodeValue" => Self::object_get_entry(&entries, "value")
+                            .unwrap_or_else(|| Value::String(String::new())),
+                        "parentNode" | "parentElement" | "previousSibling" | "nextSibling" => {
+                            Value::Null
+                        }
+                        _ => Value::Undefined,
+                    };
+                    if !matches!(value, Value::Undefined) {
+                        return Ok(value);
+                    }
+                }
                 if let Some(value) = self.fetch_response_property_from_entries(&entries, key) {
                     return Ok(value);
                 }
@@ -1524,6 +1834,32 @@ impl Harness {
                     .and_then(|symbol| symbol.description.as_deref())
                     .is_some_and(|description| description == "Symbol.toStringTag")
                     || key == "Symbol.toStringTag";
+                if Self::is_named_node_map_object(&entries) {
+                    let owner = Self::named_node_map_owner_node(&entries)
+                        .filter(|node| self.dom.element(*node).is_some());
+                    let attrs = owner
+                        .map(|owner_node| self.named_node_map_entries(owner_node))
+                        .unwrap_or_default();
+                    if key == "length" {
+                        return Ok(Value::Number(attrs.len() as i64));
+                    }
+                    if let Ok(index) = key.parse::<usize>() {
+                        let value = attrs
+                            .get(index)
+                            .and_then(|(name, value)| {
+                                owner.map(|owner_node| {
+                                    Self::new_attr_object_value(name, value, Some(owner_node))
+                                })
+                            })
+                            .unwrap_or(Value::Undefined);
+                        return Ok(value);
+                    }
+                    if let Some(owner_node) = owner {
+                        if let Some((name, value)) = attrs.iter().find(|(name, _)| name == key) {
+                            return Ok(Self::new_attr_object_value(name, value, Some(owner_node)));
+                        }
+                    }
+                }
                 if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
                     if key == "length" {
                         return Ok(Value::Number(text.chars().count() as i64));

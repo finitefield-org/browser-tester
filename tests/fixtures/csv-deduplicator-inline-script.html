@@ -1,0 +1,1061 @@
+<html><body>
+<script>
+(() => {
+  const root = document.getElementById("csv-deduplicator-tool");
+  if (!root) return;
+
+  const STORAGE_KEY = "csv_deduplicator_settings_v1";
+  const PREVIEW_LIMIT = 50;
+
+  const data = {
+    sample: root.dataset.sample || "",
+    toastSample: root.dataset.toastSample || "",
+    toastClear: root.dataset.toastClear || "",
+    toastDownload: root.dataset.toastDownload || "",
+    errorEmptyInput: root.dataset.errorEmptyInput || "",
+    errorNoKeys: root.dataset.errorNoKeys || "",
+    errorParse: root.dataset.errorParse || "",
+    errorParseLine: root.dataset.errorParseLine || "",
+    errorMismatch: root.dataset.errorMismatch || "",
+    errorDecode: root.dataset.errorDecode || "",
+    errorFile: root.dataset.errorFile || "",
+    detectTemplate: root.dataset.detectTemplate || "",
+    detectUnknown: root.dataset.detectUnknown || "",
+    detectLabelCsv: root.dataset.detectLabelCsv || "CSV",
+    detectLabelTsv: root.dataset.detectLabelTsv || "TSV",
+    detectLabelComma: root.dataset.detectLabelComma || ",",
+    detectLabelTab: root.dataset.detectLabelTab || "Tab",
+    detectLabelSemicolon: root.dataset.detectLabelSemicolon || ";",
+    columnTemplate: root.dataset.columnTemplate || "Column {index}",
+    runHintTemplate: root.dataset.runHintTemplate || "",
+    timeTemplate: root.dataset.timeTemplate || "{seconds}s",
+    conflictEmpty: root.dataset.conflictEmpty || "",
+    conflictCountTemplate: root.dataset.conflictCountTemplate || "",
+    rulesTemplate: root.dataset.rulesTemplate || "",
+    rulesJoiner: root.dataset.rulesJoiner || " / ",
+    groupCountLabel: root.dataset.groupCountLabel || "count",
+    conflictKeyLabel: root.dataset.conflictKeyLabel || "Key",
+    conflictColumnLabel: root.dataset.conflictColumnLabel || "Column",
+    conflictFirstLabel: root.dataset.conflictFirstLabel || "First",
+    conflictSecondLabel: root.dataset.conflictSecondLabel || "Second",
+    topDuplicatesEmpty: root.dataset.topDuplicatesEmpty || "-",
+    downloadResultName: root.dataset.downloadResultName || "deduplicated.csv",
+    downloadDuplicatesName: root.dataset.downloadDuplicatesName || "duplicates.csv",
+    downloadGroupsName: root.dataset.downloadGroupsName || "duplicate-groups.csv",
+    ruleCaseLabel: root.dataset.ruleCaseLabel || "",
+    ruleCaseIgnore: root.dataset.ruleCaseIgnore || "",
+    ruleCaseSensitive: root.dataset.ruleCaseSensitive || "",
+    ruleTrimLabel: root.dataset.ruleTrimLabel || "",
+    ruleTrimOn: root.dataset.ruleTrimOn || "",
+    ruleTrimOff: root.dataset.ruleTrimOff || "",
+    ruleNormalizeLabel: root.dataset.ruleNormalizeLabel || "",
+    ruleNormalizeOn: root.dataset.ruleNormalizeOn || "",
+    ruleNormalizeOff: root.dataset.ruleNormalizeOff || "",
+    ruleEmptyLabel: root.dataset.ruleEmptyLabel || "",
+    ruleEmptyInclude: root.dataset.ruleEmptyInclude || "",
+    ruleEmptySkip: root.dataset.ruleEmptySkip || ""
+  };
+
+  const elements = {
+    tabButtons: Array.from(root.querySelectorAll(".tab-btn")),
+    tabPanels: {
+      file: root.querySelector("#tab-file"),
+      paste: root.querySelector("#tab-paste"),
+      sample: root.querySelector("#tab-sample")
+    },
+    dropzone: root.querySelector("#dropzone"),
+    fileButton: root.querySelector("#file-button"),
+    fileInput: root.querySelector("#file-input"),
+    pasteInput: root.querySelector("#paste-input"),
+    sampleButton: root.querySelector("#sample-button"),
+    clearInput: root.querySelector("#clear-input"),
+    loadSample: root.querySelector("#load-sample"),
+    headerMode: root.querySelector("#header-mode"),
+    delimiterMode: root.querySelector("#delimiter-mode"),
+    encodingMode: root.querySelector("#encoding-mode"),
+    errorBanner: root.querySelector("#error-banner"),
+    errorText: root.querySelector("#error-text"),
+    detectLabel: root.querySelector("#detect-label"),
+    inputPreview: root.querySelector("#input-preview"),
+    columnSearch: root.querySelector("#column-search"),
+    columnList: root.querySelector("#column-list"),
+    selectedKeys: root.querySelector("#selected-keys"),
+    keepMode: Array.from(root.querySelectorAll("input[name=keep-mode]")),
+    conflictRow: root.querySelector("#conflict-row"),
+    conflictMode: root.querySelector("#conflict-mode"),
+    caseSensitive: root.querySelector("#case-sensitive"),
+    caseDesc: root.querySelector("#case-desc"),
+    trimKey: root.querySelector("#trim-key"),
+    normalizeKey: root.querySelector("#normalize-key"),
+    emptyKey: Array.from(root.querySelectorAll("input[name=empty-key]")),
+    runBtn: root.querySelector("#run-btn"),
+    runHint: root.querySelector("#run-hint"),
+    statOriginal: root.querySelector("#stat-original"),
+    statResult: root.querySelector("#stat-result"),
+    statRemoved: root.querySelector("#stat-removed"),
+    statGroups: root.querySelector("#stat-groups"),
+    rulesSummary: root.querySelector("#rules-summary"),
+    timeSummary: root.querySelector("#time-summary"),
+    downloadResult: root.querySelector("#download-result"),
+    downloadDuplicates: root.querySelector("#download-duplicates"),
+    downloadGroups: root.querySelector("#download-groups"),
+    topDuplicates: root.querySelector("#top-duplicates"),
+    previewTabs: Array.from(root.querySelectorAll(".preview-tab")),
+    resultPreview: root.querySelector("#result-preview"),
+    conflictSummary: root.querySelector("#conflict-summary"),
+    conflictPreview: root.querySelector("#conflict-preview"),
+    toast: root.querySelector("#toast")
+  };
+
+  const state = {
+    inputText: "",
+    rows: [],
+    dataRows: [],
+    header: [],
+    hasHeader: true,
+    delimiter: ",",
+    delimiterLabel: "",
+    keys: [],
+    savedKeyLabels: [],
+    previewTab: "result",
+    result: {
+      outputRows: [],
+      outputData: [],
+      duplicateRows: [],
+      duplicateData: [],
+      groupRows: [],
+      topDuplicates: [],
+      conflicts: []
+    }
+  };
+
+  function showToast(message) {
+    if (!message) return;
+    elements.toast.textContent = message;
+    elements.toast.classList.add("show");
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => elements.toast.classList.remove("show"), 2000);
+  }
+
+  function showError(message) {
+    if (!message) return;
+    elements.errorText.textContent = message;
+    elements.errorBanner.classList.remove("hidden");
+  }
+
+  function clearError() {
+    elements.errorBanner.classList.add("hidden");
+    elements.errorText.textContent = "";
+  }
+
+  function formatTemplate(template, values) {
+    return (template || "").replace(/\{(\w+)\}/g, (_, key) => {
+      return values[key] != null ? String(values[key]) : "";
+    });
+  }
+
+  function setRunHint() {
+    const rows = state.dataRows.length;
+    const keys = state.keys.length;
+    if (!data.runHintTemplate) return;
+    elements.runHint.textContent = formatTemplate(data.runHintTemplate, { rows, keys });
+  }
+
+  function normalizeLineBreaks(text) {
+    return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  }
+
+  function decodeSample(value) {
+    if (!value) return "";
+    try {
+      return JSON.parse(value);
+    } catch (err) {
+      return value.replace(/\\n/g, "\n");
+    }
+  }
+
+  function parseDelimited(text, delimiter) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    let justClosed = false;
+    let line = 1;
+    let quoteLine = 1;
+
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === "\"") {
+          if (text[i + 1] === "\"") {
+            field += "\"";
+            i += 1;
+          } else {
+            inQuotes = false;
+            justClosed = true;
+          }
+        } else {
+          if (ch === "\n") {
+            line += 1;
+          }
+          field += ch;
+        }
+        continue;
+      }
+
+      if (justClosed) {
+        if (ch === delimiter) {
+          row.push(field);
+          field = "";
+          justClosed = false;
+        } else if (ch === "\n") {
+          row.push(field);
+          rows.push(row);
+          row = [];
+          field = "";
+          justClosed = false;
+          line += 1;
+        } else if (ch === " " || ch === "\t") {
+          field += ch;
+        } else {
+          return { error: { line } };
+        }
+        continue;
+      }
+
+      if (ch === "\"") {
+        inQuotes = true;
+        quoteLine = line;
+        continue;
+      }
+
+      if (ch === delimiter) {
+        row.push(field);
+        field = "";
+        continue;
+      }
+
+      if (ch === "\n") {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+        line += 1;
+        continue;
+      }
+
+      field += ch;
+    }
+
+    if (inQuotes) {
+      return { error: { line: quoteLine } };
+    }
+
+    if (justClosed || field.length || row.length) {
+      row.push(field);
+    }
+
+    const hasTrailingNewline = text.endsWith("\n");
+    if (row.length > 0 && !(hasTrailingNewline && row.length === 1 && row[0] === "")) {
+      rows.push(row);
+    }
+
+    return { rows };
+  }
+
+  function countDelimiterInLine(line, delimiter) {
+    let count = 0;
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === "\"") {
+        if (inQuotes && line[i + 1] === "\"") {
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (!inQuotes && ch === delimiter) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  function detectDelimiter(text) {
+    const sample = text.slice(0, 20000);
+    const lines = sample.split("\n").slice(0, 10);
+    const candidates = [",", "\t", ";"];
+    let best = null;
+    let bestCount = -1;
+    candidates.forEach((delim) => {
+      const count = lines.reduce((sum, line) => sum + countDelimiterInLine(line, delim), 0);
+      if (count > bestCount) {
+        best = delim;
+        bestCount = count;
+      }
+    });
+    if (bestCount <= 0) return null;
+    return best;
+  }
+
+  function detectHeader(rows) {
+    if (rows.length < 2) return true;
+    const first = rows[0];
+    const second = rows[1];
+    const numeric = (value) => value != null && value !== "" && !isNaN(Number(value));
+    const firstNumeric = first.filter(numeric).length;
+    const secondNumeric = second.filter(numeric).length;
+    return firstNumeric < secondNumeric;
+  }
+
+  function columnLabel(index) {
+    return formatTemplate(data.columnTemplate, { index: index + 1 });
+  }
+
+  function updateDetectLabel(delimiter) {
+    if (!delimiter) {
+      elements.detectLabel.textContent = data.detectUnknown;
+      return;
+    }
+    const label = delimiter === "\t" ? data.detectLabelTsv : data.detectLabelCsv;
+    let delimiterLabel = data.detectLabelComma;
+    if (delimiter === "\t") delimiterLabel = data.detectLabelTab;
+    if (delimiter === ";") delimiterLabel = data.detectLabelSemicolon;
+    elements.detectLabel.textContent = formatTemplate(data.detectTemplate, {
+      type: label,
+      delimiter: delimiterLabel
+    });
+  }
+
+  function updatePreview(container, rows, headerRow) {
+    container.innerHTML = "";
+    if (!rows || rows.length === 0) return;
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    const headers = headerRow || rows[0] || [];
+    headers.forEach((cell) => {
+      const th = document.createElement("th");
+      th.textContent = cell || "";
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    const dataRows = headerRow ? rows : rows.slice(1);
+    dataRows.slice(0, PREVIEW_LIMIT).forEach((row) => {
+      const tr = document.createElement("tr");
+      headers.forEach((_, idx) => {
+        const td = document.createElement("td");
+        td.textContent = row[idx] || "";
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+
+  function rebuildColumns(header) {
+    elements.columnList.innerHTML = "";
+    elements.selectedKeys.innerHTML = "";
+    if (!header || header.length === 0) return;
+
+    const selection = new Set(state.keys);
+    header.forEach((name, idx) => {
+      const label = name || columnLabel(idx);
+      const item = document.createElement("label");
+      item.className = "flex items-center gap-2 text-sm tool-text cursor-pointer px-3 py-2 rounded-lg border tool-border bg-[color:var(--tool-bg)]";
+      const checkbox = document.createElement("log-in");
+      checkbox.type = "checkbox";
+      checkbox.value = String(idx);
+      checkbox.checked = selection.has(idx);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selection.add(idx);
+        } else {
+          selection.delete(idx);
+        }
+        state.keys = Array.from(selection).sort((a, b) => a - b);
+        renderSelectedKeys(header);
+        setRunHint();
+        saveSettings();
+      });
+      const span = document.createElement("span");
+      span.textContent = label;
+      item.appendChild(checkbox);
+      item.appendChild(span);
+      elements.columnList.appendChild(item);
+    });
+    renderSelectedKeys(header);
+    setRunHint();
+  }
+
+  function renderSelectedKeys(header) {
+    elements.selectedKeys.innerHTML = "";
+    if (!state.keys.length) return;
+    state.keys.forEach((idx) => {
+      const chip = document.createElement("span");
+      chip.className = "chip px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-2";
+      const label = header[idx] || columnLabel(idx);
+      const text = document.createElement("span");
+      text.textContent = label;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "text-[10px]";
+      remove.textContent = "×";
+      remove.addEventListener("click", () => {
+        state.keys = state.keys.filter((key) => key !== idx);
+        const checkbox = elements.columnList.querySelector(`input[value='${idx}']`);
+        if (checkbox) checkbox.checked = false;
+        renderSelectedKeys(header);
+        setRunHint();
+        saveSettings();
+      });
+      chip.appendChild(text);
+      chip.appendChild(remove);
+      elements.selectedKeys.appendChild(chip);
+    });
+  }
+
+  function applyKeySelection(indexes) {
+    state.keys = Array.from(new Set(indexes)).sort((a, b) => a - b);
+    rebuildColumns(state.header);
+  }
+
+  function autoSelectSampleKeys() {
+    if (!state.header.length) return;
+    const candidates = ["email", "e-mail", "mail", "メール", "電話", "phone", "tel"];
+    const indexes = state.header.map((label, idx) => ({ label: (label || "").toLowerCase(), idx }))
+      .filter((item) => candidates.some((token) => item.label.includes(token.toLowerCase())))
+      .map((item) => item.idx);
+    if (indexes.length) {
+      applyKeySelection(indexes.slice(0, 2));
+    } else if (state.header.length) {
+      applyKeySelection([0]);
+    }
+  }
+
+  function applySearchFilter() {
+    const query = (elements.columnSearch.value || "").toLowerCase();
+    Array.from(elements.columnList.children).forEach((label) => {
+      const text = label.textContent.toLowerCase();
+      label.classList.toggle("hidden", query && !text.includes(query));
+    });
+  }
+
+  function updateCaseDesc() {
+    elements.caseDesc.textContent = elements.caseSensitive.checked ? data.ruleCaseSensitive : data.ruleCaseIgnore;
+  }
+
+  function parseInput(text) {
+    clearError();
+    if (!text || !text.trim()) {
+      state.rows = [];
+      state.dataRows = [];
+      state.header = [];
+      state.keys = [];
+      elements.inputPreview.innerHTML = "";
+      rebuildColumns([]);
+      updateDetectLabel(null);
+      setRunHint();
+      resetResults();
+      return;
+    }
+
+    const normalized = normalizeLineBreaks(text);
+    const delimiterSetting = elements.delimiterMode.value;
+    let delimiter = ",";
+    let detectedDelimiter = null;
+    if (delimiterSetting === "auto") {
+      detectedDelimiter = detectDelimiter(normalized);
+      if (detectedDelimiter) {
+        delimiter = detectedDelimiter;
+      } else {
+        delimiter = ",";
+      }
+    } else if (delimiterSetting === "tab") {
+      delimiter = "\t";
+    } else if (delimiterSetting === "semicolon") {
+      delimiter = ";";
+    } else {
+      delimiter = ",";
+    }
+    state.delimiter = delimiter;
+    if (delimiterSetting === "auto" && !detectedDelimiter) {
+      updateDetectLabel(null);
+    } else {
+      updateDetectLabel(delimiter);
+    }
+
+    const parsed = parseDelimited(normalized, delimiter);
+    if (parsed.error) {
+      showError(formatTemplate(data.errorParseLine || data.errorParse, { line: parsed.error.line }));
+      state.rows = [];
+      state.dataRows = [];
+      state.header = [];
+      elements.inputPreview.innerHTML = "";
+      rebuildColumns([]);
+      updateDetectLabel(null);
+      resetResults();
+      return;
+    }
+
+    const rows = parsed.rows || [];
+    if (!rows.length) {
+      showError(data.errorParse);
+      state.rows = [];
+      state.dataRows = [];
+      state.header = [];
+      elements.inputPreview.innerHTML = "";
+      rebuildColumns([]);
+      updateDetectLabel(null);
+      resetResults();
+      return;
+    }
+
+    const headerMode = elements.headerMode.value;
+    let hasHeader = headerMode === "yes";
+    if (headerMode === "auto") {
+      hasHeader = detectHeader(rows);
+    }
+    state.hasHeader = hasHeader;
+
+    const header = hasHeader ? rows[0] : rows[0].map((_, idx) => columnLabel(idx));
+    const dataRows = hasHeader ? rows.slice(1) : rows.slice(0);
+    const expectedCols = header.length;
+    const mismatch = dataRows.find((row) => row.length !== expectedCols);
+    if (mismatch) {
+      showError(data.errorMismatch);
+      state.rows = [];
+      state.dataRows = [];
+      state.header = [];
+      elements.inputPreview.innerHTML = "";
+      rebuildColumns([]);
+      updateDetectLabel(null);
+      resetResults();
+      return;
+    }
+
+    state.rows = rows;
+    state.header = header.map((cell, idx) => cell || columnLabel(idx));
+    if (state.savedKeyLabels.length) {
+      const mapped = state.savedKeyLabels.map((label) => state.header.indexOf(label)).filter((idx) => idx >= 0);
+      state.keys = mapped;
+    }
+    state.dataRows = dataRows;
+
+    updatePreview(elements.inputPreview, dataRows, state.header);
+    rebuildColumns(state.header);
+    setRunHint();
+    resetResults();
+  }
+
+  function decodeArrayBuffer(buffer, encoding) {
+    try {
+      const decoder = new TextDecoder(encoding);
+      return decoder.decode(buffer);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function decodeWithAuto(buffer) {
+    const utf8 = decodeArrayBuffer(buffer, "utf-8");
+    if (!utf8) return null;
+    const replacementCount = (utf8.match(/\uFFFD/g) || []).length;
+    if (replacementCount > 0) {
+      const shift = decodeArrayBuffer(buffer, "shift_jis") || decodeArrayBuffer(buffer, "shift-jis");
+      if (shift && (shift.match(/\uFFFD/g) || []).length < replacementCount) {
+        return shift;
+      }
+    }
+    return utf8;
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buffer = reader.result;
+      const encodingMode = elements.encodingMode.value;
+      let text = "";
+      if (encodingMode === "utf8") {
+        text = decodeArrayBuffer(buffer, "utf-8");
+      } else if (encodingMode === "shift_jis") {
+        text = decodeArrayBuffer(buffer, "shift_jis") || decodeArrayBuffer(buffer, "shift-jis");
+      } else {
+        text = decodeWithAuto(buffer);
+      }
+      if (!text) {
+        showError(data.errorDecode);
+        return;
+      }
+      state.inputText = text;
+      elements.pasteInput.value = text;
+      parseInput(text);
+    };
+    reader.onerror = () => showError(data.errorFile);
+    reader.readAsArrayBuffer(file);
+  }
+
+  function normalizeKeyValue(value) {
+    let v = value == null ? "" : String(value);
+    if (elements.trimKey.checked) {
+      v = v.trim();
+    }
+    if (elements.normalizeKey.checked && v.normalize) {
+      v = v.normalize("NFKC");
+    }
+    if (!elements.caseSensitive.checked) {
+      v = v.toLowerCase();
+    }
+    return v;
+  }
+
+  function isEmptyValue(value) {
+    if (value == null) return true;
+    const text = String(value);
+    return elements.trimKey.checked ? text.trim() === "" : text === "";
+  }
+
+  function serializeRows(rows, delimiter) {
+    const escaped = rows.map((row) => {
+      return row.map((value) => {
+        let field = value == null ? "" : String(value);
+        const needsQuote =
+          field.includes(delimiter) ||
+          field.includes("\"") ||
+          field.includes("\n") ||
+          field.startsWith(" ") ||
+          field.endsWith(" ");
+        if (needsQuote) {
+          field = "\"" + field.replace(/\"/g, "\"\"") + "\"";
+        }
+        return field;
+      }).join(delimiter);
+    });
+    return escaped.join("\n");
+  }
+
+  function buildRulesSummary() {
+    const rules = [];
+    rules.push(`${data.ruleCaseLabel}${elements.caseSensitive.checked ? data.ruleCaseSensitive : data.ruleCaseIgnore}`);
+    rules.push(`${data.ruleTrimLabel}${elements.trimKey.checked ? data.ruleTrimOn : data.ruleTrimOff}`);
+    rules.push(`${data.ruleNormalizeLabel}${elements.normalizeKey.checked ? data.ruleNormalizeOn : data.ruleNormalizeOff}`);
+    const emptyValue = elements.emptyKey.find((input) => input.checked)?.value === "skip" ? data.ruleEmptySkip : data.ruleEmptyInclude;
+    rules.push(`${data.ruleEmptyLabel}${emptyValue}`);
+    elements.rulesSummary.textContent = formatTemplate(data.rulesTemplate, { rules: rules.join(data.rulesJoiner) });
+  }
+
+  function resetResults() {
+    elements.statOriginal.textContent = "0";
+    elements.statResult.textContent = "0";
+    elements.statRemoved.textContent = "0";
+    elements.statGroups.textContent = "0";
+    elements.rulesSummary.textContent = "";
+    elements.timeSummary.textContent = "";
+    elements.resultPreview.innerHTML = "";
+    elements.topDuplicates.innerHTML = "";
+    elements.conflictSummary.textContent = "";
+    elements.conflictPreview.innerHTML = "";
+    state.result.outputRows = [];
+    state.result.outputData = [];
+    state.result.duplicateRows = [];
+    state.result.duplicateData = [];
+    state.result.groupRows = [];
+    state.result.topDuplicates = [];
+    state.result.conflicts = [];
+    enableDownloads();
+  }
+
+  function deduplicate() {
+    clearError();
+    if (!state.dataRows.length) {
+      showError(data.errorEmptyInput);
+      return;
+    }
+    if (!state.keys.length) {
+      showError(data.errorNoKeys);
+      return;
+    }
+
+    const start = performance.now();
+    const keyIndexes = state.keys;
+    const keepMode = elements.keepMode.find((input) => input.checked)?.value || "first";
+    const conflictMode = elements.conflictMode.value || "first";
+    const emptyKeyMode = elements.emptyKey.find((input) => input.checked)?.value || "include";
+
+    const groups = new Map();
+    state.dataRows.forEach((row, index) => {
+      const keyValues = keyIndexes.map((idx) => normalizeKeyValue(row[idx] || ""));
+      const hasEmptyKey = keyValues.some((value) => value === "");
+      let key = keyValues.join("\u0000");
+      if (emptyKeyMode === "skip" && hasEmptyKey) {
+        key = `__row_${index}`;
+      }
+      if (!groups.has(key)) {
+        groups.set(key, {
+          rows: [],
+          indexes: [],
+          keyDisplay: keyIndexes.map((idx) => row[idx] || ""),
+          merged: row.slice(),
+          conflicts: []
+        });
+      }
+      const group = groups.get(key);
+      group.rows.push(row);
+      group.indexes.push(index);
+    });
+
+    const outputRows = [];
+    const duplicateRows = [];
+    const groupRows = [];
+    const topDuplicates = [];
+    const conflicts = [];
+
+    groups.forEach((group) => {
+      const size = group.rows.length;
+      if (size > 1) {
+        topDuplicates.push({ key: group.keyDisplay, count: size });
+      }
+
+      if (keepMode === "merge" && size > 1) {
+        const merged = group.rows[0].slice();
+        for (let i = 1; i < group.rows.length; i += 1) {
+          const row = group.rows[i];
+          row.forEach((value, idx) => {
+            const baseValue = merged[idx];
+            if (isEmptyValue(baseValue) && !isEmptyValue(value)) {
+              merged[idx] = value;
+              return;
+            }
+            if (!isEmptyValue(baseValue) && !isEmptyValue(value) && String(baseValue) !== String(value)) {
+              if (conflictMode === "last") {
+                merged[idx] = value;
+              } else {
+                if (conflictMode === "warn") {
+                  conflicts.push({
+                    key: group.keyDisplay.join(data.rulesJoiner),
+                    column: state.header[idx] || columnLabel(idx),
+                    first: baseValue,
+                    second: value
+                  });
+                }
+              }
+            }
+          });
+        }
+        outputRows.push({ index: group.indexes[0], row: merged });
+        group.rows.slice(1).forEach((row, idx) => {
+          duplicateRows.push({ index: group.indexes[idx + 1], row });
+        });
+      } else if (keepMode === "last") {
+        const lastIndex = group.indexes[group.indexes.length - 1];
+        const lastRow = group.rows[group.rows.length - 1];
+        outputRows.push({ index: lastIndex, row: lastRow });
+        group.rows.slice(0, -1).forEach((row, idx) => {
+          duplicateRows.push({ index: group.indexes[idx], row });
+        });
+      } else {
+        outputRows.push({ index: group.indexes[0], row: group.rows[0] });
+        group.rows.slice(1).forEach((row, idx) => {
+          duplicateRows.push({ index: group.indexes[idx + 1], row });
+        });
+      }
+
+      if (size > 1) {
+        groupRows.push([...group.keyDisplay, String(size)]);
+      }
+    });
+
+    outputRows.sort((a, b) => a.index - b.index);
+    duplicateRows.sort((a, b) => a.index - b.index);
+
+    const output = outputRows.map((item) => item.row);
+    const duplicates = duplicateRows.map((item) => item.row);
+
+    const groupHeader = [...keyIndexes.map((idx) => state.header[idx] || columnLabel(idx)), data.groupCountLabel];
+    const groupRowsWithHeader = [groupHeader, ...groupRows];
+
+    state.result.outputData = output;
+    state.result.duplicateData = duplicates;
+    state.result.outputRows = state.hasHeader ? [state.header, ...output] : output;
+    state.result.duplicateRows = state.hasHeader ? [state.header, ...duplicates] : duplicates;
+    state.result.groupRows = groupRowsWithHeader;
+    state.result.topDuplicates = topDuplicates.sort((a, b) => b.count - a.count).slice(0, 5);
+    state.result.conflicts = conflicts;
+
+    elements.statOriginal.textContent = String(state.dataRows.length);
+    elements.statResult.textContent = String(output.length);
+    elements.statRemoved.textContent = String(state.dataRows.length - output.length);
+    elements.statGroups.textContent = String(groupRows.length);
+
+    const elapsed = (performance.now() - start) / 1000;
+    elements.timeSummary.textContent = formatTemplate(data.timeTemplate, { seconds: elapsed.toFixed(2) });
+    buildRulesSummary();
+
+    renderResultPreview();
+    renderTopDuplicates();
+    renderConflicts();
+    enableDownloads();
+  }
+
+  function renderTopDuplicates() {
+    elements.topDuplicates.innerHTML = "";
+    if (!state.result.topDuplicates.length) {
+      elements.topDuplicates.innerHTML = `<li class="text-xs">${data.topDuplicatesEmpty}</li>`;
+      return;
+    }
+    state.result.topDuplicates.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = `${item.key.join(data.rulesJoiner)} (${item.count})`;
+      elements.topDuplicates.appendChild(li);
+    });
+  }
+
+  function renderConflicts() {
+    elements.conflictPreview.innerHTML = "";
+    if (!state.result.conflicts.length) {
+      elements.conflictSummary.textContent = data.conflictEmpty || formatTemplate(data.conflictCountTemplate, { count: 0 });
+      return;
+    }
+    elements.conflictSummary.textContent = formatTemplate(data.conflictCountTemplate, { count: state.result.conflicts.length });
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    [data.conflictKeyLabel, data.conflictColumnLabel, data.conflictFirstLabel, data.conflictSecondLabel].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    state.result.conflicts.slice(0, PREVIEW_LIMIT).forEach((conflict) => {
+      const tr = document.createElement("tr");
+      [conflict.key, conflict.column, conflict.first, conflict.second].forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    elements.conflictPreview.appendChild(table);
+  }
+
+  function renderResultPreview() {
+    const tab = state.previewTab;
+    elements.previewTabs.forEach((btn) => {
+      const active = btn.dataset.preview === tab;
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+
+    if (tab === "duplicates") {
+      updatePreview(elements.resultPreview, state.result.duplicateData, state.hasHeader ? state.header : null);
+      return;
+    }
+    if (tab === "groups") {
+      updatePreview(elements.resultPreview, state.result.groupRows.slice(1), state.result.groupRows[0]);
+      return;
+    }
+    updatePreview(elements.resultPreview, state.result.outputData, state.hasHeader ? state.header : null);
+  }
+
+  function enableDownloads() {
+    elements.downloadResult.disabled = !state.result.outputData.length;
+    elements.downloadDuplicates.disabled = !state.result.duplicateData.length;
+    elements.downloadGroups.disabled = state.result.groupRows.length <= 1;
+  }
+
+  function downloadFile(rows, filename) {
+    if (!rows || !rows.length) return;
+    const content = serializeRows(rows, state.delimiter || ",");
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(data.toastDownload);
+  }
+
+  function saveSettings() {
+    const settings = {
+      tab: elements.tabButtons.find((btn) => btn.getAttribute("aria-pressed") === "true")?.dataset.tab || "file",
+      headerMode: elements.headerMode.value,
+      delimiterMode: elements.delimiterMode.value,
+      encodingMode: elements.encodingMode.value,
+      keepMode: elements.keepMode.find((input) => input.checked)?.value || "first",
+      conflictMode: elements.conflictMode.value,
+      caseSensitive: elements.caseSensitive.checked,
+      trimKey: elements.trimKey.checked,
+      normalizeKey: elements.normalizeKey.checked,
+      emptyKey: elements.emptyKey.find((input) => input.checked)?.value || "include",
+      keys: state.keys.map((idx) => state.header[idx] || columnLabel(idx))
+    };
+    state.savedKeyLabels = settings.keys.slice();
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    } catch (err) {
+      
+    }
+  }
+
+  function restoreSettings() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function applySettings(settings) {
+    if (!settings) return;
+    if (settings.headerMode) elements.headerMode.value = settings.headerMode;
+    if (settings.delimiterMode) elements.delimiterMode.value = settings.delimiterMode;
+    if (settings.encodingMode) elements.encodingMode.value = settings.encodingMode;
+    if (settings.keepMode) {
+      const mode = elements.keepMode.find((input) => input.value === settings.keepMode);
+      if (mode) mode.checked = true;
+    }
+    if (settings.conflictMode) elements.conflictMode.value = settings.conflictMode;
+    elements.caseSensitive.checked = settings.caseSensitive !== false;
+    elements.trimKey.checked = settings.trimKey === true;
+    elements.normalizeKey.checked = settings.normalizeKey === true;
+    const emptyKey = elements.emptyKey.find((input) => input.value === (settings.emptyKey || "include"));
+    if (emptyKey) emptyKey.checked = true;
+    updateCaseDesc();
+    if (settings.tab) setTab(settings.tab);
+
+    if (settings.keys && settings.keys.length) {
+      state.savedKeyLabels = settings.keys.slice();
+      if (state.header.length) {
+        const indexes = settings.keys.map((label) => state.header.indexOf(label)).filter((idx) => idx >= 0);
+        state.keys = indexes;
+      }
+    }
+  }
+
+  function setTab(tab) {
+    elements.tabButtons.forEach((btn) => {
+      const active = btn.dataset.tab === tab;
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    Object.entries(elements.tabPanels).forEach(([key, panel]) => {
+      panel.classList.toggle("hidden", key !== tab);
+    });
+  }
+
+  elements.tabButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setTab(btn.dataset.tab);
+      saveSettings();
+    });
+  });
+
+  elements.fileButton.addEventListener("click", () => elements.fileInput.click());
+  elements.fileInput.addEventListener("change", (event) => handleFile(event.target.files[0]));
+
+  elements.dropzone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    elements.dropzone.classList.add("is-dragover");
+  });
+  elements.dropzone.addEventListener("dragleave", () => elements.dropzone.classList.remove("is-dragover"));
+  elements.dropzone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    elements.dropzone.classList.remove("is-dragover");
+    handleFile(event.dataTransfer.files[0]);
+  });
+
+  elements.pasteInput.addEventListener("log-in", () => {
+    state.inputText = elements.pasteInput.value;
+    parseInput(state.inputText);
+  });
+
+  elements.sampleButton.addEventListener("click", () => {
+    const sample = decodeSample(data.sample);
+    elements.pasteInput.value = sample;
+    state.inputText = sample;
+    setTab("paste");
+    parseInput(state.inputText);
+    autoSelectSampleKeys();
+    showToast(data.toastSample);
+    saveSettings();
+  });
+
+  elements.clearInput.addEventListener("click", () => {
+    elements.pasteInput.value = "";
+    state.inputText = "";
+    parseInput("");
+    showToast(data.toastClear);
+    saveSettings();
+  });
+
+  elements.loadSample.addEventListener("click", () => {
+    const sample = decodeSample(data.sample);
+    elements.pasteInput.value = sample;
+    state.inputText = sample;
+    setTab("paste");
+    parseInput(state.inputText);
+    autoSelectSampleKeys();
+    showToast(data.toastSample);
+    saveSettings();
+  });
+
+  elements.headerMode.addEventListener("change", () => {
+    parseInput(state.inputText);
+    saveSettings();
+  });
+  elements.delimiterMode.addEventListener("change", () => {
+    parseInput(state.inputText);
+    saveSettings();
+  });
+  elements.encodingMode.addEventListener("change", () => saveSettings());
+
+  elements.columnSearch.addEventListener("log-in", applySearchFilter);
+  elements.caseSensitive.addEventListener("change", () => {
+    updateCaseDesc();
+    saveSettings();
+  });
+  elements.trimKey.addEventListener("change", saveSettings);
+  elements.normalizeKey.addEventListener("change", saveSettings);
+  elements.emptyKey.forEach((input) => input.addEventListener("change", saveSettings));
+
+  elements.keepMode.forEach((input) => input.addEventListener("change", () => {
+    elements.conflictRow.classList.toggle("hidden", input.value !== "merge" || !input.checked);
+    saveSettings();
+  }));
+  elements.conflictMode.addEventListener("change", saveSettings);
+
+  elements.runBtn.addEventListener("click", () => {
+    deduplicate();
+  });
+
+  elements.previewTabs.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.previewTab = btn.dataset.preview;
+      renderResultPreview();
+    });
+  });
+
+  elements.downloadResult.addEventListener("click", () => downloadFile(state.result.outputRows, data.downloadResultName));
+  elements.downloadDuplicates.addEventListener("click", () => downloadFile(state.result.duplicateRows, data.downloadDuplicatesName));
+  elements.downloadGroups.addEventListener("click", () => downloadFile(state.result.groupRows, data.downloadGroupsName));
+
+  const settings = restoreSettings();
+  updateCaseDesc();
+  applySettings(settings);
+  elements.conflictRow.classList.toggle("hidden", elements.keepMode.find((input) => input.checked)?.value !== "merge");
+  parseInput(state.inputText);
+  setRunHint();
+})();
+</script>
+</body></html>

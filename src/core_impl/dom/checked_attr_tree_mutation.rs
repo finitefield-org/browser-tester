@@ -671,7 +671,9 @@ impl Dom {
         }
 
         if let Some(old_parent) = self.parent(new_child) {
-            self.nodes[old_parent.0].children.retain(|id| *id != new_child);
+            self.nodes[old_parent.0]
+                .children
+                .retain(|id| *id != new_child);
         }
 
         let index = self.nodes[parent.0]

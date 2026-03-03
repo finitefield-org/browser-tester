@@ -33,9 +33,15 @@ impl Harness {
                 Value::Bool(true),
             ),
             ("open".to_string(), Self::new_builtin_placeholder_function()),
-            ("match".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "match".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             ("has".to_string(), Self::new_builtin_placeholder_function()),
-            ("delete".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "delete".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             ("keys".to_string(), Self::new_builtin_placeholder_function()),
         ];
         entries.extend(extras);
@@ -85,7 +91,10 @@ impl Harness {
             ),
         ];
         for builtin in Self::cache_builtin_keys() {
-            cache_entries.push(((*builtin).to_string(), Self::new_builtin_placeholder_function()));
+            cache_entries.push((
+                (*builtin).to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
         }
         let cache_object = Rc::new(RefCell::new(ObjectValue::new(cache_entries)));
 
@@ -113,16 +122,22 @@ impl Harness {
         self.browser_apis
             .cache_names_in_order
             .iter()
-            .filter(|name| self.browser_apis.caches_by_name.contains_key((*name).as_str()))
+            .filter(|name| {
+                self.browser_apis
+                    .caches_by_name
+                    .contains_key((*name).as_str())
+            })
             .cloned()
             .collect()
     }
 
     pub(crate) fn remove_named_cache(&mut self, cache_name: &str) -> bool {
-        let existed = self.browser_apis.caches_by_name.remove(cache_name).is_some();
-        self.browser_apis
-            .cache_entries_by_name
-            .remove(cache_name);
+        let existed = self
+            .browser_apis
+            .caches_by_name
+            .remove(cache_name)
+            .is_some();
+        self.browser_apis.cache_entries_by_name.remove(cache_name);
         self.browser_apis
             .cache_names_in_order
             .retain(|name| name != cache_name);

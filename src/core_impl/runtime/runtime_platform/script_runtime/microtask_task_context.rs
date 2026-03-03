@@ -115,10 +115,43 @@ impl Harness {
             .as_ref()
             .cloned()
             .unwrap_or(Value::Node(event.current_target));
+        let clipboard_data = if event.event_type.eq_ignore_ascii_case("paste") {
+            Self::new_clipboard_data_object_value(event.clipboard_data.as_deref().unwrap_or(""))
+        } else {
+            Value::Undefined
+        };
+        let data_transfer = if Self::event_exposes_data_transfer(&event.event_type) {
+            Self::new_object_value(vec![
+                ("dropEffect".to_string(), Value::String("none".to_string())),
+                (
+                    "effectAllowed".to_string(),
+                    Value::String("all".to_string()),
+                ),
+                ("files".to_string(), Self::new_array_value(Vec::new())),
+                ("items".to_string(), Self::new_array_value(Vec::new())),
+                ("types".to_string(), Self::new_array_value(Vec::new())),
+                (
+                    "getData".to_string(),
+                    Self::new_builtin_placeholder_function(),
+                ),
+                (
+                    "setData".to_string(),
+                    Self::new_builtin_placeholder_function(),
+                ),
+                (
+                    "clearData".to_string(),
+                    Self::new_builtin_placeholder_function(),
+                ),
+            ])
+        } else {
+            Value::Undefined
+        };
         Self::new_object_value(vec![
             ("type".to_string(), Value::String(event.event_type.clone())),
             ("target".to_string(), target),
             ("currentTarget".to_string(), current_target),
+            ("clipboardData".to_string(), clipboard_data),
+            ("dataTransfer".to_string(), data_transfer),
             (
                 "defaultPrevented".to_string(),
                 Value::Bool(event.default_prevented),
@@ -178,6 +211,13 @@ impl Harness {
                     .unwrap_or(Value::Undefined),
             ),
         ])
+    }
+
+    fn event_exposes_data_transfer(event_type: &str) -> bool {
+        matches!(
+            event_type.to_ascii_lowercase().as_str(),
+            "drag" | "dragstart" | "dragend" | "dragenter" | "dragover" | "dragleave" | "drop"
+        )
     }
 
     pub(crate) fn execute_timer_task_callback(

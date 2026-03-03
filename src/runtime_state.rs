@@ -424,6 +424,7 @@ pub(crate) struct EventState {
     pub(crate) alt_key: bool,
     pub(crate) repeat: bool,
     pub(crate) is_composing: bool,
+    pub(crate) clipboard_data: Option<String>,
     pub(crate) propagation_stopped: bool,
     pub(crate) immediate_propagation_stopped: bool,
 }
@@ -454,6 +455,7 @@ impl EventState {
             alt_key: false,
             repeat: false,
             is_composing: false,
+            clipboard_data: None,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
@@ -531,6 +533,17 @@ pub struct DownloadArtifact {
     pub filename: Option<String>,
     pub mime_type: Option<String>,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardPayloadArtifact {
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardWriteArtifact {
+    pub payloads: Vec<ClipboardPayloadArtifact>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -714,6 +727,11 @@ pub(crate) struct DomRuntimeState {
     pub(crate) node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
     pub(crate) node_expando_props: HashMap<(NodeId, String), Value>,
     pub(crate) live_child_nodes_lists: HashMap<NodeId, Rc<RefCell<NodeListValue>>>,
+    pub(crate) live_children_lists: HashMap<NodeId, Rc<RefCell<NodeListValue>>>,
+    pub(crate) live_named_node_maps: HashMap<NodeId, Rc<RefCell<ObjectValue>>>,
+    pub(crate) node_animations: Vec<NodeAnimationRecord>,
+    pub(crate) pointer_capture_targets: HashMap<i64, NodeId>,
+    pub(crate) shadow_roots: HashMap<NodeId, ShadowRootRecord>,
     pub(crate) dialog_return_values: HashMap<NodeId, String>,
 }
 
@@ -730,9 +748,33 @@ impl Default for DomRuntimeState {
             node_event_handler_props: HashMap::new(),
             node_expando_props: HashMap::new(),
             live_child_nodes_lists: HashMap::new(),
+            live_children_lists: HashMap::new(),
+            live_named_node_maps: HashMap::new(),
+            node_animations: Vec::new(),
+            pointer_capture_targets: HashMap::new(),
+            shadow_roots: HashMap::new(),
             dialog_return_values: HashMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NodeAnimationRecord {
+    pub(crate) target: NodeId,
+    pub(crate) animation: Rc<RefCell<ObjectValue>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShadowRootMode {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShadowRootRecord {
+    pub(crate) root: NodeId,
+    pub(crate) mode: ShadowRootMode,
+    pub(crate) serializable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -820,6 +862,7 @@ pub(crate) struct BrowserApiState {
     pub(crate) next_blob_url_id: usize,
     pub(crate) blob_url_objects: HashMap<String, Rc<RefCell<BlobValue>>>,
     pub(crate) downloads: Vec<DownloadArtifact>,
+    pub(crate) clipboard_writes: Vec<ClipboardWriteArtifact>,
 }
 
 impl Default for BrowserApiState {
@@ -840,6 +883,7 @@ impl Default for BrowserApiState {
             next_blob_url_id: 1,
             blob_url_objects: HashMap::new(),
             downloads: Vec::new(),
+            clipboard_writes: Vec::new(),
         }
     }
 }

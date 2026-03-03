@@ -43,29 +43,27 @@ pub(crate) fn parse_new_date_expr(src: &str) -> Result<Option<Expr>> {
         Vec::new()
     };
 
-    if args.len() > 1 {
+    if args.len() > 7 {
         return Err(Error::ScriptParse(
-            "new Date supports zero or one argument".into(),
+            "new Date supports up to seven arguments".into(),
         ));
     }
-
-    let value = if args.len() == 1 {
-        if args[0].trim().is_empty() {
-            return Err(Error::ScriptParse(
-                "new Date argument cannot be empty".into(),
-            ));
-        }
-        Some(Box::new(parse_expr(args[0].trim())?))
-    } else {
-        None
-    };
+    if args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(Error::ScriptParse(
+            "new Date argument cannot be empty".into(),
+        ));
+    }
+    let mut parsed_args = Vec::with_capacity(args.len());
+    for arg in args {
+        parsed_args.push(parse_expr(arg.trim())?);
+    }
 
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
 
-    Ok(Some(Expr::DateNew { value }))
+    Ok(Some(Expr::DateNew { args: parsed_args }))
 }
 
 pub(crate) fn parse_new_error_expr(src: &str) -> Result<Option<Expr>> {

@@ -85,6 +85,27 @@ fn object_literal_shorthand_and_spread_supported() -> browser_tester::Result<()>
 }
 
 #[test]
+fn object_map_property_and_index_access_parse_and_run() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { unit: "mm" };
+      const stepOptionsByUnit = {
+        mm: ["0.1", "1"],
+        in: ["1/64", "1/32", "1/16", "1/8"]
+      };
+      const hasOne = stepOptionsByUnit.mm.includes("1");
+      const fromState = stepOptionsByUnit[state.unit][0];
+      document.getElementById("result").textContent = String(hasOne) + ":" + fromState;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:0.1")?;
+    Ok(())
+}
+
+#[test]
 fn object_property_compound_assignment_supported() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
@@ -258,6 +279,30 @@ fn chained_filter_boolean_is_supported() -> browser_tester::Result<()> {
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "a|b")?;
+    Ok(())
+}
+
+#[test]
+fn function_declaration_default_parameters_parse_and_execute() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function showToast(message, isError = false) {
+        return String(isError);
+      }
+
+      function showWarning(type, options = {}) {
+        return String(Object.keys(options).length);
+      }
+
+      window.__ok = showToast("x");
+      document.getElementById("result").textContent =
+        window.__ok + ":" + showWarning("warn");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "false:0")?;
     Ok(())
 }
 
@@ -1679,5 +1724,97 @@ fn create_text_node_accepts_member_expression_argument() -> browser_tester::Resu
 
     let harness = Harness::from_html(html)?;
     harness.assert_text("#root", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn decode_uri_function_references_in_ternary_expression_parse_and_run() -> browser_tester::Result<()>
+{
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const decodeSimple = true ? decodeURI : decodeURIComponent;
+      const decodeComponent = false ? decodeURI : decodeURIComponent;
+      document.getElementById("result").textContent =
+        decodeSimple("a%20b") + "|" + decodeComponent("a%2Fb");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a b|a/b")?;
+    Ok(())
+}
+
+#[test]
+fn member_access_with_reserved_property_name_parses_and_runs() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const relativeText = { in: "in {duration}", ago: "{duration} ago" };
+      const label = String(relativeText.in || "");
+      document.getElementById('out').textContent = label;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "in {duration}")?;
+    Ok(())
+}
+
+#[test]
+fn member_call_on_nested_object_path_with_class_list_toggle_parses_in_function_body()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id='panel' class='hidden'></div>
+    <div id='out'></div>
+    <script>
+      const el = { settingsPanel: document.getElementById('panel') };
+      function toggleSettings() {
+        const hidden = el.settingsPanel.classList.toggle('hidden');
+        return hidden;
+      }
+      document.getElementById('out').textContent = 'parsed';
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "parsed")?;
+    Ok(())
+}
+
+#[test]
+fn string_from_char_code_accepts_spread_subarray_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const bytes = new Uint8Array([65, 66, 67]);
+      const chunk = 2;
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      document.getElementById('out').textContent = binary;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "ABC")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_accepts_spread_of_filter_result() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const state = { history: ["c", "b", "a"] };
+      const value = "b";
+      const next = [value, ...state.history.filter((item) => item !== value)];
+      document.getElementById('out').textContent = next.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "b,c,a")?;
     Ok(())
 }

@@ -35,12 +35,12 @@ pub(crate) fn parse_node_tree_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
     let (method_name, expected_args) = match method {
-        NodeTreeMethod::After => ("after", 1),
-        NodeTreeMethod::Append => ("append", 1),
+        NodeTreeMethod::After => return Ok(None),
+        NodeTreeMethod::Append => return Ok(None),
         NodeTreeMethod::AppendChild => ("appendChild", 1),
-        NodeTreeMethod::Before => ("before", 1),
-        NodeTreeMethod::ReplaceWith => ("replaceWith", 1),
-        NodeTreeMethod::Prepend => ("prepend", 1),
+        NodeTreeMethod::Before => return Ok(None),
+        NodeTreeMethod::ReplaceWith => return Ok(None),
+        NodeTreeMethod::Prepend => return Ok(None),
         NodeTreeMethod::RemoveChild => ("removeChild", 1),
         NodeTreeMethod::InsertBefore => ("insertBefore", 2),
     };

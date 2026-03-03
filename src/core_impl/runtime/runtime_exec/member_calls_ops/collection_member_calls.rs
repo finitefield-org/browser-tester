@@ -580,6 +580,17 @@ impl Harness {
                 values.borrow_mut().elements = snapshot;
                 Value::Array(values.clone())
             }
+            "reverse" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "reverse does not take arguments".into(),
+                    ));
+                }
+                let mut snapshot = values.borrow().clone();
+                snapshot.reverse();
+                values.borrow_mut().elements = snapshot;
+                Value::Array(values.clone())
+            }
             _ => return Ok(None),
         };
         Ok(Some(value))
@@ -918,6 +929,22 @@ impl Harness {
         event: &EventState,
     ) -> Result<Option<Value>> {
         match member {
+            "item" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "item requires exactly one index argument".into(),
+                    ));
+                }
+                let index = Self::value_to_i64(&evaluated_args[0]);
+                if index < 0 {
+                    return Ok(Some(Value::Null));
+                }
+                Ok(Some(
+                    self.node_list_get(nodes, index as usize)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null),
+                ))
+            }
             "forEach" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -941,5 +968,74 @@ impl Harness {
             }
             _ => Ok(None),
         }
+    }
+
+    pub(crate) fn eval_clipboard_data_member_call(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let entries = object.borrow();
+        if !Self::is_clipboard_data_object(&entries) {
+            return Ok(None);
+        }
+        let text = Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_TEXT_KEY)
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        drop(entries);
+
+        let value = match member {
+            "getData" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "clipboardData.getData requires exactly one format argument".into(),
+                    ));
+                }
+                let format = evaluated_args[0].as_string().to_ascii_lowercase();
+                if format == "text/plain" || format == "text" {
+                    Value::String(text)
+                } else {
+                    Value::String(String::new())
+                }
+            }
+            "setData" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "clipboardData.setData requires exactly two arguments".into(),
+                    ));
+                }
+                Value::Bool(false)
+            }
+            "clearData" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "clipboardData.clearData supports at most one argument".into(),
+                    ));
+                }
+                Value::Undefined
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    pub(crate) fn eval_mock_file_member_call(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let entries = object.borrow();
+        if !Self::is_mock_file_object(&entries) {
+            return Ok(None);
+        }
+        let blob = match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
+            Some(Value::Blob(blob)) => blob,
+            _ => return Ok(None),
+        };
+        drop(entries);
+
+        self.eval_blob_member_call(&blob, member, evaluated_args)
     }
 }

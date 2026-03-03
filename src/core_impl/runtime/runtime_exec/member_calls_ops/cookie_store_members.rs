@@ -160,7 +160,11 @@ impl Harness {
                     ));
                 }
                 let query = self.cookie_query_from_value(args.first())?;
-                if query.name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                if query
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.trim().is_empty())
+                {
                     return Ok(Some(self.cookie_store_resolved_promise(Value::Null)?));
                 }
                 let cookie = self
@@ -173,12 +177,14 @@ impl Harness {
                     .into_iter()
                     .next();
                 self.sync_document_cookie_property();
-                Ok(Some(self.cookie_store_resolved_promise(
-                    cookie
-                        .as_ref()
-                        .map(Self::cookie_record_to_value)
-                        .unwrap_or(Value::Null),
-                )?))
+                Ok(Some(
+                    self.cookie_store_resolved_promise(
+                        cookie
+                            .as_ref()
+                            .map(Self::cookie_record_to_value)
+                            .unwrap_or(Value::Null),
+                    )?,
+                ))
             }
             "getAll" => {
                 if args.len() > 1 {
@@ -194,12 +200,14 @@ impl Harness {
                     query.partitioned,
                 );
                 self.sync_document_cookie_property();
-                Ok(Some(self.cookie_store_resolved_promise(Self::new_array_value(
-                    cookies
-                        .iter()
-                        .map(Self::cookie_record_to_value)
-                        .collect::<Vec<_>>(),
-                ))?))
+                Ok(Some(
+                    self.cookie_store_resolved_promise(Self::new_array_value(
+                        cookies
+                            .iter()
+                            .map(Self::cookie_record_to_value)
+                            .collect::<Vec<_>>(),
+                    ))?,
+                ))
             }
             "delete" => {
                 if args.len() > 1 {

@@ -2016,7 +2016,10 @@ fn document_visibilitychange_fires_before_mock_page_navigation() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.set_location_mock_page("https://app.local/next", next_mock);
     h.click("#go")?;
-    h.assert_text("#result", "hidden:true:visibilitychange:false|visible:false")?;
+    h.assert_text(
+        "#result",
+        "hidden:true:visibilitychange:false|visible:false",
+    )?;
     Ok(())
 }
 

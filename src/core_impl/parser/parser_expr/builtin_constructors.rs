@@ -178,7 +178,7 @@ pub(crate) fn parse_string_expr(src: &str) -> Result<Option<Expr>> {
                     "String.{member} argument cannot be empty"
                 )));
             }
-            parsed.push(parse_expr(arg)?);
+            parsed.push(parse_call_arg_expr(arg)?);
         }
         cursor.skip_ws();
         if !cursor.eof() {

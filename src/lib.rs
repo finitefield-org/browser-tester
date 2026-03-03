@@ -24,7 +24,8 @@ pub use core_dom_utils::MockFile;
 pub use core_dom_utils::{Error, Result, ThrownValue};
 pub use harness_api::{Harness, KeyboardEventInit, MockPage, MockWindow};
 pub use runtime_state::{
-    DownloadArtifact, LocationNavigation, LocationNavigationKind, PendingTimer,
+    ClipboardPayloadArtifact, ClipboardWriteArtifact, DownloadArtifact, LocationNavigation,
+    LocationNavigationKind, PendingTimer,
 };
 
 pub(crate) use core_dom_utils::*;

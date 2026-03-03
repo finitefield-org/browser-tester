@@ -134,7 +134,7 @@ impl Dom {
         for candidate in ids {
             if groups
                 .iter()
-                .any(|steps| self.matches_selector_chain(candidate, steps))
+                .any(|steps| self.matches_selector_chain_in_scope(candidate, steps, Some(*root)))
                 && seen.insert(candidate)
             {
                 matched.push(candidate);
@@ -179,7 +179,11 @@ impl Dom {
             .collect()
     }
 
-    pub(crate) fn get_elements_by_tag_name_from(&self, root: &NodeId, tag_name: &str) -> Vec<NodeId> {
+    pub(crate) fn get_elements_by_tag_name_from(
+        &self,
+        root: &NodeId,
+        tag_name: &str,
+    ) -> Vec<NodeId> {
         let mut ids = Vec::new();
         self.collect_elements_descendants_dfs(*root, &mut ids);
 
@@ -195,6 +199,42 @@ impl Dom {
             .collect()
     }
 
+    pub(crate) fn get_elements_by_tag_name_ns_from(
+        &self,
+        root: &NodeId,
+        namespace_uri: Option<&str>,
+        local_name: &str,
+    ) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        self.collect_elements_descendants_dfs(*root, &mut ids);
+
+        ids.into_iter()
+            .filter(|node_id| {
+                self.element(*node_id).is_some_and(|element| {
+                    let namespace_matches = match namespace_uri {
+                        Some("*") => true,
+                        Some(expected) => element.namespace_uri.as_deref() == Some(expected),
+                        None => element.namespace_uri.is_none(),
+                    };
+                    if !namespace_matches {
+                        return false;
+                    }
+
+                    if local_name == "*" {
+                        return true;
+                    }
+
+                    let candidate_local_name = element
+                        .tag_name
+                        .rsplit_once(':')
+                        .map(|(_, local)| local)
+                        .unwrap_or(element.tag_name.as_str());
+                    candidate_local_name == local_name
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn matches_selector(&self, node_id: NodeId, selector: &str) -> Result<bool> {
         if self.element(node_id).is_none() {
             return Ok(false);
@@ -203,7 +243,7 @@ impl Dom {
         let groups = parse_selector_groups(selector)?;
         Ok(groups
             .iter()
-            .any(|steps| self.matches_selector_chain(node_id, steps)))
+            .any(|steps| self.matches_selector_chain_in_scope(node_id, steps, Some(node_id))))
     }
 
     pub(crate) fn closest(&self, node_id: NodeId, selector: &str) -> Result<Option<NodeId>> {
@@ -216,7 +256,7 @@ impl Dom {
         while let Some(current) = cursor {
             if groups
                 .iter()
-                .any(|steps| self.matches_selector_chain(current, steps))
+                .any(|steps| self.matches_selector_chain_in_scope(current, steps, Some(node_id)))
             {
                 return Ok(Some(current));
             }

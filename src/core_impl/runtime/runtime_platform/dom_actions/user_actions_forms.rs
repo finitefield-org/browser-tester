@@ -35,10 +35,23 @@ impl Harness {
             })?
             .to_ascii_lowercase();
 
+        if tag == "select" {
+            return stacker::grow(32 * 1024 * 1024, || {
+                let previous_value = self.dom.value(target)?;
+                self.dom.set_select_value(target, text)?;
+                let next_value = self.dom.value(target)?;
+                if next_value != previous_value {
+                    self.dispatch_event(target, "input")?;
+                    self.dispatch_event(target, "change")?;
+                }
+                Ok(())
+            });
+        }
+
         if tag != "input" && tag != "textarea" {
             return Err(Error::TypeMismatch {
                 selector: selector.to_string(),
-                expected: "input or textarea".into(),
+                expected: "input, textarea, or select".into(),
                 actual: tag,
             });
         }
@@ -46,6 +59,40 @@ impl Harness {
         stacker::grow(32 * 1024 * 1024, || {
             self.dom.set_value(target, text)?;
             self.dispatch_event(target, "input")?;
+            Ok(())
+        })
+    }
+
+    pub fn set_select_value(&mut self, selector: &str, value: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+        let tag = self
+            .dom
+            .tag_name(target)
+            .ok_or_else(|| Error::TypeMismatch {
+                selector: selector.to_string(),
+                expected: "select".into(),
+                actual: "non-element".into(),
+            })?
+            .to_ascii_lowercase();
+        if tag != "select" {
+            return Err(Error::TypeMismatch {
+                selector: selector.to_string(),
+                expected: "select".into(),
+                actual: tag,
+            });
+        }
+
+        stacker::grow(32 * 1024 * 1024, || {
+            let previous_value = self.dom.value(target)?;
+            self.dom.set_select_value(target, value)?;
+            let next_value = self.dom.value(target)?;
+            if next_value != previous_value {
+                self.dispatch_event(target, "input")?;
+                self.dispatch_event(target, "change")?;
+            }
             Ok(())
         })
     }
@@ -285,6 +332,8 @@ impl Harness {
                 }
             }
 
+            self.apply_option_click_selection_with_env(target, env)?;
+
             if self.run_button_command_with_env(target, env)? {
                 return Ok(());
             }
@@ -305,6 +354,54 @@ impl Harness {
         })();
         self.dom.set_active_pseudo_element(None);
         result
+    }
+
+    fn apply_option_click_selection_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if !self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
+        {
+            return Ok(());
+        }
+
+        let Some(select_node) = self.dom.find_ancestor_by_tag(target, "select") else {
+            return Ok(());
+        };
+        if self.is_effectively_disabled(select_node) {
+            return Ok(());
+        }
+
+        let previous_value = self.dom.value(select_node)?;
+        let is_multiple = self.dom.attr(select_node, "multiple").is_some();
+        let mut options = Vec::new();
+        self.dom.collect_select_options(select_node, &mut options);
+
+        for option in options {
+            let is_target = option == target;
+            let has_selected = self.dom.attr(option, "selected").is_some();
+            if is_target {
+                if !has_selected {
+                    self.dom.set_attr(option, "selected", "true")?;
+                }
+                continue;
+            }
+            if !is_multiple && has_selected {
+                self.dom.remove_attr(option, "selected")?;
+            }
+        }
+
+        self.dom.sync_select_value(select_node)?;
+        let next_value = self.dom.value(select_node)?;
+        if next_value != previous_value {
+            self.dispatch_event_with_env(select_node, "input", env, true)?;
+            self.dispatch_event_with_env(select_node, "change", env, true)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn run_button_command_with_env(
@@ -594,7 +691,8 @@ impl Harness {
         let target = self.resolve_dispatch_target(selector)?;
         self.with_script_env(move |this, env| {
             stacker::grow(32 * 1024 * 1024, || {
-                let mut dispatched = EventState::new_untrusted(event, target, this.scheduler.now_ms);
+                let mut dispatched =
+                    EventState::new_untrusted(event, target, this.scheduler.now_ms);
                 dispatched.key = Some(init.key.clone());
                 dispatched.code = init.code.clone();
                 dispatched.ctrl_key = init.ctrl_key;

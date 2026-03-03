@@ -30,6 +30,9 @@ pub(crate) fn parse_document_create_element_expr(src: &str) -> Result<Option<Str
     if !cursor.consume_ascii("createElement") {
         return Ok(None);
     }
+    if cursor.peek().is_some_and(is_ident_char) {
+        return Ok(None);
+    }
     cursor.skip_ws();
     cursor.expect_byte(b'(')?;
     cursor.skip_ws();

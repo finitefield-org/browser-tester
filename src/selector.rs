@@ -13,6 +13,7 @@ pub(crate) enum SelectorAttrCondition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SelectorPseudoClass {
+    Scope,
     FirstChild,
     LastChild,
     FirstOfType,
@@ -347,6 +348,13 @@ pub(crate) fn parse_selector_pseudo(
     }
     let start = start + 1;
     let tail = part.get(start..)?;
+    if let Some(rest) = tail.strip_prefix("scope") {
+        if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
+            let consumed = start + "scope".len();
+            return Some((SelectorPseudoClass::Scope, consumed));
+        }
+    }
+
     if let Some(rest) = tail.strip_prefix("first-child") {
         if rest.is_empty() || is_selector_continuation(rest.as_bytes().first()?) {
             let consumed = start + "first-child".len();

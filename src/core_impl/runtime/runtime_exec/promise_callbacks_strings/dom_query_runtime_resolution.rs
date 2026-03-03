@@ -1,6 +1,16 @@
 use super::*;
 
 impl Harness {
+    fn map_selector_api_result<T>(&self, result: Result<T>) -> Result<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(Error::UnsupportedSelector(_)) => Err(Error::ScriptRuntime(
+                "SyntaxError: The provided selector is invalid".into(),
+            )),
+            Err(other) => Err(other),
+        }
+    }
+
     fn node_list_from_value(&self, value: &Value) -> Option<Vec<NodeId>> {
         match value {
             Value::NodeList(nodes) => Some(self.node_list_snapshot(nodes)),
@@ -102,21 +112,83 @@ impl Harness {
         Ok(Some(value))
     }
 
+    fn resolve_dom_index_property_key_runtime(
+        &mut self,
+        index: &DomIndex,
+        env: &HashMap<String, Value>,
+    ) -> Result<String> {
+        match index {
+            DomIndex::Static(index) => Ok(index.to_string()),
+            DomIndex::Dynamic(expr_src) => {
+                let expr = parse_expr(expr_src)?;
+                let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                let value = self.eval_expr(&expr, env, &None, &event)?;
+                Ok(value.as_string())
+            }
+        }
+    }
+
+    fn resolve_dom_query_value_runtime(
+        &mut self,
+        target: &DomQuery,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<Value>> {
+        match target {
+            DomQuery::Var(name) => env
+                .get(name)
+                .cloned()
+                .ok_or_else(|| Error::ScriptRuntime(format!("unknown element variable: {}", name)))
+                .map(Some),
+            DomQuery::VarPath { base, path } => {
+                self.resolve_dom_query_var_path_value(base, path, env)
+            }
+            DomQuery::Index { target, index } => {
+                let Some(value) = self.resolve_dom_query_value_runtime(target, env)? else {
+                    return Ok(None);
+                };
+                self.resolve_dom_query_indexed_value_runtime(value, index, env)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn resolve_dom_query_indexed_value_runtime(
+        &mut self,
+        target_value: Value,
+        index: &DomIndex,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<Value>> {
+        if let Some(list) = self.node_list_from_value(&target_value) {
+            let index = self.resolve_runtime_dom_index(index, Some(env))?;
+            return Ok(list.get(index).copied().map(Value::Node));
+        }
+
+        let key = self.resolve_dom_index_property_key_runtime(index, env)?;
+        let indexed = match self.object_property_from_value(&target_value, &key) {
+            Ok(indexed) => indexed,
+            Err(_) => return Ok(None),
+        };
+        if matches!(indexed, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+        Ok(Some(indexed))
+    }
+
     pub(crate) fn resolve_dom_query_list_static(
         &mut self,
         target: &DomQuery,
     ) -> Result<Option<Vec<NodeId>>> {
         match target {
-            DomQuery::BySelectorAll { selector } => {
-                Ok(Some(self.dom.query_selector_all(selector)?))
-            }
+            DomQuery::BySelectorAll { selector } => Ok(Some(
+                self.map_selector_api_result(self.dom.query_selector_all(selector))?,
+            )),
             DomQuery::QuerySelectorAll { target, selector } => {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
-                Ok(Some(
-                    self.dom.query_selector_all_from(&target_node, selector)?,
-                ))
+                Ok(Some(self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?))
             }
             DomQuery::Index { target, index } => {
                 let Some(list) = self.resolve_dom_query_list_static(target)? else {
@@ -130,8 +202,7 @@ impl Harness {
                     Error::ScriptRuntime("dynamic index in static context".into())
                 })?;
                 Ok(self
-                    .dom
-                    .query_selector_all(selector)?
+                    .map_selector_api_result(self.dom.query_selector_all(selector))?
                     .get(index)
                     .copied()
                     .map(|node| vec![node]))
@@ -147,7 +218,9 @@ impl Harness {
                 let index = index.static_index().ok_or_else(|| {
                     Error::ScriptRuntime("dynamic index in static context".into())
                 })?;
-                let list = self.dom.query_selector_all_from(&target_node, selector)?;
+                let list = self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?;
                 Ok(list.get(index).copied().map(|node| vec![node]))
             }
             DomQuery::Var(_) | DomQuery::VarPath { .. } => Err(Error::ScriptRuntime(
@@ -199,9 +272,9 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_runtime(query_target, env)? else {
                     return Ok(None);
                 };
-                Ok(Some(
-                    self.dom.query_selector_all_from(&target_node, selector)?,
-                ))
+                Ok(Some(self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?))
             }
             DomQuery::QuerySelectorAllIndex {
                 target: query_target,
@@ -211,7 +284,9 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_runtime(query_target, env)? else {
                     return Ok(None);
                 };
-                let all = self.dom.query_selector_all_from(&target_node, selector)?;
+                let all = self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?;
                 let index = self.resolve_runtime_dom_index(index, Some(env))?;
                 Ok(all.get(index).copied().map(|node| vec![node]))
             }
@@ -226,7 +301,9 @@ impl Harness {
             DomQuery::DocumentHead => Ok(self.dom.head()),
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
-            DomQuery::BySelector(selector) => self.dom.query_selector(selector),
+            DomQuery::BySelector(selector) => {
+                self.map_selector_api_result(self.dom.query_selector(selector))
+            }
             DomQuery::BySelectorAll { .. } => Err(Error::ScriptRuntime(
                 "cannot use querySelectorAll result as single element".into(),
             )),
@@ -234,7 +311,7 @@ impl Harness {
                 let index = index.static_index().ok_or_else(|| {
                     Error::ScriptRuntime("dynamic index in static context".into())
                 })?;
-                let all = self.dom.query_selector_all(selector)?;
+                let all = self.map_selector_api_result(self.dom.query_selector_all(selector))?;
                 Ok(all.get(index).copied())
             }
             DomQuery::Index { target, index } => {
@@ -248,7 +325,7 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_static(target)? else {
                     return Ok(None);
                 };
-                self.dom.query_selector_from(&target_node, selector)
+                self.map_selector_api_result(self.dom.query_selector_from(&target_node, selector))
             }
             DomQuery::QuerySelectorAll { .. } => Err(Error::ScriptRuntime(
                 "cannot use querySelectorAll result as single element".into(),
@@ -264,7 +341,9 @@ impl Harness {
                 let index = index.static_index().ok_or_else(|| {
                     Error::ScriptRuntime("dynamic index in static context".into())
                 })?;
-                let all = self.dom.query_selector_all_from(&target_node, selector)?;
+                let all = self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?;
                 Ok(all.get(index).copied())
             }
             DomQuery::FormElementsIndex { form, index } => {
@@ -380,6 +459,28 @@ impl Harness {
                 "cannot use querySelectorAll result as single element".into(),
             )),
             DomQuery::Index { target, index } => {
+                if matches!(
+                    target.as_ref(),
+                    DomQuery::Var(_) | DomQuery::VarPath { .. } | DomQuery::Index { .. }
+                ) {
+                    let Some(target_value) = self.resolve_dom_query_value_runtime(target, env)?
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(indexed) =
+                        self.resolve_dom_query_indexed_value_runtime(target_value, index, env)?
+                    else {
+                        return Ok(None);
+                    };
+                    return match indexed {
+                        Value::Node(node) => Ok(Some(node)),
+                        _ => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not a single element",
+                            target.describe_call()
+                        ))),
+                    };
+                }
+
                 let Some(list) = self.resolve_dom_query_list_runtime(target, env)? else {
                     return Ok(None);
                 };
@@ -390,7 +491,7 @@ impl Harness {
                 let Some(target_node) = self.resolve_dom_query_runtime(target, env)? else {
                     return Ok(None);
                 };
-                self.dom.query_selector_from(&target_node, selector)
+                self.map_selector_api_result(self.dom.query_selector_from(&target_node, selector))
             }
             DomQuery::QuerySelectorAllIndex {
                 target,
@@ -401,7 +502,9 @@ impl Harness {
                     return Ok(None);
                 };
                 let index = self.resolve_runtime_dom_index(index, Some(env))?;
-                let all = self.dom.query_selector_all_from(&target_node, selector)?;
+                let all = self.map_selector_api_result(
+                    self.dom.query_selector_all_from(&target_node, selector),
+                )?;
                 Ok(all.get(index).copied())
             }
             DomQuery::FormElementsIndex { form, index } => {

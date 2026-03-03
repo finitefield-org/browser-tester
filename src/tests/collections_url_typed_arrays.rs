@@ -2092,8 +2092,8 @@ fn arrow_function_with_object_destructuring_parameter_parses() -> Result<()> {
 }
 
 #[test]
-fn arrow_function_with_object_destructuring_after_prior_call_and_object_updates_parses()
--> Result<()> {
+fn arrow_function_with_object_destructuring_after_prior_call_and_object_updates_parses(
+) -> Result<()> {
     let html = r#"
         <p id='result'></p>
         <script>

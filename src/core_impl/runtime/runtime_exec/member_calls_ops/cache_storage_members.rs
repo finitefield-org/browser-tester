@@ -105,8 +105,7 @@ impl Harness {
         cache_name: &str,
         request_value: &Value,
     ) -> Result<Option<Value>> {
-        let fetch_result =
-            self.eval_fetch_call_from_values(std::slice::from_ref(request_value))?;
+        let fetch_result = self.eval_fetch_call_from_values(std::slice::from_ref(request_value))?;
         let Value::Promise(fetch_promise) = fetch_result else {
             return Ok(Some(self.cache_storage_rejected_promise(Value::String(
                 "TypeError: Failed to fetch".to_string(),
@@ -186,10 +185,11 @@ impl Harness {
                     ));
                 }
                 let cache_name = args[0].as_string();
-                let has = self.browser_apis.caches_by_name.contains_key(cache_name.as_str());
-                Ok(Some(
-                    self.cache_storage_resolved_promise(Value::Bool(has))?
-                ))
+                let has = self
+                    .browser_apis
+                    .caches_by_name
+                    .contains_key(cache_name.as_str());
+                Ok(Some(self.cache_storage_resolved_promise(Value::Bool(has))?))
             }
             "delete" => {
                 if args.len() != 1 {
@@ -200,7 +200,7 @@ impl Harness {
                 let cache_name = args[0].as_string();
                 let deleted = self.remove_named_cache(&cache_name);
                 Ok(Some(
-                    self.cache_storage_resolved_promise(Value::Bool(deleted))?
+                    self.cache_storage_resolved_promise(Value::Bool(deleted))?,
                 ))
             }
             "keys" => {
@@ -214,9 +214,9 @@ impl Harness {
                     .into_iter()
                     .map(Value::String)
                     .collect::<Vec<_>>();
-                Ok(Some(
-                    self.cache_storage_resolved_promise(Self::new_array_value(names))?
-                ))
+                Ok(Some(self.cache_storage_resolved_promise(
+                    Self::new_array_value(names),
+                )?))
             }
             "match" => {
                 if args.is_empty() || args.len() > 2 {
@@ -328,7 +328,7 @@ impl Harness {
                 entries.retain(|entry| entry.request_url != request_url);
                 let deleted = before != entries.len();
                 Ok(Some(
-                    self.cache_storage_resolved_promise(Value::Bool(deleted))?
+                    self.cache_storage_resolved_promise(Value::Bool(deleted))?,
                 ))
             }
             "keys" => {
@@ -349,9 +349,9 @@ impl Harness {
                         )
                     })
                     .collect::<Vec<_>>();
-                Ok(Some(
-                    self.cache_storage_resolved_promise(Self::new_array_value(keys))?
-                ))
+                Ok(Some(self.cache_storage_resolved_promise(
+                    Self::new_array_value(keys),
+                )?))
             }
             "add" => {
                 if args.len() != 1 {

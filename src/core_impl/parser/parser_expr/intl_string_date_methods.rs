@@ -328,8 +328,12 @@ pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
         if method_name == "format" {
             cursor.skip_ws();
             if cursor.eof() {
+                let formatter = parse_expr(base_src)?;
+                if !matches!(&formatter, Expr::IntlFormatterConstruct { .. }) {
+                    continue;
+                }
                 return Ok(Some(Expr::IntlFormatGetter {
-                    formatter: Box::new(parse_expr(base_src)?),
+                    formatter: Box::new(formatter),
                 }));
             }
             if cursor.peek() != Some(b'(') {
@@ -347,12 +351,17 @@ pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
             } else {
                 raw_args
             };
+            let formatter = parse_expr(base_src)?;
             if args.len() == 2 && !args[0].trim().is_empty() && !args[1].trim().is_empty() {
                 return Ok(Some(Expr::IntlRelativeTimeFormat {
-                    formatter: Box::new(parse_expr(base_src)?),
+                    formatter: Box::new(formatter),
                     value: Box::new(parse_expr(args[0].trim())?),
                     unit: Box::new(parse_expr(args[1].trim())?),
                 }));
+            }
+            if !matches!(&formatter, Expr::IntlFormatterConstruct { .. }) {
+                // Avoid hijacking generic `.format(...)` member calls.
+                continue;
             }
             if args.len() > 1 {
                 return Err(Error::ScriptParse(
@@ -366,7 +375,7 @@ pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
             }
 
             return Ok(Some(Expr::IntlFormat {
-                formatter: Box::new(parse_expr(base_src)?),
+                formatter: Box::new(formatter),
                 value: args
                     .first()
                     .map(|arg| parse_expr(arg.trim()))

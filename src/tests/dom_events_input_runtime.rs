@@ -96,6 +96,29 @@ fn focus_and_blur_update_active_element_and_events() -> Result<()> {
 }
 
 #[test]
+fn focus_on_non_input_element_via_variable_does_not_throw_and_updates_active_element() -> Result<()>
+{
+    let html = r#"
+        <div id='drop' tabindex='0'></div>
+        <button id='open'>open</button>
+        <p id='result'></p>
+        <script>
+          const drop = document.getElementById('drop');
+          document.getElementById('open').addEventListener('click', () => {
+            drop.focus();
+            document.getElementById('result').textContent =
+              document.activeElement === drop ? 'drop' : 'other';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#open")?;
+    h.assert_text("#result", "drop")?;
+    Ok(())
+}
+
+#[test]
 fn focus_in_and_focus_out_events_are_dispatched() -> Result<()> {
     let html = r#"
         <input id='a'>
@@ -385,6 +408,7 @@ fn html_input_file_value_files_and_script_assignment_work() -> Result<()> {
                 mime_type: "image/jpeg".to_string(),
                 last_modified: 1_700_000_000_000,
                 webkit_relative_path: String::new(),
+                bytes: Vec::new(),
             },
             MockFile::new("ignored.png"),
         ],
@@ -430,6 +454,7 @@ fn html_input_file_multiple_required_and_cancel_event_work() -> Result<()> {
             mime_type: "text/plain".to_string(),
             last_modified: 99,
             webkit_relative_path: "nested/b.txt".to_string(),
+            bytes: Vec::new(),
         },
     ];
     h.set_input_files("#docs", &files)?;

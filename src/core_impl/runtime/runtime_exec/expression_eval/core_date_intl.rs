@@ -19,12 +19,39 @@ impl Harness {
                 Expr::BigInt(value) => Ok(Value::BigInt(value.clone())),
                 Expr::DateNow => Ok(Value::Number(self.scheduler.now_ms)),
                 Expr::PerformanceNow => Ok(Value::Float(self.scheduler.now_ms as f64)),
-                Expr::DateNew { value } => {
-                    let timestamp_ms = if let Some(value) = value {
-                        let value = self.eval_expr(value, env, event_param, event)?;
+                Expr::DateNew { args } => {
+                    let timestamp_ms = if args.is_empty() {
+                        self.scheduler.now_ms
+                    } else if args.len() == 1 {
+                        let value = self.eval_expr(&args[0], env, event_param, event)?;
                         self.coerce_date_timestamp_ms(&value)
                     } else {
-                        self.scheduler.now_ms
+                        let mut values = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let value = self.eval_expr(arg, env, event_param, event)?;
+                            values.push(Self::value_to_i64(&value));
+                        }
+
+                        let mut year = values.first().copied().unwrap_or(0);
+                        if (0..=99).contains(&year) {
+                            year += 1900;
+                        }
+                        let month = values.get(1).copied().unwrap_or(0);
+                        let day = values.get(2).copied().unwrap_or(1);
+                        let hour = values.get(3).copied().unwrap_or(0);
+                        let minute = values.get(4).copied().unwrap_or(0);
+                        let second = values.get(5).copied().unwrap_or(0);
+                        let millisecond = values.get(6).copied().unwrap_or(0);
+
+                        Self::utc_timestamp_ms_from_components(
+                            year,
+                            month,
+                            day,
+                            hour,
+                            minute,
+                            second,
+                            millisecond,
+                        )
                     };
                     Ok(Self::new_date_value(timestamp_ms))
                 }
@@ -141,6 +168,21 @@ impl Harness {
                                 self.intl_date_time_options_from_value(&locale, options.as_ref())?;
                             Ok(self.new_intl_date_time_formatter_value(locale, options))
                         }
+                        IntlFormatterKind::NumberFormat => {
+                            let options = options
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?;
+                            let (minimum_fraction_digits, maximum_fraction_digits) =
+                                Self::parse_number_to_locale_string_fraction_digits(
+                                    options.as_ref(),
+                                )?;
+                            Ok(self.new_intl_number_formatter_value(
+                                locale,
+                                minimum_fraction_digits,
+                                maximum_fraction_digits,
+                            ))
+                        }
                         IntlFormatterKind::DisplayNames => {
                             let options = options
                                 .as_ref()
@@ -194,7 +236,6 @@ impl Harness {
                                 self.intl_segmenter_options_from_value(options.as_ref())?;
                             Ok(self.new_intl_segmenter_value(locale, options))
                         }
-                        _ => Ok(self.new_intl_formatter_value(*kind, locale)),
                     }
                 }
                 Expr::IntlFormat { formatter, value } => {
@@ -207,10 +248,23 @@ impl Harness {
                     };
                     match kind {
                         IntlFormatterKind::NumberFormat => {
-                            Ok(Value::String(Self::intl_format_number_for_locale(
-                                Self::coerce_number_for_global(&value),
-                                &locale,
-                            )))
+                            let (locale, minimum_fraction_digits, maximum_fraction_digits) =
+                                self.resolve_intl_number_format_options(&formatter)?;
+                            let number = Self::coerce_number_for_global(&value);
+                            if minimum_fraction_digits.is_none()
+                                && maximum_fraction_digits.is_none()
+                            {
+                                Ok(Value::String(Self::intl_format_number_for_locale(
+                                    number, &locale,
+                                )))
+                            } else {
+                                Ok(Value::String(Self::format_number_to_locale_string(
+                                    number,
+                                    &locale,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                )))
+                            }
                         }
                         IntlFormatterKind::DateTimeFormat => {
                             let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
@@ -264,7 +318,13 @@ impl Harness {
                             Ok(self.new_intl_date_time_format_callable(locale, options))
                         }
                         IntlFormatterKind::NumberFormat => {
-                            Ok(self.new_intl_number_format_callable(locale))
+                            let (locale, minimum_fraction_digits, maximum_fraction_digits) =
+                                self.resolve_intl_number_format_options(&formatter)?;
+                            Ok(self.new_intl_number_format_callable(
+                                locale,
+                                minimum_fraction_digits,
+                                maximum_fraction_digits,
+                            ))
                         }
                         IntlFormatterKind::DurationFormat => {
                             let (_, options) = self.resolve_intl_duration_options(&formatter)?;

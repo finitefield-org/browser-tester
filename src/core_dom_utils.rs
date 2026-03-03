@@ -30,6 +30,11 @@ pub(crate) const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind"
 pub(crate) const INTERNAL_BOUND_CALLABLE_TARGET_KEY: &str = "\u{0}\u{0}bt_callable:bound_target";
 pub(crate) const INTERNAL_BOUND_CALLABLE_THIS_KEY: &str = "\u{0}\u{0}bt_callable:bound_this";
 pub(crate) const INTERNAL_BOUND_CALLABLE_ARGS_KEY: &str = "\u{0}\u{0}bt_callable:bound_args";
+pub(crate) const INTERNAL_WORKER_KEY_PREFIX: &str = "\u{0}\u{0}bt_worker:";
+pub(crate) const INTERNAL_WORKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_worker:object";
+pub(crate) const INTERNAL_WORKER_GLOBAL_OBJECT_KEY: &str = "\u{0}\u{0}bt_worker:global";
+pub(crate) const INTERNAL_WORKER_TARGET_KEY: &str = "\u{0}\u{0}bt_worker:target";
+pub(crate) const INTERNAL_WORKER_TERMINATED_KEY: &str = "\u{0}\u{0}bt_worker:terminated";
 pub(crate) const INTERNAL_CANVAS_KEY_PREFIX: &str = "\u{0}\u{0}bt_canvas:";
 pub(crate) const INTERNAL_CANVAS_2D_CONTEXT_OBJECT_KEY: &str = "\u{0}\u{0}bt_canvas:2d_context";
 pub(crate) const INTERNAL_CANVAS_2D_ALPHA_KEY: &str = "\u{0}\u{0}bt_canvas:2d_alpha";
@@ -40,6 +45,10 @@ pub(crate) const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
 pub(crate) const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 pub(crate) const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
 pub(crate) const INTERNAL_ATTR_OBJECT_KEY: &str = "\u{0}\u{0}bt_attr";
+pub(crate) const INTERNAL_NAMED_NODE_MAP_KEY_PREFIX: &str = "\u{0}\u{0}bt_named_node_map:";
+pub(crate) const INTERNAL_NAMED_NODE_MAP_OBJECT_KEY: &str = "\u{0}\u{0}bt_named_node_map:object";
+pub(crate) const INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY: &str =
+    "\u{0}\u{0}bt_named_node_map:owner_node";
 pub(crate) const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
 pub(crate) const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
 pub(crate) const INTERNAL_NAVIGATOR_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigator";
@@ -48,6 +57,13 @@ pub(crate) const INTERNAL_CLIPBOARD_READ_TEXT_DEFAULT_KEY: &str =
     "\u{0}\u{0}bt_clipboard:read_text_default";
 pub(crate) const INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY: &str =
     "\u{0}\u{0}bt_clipboard:write_text_default";
+pub(crate) const INTERNAL_CLIPBOARD_DATA_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard:data";
+pub(crate) const INTERNAL_CLIPBOARD_DATA_TEXT_KEY: &str = "\u{0}\u{0}bt_clipboard:data:text";
+pub(crate) const INTERNAL_CLIPBOARD_ITEM_KEY_PREFIX: &str = "\u{0}\u{0}bt_clipboard_item:";
+pub(crate) const INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard_item:object";
+pub(crate) const INTERNAL_MOCK_FILE_KEY_PREFIX: &str = "\u{0}\u{0}bt_mock_file:";
+pub(crate) const INTERNAL_MOCK_FILE_OBJECT_KEY: &str = "\u{0}\u{0}bt_mock_file:object";
+pub(crate) const INTERNAL_MOCK_FILE_BLOB_KEY: &str = "\u{0}\u{0}bt_mock_file:blob";
 pub(crate) const INTERNAL_COOKIE_STORE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cookie_store";
 pub(crate) const INTERNAL_CACHE_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache_storage";
 pub(crate) const INTERNAL_CACHE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache";
@@ -223,6 +239,7 @@ pub struct MockFile {
     pub mime_type: String,
     pub last_modified: i64,
     pub webkit_relative_path: String,
+    pub bytes: Vec<u8>,
 }
 
 impl MockFile {
@@ -233,7 +250,23 @@ impl MockFile {
             mime_type: String::new(),
             last_modified: 0,
             webkit_relative_path: String::new(),
+            bytes: Vec::new(),
         }
+    }
+
+    pub fn with_bytes(mut self, bytes: &[u8]) -> Self {
+        self.bytes = bytes.to_vec();
+        self.size = self.bytes.len() as i64;
+        self
+    }
+
+    pub fn with_text(mut self, text: &str) -> Self {
+        self.bytes = text.as_bytes().to_vec();
+        self.size = self.bytes.len() as i64;
+        if self.mime_type.is_empty() {
+            self.mime_type = "text/plain".to_string();
+        }
+        self
     }
 }
 
@@ -257,6 +290,7 @@ pub(crate) struct Node {
 #[derive(Debug, Clone)]
 pub(crate) struct Element {
     pub(crate) tag_name: String,
+    pub(crate) namespace_uri: Option<String>,
     pub(crate) attrs: HashMap<String, String>,
     pub(crate) value: String,
     pub(crate) files: Vec<MockFile>,
@@ -299,6 +333,24 @@ pub(crate) fn is_valid_create_attribute_name(name: &str) -> bool {
     }
 
     chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+}
+
+pub(crate) fn is_valid_qualified_attribute_name(name: &str) -> bool {
+    let mut segments = name.split(':');
+    let first = segments.next().unwrap_or_default();
+    let second = segments.next();
+    if segments.next().is_some() {
+        return false;
+    }
+    match second {
+        None => is_valid_create_attribute_name(first),
+        Some(local) => {
+            !first.is_empty()
+                && !local.is_empty()
+                && is_valid_create_attribute_name(first)
+                && is_valid_create_attribute_name(local)
+        }
+    }
 }
 
 pub(crate) fn is_color_input_element(element: &Element) -> bool {
@@ -424,12 +476,19 @@ pub(crate) fn normalize_file_input_name(name: &str) -> String {
 }
 
 pub(crate) fn normalize_mock_file(file: &MockFile) -> MockFile {
+    let normalized_bytes = file.bytes.clone();
+    let normalized_size = if normalized_bytes.is_empty() {
+        file.size.max(0)
+    } else {
+        normalized_bytes.len() as i64
+    };
     MockFile {
         name: normalize_file_input_name(&file.name),
-        size: file.size.max(0),
+        size: normalized_size,
         mime_type: file.mime_type.clone(),
         last_modified: file.last_modified,
         webkit_relative_path: file.webkit_relative_path.clone(),
+        bytes: normalized_bytes,
     }
 }
 

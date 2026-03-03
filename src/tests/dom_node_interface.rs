@@ -544,7 +544,9 @@ fn node_insert_before_throws_when_reference_is_not_direct_child() {
     .expect_err("insertBefore should reject non-child reference");
 
     match err {
-        Error::ScriptRuntime(msg) => assert_eq!(msg, "insertBefore reference is not a direct child"),
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "insertBefore reference is not a direct child")
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }

@@ -1,6 +1,14 @@
 use super::*;
 
 impl Dom {
+    pub(crate) fn default_element_namespace_uri(tag_name: &str) -> Option<String> {
+        if tag_name.eq_ignore_ascii_case("#document-fragment") {
+            None
+        } else {
+            Some("http://www.w3.org/1999/xhtml".to_string())
+        }
+    }
+
     pub(crate) fn new() -> Self {
         let root = Node {
             parent: None,
@@ -49,8 +57,10 @@ impl Dom {
         let disabled = attrs.contains_key("disabled");
         let readonly = attrs.contains_key("readonly");
         let required = attrs.contains_key("required");
+        let namespace_uri = Self::default_element_namespace_uri(&tag_name);
         let element = Element {
             tag_name,
+            namespace_uri,
             attrs,
             value,
             files: Vec::new(),
@@ -75,8 +85,18 @@ impl Dom {
     }
 
     pub(crate) fn create_detached_element(&mut self, tag_name: String) -> NodeId {
+        let namespace_uri = Self::default_element_namespace_uri(&tag_name);
+        self.create_detached_element_with_namespace(tag_name, namespace_uri)
+    }
+
+    pub(crate) fn create_detached_element_with_namespace(
+        &mut self,
+        tag_name: String,
+        namespace_uri: Option<String>,
+    ) -> NodeId {
         let element = Element {
             tag_name,
+            namespace_uri,
             attrs: HashMap::new(),
             value: String::new(),
             files: Vec::new(),
@@ -167,5 +187,4 @@ impl Dom {
             .or_default()
             .push(node_id);
     }
-
 }

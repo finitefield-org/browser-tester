@@ -179,6 +179,198 @@ impl Harness {
         Ok(target)
     }
 
+    fn worker_target_from_callable(callable: &Value) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime(
+                "Worker callable has invalid internal state".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        match Self::object_get_entry(&entries, INTERNAL_WORKER_TARGET_KEY) {
+            Some(Value::Object(worker)) => Ok(worker),
+            _ => Err(Error::ScriptRuntime(
+                "Worker callable has invalid internal state".into(),
+            )),
+        }
+    }
+
+    fn worker_global_from_object(
+        worker: &Rc<RefCell<ObjectValue>>,
+    ) -> Result<Rc<RefCell<ObjectValue>>> {
+        let entries = worker.borrow();
+        match Self::object_get_entry(&entries, INTERNAL_WORKER_GLOBAL_OBJECT_KEY) {
+            Some(Value::Object(global)) => Ok(global),
+            _ => Err(Error::ScriptRuntime(
+                "Worker instance has invalid internal state".into(),
+            )),
+        }
+    }
+
+    fn worker_is_terminated_object(worker: &Rc<RefCell<ObjectValue>>) -> bool {
+        let entries = worker.borrow();
+        matches!(
+            Self::object_get_entry(&entries, INTERNAL_WORKER_TERMINATED_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    fn worker_set_terminated_object(worker: &Rc<RefCell<ObjectValue>>, terminated: bool) {
+        Self::object_set_entry(
+            &mut worker.borrow_mut(),
+            INTERNAL_WORKER_TERMINATED_KEY.to_string(),
+            Value::Bool(terminated),
+        );
+    }
+
+    fn resolve_worker_script_source(&self, script_url: &str) -> Result<String> {
+        let url = script_url.trim();
+        if url.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "Worker constructor requires a non-empty script URL".into(),
+            ));
+        }
+        if let Some(blob) = self.browser_apis.blob_url_objects.get(url) {
+            return Ok(String::from_utf8_lossy(&blob.borrow().bytes).into_owned());
+        }
+
+        let resolved = Self::resolve_url_string(url, Some(&self.document_url))
+            .unwrap_or_else(|| url.to_string());
+        self.platform_mocks
+            .fetch_mocks
+            .get(&resolved)
+            .or_else(|| self.platform_mocks.fetch_mocks.get(url))
+            .map(|mock| mock.body.clone())
+            .ok_or_else(|| {
+                Error::ScriptRuntime(format!("Worker script source not found: {script_url}"))
+            })
+    }
+
+    fn execute_worker_script_source(
+        &mut self,
+        source: &str,
+        worker: &Value,
+        worker_global: &Value,
+    ) -> Result<()> {
+        let worker_post_message = Self::new_worker_context_post_message_callable(worker.clone());
+        let mut worker_env = HashMap::new();
+        worker_env.insert("self".to_string(), worker_global.clone());
+        worker_env.insert("globalThis".to_string(), worker_global.clone());
+        worker_env.insert("postMessage".to_string(), worker_post_message.clone());
+        worker_env.insert("onmessage".to_string(), Value::Null);
+        worker_env.insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(1));
+
+        let stmts = parse_block_statements(source)?;
+        let mut worker_event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+        self.run_in_task_context(|inner| {
+            inner
+                .execute_stmts(&stmts, &None, &mut worker_event, &mut worker_env)
+                .map(|_| ())
+        })?;
+
+        if let Some(onmessage) = worker_env.get("onmessage").cloned() {
+            if matches!(onmessage, Value::Null | Value::Undefined) {
+                return Ok(());
+            }
+            let Value::Object(worker_global_entries) = worker_global else {
+                return Err(Error::ScriptRuntime(
+                    "Worker global has invalid internal state".into(),
+                ));
+            };
+            Self::object_set_entry(
+                &mut worker_global_entries.borrow_mut(),
+                "onmessage".to_string(),
+                onmessage,
+            );
+        }
+        Ok(())
+    }
+
+    fn new_worker_instance_from_script_source(&mut self, source: &str) -> Result<Value> {
+        let worker = Self::new_object_value(vec![
+            (INTERNAL_WORKER_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_WORKER_TERMINATED_KEY.to_string(),
+                Value::Bool(false),
+            ),
+            ("onmessage".to_string(), Value::Null),
+        ]);
+
+        let worker_global_entries = Rc::new(RefCell::new(ObjectValue::default()));
+        let worker_global = Value::Object(worker_global_entries.clone());
+
+        let worker_context_post_message =
+            Self::new_worker_context_post_message_callable(worker.clone());
+        {
+            let mut entries = worker_global_entries.borrow_mut();
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_WORKER_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(&mut entries, "self".to_string(), worker_global.clone());
+            Self::object_set_entry(
+                &mut entries,
+                "globalThis".to_string(),
+                worker_global.clone(),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "postMessage".to_string(),
+                worker_context_post_message,
+            );
+            Self::object_set_entry(&mut entries, "onmessage".to_string(), Value::Null);
+        }
+
+        let worker_post_message = Self::new_worker_main_post_message_callable(worker.clone());
+        let worker_terminate = Self::new_worker_terminate_callable(worker.clone());
+        if let Value::Object(worker_entries) = &worker {
+            let mut entries = worker_entries.borrow_mut();
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_WORKER_GLOBAL_OBJECT_KEY.to_string(),
+                worker_global.clone(),
+            );
+            Self::object_set_entry(&mut entries, "postMessage".to_string(), worker_post_message);
+            Self::object_set_entry(&mut entries, "terminate".to_string(), worker_terminate);
+        }
+
+        self.execute_worker_script_source(source, &worker, &worker_global)?;
+        Ok(worker)
+    }
+
+    fn dispatch_worker_message_to_onmessage(
+        &mut self,
+        target: &Rc<RefCell<ObjectValue>>,
+        target_this: Value,
+        data: Value,
+        event: &EventState,
+    ) -> Result<()> {
+        let handler = {
+            let entries = target.borrow();
+            Self::object_get_entry(&entries, "onmessage")
+        };
+        let Some(handler) = handler else {
+            return Ok(());
+        };
+        if matches!(handler, Value::Null | Value::Undefined) {
+            return Ok(());
+        }
+        if !self.is_callable_value(&handler) {
+            return Err(Error::ScriptRuntime(
+                "Worker.onmessage is not a function".into(),
+            ));
+        }
+        let event_object = Self::new_object_value(vec![("data".to_string(), data)]);
+        let _ = self.execute_callable_value_with_this_and_env(
+            &handler,
+            &[event_object],
+            event,
+            None,
+            Some(target_this),
+        )?;
+        Ok(())
+    }
+
     fn new_event_target_instance_from_constructor(
         &mut self,
         constructor: &Value,
@@ -610,12 +802,22 @@ impl Harness {
                         ))
                     }
                     "intl_number_format" => {
-                        let (_, locale) = self.resolve_intl_formatter(callable)?;
+                        let (locale, minimum_fraction_digits, maximum_fraction_digits) =
+                            self.resolve_intl_number_format_options(callable)?;
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
-                        Ok(Value::String(Self::intl_format_number_for_locale(
-                            Self::coerce_number_for_global(&value),
-                            &locale,
-                        )))
+                        let number = Self::coerce_number_for_global(&value);
+                        if minimum_fraction_digits.is_none() && maximum_fraction_digits.is_none() {
+                            Ok(Value::String(Self::intl_format_number_for_locale(
+                                number, &locale,
+                            )))
+                        } else {
+                            Ok(Value::String(Self::format_number_to_locale_string(
+                                number,
+                                &locale,
+                                minimum_fraction_digits,
+                                maximum_fraction_digits,
+                            )))
+                        }
                     }
                     "intl_segmenter_segments_iterator" => {
                         let Value::Object(entries) = callable else {
@@ -692,6 +894,30 @@ impl Harness {
                             }
                         };
                         Ok(self.new_async_iterator_value(chunks))
+                    }
+                    "named_node_map_iterator" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap[Symbol.iterator] does not take arguments".into(),
+                            ));
+                        }
+                        let Value::Object(entries) = callable else {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        };
+                        let entries = entries.borrow();
+                        let Some(owner) = Self::named_node_map_owner_node(&entries) else {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap iterator has invalid internal state".into(),
+                            ));
+                        };
+                        let values = self
+                            .named_node_map_entries(owner)
+                            .into_iter()
+                            .map(|(name, value)| {
+                                Self::new_attr_object_value(&name, &value, Some(owner))
+                            })
+                            .collect::<Vec<_>>();
+                        Ok(self.new_iterator_value(values))
                     }
                     "iterator_self" => {
                         if !args.is_empty() {
@@ -865,12 +1091,459 @@ impl Harness {
                         self.sync_window_runtime_properties();
                         Ok(Value::Undefined)
                     }
+                    "clipboard_item_constructor" => {
+                        self.new_clipboard_item_value_from_constructor_args(args)
+                    }
+                    "clipboard_write" => self.eval_clipboard_write_call(args),
                     "request_constructor" => self.new_fetch_request_value_from_call_args(args),
                     "headers_constructor" => self.new_headers_value_from_call_args(args),
+                    "text_encoder_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "TextEncoder constructor does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_text_encoder_instance_value())
+                    }
+                    "text_encoder_encode" => {
+                        let input = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        Ok(Self::new_uint8_typed_array_from_bytes(input.as_bytes()))
+                    }
+                    "worker_constructor" => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "Worker constructor requires one or two arguments".into(),
+                            ));
+                        }
+                        let source = self.resolve_worker_script_source(&args[0].as_string())?;
+                        self.new_worker_instance_from_script_source(&source)
+                    }
+                    "worker_main_post_message" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "Worker.postMessage supports up to two arguments".into(),
+                            ));
+                        }
+                        let data = args.first().cloned().unwrap_or(Value::Undefined);
+                        let worker = Self::worker_target_from_callable(callable)?;
+                        if Self::worker_is_terminated_object(&worker) {
+                            return Ok(Value::Undefined);
+                        }
+                        let worker_global = Self::worker_global_from_object(&worker)?;
+                        let worker_global_value = Value::Object(worker_global.clone());
+                        self.dispatch_worker_message_to_onmessage(
+                            &worker_global,
+                            worker_global_value,
+                            data,
+                            event,
+                        )?;
+                        Ok(Value::Undefined)
+                    }
+                    "worker_context_post_message" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "WorkerGlobalScope.postMessage supports up to two arguments".into(),
+                            ));
+                        }
+                        let data = args.first().cloned().unwrap_or(Value::Undefined);
+                        let worker = Self::worker_target_from_callable(callable)?;
+                        if Self::worker_is_terminated_object(&worker) {
+                            return Ok(Value::Undefined);
+                        }
+                        let worker_value = Value::Object(worker.clone());
+                        self.dispatch_worker_message_to_onmessage(
+                            &worker,
+                            worker_value,
+                            data,
+                            event,
+                        )?;
+                        Ok(Value::Undefined)
+                    }
+                    "worker_terminate" => {
+                        let worker = Self::worker_target_from_callable(callable)?;
+                        Self::worker_set_terminated_object(&worker, true);
+                        Ok(Value::Undefined)
+                    }
+                    "global_decode_uri" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "decodeURI requires exactly one argument".into(),
+                            ));
+                        }
+                        Ok(Value::String(decode_uri_like(&args[0].as_string(), false)?))
+                    }
+                    "global_decode_uri_component" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "decodeURIComponent requires exactly one argument".into(),
+                            ));
+                        }
+                        Ok(Value::String(decode_uri_like(&args[0].as_string(), true)?))
+                    }
+                    "create_image_bitmap" => self.eval_create_image_bitmap_call(args),
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }
             }
             _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+        }
+    }
+
+    fn eval_create_image_bitmap_call(&mut self, args: &[Value]) -> Result<Value> {
+        if args.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "createImageBitmap requires at least one argument".into(),
+            ));
+        }
+
+        let promise = self.new_pending_promise();
+        match self.create_image_bitmap_dimensions_from_value(&args[0]) {
+            Ok((width, height)) => {
+                self.promise_resolve(
+                    &promise,
+                    Self::new_object_value(vec![
+                        ("width".to_string(), Value::Number(width)),
+                        ("height".to_string(), Value::Number(height)),
+                        (
+                            "close".to_string(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
+                    ]),
+                )?;
+            }
+            Err(err) => {
+                self.promise_reject(&promise, Value::String(err));
+            }
+        }
+        Ok(Value::Promise(promise))
+    }
+
+    fn create_image_bitmap_dimensions_from_value(
+        &self,
+        source: &Value,
+    ) -> std::result::Result<(i64, i64), String> {
+        let (bytes, mime_type, logical_size) = match source {
+            Value::Blob(blob) => {
+                let blob = blob.borrow();
+                (
+                    blob.bytes.clone(),
+                    blob.mime_type.clone(),
+                    blob.bytes.len() as i64,
+                )
+            }
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if !Self::is_mock_file_object(&entries) {
+                    return Err(
+                        "createImageBitmap requires an image Blob or File source".to_string()
+                    );
+                }
+
+                let blob = match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
+                    Some(Value::Blob(blob)) => blob,
+                    _ => {
+                        return Err(
+                            "createImageBitmap could not access mock file bytes".to_string()
+                        );
+                    }
+                };
+                let (bytes, mime_type) = {
+                    let blob = blob.borrow();
+                    (blob.bytes.clone(), blob.mime_type.clone())
+                };
+                let logical_size = Self::object_get_entry(&entries, "size")
+                    .map(|value| Self::value_to_i64(&value))
+                    .unwrap_or(bytes.len() as i64);
+                (bytes, mime_type, logical_size)
+            }
+            _ => {
+                return Err("createImageBitmap requires an image Blob or File source".to_string());
+            }
+        };
+
+        let mime = mime_type.to_ascii_lowercase();
+        let (width, height) = Self::decode_image_dimensions(&bytes)
+            .or_else(|| {
+                if mime.starts_with("image/") && (logical_size > 0 || !bytes.is_empty()) {
+                    Some((1, 1))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| "createImageBitmap could not decode image source".to_string())?;
+
+        Ok((width.max(1), height.max(1)))
+    }
+
+    fn decode_image_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
+        Self::decode_png_dimensions(bytes)
+            .or_else(|| Self::decode_gif_dimensions(bytes))
+            .or_else(|| Self::decode_jpeg_dimensions(bytes))
+    }
+
+    fn decode_png_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
+        const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+        if bytes.len() < 24 || bytes[0..8] != PNG_SIGNATURE {
+            return None;
+        }
+        if &bytes[12..16] != b"IHDR" {
+            return None;
+        }
+        let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((width as i64, height as i64))
+    }
+
+    fn decode_gif_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
+        if bytes.len() < 10 {
+            return None;
+        }
+        if &bytes[0..6] != b"GIF87a" && &bytes[0..6] != b"GIF89a" {
+            return None;
+        }
+        let width = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let height = u16::from_le_bytes([bytes[8], bytes[9]]);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((width as i64, height as i64))
+    }
+
+    fn decode_jpeg_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
+        if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+            return None;
+        }
+
+        let mut offset = 2usize;
+        while offset + 1 < bytes.len() {
+            if bytes[offset] != 0xFF {
+                offset += 1;
+                continue;
+            }
+            while offset < bytes.len() && bytes[offset] == 0xFF {
+                offset += 1;
+            }
+            if offset >= bytes.len() {
+                break;
+            }
+            let marker = bytes[offset];
+            offset += 1;
+
+            if marker == 0xD9 || marker == 0xDA {
+                break;
+            }
+            if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+                continue;
+            }
+
+            if offset + 1 >= bytes.len() {
+                break;
+            }
+            let segment_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+            offset += 2;
+            if segment_len < 2 || offset + segment_len - 2 > bytes.len() {
+                break;
+            }
+
+            let is_sof = matches!(
+                marker,
+                0xC0 | 0xC1
+                    | 0xC2
+                    | 0xC3
+                    | 0xC5
+                    | 0xC6
+                    | 0xC7
+                    | 0xC9
+                    | 0xCA
+                    | 0xCB
+                    | 0xCD
+                    | 0xCE
+                    | 0xCF
+            );
+            if is_sof && segment_len >= 7 {
+                let height = u16::from_be_bytes([bytes[offset + 1], bytes[offset + 2]]);
+                let width = u16::from_be_bytes([bytes[offset + 3], bytes[offset + 4]]);
+                if width > 0 && height > 0 {
+                    return Some((width as i64, height as i64));
+                }
+                return None;
+            }
+
+            offset += segment_len - 2;
+        }
+
+        None
+    }
+
+    fn new_clipboard_item_value_from_constructor_args(&self, args: &[Value]) -> Result<Value> {
+        if args.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "ClipboardItem constructor requires at least one argument".into(),
+            ));
+        }
+        if args.len() > 2 {
+            return Err(Error::ScriptRuntime(
+                "ClipboardItem constructor supports up to two arguments".into(),
+            ));
+        }
+
+        let Value::Object(entries) = &args[0] else {
+            return Err(Error::ScriptRuntime(
+                "ClipboardItem constructor requires a data object".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let mut instance_entries = vec![
+            (
+                INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                "presentationStyle".to_string(),
+                Value::String("unspecified".to_string()),
+            ),
+        ];
+        let mut types = Vec::new();
+
+        for (mime_type, payload) in entries.iter() {
+            if Self::is_internal_object_key(mime_type) {
+                continue;
+            }
+            let mime_type = mime_type.to_ascii_lowercase();
+            let blob = Self::clipboard_payload_to_blob(payload, &mime_type)?;
+            instance_entries.push((mime_type.clone(), Value::Blob(blob)));
+            types.push(Value::String(mime_type));
+        }
+
+        if types.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "ClipboardItem constructor requires at least one clipboard type".into(),
+            ));
+        }
+        instance_entries.push(("types".to_string(), Self::new_array_value(types)));
+        Ok(Self::new_object_value(instance_entries))
+    }
+
+    fn eval_clipboard_write_call(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(Error::ScriptRuntime(
+                "navigator.clipboard.write requires exactly one argument".into(),
+            ));
+        }
+
+        let promise = self.new_pending_promise();
+        if let Some(reason) = self.platform_mocks.clipboard_write_error.clone() {
+            self.promise_reject(&promise, Value::String(reason));
+            return Ok(Value::Promise(promise));
+        }
+
+        let mut write_artifact = ClipboardWriteArtifact {
+            payloads: Vec::new(),
+        };
+        let Value::Array(items) = &args[0] else {
+            self.promise_reject(
+                &promise,
+                Value::String(
+                    "navigator.clipboard.write requires an array of ClipboardItem".into(),
+                ),
+            );
+            return Ok(Value::Promise(promise));
+        };
+
+        for item in items.borrow().iter() {
+            let payloads = self.clipboard_payloads_from_item_value(item)?;
+            write_artifact.payloads.extend(payloads);
+        }
+
+        self.browser_apis.clipboard_writes.push(write_artifact);
+        self.promise_resolve(&promise, Value::Undefined)?;
+        Ok(Value::Promise(promise))
+    }
+
+    fn clipboard_payloads_from_item_value(
+        &self,
+        item: &Value,
+    ) -> Result<Vec<ClipboardPayloadArtifact>> {
+        let Value::Object(entries) = item else {
+            return Err(Error::ScriptRuntime(
+                "Clipboard.write items must be objects".into(),
+            ));
+        };
+        let entries = entries.borrow();
+
+        let types = if Self::is_clipboard_item_object(&entries) {
+            match Self::object_get_entry(&entries, "types") {
+                Some(Value::Array(types)) => types
+                    .borrow()
+                    .iter()
+                    .map(Value::as_string)
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            }
+        } else {
+            entries
+                .iter()
+                .filter_map(|(key, _)| (!Self::is_internal_object_key(key)).then_some(key.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let mut payloads = Vec::new();
+        for mime_type in types {
+            let Some(payload) = Self::object_get_entry(&entries, &mime_type) else {
+                continue;
+            };
+            let blob = Self::clipboard_payload_to_blob(&payload, &mime_type)?;
+            let blob = blob.borrow();
+            payloads.push(ClipboardPayloadArtifact {
+                mime_type: mime_type.clone(),
+                bytes: blob.bytes.clone(),
+            });
+        }
+
+        if payloads.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "ClipboardItem must provide at least one payload".into(),
+            ));
+        }
+        Ok(payloads)
+    }
+
+    fn clipboard_payload_to_blob(
+        payload: &Value,
+        mime_type_hint: &str,
+    ) -> Result<Rc<RefCell<BlobValue>>> {
+        match payload {
+            Value::Blob(blob) => Ok(blob.clone()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if !Self::is_mock_file_object(&entries) {
+                    return Err(Error::ScriptRuntime(
+                        "ClipboardItem payload must be a Blob or mock file".into(),
+                    ));
+                }
+                let blob = match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
+                    Some(Value::Blob(blob)) => blob,
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "ClipboardItem payload has invalid mock file blob".into(),
+                        ));
+                    }
+                };
+                Ok(blob)
+            }
+            Value::String(text) => Ok(Rc::new(RefCell::new(BlobValue {
+                bytes: text.as_bytes().to_vec(),
+                mime_type: mime_type_hint.to_string(),
+            }))),
+            _ => Err(Error::ScriptRuntime(
+                "ClipboardItem payload must be a Blob or string".into(),
+            )),
         }
     }
 
@@ -1226,9 +1899,8 @@ impl Harness {
                             .generator_yield_stack
                             .push(yields.clone());
                     }
-                    let mut non_tdz_shadowed = Self::collect_var_declared_names(
-                        &function.handler.stmts,
-                    );
+                    let mut non_tdz_shadowed =
+                        Self::collect_var_declared_names(&function.handler.stmts);
                     non_tdz_shadowed.extend(
                         function
                             .handler
@@ -1236,10 +1908,8 @@ impl Harness {
                             .iter()
                             .map(|param| param.name.clone()),
                     );
-                    non_tdz_shadowed.extend(
-                        Self::collect_function_decls(&function.handler.stmts)
-                            .into_keys(),
-                    );
+                    non_tdz_shadowed
+                        .extend(Self::collect_function_decls(&function.handler.stmts).into_keys());
                     if let Some(expression_name) = function.expression_name.as_ref() {
                         non_tdz_shadowed.insert(expression_name.clone());
                     }

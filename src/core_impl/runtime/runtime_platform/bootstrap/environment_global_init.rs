@@ -132,6 +132,7 @@ impl Harness {
         *self.browser_apis.local_storage_object.borrow_mut() = local_storage_entries.into();
         let read_text = Self::new_builtin_placeholder_function();
         let write_text = Self::new_builtin_placeholder_function();
+        let write = Self::new_clipboard_write_callable_value();
         let clipboard = Self::new_object_value(vec![
             (INTERNAL_CLIPBOARD_OBJECT_KEY.into(), Value::Bool(true)),
             (
@@ -144,6 +145,7 @@ impl Harness {
             ),
             ("readText".into(), read_text),
             ("writeText".into(), write_text),
+            ("write".into(), write),
         ]);
         let location = Value::Object(self.dom_runtime.location_object.clone());
         let history = Value::Object(self.location_history.history_object.clone());
@@ -220,7 +222,13 @@ impl Harness {
         let caches = self.cache_storage_global_value();
         let fetch_callable = Self::new_fetch_callable_value();
         let close_callable = Self::new_window_close_callable_value();
+        let worker_constructor = Self::new_worker_constructor_value();
+        let text_encoder_constructor = Self::new_text_encoder_constructor_value();
+        let decode_uri_callable = Self::new_global_decode_uri_callable(false);
+        let decode_uri_component_callable = Self::new_global_decode_uri_callable(true);
+        let create_image_bitmap_callable = Self::new_create_image_bitmap_callable();
         let request_constructor = Self::new_request_constructor_value();
+        let clipboard_item_constructor = Self::new_clipboard_item_constructor_value();
         let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
         let element_constructor = Self::new_builtin_placeholder_function();
@@ -300,6 +308,39 @@ impl Harness {
             &local_storage,
             &close_callable,
         );
+        {
+            let mut window_entries = self.dom_runtime.window_object.borrow_mut();
+            Self::object_set_entry(
+                &mut window_entries,
+                "decodeURI".to_string(),
+                decode_uri_callable.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "decodeURIComponent".to_string(),
+                decode_uri_component_callable.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "createImageBitmap".to_string(),
+                create_image_bitmap_callable.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "ClipboardItem".to_string(),
+                clipboard_item_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Worker".to_string(),
+                worker_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextEncoder".to_string(),
+                text_encoder_constructor.clone(),
+            );
+        }
 
         let window = Value::Object(self.dom_runtime.window_object.clone());
         let document = Value::Object(self.dom_runtime.document_object.clone());
@@ -344,7 +385,27 @@ impl Harness {
             .insert("fetch".to_string(), fetch_callable);
         self.script_runtime
             .env
+            .insert("Worker".to_string(), worker_constructor);
+        self.script_runtime
+            .env
+            .insert("TextEncoder".to_string(), text_encoder_constructor);
+        self.script_runtime
+            .env
+            .insert("decodeURI".to_string(), decode_uri_callable);
+        self.script_runtime.env.insert(
+            "decodeURIComponent".to_string(),
+            decode_uri_component_callable,
+        );
+        self.script_runtime.env.insert(
+            "createImageBitmap".to_string(),
+            create_image_bitmap_callable,
+        );
+        self.script_runtime
+            .env
             .insert("Request".to_string(), request_constructor);
+        self.script_runtime
+            .env
+            .insert("ClipboardItem".to_string(), clipboard_item_constructor);
         self.script_runtime
             .env
             .insert("Headers".to_string(), headers_constructor);
@@ -382,6 +443,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("window".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert("globalThis".to_string(), window.clone());
         self.script_runtime
             .env
             .insert("this".to_string(), window.clone());

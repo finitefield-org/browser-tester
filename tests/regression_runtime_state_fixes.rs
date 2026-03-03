@@ -117,3 +117,101 @@ fn nested_map_callback_with_const_binding_does_not_trigger_false_tdz() -> Result
     harness.assert_text("#out", "| a | bb |\n| :--- | ---: |\n| 1 | 22 |")?;
     Ok(())
 }
+
+#[test]
+fn array_reverse_on_object_keys_works_for_desc_sort_pattern() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const value = { c: 1, a: 2, b: 3 };
+            const order = 'desc';
+            var keys = Object.keys(value).sort();
+            if (order === 'desc') keys.reverse();
+            document.getElementById('result').textContent = keys.join(',');
+          });
+        </script>
+        "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#result", "c,b,a")?;
+    Ok(())
+}
+
+#[test]
+fn object_shorthand_inside_map_callback_does_not_trigger_false_tdz() -> Result<()> {
+    let html = r#"
+      <textarea id='t'></textarea>
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        function detectDelimiter(text) {
+          const candidates = [",", "\t"];
+          const ranked = candidates.map((delimiter) => {
+            const measure = { score: 1 };
+            return { delimiter, ...measure };
+          }).sort((a, b) => b.score - a.score);
+          return ranked.length ? ranked[0].delimiter : ",";
+        }
+
+        document.getElementById('run').addEventListener('click', () => {
+          try {
+            const delimiter = detectDelimiter('a,b');
+            document.getElementById('out').textContent = delimiter;
+          } catch (e) {
+            document.getElementById('out').textContent = 'ERR:' + String(e && e.message ? e.message : e);
+          }
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", ",")?;
+    Ok(())
+}
+
+#[test]
+fn worker_from_blob_url_can_roundtrip_message_to_main_thread() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `self.onmessage = (e) => self.postMessage(String(e.data) + ' ok');`;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          worker.onmessage = (ev) => {
+            out.textContent = ev.data;
+            worker.terminate();
+          };
+          worker.postMessage('worker');
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "worker ok")?;
+    Ok(())
+}
+
+#[test]
+fn text_encoder_global_is_available_and_returns_uint8array_bytes() -> Result<()> {
+    let html = r#"
+      <div id='root'></div>
+      <script>
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode('ok');
+        document.getElementById('root').textContent =
+          String(bytes.length) + ':' + String(bytes[0]) + '-' + String(bytes[1]) + ':' + encoder.encoding;
+      </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#root", "2:111-107:utf-8")?;
+    Ok(())
+}

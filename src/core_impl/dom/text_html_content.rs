@@ -71,6 +71,19 @@ impl Dom {
     }
 
     pub(crate) fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+        self.set_inner_html_with_sanitize(node_id, html, true)
+    }
+
+    pub(crate) fn set_inner_html_unsafe(&mut self, node_id: NodeId, html: &str) -> Result<()> {
+        self.set_inner_html_with_sanitize(node_id, html, false)
+    }
+
+    fn set_inner_html_with_sanitize(
+        &mut self,
+        node_id: NodeId,
+        html: &str,
+        sanitize: bool,
+    ) -> Result<()> {
         if self.element(node_id).is_none() {
             return Err(Error::ScriptRuntime(
                 "innerHTML target is not an element".into(),
@@ -86,7 +99,7 @@ impl Dom {
 
         let children = fragment.nodes[fragment.root.0].children.clone();
         for child in children {
-            let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id), true)?;
+            let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id), sanitize)?;
         }
 
         self.rebuild_id_index();
@@ -101,8 +114,20 @@ impl Dom {
         }
 
         let Some(parent) = self.parent(node_id) else {
-            return Err(Error::ScriptRuntime("outerHTML target is detached".into()));
+            // Per DOM behavior, setting outerHTML on a detached element is a no-op.
+            return Ok(());
         };
+
+        if matches!(self.nodes[parent.0].node_type, NodeType::Document)
+            && self
+                .tag_name(node_id)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("html"))
+        {
+            return Err(Error::ScriptRuntime(
+                "NoModificationAllowedError: outerHTML cannot modify a direct Document child"
+                    .into(),
+            ));
+        }
 
         let index = self.nodes[parent.0]
             .children

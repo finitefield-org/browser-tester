@@ -545,6 +545,16 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        if let Some(value) =
+                            self.eval_mock_file_member_call(object, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                        if let Some(value) =
+                            self.eval_clipboard_data_member_call(object, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
                         let is_fetch_response_object = {
                             let entries = object.borrow();
                             Self::is_fetch_response_object(&entries)
@@ -563,9 +573,11 @@ impl Harness {
                             Self::is_fetch_request_object(&entries)
                         };
                         if is_fetch_request_object {
-                            if let Some(value) =
-                                self.eval_fetch_request_member_call(object, member, &evaluated_args)?
-                            {
+                            if let Some(value) = self.eval_fetch_request_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
                                 return Ok(value);
                             }
                         }
@@ -885,8 +897,10 @@ impl Harness {
                             .map(Value::Node)
                             .unwrap_or(Value::Null))
                     } else {
-                        let node = self.resolve_dom_query_required_runtime(target, env)?;
-                        Ok(Value::Node(node))
+                        Ok(self
+                            .resolve_dom_query_runtime(target, env)?
+                            .map(Value::Node)
+                            .unwrap_or(Value::Null))
                     }
                 }
                 Expr::CreateElement(tag_name) => {

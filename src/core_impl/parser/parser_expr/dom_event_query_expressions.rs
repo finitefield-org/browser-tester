@@ -80,17 +80,26 @@ pub(crate) fn parse_class_list_contains_expr(src: &str) -> Result<Option<(DomQue
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_ascii("contains") {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    if !cursor.consume_byte(b'(') {
+        return Ok(None);
+    }
     cursor.skip_ws();
-    let class_name = cursor.parse_string_literal()?;
+    let class_name = match cursor.parse_string_literal() {
+        Ok(class_name) => class_name,
+        Err(_) => return Ok(None),
+    };
     cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    if !cursor.consume_byte(b')') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);

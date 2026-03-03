@@ -126,3 +126,83 @@ fn select_attributes_and_role_override_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn clicking_option_updates_parent_select_value_and_fires_input_change() -> Result<()> {
+    let html = r#"
+        <select id='formwork-opening-faces-override'>
+          <option value='auto' selected>auto</option>
+          <option value='1'>one</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const select = document.getElementById('formwork-opening-faces-override');
+          const logs = [];
+          select.addEventListener('input', () => logs.push('input:' + select.value));
+          select.addEventListener('change', () => logs.push('change:' + select.value));
+          select.addEventListener('change', () => {
+            document.getElementById('result').textContent = logs.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#formwork-opening-faces-override option[value='1']")?;
+    h.assert_value("#formwork-opening-faces-override", "1")?;
+    h.assert_text("#result", "input:1|change:1")?;
+    Ok(())
+}
+
+#[test]
+fn harness_set_select_value_updates_select_and_dispatches_events() -> Result<()> {
+    let html = r#"
+        <select id='json-key-sort-indent'>
+          <option value='0' selected>auto</option>
+          <option value='2'>2</option>
+          <option value='4'>4</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const select = document.getElementById('json-key-sort-indent');
+          const logs = [];
+          select.addEventListener('input', () => logs.push('input:' + select.value));
+          select.addEventListener('change', () => logs.push('change:' + select.value));
+          select.addEventListener('change', () => {
+            document.getElementById('result').textContent = logs.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_select_value("#json-key-sort-indent", "4")?;
+    h.assert_value("#json-key-sort-indent", "4")?;
+    h.assert_text("#result", "input:4|change:4")?;
+    Ok(())
+}
+
+#[test]
+fn type_text_accepts_select_and_updates_value() -> Result<()> {
+    let html = r#"
+        <select id='json-key-sort-indent'>
+          <option value='0' selected>auto</option>
+          <option value='2'>2</option>
+          <option value='4'>4</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const select = document.getElementById('json-key-sort-indent');
+          const logs = [];
+          select.addEventListener('input', () => logs.push('input:' + select.value));
+          select.addEventListener('change', () => logs.push('change:' + select.value));
+          select.addEventListener('change', () => {
+            document.getElementById('result').textContent = logs.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#json-key-sort-indent", "2")?;
+    h.assert_value("#json-key-sort-indent", "2")?;
+    h.assert_text("#result", "input:2|change:2")?;
+    Ok(())
+}

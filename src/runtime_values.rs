@@ -269,10 +269,29 @@ impl PartialEq for SymbolValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LiveNodeListSource {
-    ChildNodes { parent: NodeId },
-    DescendantsByClassNames { root: NodeId, class_names: Vec<String> },
-    DescendantsByName { root: NodeId, name: String },
-    DescendantsByTagName { root: NodeId, tag_name: String },
+    ChildNodes {
+        parent: NodeId,
+    },
+    ChildElements {
+        parent: NodeId,
+    },
+    DescendantsByClassNames {
+        root: NodeId,
+        class_names: Vec<String>,
+    },
+    DescendantsByName {
+        root: NodeId,
+        name: String,
+    },
+    DescendantsByTagName {
+        root: NodeId,
+        tag_name: String,
+    },
+    DescendantsByTagNameNs {
+        root: NodeId,
+        namespace_uri: Option<String>,
+        local_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +312,13 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::ChildNodes { parent }),
+        }
+    }
+
+    pub(crate) fn live_child_elements(parent: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::ChildElements { parent }),
         }
     }
 
@@ -322,6 +348,22 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::DescendantsByTagName { root, tag_name }),
+        }
+    }
+
+    pub(crate) fn live_descendants_by_tag_name_ns(
+        root: NodeId,
+        namespace_uri: Option<String>,
+        local_name: String,
+        nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            live_source: Some(LiveNodeListSource::DescendantsByTagNameNs {
+                root,
+                namespace_uri,
+                local_name,
+            }),
         }
     }
 }
@@ -658,22 +700,22 @@ impl Value {
                     }
                     serialize_url_search_params_pairs(&pairs)
                 } else {
-                let is_readable_stream = matches!(
-                    entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                );
-                let is_animation = matches!(
-                    entries.get_entry(INTERNAL_ANIMATION_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                );
-                if is_readable_stream {
-                    "[object ReadableStream]".into()
-                } else if is_animation {
-                    "[object Animation]".into()
-                } else {
-                    "[object Object]".into()
+                    let is_readable_stream = matches!(
+                        entries.get_entry(INTERNAL_READABLE_STREAM_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    let is_animation = matches!(
+                        entries.get_entry(INTERNAL_ANIMATION_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    if is_readable_stream {
+                        "[object ReadableStream]".into()
+                    } else if is_animation {
+                        "[object Animation]".into()
+                    } else {
+                        "[object Object]".into()
+                    }
                 }
-            }
             }
             Self::Promise(_) => "[object Promise]".into(),
             Self::Map(_) => "[object Map]".into(),

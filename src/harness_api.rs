@@ -132,6 +132,10 @@ impl MockWindow {
         self.with_current_harness_mut(|page| page.type_text(selector, text))
     }
 
+    pub fn set_select_value(&mut self, selector: &str, value: &str) -> Result<()> {
+        self.with_current_harness_mut(|page| page.set_select_value(selector, value))
+    }
+
     pub fn set_input_files(&mut self, selector: &str, files: &[MockFile]) -> Result<()> {
         self.with_current_harness_mut(|page| page.set_input_files(selector, files))
     }
@@ -187,6 +191,10 @@ impl MockWindow {
 
     pub fn take_downloads(&mut self) -> Result<Vec<DownloadArtifact>> {
         self.with_current_harness_mut(|page| Ok(page.take_downloads()))
+    }
+
+    pub fn take_clipboard_writes(&mut self) -> Result<Vec<ClipboardWriteArtifact>> {
+        self.with_current_harness_mut(|page| Ok(page.take_clipboard_writes()))
     }
 }
 

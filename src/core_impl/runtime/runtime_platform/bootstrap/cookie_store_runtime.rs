@@ -31,11 +31,20 @@ impl Harness {
         }
 
         let mut entries = vec![
-            (INTERNAL_COOKIE_STORE_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (
+                INTERNAL_COOKIE_STORE_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             ("set".to_string(), Self::new_builtin_placeholder_function()),
             ("get".to_string(), Self::new_builtin_placeholder_function()),
-            ("getAll".to_string(), Self::new_builtin_placeholder_function()),
-            ("delete".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "getAll".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "delete".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
             (
                 "addEventListener".to_string(),
                 Self::new_builtin_placeholder_function(),
@@ -190,7 +199,9 @@ impl Harness {
             .is_some_and(|expires| expires <= self.scheduler.now_ms)
         {
             let before = self.browser_apis.cookies.len();
-            self.browser_apis.cookies.retain(|candidate| !key_matches(candidate));
+            self.browser_apis
+                .cookies
+                .retain(|candidate| !key_matches(candidate));
             return before != self.browser_apis.cookies.len();
         }
 
@@ -361,10 +372,7 @@ impl Harness {
             ("path".to_string(), Value::String(record.path.clone())),
             (
                 "expires".to_string(),
-                record
-                    .expires_ms
-                    .map(Value::Number)
-                    .unwrap_or(Value::Null),
+                record.expires_ms.map(Value::Number).unwrap_or(Value::Null),
             ),
             ("secure".to_string(), Value::Bool(record.secure)),
             (
@@ -394,7 +402,9 @@ impl Harness {
             .iter()
             .any(|existing| self.strict_equal(existing, &callback));
         if !already {
-            self.browser_apis.cookie_store_change_listeners.push(callback);
+            self.browser_apis
+                .cookie_store_change_listeners
+                .push(callback);
         }
         Ok(())
     }
@@ -441,7 +451,8 @@ impl Harness {
             if !self.is_callable_value(&listener) {
                 continue;
             }
-            let _ = self.execute_callable_value(&listener, std::slice::from_ref(&event_value), &event)?;
+            let _ =
+                self.execute_callable_value(&listener, std::slice::from_ref(&event_value), &event)?;
         }
         Ok(())
     }

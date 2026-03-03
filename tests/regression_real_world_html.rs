@@ -150,6 +150,14 @@ fn nested_object_path_access_on_runtime_objects_is_supported() -> browser_tester
 }
 
 #[test]
+fn csv_deduplicator_inline_script_does_not_fail_with_unclosed_block() -> browser_tester::Result<()>
+{
+    let html = include_str!("fixtures/csv-deduplicator-inline-script.html");
+    let _ = Harness::from_html(html)?;
+    Ok(())
+}
+
+#[test]
 fn function_declaration_can_be_called_before_its_definition() -> browser_tester::Result<()> {
     let html = r#"
     <div id="result"></div>
@@ -501,8 +509,8 @@ fn document_member_calls_with_dynamic_arguments_are_supported() -> browser_teste
 }
 
 #[test]
-fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler()
--> browser_tester::Result<()> {
+fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler(
+) -> browser_tester::Result<()> {
     let html = r#"
     <div id="root">
       <button id="cta-sample">CTA</button>

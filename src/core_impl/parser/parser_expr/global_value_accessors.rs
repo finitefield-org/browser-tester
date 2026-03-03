@@ -583,6 +583,9 @@ pub(crate) fn parse_global_single_arg_expr(
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');

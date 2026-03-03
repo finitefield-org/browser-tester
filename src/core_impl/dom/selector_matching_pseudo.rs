@@ -1,7 +1,12 @@
 use super::*;
 
 impl Dom {
-    pub(crate) fn matches_step(&self, node_id: NodeId, step: &SelectorStep) -> bool {
+    pub(crate) fn matches_step_in_scope(
+        &self,
+        node_id: NodeId,
+        step: &SelectorStep,
+        scope_root: Option<NodeId>,
+    ) -> bool {
         let Some(element) = self.element(node_id) else {
             return false;
         };
@@ -62,6 +67,7 @@ impl Dom {
 
         for pseudo in &step.pseudo_classes {
             let matched = match pseudo {
+                SelectorPseudoClass::Scope => scope_root == Some(node_id),
                 SelectorPseudoClass::FirstChild => self.is_first_element_child(node_id),
                 SelectorPseudoClass::LastChild => self.is_last_element_child(node_id),
                 SelectorPseudoClass::FirstOfType => self.is_first_of_type(node_id),
@@ -115,14 +121,14 @@ impl Dom {
                 }
                 SelectorPseudoClass::Is(inners) | SelectorPseudoClass::Where(inners) => inners
                     .iter()
-                    .any(|inner| self.matches_selector_chain(node_id, inner)),
+                    .any(|inner| self.matches_selector_chain_in_scope(node_id, inner, scope_root)),
                 SelectorPseudoClass::Has(inners) => {
                     let mut descendants = Vec::new();
                     self.collect_elements_descendants_dfs(node_id, &mut descendants);
                     inners.iter().any(|inner| {
-                        descendants
-                            .iter()
-                            .any(|target| self.matches_selector_chain(*target, inner))
+                        descendants.iter().any(|target| {
+                            self.matches_selector_chain_in_scope(*target, inner, scope_root)
+                        })
                     })
                 }
                 SelectorPseudoClass::NthLastChild(selector) => {
@@ -133,7 +139,7 @@ impl Dom {
                 }
                 SelectorPseudoClass::Not(inners) => !inners
                     .iter()
-                    .any(|inner| self.matches_selector_chain(node_id, inner)),
+                    .any(|inner| self.matches_selector_chain_in_scope(node_id, inner, scope_root)),
             };
             if !matched {
                 return false;

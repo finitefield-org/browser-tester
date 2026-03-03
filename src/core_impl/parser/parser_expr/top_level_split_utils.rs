@@ -43,6 +43,12 @@ pub(crate) fn split_top_level_by_ops<'a>(
                 let op_bytes = op.as_bytes();
                 if i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
                     if op_bytes.iter().all(|b| b.is_ascii_alphabetic()) {
+                        // In member access like `obj.in`, `in` is an identifier name,
+                        // not the relational operator. Preserve that by ignoring
+                        // alphabetic operators immediately following a dot chain.
+                        if scanner.previous_significant == Some(b'.') {
+                            continue;
+                        }
                         if i > 0 && is_ident_char(bytes[i - 1]) {
                             continue;
                         }

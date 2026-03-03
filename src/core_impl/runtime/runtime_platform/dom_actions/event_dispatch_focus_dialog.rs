@@ -23,6 +23,10 @@ impl Harness {
         } else {
             EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
+        let mut event = event;
+        if event_type.eq_ignore_ascii_case("paste") {
+            event.clipboard_data = Some(self.platform_mocks.clipboard_text.clone());
+        }
         self.dispatch_prepared_event_with_env(event, env)
     }
 
@@ -43,6 +47,9 @@ impl Harness {
         } else {
             EventState::new_untrusted(event_type, target, self.scheduler.now_ms)
         };
+        if event_type.eq_ignore_ascii_case("paste") {
+            event.clipboard_data = Some(self.platform_mocks.clipboard_text.clone());
+        }
         event.bubbles = bubbles;
         event.cancelable = cancelable;
         event.state = state;

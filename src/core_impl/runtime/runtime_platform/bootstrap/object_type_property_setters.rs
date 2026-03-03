@@ -117,9 +117,8 @@ impl Harness {
         match key {
             "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
             | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL"
-            | "Element" | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Document"
-            | "Node"
+            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL" | "Element"
+            | "HTMLElement" | "HTMLInputElement" | "DOMParser" | "Document" | "Node"
             | "NodeFilter" => Err(Error::ScriptRuntime(format!("window.{key} is read-only"))),
             "location" => self.set_location_property("href", value),
             "localStorage" => {
@@ -320,8 +319,22 @@ impl Harness {
                     *text = value.as_string();
                 }
             }
-            "innerHTML" => self.dom.set_inner_html(node, &value.as_string())?,
-            "outerHTML" => self.dom.set_outer_html(node, &value.as_string())?,
+            "innerHTML" => {
+                let html = if matches!(value, Value::Null) {
+                    String::new()
+                } else {
+                    value.as_string()
+                };
+                self.dom.set_inner_html(node, &html)?
+            }
+            "outerHTML" => {
+                let html = if matches!(value, Value::Null) {
+                    String::new()
+                } else {
+                    value.as_string()
+                };
+                self.dom.set_outer_html(node, &html)?
+            }
             "value" => self.dom.set_value(node, &value.as_string())?,
             "files" => {}
             "checked" => self.dom.set_checked(node, value.truthy())?,
@@ -369,8 +382,10 @@ impl Harness {
                 }
             }
             "className" | "classList" => self.dom.set_attr(node, "class", &value.as_string())?,
+            "part" => self.dom.set_attr(node, "part", &value.as_string())?,
             "id" => self.dom.set_attr(node, "id", &value.as_string())?,
             "slot" => self.dom.set_attr(node, "slot", &value.as_string())?,
+            "shadowRoot" => return Err(Error::ScriptRuntime("shadowRoot is read-only".into())),
             "role" => self.dom.set_attr(node, "role", &value.as_string())?,
             "elementTiming" => self
                 .dom

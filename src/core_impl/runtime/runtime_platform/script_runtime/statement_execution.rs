@@ -157,7 +157,7 @@ impl Harness {
         out
     }
 
-    pub(super) fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
+    pub(crate) fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
         let mut out = HashSet::new();
         for stmt in stmts {
             Self::collect_var_declared_names_from_stmt(stmt, &mut out);
@@ -598,7 +598,10 @@ impl Harness {
                 | Value::SetConstructor
                 | Value::WeakSetConstructor
                 | Value::RegExpConstructor
-        ) || matches!(Self::callable_kind_from_value(value), Some("event_target_constructor"))
+        ) || matches!(
+            Self::callable_kind_from_value(value),
+            Some("event_target_constructor")
+        )
     }
 
     fn resolve_event_target_object_for_query(
@@ -622,10 +625,7 @@ impl Harness {
         Ok(None)
     }
 
-    fn event_target_listener_node_id(
-        &mut self,
-        object: &Rc<RefCell<ObjectValue>>,
-    ) -> NodeId {
+    fn event_target_listener_node_id(&mut self, object: &Rc<RefCell<ObjectValue>>) -> NodeId {
         let object_id = Rc::as_ptr(object) as usize;
         if let Some(node_id) = self
             .script_runtime
@@ -656,8 +656,8 @@ impl Harness {
                     .unwrap_or(Value::Undefined)
                     .as_string();
                 let detail = Self::object_get_entry(&entries, "detail");
-                let bubbles = Self::object_get_entry(&entries, "bubbles")
-                    .is_some_and(|value| value.truthy());
+                let bubbles =
+                    Self::object_get_entry(&entries, "bubbles").is_some_and(|value| value.truthy());
                 let cancelable = Self::object_get_entry(&entries, "cancelable")
                     .is_some_and(|value| value.truthy());
                 return Ok((event_type, detail, bubbles, cancelable));
@@ -2043,8 +2043,8 @@ impl Harness {
                                             }
                                             RuntimeStaticInitializer::Block(handler) => {
                                                 let mut block_env = static_env.clone();
-                                                let scope_depth =
-                                                    Self::env_scope_depth(&block_env).saturating_add(1);
+                                                let scope_depth = Self::env_scope_depth(&block_env)
+                                                    .saturating_add(1);
                                                 block_env.insert(
                                                     INTERNAL_SCOPE_DEPTH_KEY.to_string(),
                                                     Value::Number(scope_depth),
@@ -2524,6 +2524,23 @@ impl Harness {
                         } => {
                             let name = self.eval_expr(name, env, event_param, event)?;
                             let value = self.eval_expr(value, env, event_param, event)?;
+                            let target_node = match env.get(target_var) {
+                                Some(Value::Node(node)) => Some(*node),
+                                Some(_) => None,
+                                None => {
+                                    return Err(Error::ScriptRuntime(format!(
+                                        "unknown FormData variable: {}",
+                                        target_var
+                                    )));
+                                }
+                            };
+
+                            if let Some(target_node) = target_node {
+                                let append_args = [name, value];
+                                self.eval_document_append_call(target_node, &append_args)?;
+                                continue;
+                            }
+
                             let name = name.as_string();
                             let value = value.as_string();
                             let target = env.get_mut(target_var).ok_or_else(|| {
@@ -2624,10 +2641,20 @@ impl Harness {
                                     self.dom.set_text_content(node, &value.as_string())?
                                 }
                                 DomProp::InnerHtml => {
-                                    self.dom.set_inner_html(node, &value.as_string())?
+                                    let html = if matches!(value, Value::Null) {
+                                        String::new()
+                                    } else {
+                                        value.as_string()
+                                    };
+                                    self.dom.set_inner_html(node, &html)?
                                 }
                                 DomProp::OuterHtml => {
-                                    self.dom.set_outer_html(node, &value.as_string())?
+                                    let html = if matches!(value, Value::Null) {
+                                        String::new()
+                                    } else {
+                                        value.as_string()
+                                    };
+                                    self.dom.set_outer_html(node, &html)?
                                 }
                                 DomProp::Value => {
                                     if self
@@ -2754,6 +2781,9 @@ impl Harness {
                                 }
                                 DomProp::ClassList => {
                                     self.dom.set_attr(node, "class", &value.as_string())?
+                                }
+                                DomProp::Part => {
+                                    self.dom.set_attr(node, "part", &value.as_string())?
                                 }
                                 DomProp::Id => self.dom.set_attr(node, "id", &value.as_string())?,
                                 DomProp::Slot => {
@@ -3071,7 +3101,6 @@ impl Harness {
                                 | DomProp::ValidityCustomError
                                 | DomProp::NodeType
                                 | DomProp::ClassListLength
-                                | DomProp::Part
                                 | DomProp::PartLength
                                 | DomProp::TagName
                                 | DomProp::LocalName
@@ -3146,11 +3175,25 @@ impl Harness {
                         }
                         Stmt::ClassListCall {
                             target,
+                            optional,
                             method,
                             class_names,
                             force,
                         } => {
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
+                            let node = if *optional {
+                                if let DomQuery::Var(name) = target {
+                                    if matches!(env.get(name), Some(Value::Null | Value::Undefined))
+                                    {
+                                        continue;
+                                    }
+                                }
+                                match self.resolve_dom_query_runtime(target, env)? {
+                                    Some(node) => node,
+                                    None => continue,
+                                }
+                            } else {
+                                self.resolve_dom_query_required_runtime(target, env)?
+                            };
                             match method {
                                 ClassListMethod::Add => {
                                     for class_name in class_names {
@@ -3190,10 +3233,14 @@ impl Harness {
                                 }
                                 ClassListMethod::Replace => {
                                     let old_class_name = class_names.first().ok_or_else(|| {
-                                        Error::ScriptRuntime("replace requires old and new class names".into())
+                                        Error::ScriptRuntime(
+                                            "replace requires old and new class names".into(),
+                                        )
                                     })?;
                                     let new_class_name = class_names.get(1).ok_or_else(|| {
-                                        Error::ScriptRuntime("replace requires old and new class names".into())
+                                        Error::ScriptRuntime(
+                                            "replace requires old and new class names".into(),
+                                        )
                                     })?;
                                     let old_class_name = self
                                         .eval_expr(old_class_name, env, event_param, event)?
@@ -3201,19 +3248,35 @@ impl Harness {
                                     let new_class_name = self
                                         .eval_expr(new_class_name, env, event_param, event)?
                                         .as_string();
-                                    let _ = self
-                                        .dom
-                                        .class_replace(node, &old_class_name, &new_class_name)?;
+                                    let _ = self.dom.class_replace(
+                                        node,
+                                        &old_class_name,
+                                        &new_class_name,
+                                    )?;
                                 }
                             }
                         }
                         Stmt::ClassListForEach {
                             target,
+                            optional,
                             item_var,
                             index_var,
                             body,
                         } => {
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
+                            let node = if *optional {
+                                if let DomQuery::Var(name) = target {
+                                    if matches!(env.get(name), Some(Value::Null | Value::Undefined))
+                                    {
+                                        continue;
+                                    }
+                                }
+                                match self.resolve_dom_query_runtime(target, env)? {
+                                    Some(node) => node,
+                                    None => continue,
+                                }
+                            } else {
+                                self.resolve_dom_query_required_runtime(target, env)?
+                            };
                             let classes = class_tokens(self.dom.attr(node, "class").as_deref());
                             let prev_item = env.get(item_var).cloned();
                             let prev_item_const = self.is_const_binding(env, item_var);
@@ -3374,12 +3437,39 @@ impl Harness {
                             let node = self.eval_expr(node, env, event_param, event)?;
                             let Value::Node(node) = node else {
                                 return Err(Error::ScriptRuntime(
-                            "insertAdjacentElement second argument must be an element reference"
-                                .into(),
-                        ));
+                                    "TypeError: Failed to execute 'insertAdjacentElement': parameter 2 is not of type 'Element'"
+                                        .into(),
+                                ));
                             };
-                            self.dom
-                                .insert_adjacent_node(target_node, *position, node)?;
+                            let node_is_fragment = self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("#document-fragment"));
+                            if self.dom.element(node).is_none() || node_is_fragment {
+                                return Err(Error::ScriptRuntime(
+                                    "TypeError: Failed to execute 'insertAdjacentElement': parameter 2 is not of type 'Element'"
+                                        .into(),
+                                ));
+                            }
+
+                            if matches!(
+                                position,
+                                InsertAdjacentPosition::BeforeBegin
+                                    | InsertAdjacentPosition::AfterEnd
+                            ) {
+                                let Some(parent) = self.dom.parent(target_node) else {
+                                    continue;
+                                };
+                                let parent_is_fragment =
+                                    self.dom.tag_name(parent).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("#document-fragment")
+                                    });
+                                if self.dom.element(parent).is_none() || parent_is_fragment {
+                                    continue;
+                                }
+                            }
+
+                            let _ = self.dom.insert_adjacent_node(target_node, *position, node);
                         }
                         Stmt::InsertAdjacentText {
                             target,
@@ -3393,9 +3483,17 @@ impl Harness {
                                 position,
                                 InsertAdjacentPosition::BeforeBegin
                                     | InsertAdjacentPosition::AfterEnd
-                            ) && self.dom.parent(target_node).is_none()
-                            {
-                                continue;
+                            ) {
+                                let Some(parent) = self.dom.parent(target_node) else {
+                                    continue;
+                                };
+                                let parent_is_fragment =
+                                    self.dom.tag_name(parent).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("#document-fragment")
+                                    });
+                                if self.dom.element(parent).is_none() || parent_is_fragment {
+                                    continue;
+                                }
                             }
                             let text_node = self.dom.create_detached_text(text.as_string());
                             self.dom
@@ -3409,13 +3507,49 @@ impl Harness {
                             let target_node =
                                 self.resolve_dom_query_required_runtime(target, env)?;
                             let position = self.eval_expr(position, env, event_param, event)?;
-                            let position = resolve_insert_adjacent_position(&position.as_string())?;
+                            let position_text = position.as_string();
+                            let position = resolve_insert_adjacent_position(&position_text)
+                                .map_err(|_| {
+                                    Error::ScriptRuntime(format!(
+                                        "SyntaxError: unsupported insertAdjacentHTML position: {position_text}"
+                                    ))
+                                })?;
+                            if matches!(
+                                position,
+                                InsertAdjacentPosition::BeforeBegin
+                                    | InsertAdjacentPosition::AfterEnd
+                            ) {
+                                let Some(parent) = self.dom.parent(target_node) else {
+                                    return Err(Error::ScriptRuntime(
+                                        "NoModificationAllowedError: Failed to execute 'insertAdjacentHTML' because the target has no parent element"
+                                            .into(),
+                                    ));
+                                };
+                                let parent_is_fragment =
+                                    self.dom.tag_name(parent).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("#document-fragment")
+                                    });
+                                if self.dom.element(parent).is_none() || parent_is_fragment {
+                                    return Err(Error::ScriptRuntime(
+                                        "NoModificationAllowedError: Failed to execute 'insertAdjacentHTML' on a node whose parent is not an Element"
+                                            .into(),
+                                    ));
+                                }
+                            }
                             let html = self.eval_expr(html, env, event_param, event)?;
-                            self.dom.insert_adjacent_html(
+                            match self.dom.insert_adjacent_html(
                                 target_node,
                                 position,
                                 &html.as_string(),
-                            )?;
+                            ) {
+                                Ok(()) => {}
+                                Err(Error::ScriptParse(message)) => {
+                                    return Err(Error::ScriptRuntime(format!(
+                                        "SyntaxError: {message}"
+                                    )));
+                                }
+                                Err(other) => return Err(other),
+                            }
                         }
                         Stmt::SetTimeout { handler, delay_ms } => {
                             let delay = self.eval_expr(delay_ms, env, event_param, event)?;
@@ -3738,14 +3872,12 @@ impl Harness {
 
                                 let iterable = self.eval_expr(iterable, env, event_param, event)?;
                                 let source = match iterable {
-                                    Value::NodeList(nodes) => {
-                                        ForOfSource::Values(
-                                            self.node_list_snapshot(&nodes)
-                                                .into_iter()
-                                                .map(Value::Node)
-                                                .collect::<Vec<_>>(),
-                                        )
-                                    }
+                                    Value::NodeList(nodes) => ForOfSource::Values(
+                                        self.node_list_snapshot(&nodes)
+                                            .into_iter()
+                                            .map(Value::Node)
+                                            .collect::<Vec<_>>(),
+                                    ),
                                     Value::Array(values) => {
                                         ForOfSource::Values(values.borrow().clone())
                                     }
@@ -4357,8 +4489,9 @@ impl Harness {
                             capture,
                             handler,
                         } => {
-                            let event_type =
-                                self.eval_expr(event_type, env, event_param, event)?.as_string();
+                            let event_type = self
+                                .eval_expr(event_type, env, event_param, event)?
+                                .as_string();
                             if let Some(target_object) =
                                 self.resolve_event_target_object_for_query(target, env)?
                             {
@@ -4382,9 +4515,12 @@ impl Harness {
                                         );
                                     }
                                     ListenerRegistrationOp::Remove => {
-                                        let _ = self
-                                            .listeners
-                                            .remove(node, &event_type, *capture, handler);
+                                        let _ = self.listeners.remove(
+                                            node,
+                                            &event_type,
+                                            *capture,
+                                            handler,
+                                        );
                                     }
                                 }
                                 continue;
