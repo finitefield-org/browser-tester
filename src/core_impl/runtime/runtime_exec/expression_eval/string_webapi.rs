@@ -137,8 +137,49 @@ impl Harness {
                     search,
                     position,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
                     let search = self.eval_expr(search, env, event_param, event)?;
+                    if let Value::Array(values) = &value {
+                        let values_ref = values.borrow();
+                        let len = values_ref.len() as i64;
+                        let mut position = position
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .unwrap_or(0);
+                        if position < 0 {
+                            position = (len + position).max(0);
+                        }
+                        let position = position.min(len) as usize;
+                        for item in values_ref.iter().skip(position) {
+                            if self.strict_equal(item, &search) {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        return Ok(Value::Bool(false));
+                    }
+                    if let Value::TypedArray(values) = &value {
+                        let values_vec = self.typed_array_snapshot(values)?;
+                        let len = values_vec.len() as i64;
+                        let mut position = position
+                            .as_ref()
+                            .map(|value| self.eval_expr(value, env, event_param, event))
+                            .transpose()?
+                            .map(|value| Self::value_to_i64(&value))
+                            .unwrap_or(0);
+                        if position < 0 {
+                            position = (len + position).max(0);
+                        }
+                        let position = position.min(len) as usize;
+                        for item in values_vec.iter().skip(position) {
+                            if self.strict_equal(item, &search) {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        return Ok(Value::Bool(false));
+                    }
+                    let value = value.as_string();
                     if matches!(search, Value::RegExp(_)) {
                         return Err(Error::ScriptRuntime(
                         "First argument to String.prototype.includes must not be a regular expression"
