@@ -63,7 +63,7 @@ fn debug_active_element_ternary_direct() {
     let mut h = Harness::from_html(html).unwrap();
     h.click("#btn").unwrap();
     println!("result dom direct: {}", h.dump_dom("#result").unwrap());
-    h.assert_text("#result", "none").unwrap();
+    h.assert_text("#result", "active").unwrap();
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn debug_ternary_variable() {
     let mut h = Harness::from_html(html).unwrap();
     h.click("#btn").unwrap();
     println!("ternary var: {}", h.dump_dom("#result").unwrap());
-    h.assert_text("#result", "start:none").unwrap();
+    h.assert_text("#result", "start:active").unwrap();
 }
 
 #[test]

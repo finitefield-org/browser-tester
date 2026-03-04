@@ -32,6 +32,7 @@ pub struct MockPage {
 pub struct KeyboardEventInit {
     pub key: String,
     pub code: Option<String>,
+    pub location: i64,
     pub ctrl_key: bool,
     pub meta_key: bool,
     pub shift_key: bool,

@@ -188,6 +188,60 @@ impl Harness {
             && from_parts.hash != to_parts.hash
     }
 
+    pub(crate) fn navigation_can_go_back(&self) -> bool {
+        self.location_history.history_index > 0 && !self.location_history.history_entries.is_empty()
+    }
+
+    pub(crate) fn navigation_can_go_forward(&self) -> bool {
+        self.location_history.history_index.saturating_add(1)
+            < self.location_history.history_entries.len()
+    }
+
+    pub(crate) fn navigation_entry_value(&self, index: usize, entry: &HistoryEntry) -> Value {
+        Self::new_object_value(vec![
+            ("key".to_string(), Value::String(entry.key.clone())),
+            ("url".to_string(), Value::String(entry.url.clone())),
+            ("index".to_string(), Value::Number(index as i64)),
+            ("sameDocument".to_string(), Value::Bool(true)),
+            ("state".to_string(), entry.state.clone()),
+        ])
+    }
+
+    pub(crate) fn navigation_current_entry_value(&self) -> Value {
+        self.location_history
+            .history_entries
+            .get(self.location_history.history_index)
+            .map(|entry| self.navigation_entry_value(self.location_history.history_index, entry))
+            .unwrap_or(Value::Null)
+    }
+
+    pub(crate) fn navigation_entries_value(&self) -> Value {
+        Self::new_array_value(
+            self.location_history
+                .history_entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| self.navigation_entry_value(index, entry))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn navigation_find_entry_index_by_key(&self, key: &str) -> Option<usize> {
+        self.location_history
+            .history_entries
+            .iter()
+            .position(|entry| entry.key == key)
+    }
+
+    pub(crate) fn next_history_entry_key(&mut self) -> String {
+        let key = format!("entry-{}", self.location_history.next_history_entry_key);
+        self.location_history.next_history_entry_key = self
+            .location_history
+            .next_history_entry_key
+            .saturating_add(1);
+        key
+    }
+
     pub(crate) fn navigate_location(
         &mut self,
         next_url: &str,
@@ -207,6 +261,7 @@ impl Harness {
         }
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_navigation_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
         self.location_history
@@ -243,6 +298,7 @@ impl Harness {
             });
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_navigation_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
         let _ = self.load_location_mock_page_if_exists(&current)?;
@@ -265,7 +321,9 @@ impl Harness {
             .saturating_add(1)
             .min(self.location_history.history_entries.len());
         self.location_history.history_entries.truncate(next);
+        let key = self.next_history_entry_key();
         self.location_history.history_entries.push(HistoryEntry {
+            key,
             url: url.to_string(),
             state,
         });
@@ -278,7 +336,9 @@ impl Harness {
 
     pub(crate) fn history_replace_current_entry(&mut self, url: &str, state: Value) {
         if self.location_history.history_entries.is_empty() {
+            let key = self.next_history_entry_key();
             self.location_history.history_entries.push(HistoryEntry {
+                key,
                 url: url.to_string(),
                 state,
             });
@@ -291,7 +351,9 @@ impl Harness {
                 .len()
                 .saturating_sub(1),
         );
+        let key = self.location_history.history_entries[index].key.clone();
         self.location_history.history_entries[index] = HistoryEntry {
+            key,
             url: url.to_string(),
             state,
         };
@@ -316,6 +378,7 @@ impl Harness {
         }
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_navigation_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
         Ok(())
@@ -339,18 +402,20 @@ impl Harness {
 
         let from = self.document_url.clone();
         self.location_history.history_index = target;
-        let entry = self
-            .location_history
-            .history_entries
-            .get(target)
-            .cloned()
-            .unwrap_or(HistoryEntry {
+        let entry = if let Some(entry) = self.location_history.history_entries.get(target).cloned()
+        {
+            entry
+        } else {
+            HistoryEntry {
+                key: self.next_history_entry_key(),
                 url: self.document_url.clone(),
                 state: Value::Null,
-            });
+            }
+        };
         self.document_url = entry.url.clone();
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_navigation_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
 

@@ -1559,6 +1559,14 @@ impl Harness {
                 }
                 Ok(Some(Self::new_range_object_value(self.dom.root)))
             }
+            "getSelection" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getSelection takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(self.ensure_document_selection_object()))
+            }
             "append" => Ok(Some(
                 self.eval_document_append_call(self.dom.root, evaluated_args)?,
             )),
@@ -1644,6 +1652,979 @@ impl Harness {
         }
     }
 
+    pub(crate) fn eval_window_member_call(
+        &mut self,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "getSelection" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getSelection takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(self.ensure_document_selection_object()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn ensure_document_selection_object(&mut self) -> Value {
+        let is_selection_object = {
+            let entries = self.dom_runtime.selection_object.borrow();
+            Self::is_selection_object(&entries)
+        };
+        if !is_selection_object {
+            self.dom_runtime.selection_object =
+                match Self::new_selection_object_value(self.dom.root) {
+                    Value::Object(selection) => selection,
+                    _ => Rc::new(RefCell::new(ObjectValue::default())),
+                };
+        }
+        Value::Object(self.dom_runtime.selection_object.clone())
+    }
+
+    fn selection_boundary_node_from_value(&self, value: &Value) -> Result<NodeId> {
+        match value {
+            Value::Node(node) if self.dom.is_valid_node(*node) => Ok(*node),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    Ok(self.dom.root)
+                } else {
+                    Err(Error::ScriptRuntime(
+                        "Selection boundary container must be a Node".into(),
+                    ))
+                }
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Selection boundary container must be a Node".into(),
+            )),
+        }
+    }
+
+    fn selection_clamped_offset(&self, node: NodeId, offset: i64) -> i64 {
+        let max = match &self.dom.nodes[node.0].node_type {
+            NodeType::Text(text) => text.chars().count() as i64,
+            NodeType::Document | NodeType::Element(_) => {
+                self.dom.nodes[node.0].children.len() as i64
+            }
+        };
+        offset.max(0).min(max)
+    }
+
+    fn selection_boundary_char_index_in_subtree(
+        &self,
+        current: NodeId,
+        target: NodeId,
+        target_offset: i64,
+        prefix: usize,
+    ) -> Option<usize> {
+        if current == target {
+            let clamped = self.selection_clamped_offset(target, target_offset) as usize;
+            let index = match &self.dom.nodes[target.0].node_type {
+                NodeType::Text(_) => prefix + clamped,
+                NodeType::Document | NodeType::Element(_) => {
+                    let children = &self.dom.nodes[target.0].children;
+                    let upto = clamped.min(children.len());
+                    let mut out = prefix;
+                    for child in children.iter().take(upto) {
+                        out += self.dom.text_content(*child).chars().count();
+                    }
+                    out
+                }
+            };
+            return Some(index);
+        }
+
+        if matches!(self.dom.nodes[current.0].node_type, NodeType::Text(_)) {
+            return None;
+        }
+
+        let mut running = prefix;
+        for child in &self.dom.nodes[current.0].children {
+            if let Some(found) = self.selection_boundary_char_index_in_subtree(
+                *child,
+                target,
+                target_offset,
+                running,
+            ) {
+                return Some(found);
+            }
+            running += self.dom.text_content(*child).chars().count();
+        }
+        None
+    }
+
+    fn selection_boundary_char_index(&self, node: NodeId, offset: i64) -> Option<usize> {
+        if !self.dom.is_valid_node(node) {
+            return None;
+        }
+        self.selection_boundary_char_index_in_subtree(self.dom.root, node, offset, 0)
+    }
+
+    fn selection_compare_points(
+        &self,
+        left_node: NodeId,
+        left_offset: i64,
+        right_node: NodeId,
+        right_offset: i64,
+    ) -> std::cmp::Ordering {
+        let left = self
+            .selection_boundary_char_index(left_node, left_offset)
+            .unwrap_or(0);
+        let right = self
+            .selection_boundary_char_index(right_node, right_offset)
+            .unwrap_or(0);
+        left.cmp(&right)
+    }
+
+    fn selection_internal_range_object(
+        &mut self,
+        selection: &Rc<RefCell<ObjectValue>>,
+    ) -> Rc<RefCell<ObjectValue>> {
+        let existing = {
+            let entries = selection.borrow();
+            match Self::object_get_entry(&entries, INTERNAL_SELECTION_RANGE_KEY) {
+                Some(Value::Object(range)) => Some(range),
+                _ => None,
+            }
+        };
+        if let Some(range) = existing {
+            return range;
+        }
+
+        let range = match Self::new_range_object_value(self.dom.root) {
+            Value::Object(range) => range,
+            _ => Rc::new(RefCell::new(ObjectValue::default())),
+        };
+        Self::object_set_entry(
+            &mut selection.borrow_mut(),
+            INTERNAL_SELECTION_RANGE_KEY.to_string(),
+            Value::Object(range.clone()),
+        );
+        range
+    }
+
+    fn selection_anchor_focus(
+        &self,
+        selection: &Rc<RefCell<ObjectValue>>,
+    ) -> Option<(NodeId, i64, NodeId, i64)> {
+        let entries = selection.borrow();
+        let anchor_node = match Self::object_get_entry(&entries, "anchorNode") {
+            Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+            _ => return None,
+        };
+        let focus_node = match Self::object_get_entry(&entries, "focusNode") {
+            Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+            _ => return None,
+        };
+        let anchor_offset = match Self::object_get_entry(&entries, "anchorOffset") {
+            Some(Value::Number(offset)) => offset,
+            _ => 0,
+        };
+        let focus_offset = match Self::object_get_entry(&entries, "focusOffset") {
+            Some(Value::Number(offset)) => offset,
+            _ => 0,
+        };
+        Some((anchor_node, anchor_offset, focus_node, focus_offset))
+    }
+
+    fn selection_normalized_boundaries(
+        &self,
+        selection: &Rc<RefCell<ObjectValue>>,
+    ) -> Option<(NodeId, i64, NodeId, i64)> {
+        let entries = selection.borrow();
+        let has_range = matches!(
+            Self::object_get_entry(&entries, "rangeCount"),
+            Some(Value::Number(count)) if count > 0
+        );
+        if !has_range {
+            return None;
+        }
+        let range_object = match Self::object_get_entry(&entries, INTERNAL_SELECTION_RANGE_KEY) {
+            Some(Value::Object(range)) => range,
+            _ => return None,
+        };
+        let range_entries = range_object.borrow();
+        let start_container =
+            match Self::object_get_entry(&range_entries, INTERNAL_RANGE_START_CONTAINER_KEY) {
+                Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+                _ => return None,
+            };
+        let start_offset =
+            match Self::object_get_entry(&range_entries, INTERNAL_RANGE_START_OFFSET_KEY) {
+                Some(Value::Number(offset)) => offset,
+                _ => 0,
+            };
+        let end_container =
+            match Self::object_get_entry(&range_entries, INTERNAL_RANGE_END_CONTAINER_KEY) {
+                Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+                _ => return None,
+            };
+        let end_offset = match Self::object_get_entry(&range_entries, INTERNAL_RANGE_END_OFFSET_KEY)
+        {
+            Some(Value::Number(offset)) => offset,
+            _ => 0,
+        };
+        Some((start_container, start_offset, end_container, end_offset))
+    }
+
+    fn selection_slice_text_by_char_index(value: &str, start: usize, end: usize) -> String {
+        if end <= start {
+            return String::new();
+        }
+        let start_byte = Self::char_index_to_byte(value, start);
+        let end_byte = Self::char_index_to_byte(value, end);
+        value[start_byte..end_byte].to_string()
+    }
+
+    fn selection_node_boundary_char_indexes(&self, node: NodeId) -> Option<(usize, usize)> {
+        if !self.dom.is_valid_node(node) {
+            return None;
+        }
+        if node == self.dom.root {
+            let total = self.dom.text_content(self.dom.root).chars().count();
+            return Some((0, total));
+        }
+        let parent = self.dom.parent(node)?;
+        let index = self.dom.nodes[parent.0]
+            .children
+            .iter()
+            .position(|candidate| *candidate == node)?;
+        let start = self
+            .selection_boundary_char_index(parent, index as i64)
+            .unwrap_or(0);
+        let end = self
+            .selection_boundary_char_index(parent, (index + 1) as i64)
+            .unwrap_or(start);
+        Some((start, end))
+    }
+
+    fn selection_set_state(
+        &mut self,
+        anchor_node: Option<NodeId>,
+        anchor_offset: i64,
+        focus_node: Option<NodeId>,
+        focus_offset: i64,
+    ) -> bool {
+        let selection = match self.ensure_document_selection_object() {
+            Value::Object(selection) => selection,
+            _ => return false,
+        };
+
+        let before = {
+            let entries = selection.borrow();
+            (
+                Self::object_get_entry(&entries, "anchorNode"),
+                Self::object_get_entry(&entries, "anchorOffset"),
+                Self::object_get_entry(&entries, "focusNode"),
+                Self::object_get_entry(&entries, "focusOffset"),
+                Self::object_get_entry(&entries, "rangeCount"),
+                Self::object_get_entry(&entries, "direction"),
+            )
+        };
+
+        if let (Some(anchor_node), Some(focus_node)) = (anchor_node, focus_node) {
+            let anchor_offset = self.selection_clamped_offset(anchor_node, anchor_offset);
+            let focus_offset = self.selection_clamped_offset(focus_node, focus_offset);
+            let ordering =
+                self.selection_compare_points(anchor_node, anchor_offset, focus_node, focus_offset);
+            let (start_container, start_offset, end_container, end_offset, direction) =
+                match ordering {
+                    std::cmp::Ordering::Greater => (
+                        focus_node,
+                        focus_offset,
+                        anchor_node,
+                        anchor_offset,
+                        "backward",
+                    ),
+                    std::cmp::Ordering::Equal => {
+                        (anchor_node, anchor_offset, focus_node, focus_offset, "none")
+                    }
+                    std::cmp::Ordering::Less => (
+                        anchor_node,
+                        anchor_offset,
+                        focus_node,
+                        focus_offset,
+                        "forward",
+                    ),
+                };
+            let range_object = self.selection_internal_range_object(&selection);
+            {
+                let mut range_entries = range_object.borrow_mut();
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_START_CONTAINER_KEY.to_string(),
+                    Value::Node(start_container),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_START_OFFSET_KEY.to_string(),
+                    Value::Number(start_offset),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_END_CONTAINER_KEY.to_string(),
+                    Value::Node(end_container),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_END_OFFSET_KEY.to_string(),
+                    Value::Number(end_offset),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "startContainer".to_string(),
+                    Value::Node(start_container),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "startOffset".to_string(),
+                    Value::Number(start_offset),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "endContainer".to_string(),
+                    Value::Node(end_container),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "endOffset".to_string(),
+                    Value::Number(end_offset),
+                );
+            }
+            {
+                let mut entries = selection.borrow_mut();
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_SELECTION_RANGE_KEY.to_string(),
+                    Value::Object(range_object),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "anchorNode".to_string(),
+                    Value::Node(anchor_node),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "anchorOffset".to_string(),
+                    Value::Number(anchor_offset),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "focusNode".to_string(),
+                    Value::Node(focus_node),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "focusOffset".to_string(),
+                    Value::Number(focus_offset),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "isCollapsed".to_string(),
+                    Value::Bool(ordering == std::cmp::Ordering::Equal),
+                );
+                Self::object_set_entry(&mut entries, "rangeCount".to_string(), Value::Number(1));
+                Self::object_set_entry(
+                    &mut entries,
+                    "type".to_string(),
+                    Value::String(if ordering == std::cmp::Ordering::Equal {
+                        "Caret".to_string()
+                    } else {
+                        "Range".to_string()
+                    }),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "direction".to_string(),
+                    Value::String(direction.to_string()),
+                );
+            }
+        } else {
+            let range_object = self.selection_internal_range_object(&selection);
+            {
+                let mut range_entries = range_object.borrow_mut();
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_START_CONTAINER_KEY.to_string(),
+                    Value::Node(self.dom.root),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_START_OFFSET_KEY.to_string(),
+                    Value::Number(0),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_END_CONTAINER_KEY.to_string(),
+                    Value::Node(self.dom.root),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    INTERNAL_RANGE_END_OFFSET_KEY.to_string(),
+                    Value::Number(0),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "startContainer".to_string(),
+                    Value::Node(self.dom.root),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "startOffset".to_string(),
+                    Value::Number(0),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "endContainer".to_string(),
+                    Value::Node(self.dom.root),
+                );
+                Self::object_set_entry(
+                    &mut range_entries,
+                    "endOffset".to_string(),
+                    Value::Number(0),
+                );
+            }
+            {
+                let mut entries = selection.borrow_mut();
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_SELECTION_RANGE_KEY.to_string(),
+                    Value::Object(range_object),
+                );
+                Self::object_set_entry(&mut entries, "anchorNode".to_string(), Value::Null);
+                Self::object_set_entry(&mut entries, "anchorOffset".to_string(), Value::Number(0));
+                Self::object_set_entry(&mut entries, "focusNode".to_string(), Value::Null);
+                Self::object_set_entry(&mut entries, "focusOffset".to_string(), Value::Number(0));
+                Self::object_set_entry(&mut entries, "isCollapsed".to_string(), Value::Bool(true));
+                Self::object_set_entry(&mut entries, "rangeCount".to_string(), Value::Number(0));
+                Self::object_set_entry(
+                    &mut entries,
+                    "type".to_string(),
+                    Value::String("None".to_string()),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    "direction".to_string(),
+                    Value::String("none".to_string()),
+                );
+            }
+        }
+
+        let after = {
+            let entries = selection.borrow();
+            (
+                Self::object_get_entry(&entries, "anchorNode"),
+                Self::object_get_entry(&entries, "anchorOffset"),
+                Self::object_get_entry(&entries, "focusNode"),
+                Self::object_get_entry(&entries, "focusOffset"),
+                Self::object_get_entry(&entries, "rangeCount"),
+                Self::object_get_entry(&entries, "direction"),
+            )
+        };
+        before != after
+    }
+
+    pub(crate) fn eval_selection_member_call(
+        &mut self,
+        selection_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let is_selection = {
+            let entries = selection_object.borrow();
+            Self::is_selection_object(&entries)
+        };
+        if !is_selection {
+            return Ok(None);
+        }
+
+        match member {
+            "addRange" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "addRange requires exactly one range argument".into(),
+                    ));
+                }
+                let range = match evaluated_args.first() {
+                    Some(Value::Object(object)) => object.clone(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "addRange argument must be a Range".into(),
+                        ));
+                    }
+                };
+                let (start_container, start_offset, end_container, end_offset) = {
+                    let range_entries = range.borrow();
+                    if !Self::is_range_object(&range_entries) {
+                        return Err(Error::ScriptRuntime(
+                            "addRange argument must be a Range".into(),
+                        ));
+                    }
+                    let start_container = match Self::object_get_entry(
+                        &range_entries,
+                        INTERNAL_RANGE_START_CONTAINER_KEY,
+                    ) {
+                        Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "Range boundary container must be a Node".into(),
+                            ));
+                        }
+                    };
+                    let start_offset = match Self::object_get_entry(
+                        &range_entries,
+                        INTERNAL_RANGE_START_OFFSET_KEY,
+                    ) {
+                        Some(Value::Number(offset)) => offset,
+                        _ => 0,
+                    };
+                    let end_container = match Self::object_get_entry(
+                        &range_entries,
+                        INTERNAL_RANGE_END_CONTAINER_KEY,
+                    ) {
+                        Some(Value::Node(node)) if self.dom.is_valid_node(node) => node,
+                        _ => {
+                            return Err(Error::ScriptRuntime(
+                                "Range boundary container must be a Node".into(),
+                            ));
+                        }
+                    };
+                    let end_offset =
+                        match Self::object_get_entry(&range_entries, INTERNAL_RANGE_END_OFFSET_KEY)
+                        {
+                            Some(Value::Number(offset)) => offset,
+                            _ => 0,
+                        };
+                    (start_container, start_offset, end_container, end_offset)
+                };
+                {
+                    let mut selection_entries = selection_object.borrow_mut();
+                    Self::object_set_entry(
+                        &mut selection_entries,
+                        INTERNAL_SELECTION_RANGE_KEY.to_string(),
+                        Value::Object(range.clone()),
+                    );
+                }
+                let changed = self.selection_set_state(
+                    Some(start_container),
+                    start_offset,
+                    Some(end_container),
+                    end_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "collapse" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "collapse requires one or two arguments".into(),
+                    ));
+                }
+                let changed = match evaluated_args.first() {
+                    Some(Value::Null) => self.selection_set_state(None, 0, None, 0),
+                    Some(boundary) => {
+                        let node = self.selection_boundary_node_from_value(boundary)?;
+                        let offset = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                        if offset < 0 {
+                            return Err(Error::ScriptRuntime(
+                                "IndexSizeError: offset must be non-negative".into(),
+                            ));
+                        }
+                        self.selection_set_state(Some(node), offset, Some(node), offset)
+                    }
+                    None => false,
+                };
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "collapseToStart" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "collapseToStart takes no arguments".into(),
+                    ));
+                }
+                let Some((start_container, start_offset, _, _)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Selection has no range".into(),
+                    ));
+                };
+                let changed = self.selection_set_state(
+                    Some(start_container),
+                    start_offset,
+                    Some(start_container),
+                    start_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "collapseToEnd" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "collapseToEnd takes no arguments".into(),
+                    ));
+                }
+                let Some((_, _, end_container, end_offset)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Selection has no range".into(),
+                    ));
+                };
+                let changed = self.selection_set_state(
+                    Some(end_container),
+                    end_offset,
+                    Some(end_container),
+                    end_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "containsNode" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "containsNode requires one or two arguments".into(),
+                    ));
+                }
+                let node = match evaluated_args.first() {
+                    Some(Value::Node(node)) if self.dom.is_valid_node(*node) => *node,
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "containsNode first argument must be a Node".into(),
+                        ));
+                    }
+                };
+                let allow_partial = evaluated_args
+                    .get(1)
+                    .map(|value| value.truthy())
+                    .unwrap_or(false);
+                let Some((start_container, start_offset, end_container, end_offset)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Ok(Some(Value::Bool(false)));
+                };
+                let selection_start = self
+                    .selection_boundary_char_index(start_container, start_offset)
+                    .unwrap_or(0);
+                let selection_end = self
+                    .selection_boundary_char_index(end_container, end_offset)
+                    .unwrap_or(selection_start);
+                let Some((node_start, node_end)) = self.selection_node_boundary_char_indexes(node)
+                else {
+                    return Ok(Some(Value::Bool(false)));
+                };
+                let contains = if allow_partial {
+                    node_end > selection_start && node_start < selection_end
+                } else {
+                    node_start >= selection_start && node_end <= selection_end
+                };
+                Ok(Some(Value::Bool(contains)))
+            }
+            "deleteFromDocument" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "deleteFromDocument takes no arguments".into(),
+                    ));
+                }
+                let Some((start_container, start_offset, end_container, end_offset)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Ok(Some(Value::Undefined));
+                };
+                if self.selection_compare_points(
+                    start_container,
+                    start_offset,
+                    end_container,
+                    end_offset,
+                ) == std::cmp::Ordering::Equal
+                {
+                    return Ok(Some(Value::Undefined));
+                }
+
+                if start_container == end_container {
+                    let start =
+                        self.selection_clamped_offset(start_container, start_offset) as usize;
+                    let end = self.selection_clamped_offset(end_container, end_offset) as usize;
+                    match &mut self.dom.nodes[start_container.0].node_type {
+                        NodeType::Text(text) => {
+                            let start_byte = Self::char_index_to_byte(text, start);
+                            let end_byte = Self::char_index_to_byte(text, end);
+                            text.replace_range(start_byte..end_byte, "");
+                        }
+                        NodeType::Document | NodeType::Element(_) => {
+                            if end > start {
+                                let targets =
+                                    self.dom.nodes[start_container.0].children[start..end].to_vec();
+                                for child in targets {
+                                    let _ = self.dom.remove_child(start_container, child);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let full = self.dom.text_content(self.dom.root);
+                    let start = self
+                        .selection_boundary_char_index(start_container, start_offset)
+                        .unwrap_or(0);
+                    let end = self
+                        .selection_boundary_char_index(end_container, end_offset)
+                        .unwrap_or(start);
+                    let start = start.min(full.chars().count());
+                    let end = end.min(full.chars().count()).max(start);
+                    let mut next = String::new();
+                    next.push_str(&Self::selection_slice_text_by_char_index(&full, 0, start));
+                    next.push_str(&Self::selection_slice_text_by_char_index(
+                        &full,
+                        end,
+                        full.chars().count(),
+                    ));
+                    if let Some(body) = self.dom.body().or_else(|| self.dom.document_element()) {
+                        let _ = self.dom.set_text_content(body, &next);
+                    }
+                }
+
+                let changed = self.selection_set_state(
+                    Some(start_container),
+                    start_offset,
+                    Some(start_container),
+                    start_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "empty" | "removeAllRanges" => {
+                if !evaluated_args.is_empty() {
+                    let method = if member == "empty" {
+                        "empty"
+                    } else {
+                        "removeAllRanges"
+                    };
+                    return Err(Error::ScriptRuntime(format!("{method} takes no arguments")));
+                }
+                let changed = self.selection_set_state(None, 0, None, 0);
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "extend" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "extend requires exactly two arguments".into(),
+                    ));
+                }
+                let Some((anchor_node, anchor_offset, _, _)) =
+                    self.selection_anchor_focus(selection_object)
+                else {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Selection has no range".into(),
+                    ));
+                };
+                let focus_node = self.selection_boundary_node_from_value(&evaluated_args[0])?;
+                let focus_offset = Self::value_to_i64(&evaluated_args[1]);
+                if focus_offset < 0 {
+                    return Err(Error::ScriptRuntime(
+                        "IndexSizeError: offset must be non-negative".into(),
+                    ));
+                }
+                let changed = self.selection_set_state(
+                    Some(anchor_node),
+                    anchor_offset,
+                    Some(focus_node),
+                    focus_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "getComposedRanges" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getComposedRanges supports at most one argument".into(),
+                    ));
+                }
+                let Some((start_container, start_offset, end_container, end_offset)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Ok(Some(Self::new_array_value(Vec::new())));
+                };
+                let range = Self::new_object_value(vec![
+                    ("startContainer".to_string(), Value::Node(start_container)),
+                    ("startOffset".to_string(), Value::Number(start_offset)),
+                    ("endContainer".to_string(), Value::Node(end_container)),
+                    ("endOffset".to_string(), Value::Number(end_offset)),
+                ]);
+                Ok(Some(Self::new_array_value(vec![range])))
+            }
+            "getRangeAt" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "getRangeAt requires exactly one index argument".into(),
+                    ));
+                }
+                let index = Self::value_to_i64(&evaluated_args[0]);
+                let has_range = self
+                    .selection_normalized_boundaries(selection_object)
+                    .is_some();
+                if index != 0 || !has_range {
+                    return Err(Error::ScriptRuntime(
+                        "IndexSizeError: Invalid range index".into(),
+                    ));
+                }
+                let range = self.selection_internal_range_object(selection_object);
+                Ok(Some(Value::Object(range)))
+            }
+            "modify" => {
+                if evaluated_args.len() != 3 {
+                    return Err(Error::ScriptRuntime(
+                        "modify requires exactly three arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "removeRange" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "removeRange requires exactly one range argument".into(),
+                    ));
+                }
+                let candidate = match evaluated_args.first() {
+                    Some(Value::Object(object)) => object.clone(),
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "removeRange argument must be a Range".into(),
+                        ));
+                    }
+                };
+                let current = self.selection_internal_range_object(selection_object);
+                if !Rc::ptr_eq(&candidate, &current) {
+                    return Err(Error::ScriptRuntime(
+                        "NotFoundError: Failed to execute 'removeRange': The given range isn't in selection"
+                            .into(),
+                    ));
+                }
+                let changed = self.selection_set_state(None, 0, None, 0);
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "selectAllChildren" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "selectAllChildren requires exactly one argument".into(),
+                    ));
+                }
+                let node = self.selection_boundary_node_from_value(&evaluated_args[0])?;
+                let end = match &self.dom.nodes[node.0].node_type {
+                    NodeType::Text(text) => text.chars().count() as i64,
+                    NodeType::Document | NodeType::Element(_) => {
+                        self.dom.nodes[node.0].children.len() as i64
+                    }
+                };
+                let changed = self.selection_set_state(Some(node), 0, Some(node), end);
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "setBaseAndExtent" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(
+                        "setBaseAndExtent requires exactly four arguments".into(),
+                    ));
+                }
+                let anchor_node = self.selection_boundary_node_from_value(&evaluated_args[0])?;
+                let anchor_offset = Self::value_to_i64(&evaluated_args[1]);
+                let focus_node = self.selection_boundary_node_from_value(&evaluated_args[2])?;
+                let focus_offset = Self::value_to_i64(&evaluated_args[3]);
+                if anchor_offset < 0 || focus_offset < 0 {
+                    return Err(Error::ScriptRuntime(
+                        "IndexSizeError: offset must be non-negative".into(),
+                    ));
+                }
+                let changed = self.selection_set_state(
+                    Some(anchor_node),
+                    anchor_offset,
+                    Some(focus_node),
+                    focus_offset,
+                );
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "setPosition" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "setPosition requires one or two arguments".into(),
+                    ));
+                }
+                let changed = match evaluated_args.first() {
+                    Some(Value::Null) => self.selection_set_state(None, 0, None, 0),
+                    Some(boundary) => {
+                        let node = self.selection_boundary_node_from_value(boundary)?;
+                        let offset = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                        if offset < 0 {
+                            return Err(Error::ScriptRuntime(
+                                "IndexSizeError: offset must be non-negative".into(),
+                            ));
+                        }
+                        self.selection_set_state(Some(node), offset, Some(node), offset)
+                    }
+                    None => false,
+                };
+                if changed {
+                    let _ = self.dispatch_document_selectionchange()?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "toString" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("toString takes no arguments".into()));
+                }
+                let Some((start_container, start_offset, end_container, end_offset)) =
+                    self.selection_normalized_boundaries(selection_object)
+                else {
+                    return Ok(Some(Value::String(String::new())));
+                };
+                let full = self.dom.text_content(self.dom.root);
+                let start = self
+                    .selection_boundary_char_index(start_container, start_offset)
+                    .unwrap_or(0);
+                let end = self
+                    .selection_boundary_char_index(end_container, end_offset)
+                    .unwrap_or(start);
+                let len = full.chars().count();
+                let start = start.min(len);
+                let end = end.min(len).max(start);
+                Ok(Some(Value::String(
+                    Self::selection_slice_text_by_char_index(&full, start, end),
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub(crate) fn parse_listener_capture_arg(&self, value: Option<&Value>) -> Result<bool> {
         let Some(value) = value else {
             return Ok(false);
@@ -1661,6 +2642,105 @@ impl Harness {
                     .into(),
             )),
         }
+    }
+
+    pub(crate) fn eval_event_target_member_call(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let (is_event_target, is_match_media) = {
+            let entries = object.borrow();
+            (
+                Self::is_event_target_object(&entries),
+                Self::is_match_media_object(&entries),
+            )
+        };
+        if !is_event_target {
+            return Ok(None);
+        }
+
+        let (normalized_member, listener_event_type, capture_mode) = match member {
+            "addListener" if is_match_media => ("addEventListener", "change", None),
+            "removeListener" if is_match_media => ("removeEventListener", "change", None),
+            "addEventListener" | "removeEventListener" => (member, "", Some(())),
+            _ => return Ok(None),
+        };
+
+        let (event_type, capture, callback_value) = if capture_mode.is_none() {
+            if evaluated_args.len() != 1 {
+                let label = if normalized_member == "addEventListener" {
+                    "addListener"
+                } else {
+                    "removeListener"
+                };
+                return Err(Error::ScriptRuntime(format!(
+                    "{label} requires exactly one callback argument"
+                )));
+            }
+            (
+                listener_event_type.to_string(),
+                false,
+                evaluated_args.first().cloned().unwrap_or(Value::Undefined),
+            )
+        } else {
+            if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                return Err(Error::ScriptRuntime(format!(
+                    "{normalized_member} requires two or three arguments"
+                )));
+            }
+            (
+                evaluated_args[0].as_string(),
+                self.parse_listener_capture_arg(evaluated_args.get(2))?,
+                evaluated_args[1].clone(),
+            )
+        };
+
+        let node = self.event_target_listener_node_id(object);
+        let result = match normalized_member {
+            "addEventListener" => match callback_value {
+                Value::Function(function) => {
+                    self.listeners.add(
+                        node,
+                        event_type,
+                        Listener {
+                            capture,
+                            is_event_handler_property: false,
+                            handler: function.handler.clone(),
+                            captured_env: function.captured_env.clone(),
+                            captured_pending_function_decls: function
+                                .captured_pending_function_decls
+                                .clone(),
+                        },
+                    );
+                    Value::Undefined
+                }
+                Value::Null | Value::Undefined => Value::Undefined,
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "addEventListener callback must be a function".into(),
+                    ));
+                }
+            },
+            "removeEventListener" => match callback_value {
+                Value::Function(function) => {
+                    let _ = self
+                        .listeners
+                        .remove(node, &event_type, capture, &function.handler);
+                    Value::Undefined
+                }
+                Value::Null | Value::Undefined => Value::Undefined,
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "removeEventListener callback must be a function".into(),
+                    ));
+                }
+            },
+            _ => return Ok(None),
+        };
+
+        Ok(Some(result))
     }
 
     pub(crate) fn eval_node_member_call(
@@ -1725,11 +2805,9 @@ impl Harness {
             }
             "click" => {
                 if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "click does not take arguments".into(),
-                    ));
+                    return Err(Error::ScriptRuntime("click does not take arguments".into()));
                 }
-                self.click_node(node)?;
+                self.click_dom_method(node)?;
                 Ok(Some(Value::Undefined))
             }
             "attachShadow" => {
@@ -2740,7 +3818,34 @@ impl Harness {
                 if !is_canvas {
                     return Ok(None);
                 }
+                let transferred_key =
+                    INTERNAL_CANVAS_TRANSFERRED_TO_OFFSCREEN_NODE_EXPANDO_KEY.to_string();
+                let transferred_to_offscreen = self
+                    .dom_runtime
+                    .node_expando_props
+                    .get(&(node, transferred_key))
+                    .is_some_and(|value| value.truthy());
+                if transferred_to_offscreen {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Failed to execute 'getContext': canvas has transferred control to offscreen"
+                            .into(),
+                    ));
+                }
                 let context_kind = evaluated_args[0].as_string().to_ascii_lowercase();
+                let is_known_context = matches!(
+                    context_kind.as_str(),
+                    "2d" | "webgl" | "experimental-webgl" | "webgl2" | "webgpu" | "bitmaprenderer"
+                );
+                if let Some(Value::String(existing_mode)) =
+                    self.dom_runtime.node_expando_props.get(&(
+                        node,
+                        INTERNAL_CANVAS_CONTEXT_MODE_NODE_EXPANDO_KEY.to_string(),
+                    ))
+                {
+                    if existing_mode != &context_kind {
+                        return Ok(Some(Value::Null));
+                    }
+                }
                 if context_kind != "2d" {
                     return Ok(Some(Value::Null));
                 }
@@ -2756,11 +3861,73 @@ impl Harness {
                     .get(1)
                     .map(Self::canvas_2d_alpha_from_options)
                     .unwrap_or(true);
-                let context = self.new_canvas_2d_context_value(alpha);
+                let context = self.new_canvas_2d_context_value(node, alpha);
                 self.dom_runtime
                     .node_expando_props
                     .insert((node, key), context.clone());
+                if is_known_context {
+                    self.dom_runtime.node_expando_props.insert(
+                        (
+                            node,
+                            INTERNAL_CANVAS_CONTEXT_MODE_NODE_EXPANDO_KEY.to_string(),
+                        ),
+                        Value::String(context_kind),
+                    );
+                }
                 Ok(Some(context))
+            }
+            "transferControlToOffscreen" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "transferControlToOffscreen takes no arguments".into(),
+                    ));
+                }
+                let is_canvas = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+                if !is_canvas {
+                    return Ok(None);
+                }
+                if self.dom_runtime.node_expando_props.contains_key(&(
+                    node,
+                    INTERNAL_CANVAS_CONTEXT_MODE_NODE_EXPANDO_KEY.to_string(),
+                )) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Failed to execute 'transferControlToOffscreen': canvas has an existing rendering context"
+                            .into(),
+                    ));
+                }
+                if self.dom_runtime.node_expando_props.contains_key(&(
+                    node,
+                    INTERNAL_CANVAS_TRANSFERRED_TO_OFFSCREEN_NODE_EXPANDO_KEY.to_string(),
+                )) {
+                    return Err(Error::ScriptRuntime(
+                        "InvalidStateError: Failed to execute 'transferControlToOffscreen': canvas has already transferred control to offscreen"
+                            .into(),
+                    ));
+                }
+                self.dom_runtime.node_expando_props.insert(
+                    (
+                        node,
+                        INTERNAL_CANVAS_TRANSFERRED_TO_OFFSCREEN_NODE_EXPANDO_KEY.to_string(),
+                    ),
+                    Value::Bool(true),
+                );
+                Ok(Some(Self::new_object_value(vec![
+                    (
+                        INTERNAL_CANVAS_KEY_PREFIX.to_string(),
+                        Value::String("offscreen_canvas".to_string()),
+                    ),
+                    (
+                        "width".to_string(),
+                        Value::Number(self.canvas_dimension_value(node, "width")),
+                    ),
+                    (
+                        "height".to_string(),
+                        Value::Number(self.canvas_dimension_value(node, "height")),
+                    ),
+                ])))
             }
             "toDataURL" => {
                 if evaluated_args.len() > 2 {
@@ -3037,13 +4204,7 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let context = context_object.borrow_mut();
-        let fill_style = Self::object_get_entry(&context, "fillStyle")
-            .map(|value| value.as_string())
-            .unwrap_or_else(|| "#000000".to_string());
-        let stroke_style = Self::object_get_entry(&context, "strokeStyle")
-            .map(|value| value.as_string())
-            .unwrap_or_else(|| "#000000".to_string());
+        let mut context = context_object.borrow_mut();
         match member {
             "fillRect" | "clearRect" | "strokeRect" => {
                 if evaluated_args.len() != 4 {
@@ -3051,13 +4212,43 @@ impl Harness {
                         "{member} requires exactly four arguments"
                     )));
                 }
-                let _ = &fill_style;
-                let _ = &stroke_style;
                 Ok(Some(Value::Undefined))
             }
-            "beginPath" | "closePath" | "fill" | "stroke" => {
+            "fillText" | "strokeText" => {
+                if !(evaluated_args.len() == 3 || evaluated_args.len() == 4) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} requires three or four arguments"
+                    )));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "measureText" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "measureText supports at most one argument".into(),
+                    ));
+                }
+                let text = evaluated_args
+                    .first()
+                    .map(Value::as_string)
+                    .unwrap_or_else(|| "undefined".to_string());
+                let width = text.chars().count() as f64 * 10.0;
+                Ok(Some(Self::new_object_value(vec![(
+                    "width".to_string(),
+                    Self::number_value(width),
+                )])))
+            }
+            "beginPath" | "closePath" | "save" | "restore" => {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(format!("{member} takes no arguments")));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "fill" | "stroke" | "clip" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} supports at most two arguments"
+                    )));
                 }
                 Ok(Some(Value::Undefined))
             }
@@ -3077,6 +4268,329 @@ impl Harness {
                 }
                 Ok(Some(Value::Undefined))
             }
+            "arcTo" => {
+                if evaluated_args.len() != 5 {
+                    return Err(Error::ScriptRuntime(
+                        "arcTo requires exactly five arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "bezierCurveTo" => {
+                if evaluated_args.len() != 6 {
+                    return Err(Error::ScriptRuntime(
+                        "bezierCurveTo requires exactly six arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "quadraticCurveTo" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(
+                        "quadraticCurveTo requires exactly four arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "ellipse" => {
+                if evaluated_args.len() < 7 || evaluated_args.len() > 8 {
+                    return Err(Error::ScriptRuntime(
+                        "ellipse requires seven or eight arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "rect" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(
+                        "rect requires exactly four arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "roundRect" => {
+                if evaluated_args.len() != 5 {
+                    return Err(Error::ScriptRuntime(
+                        "roundRect requires exactly five arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "drawFocusIfNeeded" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "drawFocusIfNeeded supports at most one argument".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "isPointInPath" | "isPointInStroke" => {
+                if !(evaluated_args.len() == 2 || evaluated_args.len() == 3) {
+                    return Err(Error::ScriptRuntime(format!(
+                        "{member} requires two or three arguments"
+                    )));
+                }
+                Ok(Some(Value::Bool(false)))
+            }
+            "setLineDash" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "setLineDash requires exactly one argument".into(),
+                    ));
+                }
+                let mut line_dash = self.canvas_2d_line_dash_values(&evaluated_args[0])?;
+                if line_dash.len() % 2 == 1 {
+                    let copy = line_dash.clone();
+                    line_dash.extend(copy);
+                }
+                Self::canvas_2d_store_line_dash(&mut context, &line_dash);
+                Ok(Some(Value::Undefined))
+            }
+            "getLineDash" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getLineDash takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_array_value(
+                    Self::canvas_2d_read_line_dash(&context)
+                        .into_iter()
+                        .map(Self::number_value)
+                        .collect(),
+                )))
+            }
+            "createLinearGradient" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(
+                        "createLinearGradient requires exactly four arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_canvas_gradient_value()))
+            }
+            "createRadialGradient" => {
+                if evaluated_args.len() != 6 {
+                    return Err(Error::ScriptRuntime(
+                        "createRadialGradient requires exactly six arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_canvas_gradient_value()))
+            }
+            "createConicGradient" => {
+                if evaluated_args.len() != 3 {
+                    return Err(Error::ScriptRuntime(
+                        "createConicGradient requires exactly three arguments".into(),
+                    ));
+                }
+                Ok(Some(Self::new_canvas_gradient_value()))
+            }
+            "createPattern" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "createPattern requires exactly two arguments".into(),
+                    ));
+                }
+                if matches!(evaluated_args[0], Value::Null | Value::Undefined) {
+                    return Ok(Some(Value::Null));
+                }
+                Ok(Some(Self::new_canvas_pattern_value()))
+            }
+            "drawImage" => {
+                if !(evaluated_args.len() == 3
+                    || evaluated_args.len() == 5
+                    || evaluated_args.len() == 9)
+                {
+                    return Err(Error::ScriptRuntime(
+                        "drawImage requires three, five, or nine arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "createImageData" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
+                    return Err(Error::ScriptRuntime(
+                        "createImageData requires one or two arguments".into(),
+                    ));
+                }
+                let (width, height) = if evaluated_args.len() == 1 {
+                    let Value::Object(entries) = &evaluated_args[0] else {
+                        return Err(Error::ScriptRuntime(
+                            "createImageData(imageData) requires an ImageData-like object".into(),
+                        ));
+                    };
+                    let entries = entries.borrow();
+                    let width = Self::object_get_entry(&entries, "width")
+                        .map(|value| Self::coerce_number_for_number_constructor(&value) as i64)
+                        .unwrap_or(0)
+                        .max(0);
+                    let height = Self::object_get_entry(&entries, "height")
+                        .map(|value| Self::coerce_number_for_number_constructor(&value) as i64)
+                        .unwrap_or(0)
+                        .max(0);
+                    (width, height)
+                } else {
+                    (
+                        Self::coerce_number_for_number_constructor(&evaluated_args[0]) as i64,
+                        Self::coerce_number_for_number_constructor(&evaluated_args[1]) as i64,
+                    )
+                };
+                Ok(Some(Self::new_canvas_image_data_value(width, height)))
+            }
+            "getImageData" => {
+                if evaluated_args.len() != 4 {
+                    return Err(Error::ScriptRuntime(
+                        "getImageData requires exactly four arguments".into(),
+                    ));
+                }
+                let width =
+                    Self::coerce_number_for_number_constructor(&evaluated_args[2]).abs() as i64;
+                let height =
+                    Self::coerce_number_for_number_constructor(&evaluated_args[3]).abs() as i64;
+                Ok(Some(Self::new_canvas_image_data_value(width, height)))
+            }
+            "putImageData" => {
+                if !(evaluated_args.len() == 3 || evaluated_args.len() == 7) {
+                    return Err(Error::ScriptRuntime(
+                        "putImageData requires three or seven arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "getTransform" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "getTransform takes no arguments".into(),
+                    ));
+                }
+                let transform = Self::canvas_2d_read_transform(&context);
+                Ok(Some(Self::new_canvas_transform_value(transform)))
+            }
+            "transform" => {
+                if evaluated_args.len() != 6 {
+                    return Err(Error::ScriptRuntime(
+                        "transform requires exactly six arguments".into(),
+                    ));
+                }
+                let next = [
+                    Self::coerce_number_for_number_constructor(&evaluated_args[0]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[1]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[2]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[3]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[4]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[5]),
+                ];
+                let current = Self::canvas_2d_read_transform(&context);
+                Self::canvas_2d_store_transform(
+                    &mut context,
+                    Self::canvas_2d_multiply_transform(current, next),
+                );
+                Ok(Some(Value::Undefined))
+            }
+            "setTransform" => {
+                if !(evaluated_args.len() == 1 || evaluated_args.len() == 6) {
+                    return Err(Error::ScriptRuntime(
+                        "setTransform requires one or six arguments".into(),
+                    ));
+                }
+                let next = if evaluated_args.len() == 1 {
+                    let Value::Object(entries) = &evaluated_args[0] else {
+                        return Err(Error::ScriptRuntime(
+                            "setTransform(matrix) requires an object argument".into(),
+                        ));
+                    };
+                    Self::canvas_2d_transform_from_object_entries(&entries.borrow())
+                } else {
+                    [
+                        Self::coerce_number_for_number_constructor(&evaluated_args[0]),
+                        Self::coerce_number_for_number_constructor(&evaluated_args[1]),
+                        Self::coerce_number_for_number_constructor(&evaluated_args[2]),
+                        Self::coerce_number_for_number_constructor(&evaluated_args[3]),
+                        Self::coerce_number_for_number_constructor(&evaluated_args[4]),
+                        Self::coerce_number_for_number_constructor(&evaluated_args[5]),
+                    ]
+                };
+                Self::canvas_2d_store_transform(&mut context, next);
+                Ok(Some(Value::Undefined))
+            }
+            "resetTransform" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "resetTransform takes no arguments".into(),
+                    ));
+                }
+                Self::canvas_2d_store_transform(&mut context, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+                Ok(Some(Value::Undefined))
+            }
+            "scale" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "scale requires exactly two arguments".into(),
+                    ));
+                }
+                let current = Self::canvas_2d_read_transform(&context);
+                let next = [
+                    Self::coerce_number_for_number_constructor(&evaluated_args[0]),
+                    0.0,
+                    0.0,
+                    Self::coerce_number_for_number_constructor(&evaluated_args[1]),
+                    0.0,
+                    0.0,
+                ];
+                Self::canvas_2d_store_transform(
+                    &mut context,
+                    Self::canvas_2d_multiply_transform(current, next),
+                );
+                Ok(Some(Value::Undefined))
+            }
+            "translate" => {
+                if evaluated_args.len() != 2 {
+                    return Err(Error::ScriptRuntime(
+                        "translate requires exactly two arguments".into(),
+                    ));
+                }
+                let current = Self::canvas_2d_read_transform(&context);
+                let next = [
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    Self::coerce_number_for_number_constructor(&evaluated_args[0]),
+                    Self::coerce_number_for_number_constructor(&evaluated_args[1]),
+                ];
+                Self::canvas_2d_store_transform(
+                    &mut context,
+                    Self::canvas_2d_multiply_transform(current, next),
+                );
+                Ok(Some(Value::Undefined))
+            }
+            "rotate" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "rotate requires exactly one argument".into(),
+                    ));
+                }
+                let radians = Self::coerce_number_for_number_constructor(&evaluated_args[0]);
+                let current = Self::canvas_2d_read_transform(&context);
+                let next = [
+                    radians.cos(),
+                    radians.sin(),
+                    -radians.sin(),
+                    radians.cos(),
+                    0.0,
+                    0.0,
+                ];
+                Self::canvas_2d_store_transform(
+                    &mut context,
+                    Self::canvas_2d_multiply_transform(current, next),
+                );
+                Ok(Some(Value::Undefined))
+            }
+            "reset" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("reset takes no arguments".into()));
+                }
+                Self::canvas_2d_reset_context_state(&mut context);
+                Ok(Some(Value::Undefined))
+            }
             "getContextAttributes" => {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
@@ -3086,10 +4600,20 @@ impl Harness {
                 let alpha = Self::object_get_entry(&context, INTERNAL_CANVAS_2D_ALPHA_KEY)
                     .map(|value| value.truthy())
                     .unwrap_or(true);
-                Ok(Some(Self::new_object_value(vec![(
-                    "alpha".to_string(),
-                    Value::Bool(alpha),
-                )])))
+                Ok(Some(Self::new_object_value(vec![
+                    ("alpha".to_string(), Value::Bool(alpha)),
+                    ("colorSpace".to_string(), Value::String("srgb".to_string())),
+                    ("desynchronized".to_string(), Value::Bool(false)),
+                    ("willReadFrequently".to_string(), Value::Bool(false)),
+                ])))
+            }
+            "isContextLost" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "isContextLost takes no arguments".into(),
+                    ));
+                }
+                Ok(Some(Value::Bool(false)))
             }
             "toString" => {
                 if !evaluated_args.is_empty() {
@@ -3101,6 +4625,261 @@ impl Harness {
             }
             _ => Ok(None),
         }
+    }
+
+    fn canvas_2d_line_dash_values(&mut self, value: &Value) -> Result<Vec<f64>> {
+        let values = match value {
+            Value::Array(values) => values.borrow().elements.clone(),
+            Value::TypedArray(values) => self.typed_array_snapshot(values)?,
+            _ => vec![value.clone()],
+        };
+        Ok(values
+            .into_iter()
+            .map(|entry| Self::coerce_number_for_number_constructor(&entry))
+            .map(|entry| {
+                if entry.is_finite() && entry >= 0.0 {
+                    entry
+                } else {
+                    0.0
+                }
+            })
+            .collect())
+    }
+
+    fn canvas_2d_store_line_dash(context: &mut ObjectValue, line_dash: &[f64]) {
+        Self::object_set_entry(
+            context,
+            INTERNAL_CANVAS_2D_LINE_DASH_KEY.to_string(),
+            Self::new_array_value(line_dash.iter().copied().map(Self::number_value).collect()),
+        );
+    }
+
+    fn canvas_2d_read_line_dash(context: &ObjectValue) -> Vec<f64> {
+        let Some(Value::Array(values)) =
+            Self::object_get_entry(context, INTERNAL_CANVAS_2D_LINE_DASH_KEY)
+        else {
+            return Vec::new();
+        };
+        values
+            .borrow()
+            .elements
+            .iter()
+            .map(Self::coerce_number_for_number_constructor)
+            .map(|value| if value.is_finite() { value } else { 0.0 })
+            .collect()
+    }
+
+    fn canvas_2d_transform_from_object_entries(entries: &ObjectValue) -> [f64; 6] {
+        let get = |key: &str, default: f64| {
+            Self::object_get_entry(entries, key)
+                .map(|value| Self::coerce_number_for_number_constructor(&value))
+                .filter(|value| value.is_finite())
+                .unwrap_or(default)
+        };
+        [
+            get("a", 1.0),
+            get("b", 0.0),
+            get("c", 0.0),
+            get("d", 1.0),
+            get("e", 0.0),
+            get("f", 0.0),
+        ]
+    }
+
+    fn canvas_2d_read_transform(context: &ObjectValue) -> [f64; 6] {
+        let Some(Value::Array(values)) =
+            Self::object_get_entry(context, INTERNAL_CANVAS_2D_TRANSFORM_KEY)
+        else {
+            return [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        };
+        let values = values.borrow();
+        let read = |index: usize, default: f64| {
+            values
+                .elements
+                .get(index)
+                .map(Self::coerce_number_for_number_constructor)
+                .filter(|value| value.is_finite())
+                .unwrap_or(default)
+        };
+        [
+            read(0, 1.0),
+            read(1, 0.0),
+            read(2, 0.0),
+            read(3, 1.0),
+            read(4, 0.0),
+            read(5, 0.0),
+        ]
+    }
+
+    fn canvas_2d_store_transform(context: &mut ObjectValue, transform: [f64; 6]) {
+        Self::object_set_entry(
+            context,
+            INTERNAL_CANVAS_2D_TRANSFORM_KEY.to_string(),
+            Self::new_array_value(transform.into_iter().map(Self::number_value).collect()),
+        );
+    }
+
+    fn canvas_2d_multiply_transform(left: [f64; 6], right: [f64; 6]) -> [f64; 6] {
+        [
+            left[0] * right[0] + left[2] * right[1],
+            left[1] * right[0] + left[3] * right[1],
+            left[0] * right[2] + left[2] * right[3],
+            left[1] * right[2] + left[3] * right[3],
+            left[0] * right[4] + left[2] * right[5] + left[4],
+            left[1] * right[4] + left[3] * right[5] + left[5],
+        ]
+    }
+
+    fn new_canvas_transform_value(transform: [f64; 6]) -> Value {
+        Self::new_object_value(vec![
+            ("a".to_string(), Self::number_value(transform[0])),
+            ("b".to_string(), Self::number_value(transform[1])),
+            ("c".to_string(), Self::number_value(transform[2])),
+            ("d".to_string(), Self::number_value(transform[3])),
+            ("e".to_string(), Self::number_value(transform[4])),
+            ("f".to_string(), Self::number_value(transform[5])),
+        ])
+    }
+
+    fn new_canvas_gradient_value() -> Value {
+        Self::new_object_value(vec![(
+            "addColorStop".to_string(),
+            Self::new_builtin_placeholder_function(),
+        )])
+    }
+
+    fn new_canvas_pattern_value() -> Value {
+        Self::new_object_value(vec![(
+            "setTransform".to_string(),
+            Self::new_builtin_placeholder_function(),
+        )])
+    }
+
+    fn new_canvas_image_data_value(width: i64, height: i64) -> Value {
+        let width = width.max(0);
+        let height = height.max(0);
+        let len = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+            .min(1_000_000);
+        let data = Self::new_array_value(vec![Value::Number(0); len]);
+        Self::new_object_value(vec![
+            ("width".to_string(), Value::Number(width)),
+            ("height".to_string(), Value::Number(height)),
+            ("data".to_string(), data),
+        ])
+    }
+
+    fn canvas_2d_reset_context_state(context: &mut ObjectValue) {
+        Self::object_set_entry(
+            context,
+            "fillStyle".to_string(),
+            Value::String("#000000".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "strokeStyle".to_string(),
+            Value::String("#000000".to_string()),
+        );
+        Self::object_set_entry(context, "lineWidth".to_string(), Value::Number(1));
+        Self::object_set_entry(
+            context,
+            "lineCap".to_string(),
+            Value::String("butt".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "lineJoin".to_string(),
+            Value::String("miter".to_string()),
+        );
+        Self::object_set_entry(context, "miterLimit".to_string(), Value::Number(10));
+        Self::object_set_entry(context, "lineDashOffset".to_string(), Value::Number(0));
+        Self::object_set_entry(
+            context,
+            "font".to_string(),
+            Value::String("10px sans-serif".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "textAlign".to_string(),
+            Value::String("start".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "textBaseline".to_string(),
+            Value::String("alphabetic".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "direction".to_string(),
+            Value::String("inherit".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "letterSpacing".to_string(),
+            Value::String("0px".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "fontKerning".to_string(),
+            Value::String("auto".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "fontStretch".to_string(),
+            Value::String("normal".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "fontVariantCaps".to_string(),
+            Value::String("normal".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "textRendering".to_string(),
+            Value::String("auto".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "wordSpacing".to_string(),
+            Value::String("0px".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "lang".to_string(),
+            Value::String("inherit".to_string()),
+        );
+        Self::object_set_entry(context, "shadowBlur".to_string(), Value::Number(0));
+        Self::object_set_entry(
+            context,
+            "shadowColor".to_string(),
+            Value::String("rgba(0, 0, 0, 0)".to_string()),
+        );
+        Self::object_set_entry(context, "shadowOffsetX".to_string(), Value::Number(0));
+        Self::object_set_entry(context, "shadowOffsetY".to_string(), Value::Number(0));
+        Self::object_set_entry(context, "globalAlpha".to_string(), Value::Number(1));
+        Self::object_set_entry(
+            context,
+            "globalCompositeOperation".to_string(),
+            Value::String("source-over".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "imageSmoothingEnabled".to_string(),
+            Value::Bool(true),
+        );
+        Self::object_set_entry(
+            context,
+            "imageSmoothingQuality".to_string(),
+            Value::String("low".to_string()),
+        );
+        Self::object_set_entry(
+            context,
+            "filter".to_string(),
+            Value::String("none".to_string()),
+        );
+        Self::canvas_2d_store_line_dash(context, &[]);
+        Self::canvas_2d_store_transform(context, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     }
 
     pub(crate) fn normalized_input_type(&self, node: NodeId) -> String {

@@ -107,3 +107,90 @@ fn option_optional_end_tag_parsing_before_option_and_optgroup_works() -> Result<
     h.assert_text("#result", "2:1:2:0:0:Two:Three:4:option")?;
     Ok(())
 }
+
+#[test]
+fn option_constructor_defaults_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <select id='s'></select>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const empty = new Option();
+            const four = new Option('Four');
+            const five = new Option('Five', '5');
+            const one = new Option('one', '1', true, false);
+            const two = new Option('two', '2', false, true);
+
+            const select = document.getElementById('s');
+            select[0] = four;
+            select[1] = five;
+            select[2] = new Option('Six', '6');
+
+            document.getElementById('result').textContent = [
+              empty.textContent === '',
+              empty.value === '',
+              empty.getAttribute('value') === null,
+              four.value,
+              four.getAttribute('value') === null,
+              five.value,
+              five.getAttribute('value'),
+              one.getAttribute('selected') !== null,
+              two.getAttribute('selected') !== null,
+              one instanceof HTMLOptionElement,
+              one instanceof Option,
+              window.Option === Option,
+              [select.length, select[0].value, select[1].textContent, select[2].value].join(',')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:Four:true:5:5:true:true:true:true:true:3,Four,Five,6",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn select_index_assignment_with_option_constructor_replaces_and_removes() -> Result<()> {
+    let html = r#"
+        <select id='s'></select>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const select = document.getElementById('s');
+            select[0] = new Option('zero', '0');
+            select[1] = new Option('one', '1');
+            select[2] = new Option('two', '2');
+
+            const before = [select.length, select.item(1).value, select.item(2).value].join(',');
+
+            select[1] = new Option('ONE', '10');
+            select[5] = new Option('tail', '9');
+            const afterReplace = [select.length, select.item(1).value, select.item(3).value].join(',');
+
+            select[0] = null;
+            const afterRemove = [
+              select.length,
+              select.item(0).value,
+              select.item(1).value,
+              select.item(2).value,
+              select.item(3) === null
+            ].join(',');
+
+            document.getElementById('result').textContent =
+              [before, afterReplace, afterRemove].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "3,1,2|4,10,9|3,10,2,9,true")?;
+    Ok(())
+}

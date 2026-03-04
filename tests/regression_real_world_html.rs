@@ -158,8 +158,28 @@ fn csv_deduplicator_inline_script_does_not_fail_with_unclosed_block() -> browser
 }
 
 #[test]
-fn cron_descriptor_inline_script_does_not_fail_with_unsupported_expression() -> browser_tester::Result<()>
-{
+fn malformed_escaped_empty_string_literals_are_normalized_before_parse()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      (() => {
+        const row = [null, ""];
+        const allEmpty = row.every((cell) => String(cell == null ? \"\" : cell) === \"\");
+        const replaced = "\"".replace(/\"/g, "x");
+        document.getElementById("result").textContent = String(allEmpty) + ":" + replaced;
+      })();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:x")?;
+    Ok(())
+}
+
+#[test]
+fn cron_descriptor_inline_script_does_not_fail_with_unsupported_expression()
+-> browser_tester::Result<()> {
     let html = include_str!("fixtures/cron-descriptor-inline-script.html");
     let _ = Harness::from_html(html)?;
     Ok(())

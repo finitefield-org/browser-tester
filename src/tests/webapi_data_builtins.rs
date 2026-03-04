@@ -2560,6 +2560,84 @@ fn match_media_default_value_can_be_configured() -> Result<()> {
 }
 
 #[test]
+fn match_media_event_target_methods_work_in_expression_context() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(width <= 600px)');
+          let calls = 0;
+          const listener = () => { calls += 1; };
+          document.getElementById('btn').addEventListener('click', () => {
+            const ret = mql.addEventListener('change', listener);
+            mql.dispatchEvent(new Event('change'));
+            const removed = mql.removeEventListener('change', listener);
+            mql.dispatchEvent(new Event('change'));
+            document.getElementById('result').textContent =
+              (ret === undefined) + ':' + (removed === undefined) + ':' + calls;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:1")?;
+    Ok(())
+}
+
+#[test]
+fn match_media_add_listener_alias_and_onchange_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(prefers-reduced-motion: reduce)');
+          let count = 0;
+          const legacy = () => { count += 1; };
+          document.getElementById('btn').addEventListener('click', () => {
+            mql.onchange = () => { count += 10; };
+            mql.addListener(legacy);
+            mql.dispatchEvent(new Event('change'));
+            mql.removeListener(legacy);
+            mql.onchange = null;
+            mql.dispatchEvent(new Event('change'));
+            document.getElementById('result').textContent =
+              count + ':' + (mql.onchange === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "11:true")?;
+    Ok(())
+}
+
+#[test]
+fn match_media_matches_property_is_live_for_existing_objects() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(unknown-query)');
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              mql.matches + ':' + mql.media;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "false:(unknown-query)")?;
+
+    h.set_default_match_media_matches(true);
+    h.click("#btn")?;
+    h.assert_text("#result", "true:(unknown-query)")?;
+    Ok(())
+}
+
+#[test]
 fn navigator_clipboard_read_text_then_updates_dom() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2804,6 +2882,123 @@ fn structured_clone_rejects_non_cloneable_values() -> Result<()> {
 }
 
 #[test]
+fn structured_clone_preserves_circular_and_shared_references() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const source = { name: 'MDN' };
+            source.self = source;
+            source.shared = { value: 1 };
+            source.left = source.shared;
+            source.right = source.shared;
+
+            const clone = structuredClone(source);
+            const left = clone.left;
+            left.value = 9;
+
+            document.getElementById('result').textContent =
+              (clone !== source) + ':' +
+              (clone.self === clone) + ':' +
+              (clone.left === clone.right) + ':' +
+              (clone.left !== source.shared) + ':' +
+              source.shared.value + ':' +
+              clone.right.value;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true:true:true:1:9")?;
+    Ok(())
+}
+
+#[test]
+fn structured_clone_transfers_array_buffer() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const buffer = new ArrayBuffer(4);
+            const source = new Uint8Array(buffer);
+            source[0] = 1;
+            source[1] = 2;
+
+            const clone = structuredClone({ buffer }, { transfer: [buffer] });
+            const moved = new Uint8Array(clone.buffer);
+            const detachedView = new Uint8Array(buffer);
+
+            document.getElementById('result').textContent =
+              buffer.byteLength + ':' +
+              moved[0] + ':' +
+              moved[1] + ':' +
+              detachedView.byteLength;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:1:2:0")?;
+    Ok(())
+}
+
+#[test]
+fn structured_clone_window_method_reference_supports_options() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const sc = window.structuredClone;
+            const buffer = new ArrayBuffer(2);
+            const source = new Uint8Array(buffer);
+            source[0] = 7;
+
+            const clone = sc({ buffer }, { transfer: [buffer] });
+            const moved = new Uint8Array(clone.buffer);
+
+            document.getElementById('result').textContent =
+              buffer.byteLength + ':' + moved[0];
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "0:7")?;
+    Ok(())
+}
+
+#[test]
+fn structured_clone_invalid_transfer_list_item_throws_data_clone_error() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            try {
+              structuredClone({ x: 1 }, { transfer: [1] });
+              document.getElementById('result').textContent = 'no-error';
+            } catch (e) {
+              document.getElementById('result').textContent =
+                String(e).includes('DataCloneError') &&
+                String(e).includes('transfer list items');
+            }
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
 fn request_animation_frame_and_cancel_animation_frame_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2829,6 +3024,396 @@ fn request_animation_frame_and_cancel_animation_frame_work() -> Result<()> {
     h.assert_text("#result", "")?;
     h.advance_time(1)?;
     h.assert_text("#result", "R16")?;
+    Ok(())
+}
+
+#[test]
+fn request_animation_frame_window_method_reference_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const raf = window.requestAnimationFrame;
+            raf((ts) => {
+              out.textContent = 'ts=' + ts;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(16)?;
+    h.assert_text("#result", "ts=16")?;
+    Ok(())
+}
+
+#[test]
+fn request_animation_frame_method_requires_callable_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const raf = window.requestAnimationFrame;
+            raf(123);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("requestAnimationFrame should reject non-callable callbacks");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("requestAnimationFrame callback must be callable"))
+        }
+        other => panic!("unexpected requestAnimationFrame error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn cancel_animation_frame_window_method_reference_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const cancel = window.cancelAnimationFrame;
+            const canceled = requestAnimationFrame(() => {
+              out.textContent = 'CANCELED';
+            });
+            const returnValue = cancel(canceled);
+            requestAnimationFrame((ts) => {
+              out.textContent = String(returnValue === undefined) + '|R' + ts;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(16)?;
+    h.assert_text("#result", "true|R16")?;
+    Ok(())
+}
+
+#[test]
+fn clear_interval_window_method_reference_cancels_interval() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const clear = window.clearInterval;
+            let count = 0;
+            const id = setInterval(() => {
+              count += 1;
+              out.textContent = String(count);
+              if (count === 2) {
+                clear(id);
+              }
+            }, 5);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "1")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "2")?;
+    h.advance_time(20)?;
+    h.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn set_interval_window_method_reference_supports_callback_and_extra_arguments() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const setIntervalRef = window.setInterval;
+            let count = 0;
+            const id = setIntervalRef((left, right) => {
+              count += 1;
+              out.textContent = String(count) + ':' + left + right;
+            }, 5, 'A', 'B');
+            out.textContent = 'scheduled:' + String(id);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "scheduled:1")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "1:AB")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "2:AB")?;
+    assert!(h.clear_timer(1));
+    h.advance_time(20)?;
+    h.assert_text("#result", "2:AB")?;
+    Ok(())
+}
+
+#[test]
+fn set_interval_window_method_reference_supports_string_code_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setIntervalRef = window.setInterval;
+            const id = setIntervalRef(
+              "window.__intervalCodeCount = (window.__intervalCodeCount || 0) + 1; document.getElementById('result').textContent = 'code:' + window.__intervalCodeCount;",
+              5
+            );
+            document.getElementById('result').textContent = 'scheduled:' + String(id);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "scheduled:1")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "code:1")?;
+    assert!(h.clear_timer(1));
+    Ok(())
+}
+
+#[test]
+fn set_interval_window_method_reference_requires_at_least_one_argument() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setIntervalRef = window.setInterval;
+            setIntervalRef();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("setInterval should reject empty argument list");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("setInterval requires at least one argument"))
+        }
+        other => panic!("unexpected setInterval error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn set_interval_window_method_reference_rejects_unsupported_callback_type() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setIntervalRef = window.setInterval;
+            setIntervalRef(123, 5);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("setInterval should reject non-callable and non-string callbacks");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("TypeError: setInterval callback must be callable or a string"),)
+        }
+        other => panic!("unexpected setInterval error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn set_timeout_window_method_reference_supports_callback_and_extra_arguments() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const setTimeoutRef = window.setTimeout;
+            const id = setTimeoutRef((left, right) => {
+              out.textContent = left + right;
+            }, 5, 'A', 'B');
+            out.textContent = 'scheduled:' + String(id);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "scheduled:1")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "AB")?;
+    h.advance_time(20)?;
+    h.assert_text("#result", "AB")?;
+    Ok(())
+}
+
+#[test]
+fn set_timeout_window_method_reference_supports_string_code_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setTimeoutRef = window.setTimeout;
+            const id = setTimeoutRef(
+              "window.__timeoutCodeCount = (window.__timeoutCodeCount || 0) + 1; document.getElementById('result').textContent = 'code:' + window.__timeoutCodeCount;",
+              5
+            );
+            document.getElementById('result').textContent = 'scheduled:' + String(id);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "scheduled:1")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "code:1")?;
+    h.advance_time(20)?;
+    h.assert_text("#result", "code:1")?;
+    Ok(())
+}
+
+#[test]
+fn set_timeout_window_method_reference_requires_at_least_one_argument() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setTimeoutRef = window.setTimeout;
+            setTimeoutRef();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("setTimeout should reject empty argument list");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("setTimeout requires at least one argument"))
+        }
+        other => panic!("unexpected setTimeout error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn set_timeout_window_method_reference_rejects_unsupported_callback_type() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const setTimeoutRef = window.setTimeout;
+            setTimeoutRef(123, 5);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("setTimeout should reject non-callable and non-string callbacks");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("TypeError: setTimeout callback must be callable or a string"),)
+        }
+        other => panic!("unexpected setTimeout error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn clear_interval_unknown_id_is_noop_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = window.clearInterval(999999);
+            document.getElementById('result').textContent = String(result === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn clear_timeout_window_method_reference_cancels_timeout() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const out = document.getElementById('result');
+            const clear = window.clearTimeout;
+            const timeoutId = setTimeout(() => {
+              out.textContent = 'TIMEOUT_FIRED';
+            }, 10);
+            clear(timeoutId);
+            setTimeout(() => {
+              out.textContent = 'still-canceled';
+            }, 12);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(10)?;
+    h.assert_text("#result", "")?;
+    h.advance_time(2)?;
+    h.assert_text("#result", "still-canceled")?;
+    Ok(())
+}
+
+#[test]
+fn clear_timeout_unknown_id_is_noop_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = window.clearTimeout(1234567);
+            document.getElementById('result').textContent = String(result === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true")?;
     Ok(())
 }
 
@@ -2960,6 +3545,57 @@ fn alert_confirm_prompt_support_mocked_responses() -> Result<()> {
 }
 
 #[test]
+fn alert_supports_optional_message_and_window_method_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const alias = window.alert;
+            alert();
+            window.alert(123);
+            alias(true);
+            document.getElementById('result').textContent = 'ok';
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "ok")?;
+    assert_eq!(
+        h.take_alert_messages(),
+        vec!["".to_string(), "123".to_string(), "true".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn confirm_supports_optional_message_and_window_method_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const alias = window.confirm;
+            const a = confirm();
+            const b = window.confirm(123);
+            const c = alias(true);
+            document.getElementById('result').textContent = a + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.enqueue_confirm_response(true);
+    h.enqueue_confirm_response(false);
+    h.enqueue_confirm_response(true);
+    h.click("#btn")?;
+    h.assert_text("#result", "true:false:true")?;
+    Ok(())
+}
+
+#[test]
 fn prompt_uses_default_argument_when_no_mock_response() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2975,6 +3611,31 @@ fn prompt_uses_default_argument_when_no_mock_response() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "guest")?;
+    Ok(())
+}
+
+#[test]
+fn prompt_supports_optional_message_and_window_method_reference() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const alias = window.prompt;
+            const a = prompt();
+            const b = window.prompt('name?');
+            const c = alias('role?', 'dev');
+            document.getElementById('result').textContent =
+              String(a === null) + ':' + b + ':' + c;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.enqueue_prompt_response(None);
+    h.enqueue_prompt_response(Some("kazu"));
+    h.click("#btn")?;
+    h.assert_text("#result", "true:kazu:dev")?;
     Ok(())
 }
 
@@ -3055,19 +3716,19 @@ fn global_function_arity_errors_have_stable_messages() {
         ),
         (
             "<script>structuredClone();</script>",
-            "structuredClone requires exactly one argument",
+            "structuredClone requires one or two arguments",
         ),
         (
-            "<script>alert();</script>",
-            "alert requires exactly one argument",
+            "<script>window.alert('ok', 'ng');</script>",
+            "alert requires zero or one argument",
         ),
         (
             "<script>window.confirm('ok', 'ng');</script>",
-            "confirm requires exactly one argument",
+            "confirm requires zero or one argument",
         ),
         (
-            "<script>prompt();</script>",
-            "prompt requires one or two arguments",
+            "<script>prompt('x', 'y', 'z');</script>",
+            "prompt requires zero to two arguments",
         ),
         (
             "<script>window.prompt('x', );</script>",
@@ -3078,8 +3739,24 @@ fn global_function_arity_errors_have_stable_messages() {
             "requestAnimationFrame requires exactly one argument",
         ),
         (
+            "<script>setTimeout();</script>",
+            "setTimeout requires at least 1 argument",
+        ),
+        (
             "<script>cancelAnimationFrame();</script>",
             "cancelAnimationFrame requires 1 argument",
+        ),
+        (
+            "<script>clearInterval();</script>",
+            "clearInterval requires 1 argument",
+        ),
+        (
+            "<script>clearTimeout();</script>",
+            "clearTimeout requires 1 argument",
+        ),
+        (
+            "<script>queueMicrotask();</script>",
+            "queueMicrotask requires exactly one argument",
         ),
         (
             "<script>Array.isArray();</script>",
@@ -3161,7 +3838,10 @@ fn btoa_non_latin1_input_returns_runtime_error() -> Result<()> {
         .click("#btn")
         .expect_err("btoa should reject non-Latin1 input");
     match err {
-        Error::ScriptRuntime(msg) => assert!(msg.contains("non-Latin1")),
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("InvalidCharacterError"));
+            assert!(msg.contains("non-Latin1"));
+        }
         other => panic!("unexpected btoa error: {other:?}"),
     }
     Ok(())
@@ -3238,6 +3918,46 @@ fn atob_and_btoa_global_functions_work() -> Result<()> {
 }
 
 #[test]
+fn atob_window_method_reference_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const decode = window.atob;
+            const decoded = decode('Qg==');
+            document.getElementById('result').textContent = decoded;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "B")?;
+    Ok(())
+}
+
+#[test]
+fn btoa_window_method_reference_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const encode = window.btoa;
+            const encoded = encode('B');
+            document.getElementById('result').textContent = encoded;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "Qg==")?;
+    Ok(())
+}
+
+#[test]
 fn atob_invalid_input_returns_runtime_error() -> Result<()> {
     let html = r#"
         <button id='atob'>atob</button>
@@ -3254,7 +3974,10 @@ fn atob_invalid_input_returns_runtime_error() -> Result<()> {
         .click("#atob")
         .expect_err("atob should reject invalid base64");
     match atob_err {
-        Error::ScriptRuntime(msg) => assert!(msg.contains("invalid base64")),
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("InvalidCharacterError"));
+            assert!(msg.contains("invalid base64"));
+        }
         other => panic!("unexpected atob error: {other:?}"),
     }
 

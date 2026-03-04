@@ -1,6 +1,32 @@
 use super::*;
 
 impl Dom {
+    fn sync_select_values_including_subtree(&mut self, root: NodeId) -> Result<()> {
+        let mut select_nodes = Vec::new();
+        if self
+            .tag_name(root)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+        {
+            select_nodes.push(root);
+        }
+
+        let mut descendants = Vec::new();
+        self.collect_elements_descendants_dfs(root, &mut descendants);
+        for node in descendants {
+            if self
+                .tag_name(node)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+            {
+                select_nodes.push(node);
+            }
+        }
+
+        for select_node in select_nodes {
+            self.sync_select_value(select_node)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn text_content(&self, node_id: NodeId) -> String {
         match &self.nodes[node_id.0].node_type {
             NodeType::Document => {
@@ -103,6 +129,7 @@ impl Dom {
         }
 
         self.rebuild_id_index();
+        self.sync_select_values_including_subtree(node_id)?;
         Ok(())
     }
 
@@ -151,6 +178,7 @@ impl Dom {
         }
 
         self.rebuild_id_index();
+        self.sync_select_values_including_subtree(parent)?;
         Ok(())
     }
 
@@ -172,6 +200,14 @@ impl Dom {
                 self.insert_adjacent_node(target, position, node)?;
             }
         }
+
+        let sync_root = match position {
+            InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd => {
+                self.parent(target).unwrap_or(target)
+            }
+            InsertAdjacentPosition::AfterBegin | InsertAdjacentPosition::BeforeEnd => target,
+        };
+        self.sync_select_values_including_subtree(sync_root)?;
         Ok(())
     }
 

@@ -333,8 +333,9 @@ impl Harness {
                 let js_type = match inner.as_ref() {
                     Expr::Var(name) => {
                         self.ensure_binding_initialized(env, name)?;
-                        env.get(name)
-                            .cloned()
+                        self.resolve_listener_capture_pending_value(name)
+                            .flatten()
+                            .or_else(|| env.get(name).cloned())
                             .or_else(|| self.resolve_pending_function_decl(name, env))
                             .as_ref()
                             .map_or("undefined", |value| match value {
@@ -374,7 +375,7 @@ impl Harness {
                             | Value::RegExp(_)
                             | Value::Date(_) => "object",
                             Value::Object(_) => {
-                                if self.is_callable_value(value) {
+                                if self.is_callable_value(&value) {
                                     "function"
                                 } else {
                                     "object"

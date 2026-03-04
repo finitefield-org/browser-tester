@@ -402,6 +402,110 @@ impl Harness {
         Ok((encoding, fatal, ignore_bom))
     }
 
+    fn css_style_sheet_object_from_receiver(
+        receiver: Option<&Value>,
+    ) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(entries)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "CSSStyleSheet method called on incompatible receiver".into(),
+            ));
+        };
+        let is_css_style_sheet = {
+            let entries_ref = entries.borrow();
+            Self::is_css_style_sheet_object(&entries_ref)
+        };
+        if !is_css_style_sheet {
+            return Err(Error::ScriptRuntime(
+                "CSSStyleSheet method called on incompatible receiver".into(),
+            ));
+        }
+        Ok(entries.clone())
+    }
+
+    fn computed_style_state_from_receiver(
+        receiver: Option<&Value>,
+    ) -> Result<(NodeId, Option<String>)> {
+        let Some(Value::Object(entries)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "getPropertyValue called on incompatible receiver".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        if !Self::is_computed_style_object(&entries) {
+            return Err(Error::ScriptRuntime(
+                "getPropertyValue called on incompatible receiver".into(),
+            ));
+        }
+        let Some(node) = Self::computed_style_target_node(&entries) else {
+            return Err(Error::ScriptRuntime(
+                "getPropertyValue called on incompatible receiver".into(),
+            ));
+        };
+        let pseudo = Self::computed_style_pseudo(&entries);
+        Ok((node, pseudo))
+    }
+
+    fn get_computed_style_pseudo_from_value(value: Option<&Value>) -> Result<Option<String>> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        match value {
+            Value::Null | Value::Undefined => Ok(None),
+            Value::String(raw) => {
+                let pseudo = raw.trim();
+                if !Self::is_valid_get_computed_style_pseudo_selector(pseudo) {
+                    return Err(Error::ScriptRuntime(
+                        "TypeError: pseudoElt must be a valid pseudo-element selector and not ::part() or ::slotted()".into(),
+                    ));
+                }
+                Ok(Some(pseudo.to_string()))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "TypeError: pseudoElt must be a valid pseudo-element selector and not ::part() or ::slotted()".into(),
+            )),
+        }
+    }
+
+    fn is_valid_get_computed_style_pseudo_selector(pseudo: &str) -> bool {
+        if pseudo.is_empty() {
+            return false;
+        }
+        let lowered = pseudo.to_ascii_lowercase();
+        if lowered.starts_with("::part(") || lowered.starts_with("::slotted(") {
+            return false;
+        }
+        let Some(rest) = lowered.strip_prefix("::") else {
+            return false;
+        };
+        if rest.is_empty() {
+            return false;
+        }
+        let (name, maybe_args) = if let Some(paren_idx) = rest.find('(') {
+            let Some(stripped) = rest.strip_suffix(')') else {
+                return false;
+            };
+            if paren_idx + 1 > stripped.len() {
+                return false;
+            }
+            (&stripped[..paren_idx], Some(&stripped[paren_idx + 1..]))
+        } else {
+            (rest, None)
+        };
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            return false;
+        }
+        if let Some(args) = maybe_args {
+            if args.contains('(') || args.contains(')') {
+                return false;
+            }
+        }
+        true
+    }
+
     fn text_decoder_options_from_value(options: Option<&Value>) -> Result<(bool, bool)> {
         let Some(options) = options else {
             return Ok((false, false));
@@ -433,6 +537,57 @@ impl Harness {
                 "TextDecoder.decode options must be an object".into(),
             )),
         }
+    }
+
+    fn window_post_message_target_window(
+        &self,
+        this_arg: Option<&Value>,
+    ) -> Rc<RefCell<ObjectValue>> {
+        let Some(Value::Object(target)) = this_arg else {
+            return self.dom_runtime.window_object.clone();
+        };
+        if Self::is_window_object(&target.borrow()) {
+            target.clone()
+        } else {
+            self.dom_runtime.window_object.clone()
+        }
+    }
+
+    fn window_post_message_target_origin_from_args(
+        &self,
+        args: &[Value],
+        fallback_origin: &str,
+    ) -> String {
+        let Some(second) = args.get(1) else {
+            return fallback_origin.to_string();
+        };
+
+        if matches!(second, Value::Object(_) | Value::Null) {
+            if let Value::Object(entries) = second {
+                let entries = entries.borrow();
+                return match Self::object_get_entry(&entries, "targetOrigin") {
+                    Some(Value::Null | Value::Undefined) | None => fallback_origin.to_string(),
+                    Some(value) => value.as_string(),
+                };
+            }
+            return fallback_origin.to_string();
+        }
+
+        second.as_string()
+    }
+
+    fn window_post_message_target_origin_matches(
+        target_origin: &str,
+        recipient_origin: &str,
+        sender_origin: &str,
+    ) -> bool {
+        if target_origin == "*" {
+            return true;
+        }
+        if target_origin == "/" {
+            return sender_origin == recipient_origin;
+        }
+        target_origin == recipient_origin
     }
 
     fn text_decoder_input_bytes(&self, input: Option<&Value>) -> Result<Vec<u8>> {
@@ -752,6 +907,10 @@ impl Harness {
         constructor_name: &str,
         args: &[Value],
         include_detail: bool,
+        include_keyboard_fields: bool,
+        include_wheel_fields: bool,
+        include_navigate_fields: bool,
+        include_pointer_fields: bool,
     ) -> Result<Value> {
         if args.is_empty() || args.len() > 2 {
             return Err(Error::ScriptRuntime(format!(
@@ -772,6 +931,43 @@ impl Harness {
         } else {
             None
         };
+        let mut key = String::new();
+        let mut code = String::new();
+        let mut location = 0i64;
+        let mut ctrl_key = false;
+        let mut meta_key = false;
+        let mut shift_key = false;
+        let mut alt_key = false;
+        let mut repeat = false;
+        let mut is_composing = false;
+        let mut delta_x = 0.0f64;
+        let mut delta_y = 0.0f64;
+        let mut delta_z = 0.0f64;
+        let mut delta_mode = 0i64;
+        let mut pointer_id = 0i64;
+        let mut pointer_width = 1.0f64;
+        let mut pointer_height = 1.0f64;
+        let mut pointer_pressure = 0.0f64;
+        let mut pointer_tangential_pressure = 0.0f64;
+        let mut pointer_tilt_x = 0i64;
+        let mut pointer_tilt_y = 0i64;
+        let mut pointer_twist = 0i64;
+        let mut pointer_type = String::new();
+        let mut pointer_is_primary = false;
+        let mut pointer_altitude_angle = 0.0f64;
+        let mut pointer_azimuth_angle = 0.0f64;
+        let mut pointer_persistent_device_id = 0i64;
+        let mut can_intercept = false;
+        let mut destination = Value::Null;
+        let mut download_request = Value::Null;
+        let mut form_data = Value::Null;
+        let mut hash_change = false;
+        let mut has_ua_visual_transition = false;
+        let mut info = Value::Undefined;
+        let mut navigation_type = "push".to_string();
+        let mut signal = Self::new_navigate_event_default_signal_value();
+        let mut source_element = Value::Null;
+        let mut user_initiated = false;
         if let Some(options) = args.get(1) {
             match options {
                 Value::Null | Value::Undefined => {}
@@ -785,6 +981,114 @@ impl Harness {
                         detail =
                             Some(Self::object_get_entry(&entries, "detail").unwrap_or(Value::Null));
                     }
+                    if include_keyboard_fields {
+                        key = Self::object_get_entry(&entries, "key")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        code = Self::object_get_entry(&entries, "code")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        location = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "location")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                        ctrl_key = Self::object_get_entry(&entries, "ctrlKey")
+                            .is_some_and(|value| value.truthy());
+                        meta_key = Self::object_get_entry(&entries, "metaKey")
+                            .is_some_and(|value| value.truthy());
+                        shift_key = Self::object_get_entry(&entries, "shiftKey")
+                            .is_some_and(|value| value.truthy());
+                        alt_key = Self::object_get_entry(&entries, "altKey")
+                            .is_some_and(|value| value.truthy());
+                        repeat = Self::object_get_entry(&entries, "repeat")
+                            .is_some_and(|value| value.truthy());
+                        is_composing = Self::object_get_entry(&entries, "isComposing")
+                            .is_some_and(|value| value.truthy());
+                    }
+                    if include_wheel_fields {
+                        delta_x = Self::object_get_entry(&entries, "deltaX")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        delta_y = Self::object_get_entry(&entries, "deltaY")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        delta_z = Self::object_get_entry(&entries, "deltaZ")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        delta_mode = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "deltaMode")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                    }
+                    if include_pointer_fields {
+                        pointer_id = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "pointerId")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                        pointer_width = Self::object_get_entry(&entries, "width")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(1.0);
+                        pointer_height = Self::object_get_entry(&entries, "height")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(1.0);
+                        pointer_pressure = Self::object_get_entry(&entries, "pressure")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        pointer_tangential_pressure =
+                            Self::object_get_entry(&entries, "tangentialPressure")
+                                .map(|value| Self::coerce_number_for_global(&value))
+                                .unwrap_or(0.0);
+                        pointer_tilt_x = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "tiltX").unwrap_or(Value::Number(0)),
+                        );
+                        pointer_tilt_y = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "tiltY").unwrap_or(Value::Number(0)),
+                        );
+                        pointer_twist = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "twist").unwrap_or(Value::Number(0)),
+                        );
+                        pointer_type = Self::object_get_entry(&entries, "pointerType")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        pointer_is_primary = Self::object_get_entry(&entries, "isPrimary")
+                            .is_some_and(|value| value.truthy());
+                        pointer_altitude_angle = Self::object_get_entry(&entries, "altitudeAngle")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        pointer_azimuth_angle = Self::object_get_entry(&entries, "azimuthAngle")
+                            .map(|value| Self::coerce_number_for_global(&value))
+                            .unwrap_or(0.0);
+                        pointer_persistent_device_id = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "persistentDeviceId")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                    }
+                    if include_navigate_fields {
+                        can_intercept = Self::object_get_entry(&entries, "canIntercept")
+                            .is_some_and(|value| value.truthy());
+                        destination =
+                            Self::object_get_entry(&entries, "destination").unwrap_or(Value::Null);
+                        download_request = Self::object_get_entry(&entries, "downloadRequest")
+                            .unwrap_or(Value::Null);
+                        form_data =
+                            Self::object_get_entry(&entries, "formData").unwrap_or(Value::Null);
+                        hash_change = Self::object_get_entry(&entries, "hashChange")
+                            .is_some_and(|value| value.truthy());
+                        has_ua_visual_transition =
+                            Self::object_get_entry(&entries, "hasUAVisualTransition")
+                                .is_some_and(|value| value.truthy());
+                        info = Self::object_get_entry(&entries, "info").unwrap_or(Value::Undefined);
+                        if let Some(value) = Self::object_get_entry(&entries, "navigationType") {
+                            navigation_type = value.as_string();
+                        }
+                        if let Some(value) = Self::object_get_entry(&entries, "signal") {
+                            signal = value;
+                        }
+                        source_element = Self::object_get_entry(&entries, "sourceElement")
+                            .unwrap_or(Value::Null);
+                        user_initiated = Self::object_get_entry(&entries, "userInitiated")
+                            .is_some_and(|value| value.truthy());
+                    }
                 }
                 _ => {
                     return Err(Error::ScriptRuntime(format!(
@@ -794,6 +1098,7 @@ impl Harness {
             }
         }
 
+        let event_type_value = event_type.clone();
         let mut entries = vec![
             (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("type".to_string(), Value::String(event_type)),
@@ -808,9 +1113,129 @@ impl Harness {
             ),
             ("target".to_string(), Value::Null),
             ("currentTarget".to_string(), Value::Null),
+            (
+                "preventDefault".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "stopPropagation".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "stopImmediatePropagation".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ];
         if let Some(detail) = detail {
             entries.push(("detail".to_string(), detail));
+        }
+        if include_keyboard_fields {
+            let key_code = Self::keyboard_key_code_for_key(&key);
+            let char_code = Self::keyboard_char_code_for_event(&event_type_value, &key);
+            entries.push((
+                INTERNAL_KEYBOARD_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("key".to_string(), Value::String(key.clone())));
+            entries.push(("code".to_string(), Value::String(code)));
+            entries.push(("location".to_string(), Value::Number(location)));
+            entries.push(("ctrlKey".to_string(), Value::Bool(ctrl_key)));
+            entries.push(("metaKey".to_string(), Value::Bool(meta_key)));
+            entries.push(("shiftKey".to_string(), Value::Bool(shift_key)));
+            entries.push(("altKey".to_string(), Value::Bool(alt_key)));
+            entries.push(("repeat".to_string(), Value::Bool(repeat)));
+            entries.push(("isComposing".to_string(), Value::Bool(is_composing)));
+            entries.push(("keyCode".to_string(), Value::Number(key_code)));
+            entries.push(("charCode".to_string(), Value::Number(char_code)));
+            entries.push((
+                "keyIdentifier".to_string(),
+                Value::String(if key.is_empty() {
+                    "Unidentified".to_string()
+                } else {
+                    key
+                }),
+            ));
+            entries.push((
+                "getModifierState".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+        }
+        if include_wheel_fields {
+            entries.push((
+                INTERNAL_WHEEL_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("deltaX".to_string(), Value::Float(delta_x)));
+            entries.push(("deltaY".to_string(), Value::Float(delta_y)));
+            entries.push(("deltaZ".to_string(), Value::Float(delta_z)));
+            entries.push(("deltaMode".to_string(), Value::Number(delta_mode)));
+        }
+        if include_pointer_fields {
+            entries.push((
+                INTERNAL_POINTER_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("pointerId".to_string(), Value::Number(pointer_id)));
+            entries.push(("width".to_string(), Value::Float(pointer_width)));
+            entries.push(("height".to_string(), Value::Float(pointer_height)));
+            entries.push(("pressure".to_string(), Value::Float(pointer_pressure)));
+            entries.push((
+                "tangentialPressure".to_string(),
+                Value::Float(pointer_tangential_pressure),
+            ));
+            entries.push(("tiltX".to_string(), Value::Number(pointer_tilt_x)));
+            entries.push(("tiltY".to_string(), Value::Number(pointer_tilt_y)));
+            entries.push(("twist".to_string(), Value::Number(pointer_twist)));
+            entries.push(("pointerType".to_string(), Value::String(pointer_type)));
+            entries.push(("isPrimary".to_string(), Value::Bool(pointer_is_primary)));
+            entries.push((
+                "altitudeAngle".to_string(),
+                Value::Float(pointer_altitude_angle),
+            ));
+            entries.push((
+                "azimuthAngle".to_string(),
+                Value::Float(pointer_azimuth_angle),
+            ));
+            entries.push((
+                "persistentDeviceId".to_string(),
+                Value::Number(pointer_persistent_device_id),
+            ));
+            entries.push((
+                "getCoalescedEvents".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+            entries.push((
+                "getPredictedEvents".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+        }
+        if include_navigate_fields {
+            entries.push((
+                INTERNAL_NAVIGATE_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("canIntercept".to_string(), Value::Bool(can_intercept)));
+            entries.push(("destination".to_string(), destination));
+            entries.push(("downloadRequest".to_string(), download_request));
+            entries.push(("formData".to_string(), form_data));
+            entries.push(("hashChange".to_string(), Value::Bool(hash_change)));
+            entries.push((
+                "hasUAVisualTransition".to_string(),
+                Value::Bool(has_ua_visual_transition),
+            ));
+            entries.push(("info".to_string(), info));
+            entries.push(("navigationType".to_string(), Value::String(navigation_type)));
+            entries.push(("signal".to_string(), signal));
+            entries.push(("sourceElement".to_string(), source_element));
+            entries.push(("userInitiated".to_string(), Value::Bool(user_initiated)));
+            entries.push((
+                "intercept".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+            entries.push((
+                "scroll".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
         }
         Ok(Self::new_object_value(entries))
     }
@@ -1145,9 +1570,8 @@ impl Harness {
                         let (locale, options) =
                             self.resolve_intl_number_format_options(callable)?;
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
-                        let number = Self::coerce_number_for_global(&value);
-                        Ok(Value::String(self.intl_format_number_with_options(
-                            number, &locale, &options,
+                        Ok(Value::String(self.intl_format_number_value_with_options(
+                            &value, &locale, &options,
                         )))
                     }
                     "intl_segmenter_segments_iterator" => {
@@ -1378,15 +1802,63 @@ impl Harness {
                         }
                         self.new_event_target_instance_from_constructor(callable, this_arg)
                     }
-                    "event_constructor" => {
-                        self.new_event_object_from_constructor_args("Event", args, false)
-                    }
-                    "custom_event_constructor" => {
-                        self.new_event_object_from_constructor_args("CustomEvent", args, true)
-                    }
-                    "mouse_event_constructor" => {
-                        self.new_event_object_from_constructor_args("MouseEvent", args, false)
-                    }
+                    "event_constructor" => self.new_event_object_from_constructor_args(
+                        "Event", args, false, false, false, false, false,
+                    ),
+                    "custom_event_constructor" => self.new_event_object_from_constructor_args(
+                        "CustomEvent",
+                        args,
+                        true,
+                        false,
+                        false,
+                        false,
+                        false,
+                    ),
+                    "mouse_event_constructor" => self.new_event_object_from_constructor_args(
+                        "MouseEvent",
+                        args,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                    ),
+                    "keyboard_event_constructor" => self.new_event_object_from_constructor_args(
+                        "KeyboardEvent",
+                        args,
+                        false,
+                        true,
+                        false,
+                        false,
+                        false,
+                    ),
+                    "wheel_event_constructor" => self.new_event_object_from_constructor_args(
+                        "WheelEvent",
+                        args,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                    ),
+                    "navigate_event_constructor" => self.new_event_object_from_constructor_args(
+                        "NavigateEvent",
+                        args,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                    ),
+                    "pointer_event_constructor" => self.new_event_object_from_constructor_args(
+                        "PointerEvent",
+                        args,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                    ),
                     "dom_parser_constructor" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime(
@@ -1425,6 +1897,333 @@ impl Harness {
                         self.sync_window_runtime_properties();
                         Ok(Value::Undefined)
                     }
+                    "window_stop_function" => Ok(Value::Undefined),
+                    "window_focus_function" => Ok(Value::Undefined),
+                    "window_scroll_function" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "scroll supports zero, one, or two arguments".into(),
+                            ));
+                        }
+                        let position_changed = self.apply_document_scroll_operation("scroll", args);
+                        self.dispatch_document_scroll_sequence(position_changed)?;
+                        Ok(Value::Undefined)
+                    }
+                    "window_scroll_by_function" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "scrollBy supports zero, one, or two arguments".into(),
+                            ));
+                        }
+                        let position_changed =
+                            self.apply_document_scroll_operation("scrollBy", args);
+                        self.dispatch_document_scroll_sequence(position_changed)?;
+                        Ok(Value::Undefined)
+                    }
+                    "window_scroll_to_function" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "scrollTo supports zero, one, or two arguments".into(),
+                            ));
+                        }
+                        let position_changed =
+                            self.apply_document_scroll_operation("scrollTo", args);
+                        self.dispatch_document_scroll_sequence(position_changed)?;
+                        Ok(Value::Undefined)
+                    }
+                    "window_move_by_function" => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "moveBy requires exactly two arguments".into(),
+                            ));
+                        }
+                        let delta_x = Self::value_to_i64(&args[0]);
+                        let delta_y = Self::value_to_i64(&args[1]);
+                        self.browser_apis.window_screen_x =
+                            self.browser_apis.window_screen_x.saturating_add(delta_x);
+                        self.browser_apis.window_screen_y =
+                            self.browser_apis.window_screen_y.saturating_add(delta_y);
+                        self.sync_window_runtime_properties();
+                        Ok(Value::Undefined)
+                    }
+                    "window_move_to_function" => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "moveTo requires exactly two arguments".into(),
+                            ));
+                        }
+                        let next_x = Self::value_to_i64(&args[0]);
+                        let next_y = Self::value_to_i64(&args[1]);
+                        self.browser_apis.window_screen_x = next_x;
+                        self.browser_apis.window_screen_y = next_y;
+                        self.sync_window_runtime_properties();
+                        Ok(Value::Undefined)
+                    }
+                    "window_resize_by_function" => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "resizeBy requires exactly two arguments".into(),
+                            ));
+                        }
+
+                        let current_width = {
+                            let window = self.dom_runtime.window_object.borrow();
+                            let raw_value = Self::object_get_entry(&window, "innerWidth");
+                            let parsed = match raw_value {
+                                Some(Value::Number(value)) => Some(value as f64),
+                                Some(Value::Float(value)) if value.is_finite() => Some(value),
+                                Some(Value::String(value)) => value.parse::<f64>().ok(),
+                                _ => None,
+                            }
+                            .unwrap_or(1024.0);
+                            if !parsed.is_finite() {
+                                1024i64
+                            } else {
+                                parsed.max(0.0).trunc() as i64
+                            }
+                        };
+                        let current_height = {
+                            let window = self.dom_runtime.window_object.borrow();
+                            let raw_value = Self::object_get_entry(&window, "innerHeight");
+                            let parsed = match raw_value {
+                                Some(Value::Number(value)) => Some(value as f64),
+                                Some(Value::Float(value)) if value.is_finite() => Some(value),
+                                Some(Value::String(value)) => value.parse::<f64>().ok(),
+                                _ => None,
+                            }
+                            .unwrap_or(768.0);
+                            if !parsed.is_finite() {
+                                768i64
+                            } else {
+                                parsed.max(0.0).trunc() as i64
+                            }
+                        };
+
+                        let delta_x = Self::value_to_i64(&args[0]);
+                        let delta_y = Self::value_to_i64(&args[1]);
+                        let next_width = current_width.saturating_add(delta_x).max(0);
+                        let next_height = current_height.saturating_add(delta_y).max(0);
+
+                        {
+                            let mut window = self.dom_runtime.window_object.borrow_mut();
+                            Self::object_set_entry(
+                                &mut window,
+                                "innerWidth".to_string(),
+                                Value::Number(next_width),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "innerHeight".to_string(),
+                                Value::Number(next_height),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "outerWidth".to_string(),
+                                Value::Number(next_width),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "outerHeight".to_string(),
+                                Value::Number(next_height),
+                            );
+                        }
+
+                        Ok(Value::Undefined)
+                    }
+                    "window_resize_to_function" => {
+                        if args.len() != 2 {
+                            return Err(Error::ScriptRuntime(
+                                "resizeTo requires exactly two arguments".into(),
+                            ));
+                        }
+
+                        let next_width = Self::value_to_i64(&args[0]).max(0);
+                        let next_height = Self::value_to_i64(&args[1]).max(0);
+                        {
+                            let mut window = self.dom_runtime.window_object.borrow_mut();
+                            Self::object_set_entry(
+                                &mut window,
+                                "innerWidth".to_string(),
+                                Value::Number(next_width),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "innerHeight".to_string(),
+                                Value::Number(next_height),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "outerWidth".to_string(),
+                                Value::Number(next_width),
+                            );
+                            Self::object_set_entry(
+                                &mut window,
+                                "outerHeight".to_string(),
+                                Value::Number(next_height),
+                            );
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "window_post_message_function" => {
+                        if args.is_empty() || args.len() > 3 {
+                            return Err(Error::ScriptRuntime(
+                                "postMessage requires one to three arguments".into(),
+                            ));
+                        }
+
+                        let sender_origin = self.current_location_parts().origin();
+                        let target_origin =
+                            self.window_post_message_target_origin_from_args(args, &sender_origin);
+                        let target_window =
+                            self.window_post_message_target_window(this_arg.as_ref());
+                        let recipient_origin = self.current_location_parts().origin();
+                        if !Self::window_post_message_target_origin_matches(
+                            &target_origin,
+                            &recipient_origin,
+                            &sender_origin,
+                        ) {
+                            return Ok(Value::Undefined);
+                        }
+
+                        let mut array_stack = Vec::new();
+                        let mut object_stack = Vec::new();
+                        let data = Self::structured_clone_value(
+                            &args[0],
+                            &mut array_stack,
+                            &mut object_stack,
+                        )?;
+                        let event_payload = Self::new_object_value(vec![
+                            (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
+                            ("type".to_string(), Value::String("message".to_string())),
+                            ("data".to_string(), data),
+                            ("origin".to_string(), Value::String(sender_origin)),
+                            (
+                                "source".to_string(),
+                                Value::Object(self.dom_runtime.window_object.clone()),
+                            ),
+                        ]);
+                        let _ = self.dispatch_event_target(target_window, event_payload)?;
+                        Ok(Value::Undefined)
+                    }
+                    "window_get_computed_style_function" => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "getComputedStyle requires one or two arguments".into(),
+                            ));
+                        }
+                        let node = match &args[0] {
+                            Value::Node(node) if self.dom.element(*node).is_some() => *node,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "TypeError: getComputedStyle target must be an Element".into(),
+                                ));
+                            }
+                        };
+                        let pseudo = Self::get_computed_style_pseudo_from_value(args.get(1))?;
+                        Ok(Self::new_computed_style_object_value(node, pseudo))
+                    }
+                    "window_alert_function" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "alert requires zero or one argument".into(),
+                            ));
+                        }
+                        let message = args.first().map(Value::as_string).unwrap_or_default();
+                        self.platform_mocks.alert_messages.push(message);
+                        Ok(Value::Undefined)
+                    }
+                    "window_confirm_function" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "confirm requires zero or one argument".into(),
+                            ));
+                        }
+                        if let Some(message) = args.first() {
+                            let _ = message.as_string();
+                        }
+                        let accepted = self
+                            .platform_mocks
+                            .confirm_responses
+                            .pop_front()
+                            .unwrap_or(self.platform_mocks.default_confirm_response);
+                        Ok(Value::Bool(accepted))
+                    }
+                    "window_prompt_function" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "prompt requires zero to two arguments".into(),
+                            ));
+                        }
+                        if let Some(message) = args.first() {
+                            let _ = message.as_string();
+                        }
+                        let default_value = args.get(1).map(Value::as_string);
+                        let response = self
+                            .platform_mocks
+                            .prompt_responses
+                            .pop_front()
+                            .unwrap_or_else(|| {
+                                self.platform_mocks
+                                    .default_prompt_response
+                                    .clone()
+                                    .or(default_value)
+                            });
+                        match response {
+                            Some(value) => Ok(Value::String(value)),
+                            None => Ok(Value::Null),
+                        }
+                    }
+                    "window_print_function" => {
+                        self.platform_mocks.print_call_count =
+                            self.platform_mocks.print_call_count.saturating_add(1);
+                        Ok(Value::Undefined)
+                    }
+                    "window_report_error_function" => {
+                        if args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: reportError requires one argument".into(),
+                            ));
+                        }
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "reportError supports only one argument".into(),
+                            ));
+                        }
+                        let throwable = args[0].clone();
+                        let event_payload = Self::new_object_value(vec![
+                            (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
+                            ("type".to_string(), Value::String("error".to_string())),
+                            ("detail".to_string(), throwable),
+                            ("bubbles".to_string(), Value::Bool(false)),
+                            ("cancelable".to_string(), Value::Bool(true)),
+                            ("defaultPrevented".to_string(), Value::Bool(false)),
+                            ("isTrusted".to_string(), Value::Bool(false)),
+                            ("eventPhase".to_string(), Value::Number(0)),
+                            (
+                                "timeStamp".to_string(),
+                                Value::Number(self.scheduler.now_ms),
+                            ),
+                            ("target".to_string(), Value::Null),
+                            ("currentTarget".to_string(), Value::Null),
+                            (
+                                "preventDefault".to_string(),
+                                Self::new_builtin_placeholder_function(),
+                            ),
+                            (
+                                "stopPropagation".to_string(),
+                                Self::new_builtin_placeholder_function(),
+                            ),
+                            (
+                                "stopImmediatePropagation".to_string(),
+                                Self::new_builtin_placeholder_function(),
+                            ),
+                        ]);
+                        let _ = self.dispatch_event_target(
+                            self.dom_runtime.window_object.clone(),
+                            event_payload,
+                        );
+                        Ok(Value::Undefined)
+                    }
                     "clipboard_item_constructor" => {
                         self.new_clipboard_item_value_from_constructor_args(args)
                     }
@@ -1459,9 +2258,8 @@ impl Harness {
                         };
                         let (fatal, ignore_bom) =
                             Self::text_decoder_options_from_value(args.get(1))?;
-                        let mut instance = Self::new_text_decoder_instance_value(
-                            encoding, fatal, ignore_bom,
-                        );
+                        let mut instance =
+                            Self::new_text_decoder_instance_value(encoding, fatal, ignore_bom);
                         self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
                         Ok(instance)
                     }
@@ -1473,9 +2271,8 @@ impl Harness {
                         }
                         let readable = self.new_readable_stream_placeholder_value(Vec::new());
                         let writable = Self::new_writable_stream_placeholder_value();
-                        let mut instance = Self::new_text_encoder_stream_instance_value(
-                            readable, writable,
-                        );
+                        let mut instance =
+                            Self::new_text_encoder_stream_instance_value(readable, writable);
                         self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
                         Ok(instance)
                     }
@@ -1502,6 +2299,18 @@ impl Harness {
                         let mut instance = Self::new_text_decoder_stream_instance_value(
                             encoding, fatal, ignore_bom, readable, writable,
                         );
+                        self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
+                        Ok(instance)
+                    }
+                    "css_style_sheet_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "CSSStyleSheet constructor does not take arguments".into(),
+                            ));
+                        }
+                        let mut instance = Self::new_css_style_sheet_instance_value(Value::Object(
+                            self.dom_runtime.document_object.clone(),
+                        ));
                         self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
                         Ok(instance)
                     }
@@ -1592,6 +2401,82 @@ impl Harness {
                             Self::text_decoder_stream_state_from_receiver(this_arg.as_ref())?;
                         Ok(writable)
                     }
+                    "css_style_sheet_replace_sync" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "CSSStyleSheet.replaceSync requires exactly one argument".into(),
+                            ));
+                        }
+                        let sheet = Self::css_style_sheet_object_from_receiver(this_arg.as_ref())?;
+                        let replacement = args[0].as_string();
+                        let rules = if replacement.trim().is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![Value::String(replacement)]
+                        };
+                        Self::object_set_entry(
+                            &mut sheet.borrow_mut(),
+                            INTERNAL_CSS_STYLE_SHEET_RULES_KEY.to_string(),
+                            Self::new_array_value(rules),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "css_style_sheet_insert_rule" => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "CSSStyleSheet.insertRule requires one or two arguments".into(),
+                            ));
+                        }
+                        let sheet = Self::css_style_sheet_object_from_receiver(this_arg.as_ref())?;
+                        let rule = Value::as_string(&args[0]);
+                        let existing_rules = {
+                            let sheet_ref = sheet.borrow();
+                            match Self::object_get_entry(
+                                &sheet_ref,
+                                INTERNAL_CSS_STYLE_SHEET_RULES_KEY,
+                            ) {
+                                Some(Value::Array(rules)) => rules,
+                                _ => Rc::new(RefCell::new(ArrayValue::new(Vec::new()))),
+                            }
+                        };
+                        let mut rules_ref = existing_rules.borrow_mut();
+                        let default_index = rules_ref.len();
+                        let index = if let Some(index_value) = args.get(1) {
+                            let requested = Self::value_to_i64(index_value);
+                            if requested < 0 || (requested as usize) > rules_ref.len() {
+                                return Err(Error::ScriptRuntime(
+                                    "CSSStyleSheet.insertRule index out of range".into(),
+                                ));
+                            }
+                            requested as usize
+                        } else {
+                            default_index
+                        };
+                        rules_ref.insert(index, Value::String(rule));
+                        drop(rules_ref);
+                        Self::object_set_entry(
+                            &mut sheet.borrow_mut(),
+                            INTERNAL_CSS_STYLE_SHEET_RULES_KEY.to_string(),
+                            Value::Array(existing_rules),
+                        );
+                        Ok(Value::Number(index as i64))
+                    }
+                    "computed_style_get_property_value" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "getPropertyValue requires exactly one argument".into(),
+                            ));
+                        }
+                        let (node, pseudo) =
+                            Self::computed_style_state_from_receiver(this_arg.as_ref())?;
+                        let property_name = args[0].as_string();
+                        let value = self.computed_style_property_value(
+                            node,
+                            pseudo.as_deref(),
+                            &property_name,
+                        )?;
+                        Ok(Value::String(value))
+                    }
                     "worker_constructor" => {
                         if args.is_empty() || args.len() > 2 {
                             return Err(Error::ScriptRuntime(
@@ -1608,6 +2493,32 @@ impl Harness {
                             ));
                         }
                         Ok(Self::new_data_transfer_object_value("dragstart"))
+                    }
+                    "option_constructor" => {
+                        if args.len() > 4 {
+                            return Err(Error::ScriptRuntime(
+                                "Option constructor supports up to four arguments".into(),
+                            ));
+                        }
+                        let text = if args.is_empty() {
+                            String::new()
+                        } else {
+                            args[0].as_string()
+                        };
+                        let option = self.dom.create_detached_element("option".to_string());
+                        self.dom.set_text_content(option, &text)?;
+
+                        if args.len() >= 2 {
+                            self.dom.set_value(option, &args[1].as_string())?;
+                        }
+
+                        let default_selected = args.get(2).is_some_and(Value::truthy);
+                        let selected = args.get(3).is_some_and(Value::truthy);
+                        if default_selected || selected {
+                            self.dom.set_attr(option, "selected", "true")?;
+                        }
+
+                        Ok(Value::Node(option))
                     }
                     "worker_main_post_message" => {
                         if args.len() > 2 {
@@ -1671,16 +2582,204 @@ impl Harness {
                         }
                         Ok(Value::String(decode_uri_like(&args[0].as_string(), true)?))
                     }
-                    "string_static_from_char_code" => self
-                        .eval_string_static_method_from_values(
-                            StringStaticMethod::FromCharCode,
-                            args,
-                        ),
-                    "string_static_from_code_point" => self
-                        .eval_string_static_method_from_values(
-                            StringStaticMethod::FromCodePoint,
-                            args,
-                        ),
+                    "global_atob" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "atob requires exactly one argument".into(),
+                            ));
+                        }
+                        Ok(Value::String(decode_base64_to_binary_string(
+                            &args[0].as_string(),
+                        )?))
+                    }
+                    "global_btoa" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "btoa requires exactly one argument".into(),
+                            ));
+                        }
+                        Ok(Value::String(encode_binary_string_to_base64(
+                            &args[0].as_string(),
+                        )?))
+                    }
+                    "global_structured_clone" => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "structuredClone requires one or two arguments".into(),
+                            ));
+                        }
+                        Self::structured_clone_value_with_options(&args[0], args.get(1))
+                    }
+                    "global_request_animation_frame" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "requestAnimationFrame requires exactly one argument".into(),
+                            ));
+                        }
+                        let callback = args[0].clone();
+                        if !self.is_callable_value(&callback) {
+                            return Err(Error::ScriptRuntime(
+                                "requestAnimationFrame callback must be callable".into(),
+                            ));
+                        }
+                        let mut timer_env = caller_env
+                            .cloned()
+                            .unwrap_or_else(|| self.script_runtime.env.to_map());
+                        let callback_name = format!(
+                            "\u{0}\u{0}bt_raf_cb_{}",
+                            self.script_runtime.allocate_function_id()
+                        );
+                        timer_env.insert(callback_name.clone(), callback);
+                        let timer_id = self.schedule_animation_frame(
+                            TimerCallback::Reference(callback_name),
+                            &timer_env,
+                        );
+                        Ok(Value::Number(timer_id))
+                    }
+                    "global_set_timeout" => {
+                        if args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "setTimeout requires at least one argument".into(),
+                            ));
+                        }
+
+                        let mut timer_env = caller_env
+                            .cloned()
+                            .unwrap_or_else(|| self.script_runtime.env.to_map());
+                        let callback = match &args[0] {
+                            value if self.is_callable_value(value) => {
+                                let callback_name = format!(
+                                    "\u{0}\u{0}bt_timeout_cb_{}",
+                                    self.script_runtime.allocate_function_id()
+                                );
+                                timer_env.insert(callback_name.clone(), value.clone());
+                                TimerCallback::Reference(callback_name)
+                            }
+                            Value::String(source) => {
+                                let stmts =
+                                    parse_block_statements(source).map_err(|err| match err {
+                                        Error::ScriptParse(message) => {
+                                            Error::ScriptRuntime(format!("SyntaxError: {message}"))
+                                        }
+                                        other => other,
+                                    })?;
+                                TimerCallback::Inline(ScriptHandler {
+                                    params: Vec::new(),
+                                    stmts,
+                                })
+                            }
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "TypeError: setTimeout callback must be callable or a string"
+                                        .into(),
+                                ));
+                            }
+                        };
+
+                        let delay = args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                        let callback_args = args.iter().skip(2).cloned().collect::<Vec<_>>();
+                        let timer_id =
+                            self.schedule_timeout(callback, delay, callback_args, &timer_env);
+                        Ok(Value::Number(timer_id))
+                    }
+                    "global_set_interval" => {
+                        if args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "setInterval requires at least one argument".into(),
+                            ));
+                        }
+
+                        let mut timer_env = caller_env
+                            .cloned()
+                            .unwrap_or_else(|| self.script_runtime.env.to_map());
+                        let callback = match &args[0] {
+                            value if self.is_callable_value(value) => {
+                                let callback_name = format!(
+                                    "\u{0}\u{0}bt_interval_cb_{}",
+                                    self.script_runtime.allocate_function_id()
+                                );
+                                timer_env.insert(callback_name.clone(), value.clone());
+                                TimerCallback::Reference(callback_name)
+                            }
+                            Value::String(source) => {
+                                let stmts =
+                                    parse_block_statements(source).map_err(|err| match err {
+                                        Error::ScriptParse(message) => {
+                                            Error::ScriptRuntime(format!("SyntaxError: {message}"))
+                                        }
+                                        other => other,
+                                    })?;
+                                TimerCallback::Inline(ScriptHandler {
+                                    params: Vec::new(),
+                                    stmts,
+                                })
+                            }
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "TypeError: setInterval callback must be callable or a string"
+                                        .into(),
+                                ));
+                            }
+                        };
+
+                        let delay = args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                        let callback_args = args.iter().skip(2).cloned().collect::<Vec<_>>();
+                        let timer_id =
+                            self.schedule_interval(callback, delay, callback_args, &timer_env);
+                        Ok(Value::Number(timer_id))
+                    }
+                    "global_cancel_animation_frame" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "cancelAnimationFrame requires exactly one argument".into(),
+                            ));
+                        }
+                        let timer_id = Self::value_to_i64(&args[0]);
+                        self.clear_timeout(timer_id);
+                        Ok(Value::Undefined)
+                    }
+                    "global_clear_interval" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "clearInterval requires exactly one argument".into(),
+                            ));
+                        }
+                        let timer_id = Self::value_to_i64(&args[0]);
+                        self.clear_timeout(timer_id);
+                        Ok(Value::Undefined)
+                    }
+                    "global_clear_timeout" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "clearTimeout requires exactly one argument".into(),
+                            ));
+                        }
+                        let timer_id = Self::value_to_i64(&args[0]);
+                        self.clear_timeout(timer_id);
+                        Ok(Value::Undefined)
+                    }
+                    "global_queue_microtask" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "queueMicrotask requires exactly one argument".into(),
+                            ));
+                        }
+                        if !self.is_callable_value(&args[0]) {
+                            return Err(Error::ScriptRuntime(
+                                "queueMicrotask callback must be callable".into(),
+                            ));
+                        }
+                        self.queue_callable_microtask(args[0].clone());
+                        Ok(Value::Undefined)
+                    }
+                    "string_static_from_char_code" => self.eval_string_static_method_from_values(
+                        StringStaticMethod::FromCharCode,
+                        args,
+                    ),
+                    "string_static_from_code_point" => self.eval_string_static_method_from_values(
+                        StringStaticMethod::FromCodePoint,
+                        args,
+                    ),
                     "string_static_raw" => {
                         self.eval_string_static_method_from_values(StringStaticMethod::Raw, args)
                     }
@@ -1700,7 +2799,7 @@ impl Harness {
         }
 
         let promise = self.new_pending_promise();
-        match self.create_image_bitmap_dimensions_from_value(&args[0]) {
+        match self.create_image_bitmap_dimensions_from_args(args) {
             Ok((width, height)) => {
                 self.promise_resolve(
                     &promise,
@@ -1721,6 +2820,97 @@ impl Harness {
         Ok(Value::Promise(promise))
     }
 
+    fn create_image_bitmap_dimensions_from_args(
+        &self,
+        args: &[Value],
+    ) -> std::result::Result<(i64, i64), String> {
+        let (source_width, source_height) =
+            self.create_image_bitmap_dimensions_from_value(&args[0])?;
+        let mut width = source_width;
+        let mut height = source_height;
+
+        let options = match args.len() {
+            1 => None,
+            2 => Some(&args[1]),
+            5 => {
+                let crop_width = Self::value_to_i64(&args[3]).abs();
+                let crop_height = Self::value_to_i64(&args[4]).abs();
+                if crop_width == 0 || crop_height == 0 {
+                    return Err("createImageBitmap crop width/height must be non-zero".to_string());
+                }
+                width = crop_width;
+                height = crop_height;
+                None
+            }
+            6 => {
+                let crop_width = Self::value_to_i64(&args[3]).abs();
+                let crop_height = Self::value_to_i64(&args[4]).abs();
+                if crop_width == 0 || crop_height == 0 {
+                    return Err("createImageBitmap crop width/height must be non-zero".to_string());
+                }
+                width = crop_width;
+                height = crop_height;
+                Some(&args[5])
+            }
+            _ => {
+                return Err("createImageBitmap supports 1, 2, 5, or 6 arguments".to_string());
+            }
+        };
+
+        let (resize_width, resize_height) =
+            self.create_image_bitmap_resize_from_options(options)?;
+        if let Some(resize_width) = resize_width {
+            width = resize_width;
+        }
+        if let Some(resize_height) = resize_height {
+            height = resize_height;
+        }
+
+        Ok((width.max(1), height.max(1)))
+    }
+
+    fn create_image_bitmap_resize_from_options(
+        &self,
+        options: Option<&Value>,
+    ) -> std::result::Result<(Option<i64>, Option<i64>), String> {
+        let Some(options) = options else {
+            return Ok((None, None));
+        };
+
+        match options {
+            Value::Null | Value::Undefined => Ok((None, None)),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                let resize_width = match Self::object_get_entry(&entries, "resizeWidth") {
+                    Some(Value::Null | Value::Undefined) | None => None,
+                    Some(value) => {
+                        let width = Self::value_to_i64(&value);
+                        if width <= 0 {
+                            return Err("createImageBitmap resizeWidth must be a positive integer"
+                                .to_string());
+                        }
+                        Some(width)
+                    }
+                };
+                let resize_height = match Self::object_get_entry(&entries, "resizeHeight") {
+                    Some(Value::Null | Value::Undefined) | None => None,
+                    Some(value) => {
+                        let height = Self::value_to_i64(&value);
+                        if height <= 0 {
+                            return Err(
+                                "createImageBitmap resizeHeight must be a positive integer"
+                                    .to_string(),
+                            );
+                        }
+                        Some(height)
+                    }
+                };
+                Ok((resize_width, resize_height))
+            }
+            _ => Err("createImageBitmap options must be an object".to_string()),
+        }
+    }
+
     fn create_image_bitmap_dimensions_from_value(
         &self,
         source: &Value,
@@ -1736,6 +2926,16 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                let width = Self::object_get_entry(&entries, "width")
+                    .map(|value| Self::value_to_i64(&value));
+                let height = Self::object_get_entry(&entries, "height")
+                    .map(|value| Self::value_to_i64(&value));
+                if let (Some(width), Some(height)) = (width, height) {
+                    if width > 0 && height > 0 {
+                        return Ok((width, height));
+                    }
+                }
+
                 if !Self::is_mock_file_object(&entries) {
                     return Err(
                         "createImageBitmap requires an image Blob or File source".to_string()
@@ -1758,6 +2958,38 @@ impl Harness {
                     .map(|value| Self::value_to_i64(&value))
                     .unwrap_or(bytes.len() as i64);
                 (bytes, mime_type, logical_size)
+            }
+            Value::Node(node) => {
+                let tag = self
+                    .dom
+                    .tag_name(*node)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let dimensions = match tag.as_str() {
+                    "canvas" => {
+                        let width = self
+                            .dom
+                            .attr(*node, "width")
+                            .and_then(|value| value.parse::<i64>().ok())
+                            .unwrap_or(300);
+                        let height = self
+                            .dom
+                            .attr(*node, "height")
+                            .and_then(|value| value.parse::<i64>().ok())
+                            .unwrap_or(150);
+                        Some((width, height))
+                    }
+                    _ => None,
+                };
+                let Some((width, height)) = dimensions else {
+                    return Err(
+                        "createImageBitmap requires an image Blob or File source".to_string()
+                    );
+                };
+                if width <= 0 || height <= 0 {
+                    return Err("createImageBitmap could not decode image source".to_string());
+                }
+                return Ok((width, height));
             }
             _ => {
                 return Err("createImageBitmap requires an image Blob or File source".to_string());

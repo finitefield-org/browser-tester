@@ -1,4 +1,41 @@
 use super::*;
+
+pub(crate) fn normalize_malformed_escaped_empty_string_literals(src: &str) -> String {
+    if !src.contains("\\\"\\\"") && !src.contains("\\'\\'") {
+        return src.to_string();
+    }
+
+    let bytes = src.as_bytes();
+    let mut scanner = JsLexScanner::new();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let can_rewrite = matches!(scanner.mode, JsLexMode::Normal | JsLexMode::TemplateExpr { .. });
+        if can_rewrite && i + 3 < bytes.len() {
+            let escaped_double =
+                bytes[i] == b'\\' && bytes[i + 1] == b'"' && bytes[i + 2] == b'\\' && bytes[i + 3] == b'"';
+            let escaped_single =
+                bytes[i] == b'\\' && bytes[i + 1] == b'\'' && bytes[i + 2] == b'\\' && bytes[i + 3] == b'\'';
+            if escaped_double || escaped_single {
+                let quote = if escaped_double { '"' } else { '\'' };
+                out.push(quote);
+                out.push(quote);
+                scanner.consume_significant_bytes(&[quote as u8, quote as u8]);
+                i += 4;
+                continue;
+            }
+        }
+
+        let next = scanner.advance(bytes, i);
+        if let Some(chunk) = src.get(i..next) {
+            out.push_str(chunk);
+        }
+        i = next;
+    }
+
+    out
+}
 pub(crate) fn parse_string_literal_exact(src: &str) -> Result<String> {
     let bytes = src.as_bytes();
     if bytes.len() < 2 {

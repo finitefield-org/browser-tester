@@ -260,7 +260,9 @@ impl Dom {
             }
         }
 
-        Ok(clamp_layout_px_to_i64(css_width + padding_left + padding_right))
+        Ok(clamp_layout_px_to_i64(
+            css_width + padding_left + padding_right,
+        ))
     }
 
     pub(crate) fn client_height(&self, node_id: NodeId) -> Result<i64> {

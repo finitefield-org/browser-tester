@@ -193,6 +193,10 @@ impl Harness {
         std::mem::take(&mut self.platform_mocks.alert_messages)
     }
 
+    pub fn take_print_call_count(&mut self) -> usize {
+        std::mem::take(&mut self.platform_mocks.print_call_count)
+    }
+
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
         if max_steps == 0 {
             return Err(Error::ScriptRuntime(

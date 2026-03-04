@@ -110,8 +110,13 @@ impl Harness {
     pub(crate) fn initialize_global_bindings(&mut self) {
         self.sync_location_object();
         self.sync_history_object();
+        self.sync_navigation_object();
         self.dom_runtime.window_object = Rc::new(RefCell::new(ObjectValue::default()));
         self.dom_runtime.document_object = Rc::new(RefCell::new(ObjectValue::default()));
+        self.dom_runtime.selection_object = match Self::new_selection_object_value(self.dom.root) {
+            Value::Object(selection) => selection,
+            _ => Rc::new(RefCell::new(ObjectValue::default())),
+        };
         self.browser_apis
             .url_constructor_properties
             .borrow_mut()
@@ -149,6 +154,7 @@ impl Harness {
         ]);
         let location = Value::Object(self.dom_runtime.location_object.clone());
         let history = Value::Object(self.location_history.history_object.clone());
+        let navigation = Value::Object(self.location_history.navigation_object.clone());
 
         let navigator = Self::new_object_value(vec![
             (INTERNAL_NAVIGATOR_OBJECT_KEY.into(), Value::Bool(true)),
@@ -251,17 +257,49 @@ impl Harness {
         let event_constructor = Self::new_event_constructor_value();
         let custom_event_constructor = Self::new_custom_event_constructor_value();
         let mouse_event_constructor = Self::new_mouse_event_constructor_value();
+        let keyboard_event_constructor = Self::new_keyboard_event_constructor_value();
+        let wheel_event_constructor = Self::new_wheel_event_constructor_value();
+        let navigate_event_constructor = Self::new_navigate_event_constructor_value();
+        let pointer_event_constructor = Self::new_pointer_event_constructor_value();
         let iterator_constructor = self.new_iterator_constructor_value();
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
         let fetch_callable = Self::new_fetch_callable_value();
         let close_callable = Self::new_window_close_callable_value();
+        let stop_callable = Self::new_window_stop_callable_value();
+        let focus_callable = Self::new_window_focus_callable_value();
+        let scroll_callable = Self::new_window_scroll_callable_value();
+        let scroll_by_callable = Self::new_window_scroll_by_callable_value();
+        let scroll_to_callable = Self::new_window_scroll_to_callable_value();
+        let move_by_callable = Self::new_window_move_by_callable_value();
+        let move_to_callable = Self::new_window_move_to_callable_value();
+        let resize_by_callable = Self::new_window_resize_by_callable_value();
+        let resize_to_callable = Self::new_window_resize_to_callable_value();
+        let post_message_callable = Self::new_window_post_message_callable_value();
+        let get_computed_style_callable = Self::new_window_get_computed_style_callable_value();
+        let alert_callable = Self::new_window_alert_callable_value();
+        let confirm_callable = Self::new_window_confirm_callable_value();
+        let prompt_callable = Self::new_window_prompt_callable_value();
+        let print_callable = Self::new_window_print_callable_value();
+        let report_error_callable = Self::new_window_report_error_callable_value();
+        let atob_callable = Self::new_global_atob_callable();
+        let btoa_callable = Self::new_global_btoa_callable();
+        let structured_clone_callable = Self::new_global_structured_clone_callable();
+        let request_animation_frame_callable = Self::new_global_request_animation_frame_callable();
+        let set_timeout_callable = Self::new_global_set_timeout_callable();
+        let set_interval_callable = Self::new_global_set_interval_callable();
+        let cancel_animation_frame_callable = Self::new_global_cancel_animation_frame_callable();
+        let clear_interval_callable = Self::new_global_clear_interval_callable();
+        let clear_timeout_callable = Self::new_global_clear_timeout_callable();
+        let queue_microtask_callable = Self::new_global_queue_microtask_callable();
         let worker_constructor = Self::new_worker_constructor_value();
         let data_transfer_constructor = Self::new_data_transfer_constructor_value();
+        let option_constructor = Self::new_option_constructor_value();
         let text_encoder_constructor = Self::new_text_encoder_constructor_value();
         let text_decoder_constructor = Self::new_text_decoder_constructor_value();
         let text_encoder_stream_constructor = Self::new_text_encoder_stream_constructor_value();
         let text_decoder_stream_constructor = Self::new_text_decoder_stream_constructor_value();
+        let css_style_sheet_constructor = Self::new_css_style_sheet_constructor_value();
         let decode_uri_callable = Self::new_global_decode_uri_callable(false);
         let decode_uri_component_callable = Self::new_global_decode_uri_callable(true);
         let create_image_bitmap_callable = Self::new_create_image_bitmap_callable();
@@ -272,6 +310,7 @@ impl Harness {
         let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
+        let html_option_element_constructor = Self::new_builtin_placeholder_function();
         let html_select_element_constructor = Self::new_builtin_placeholder_function();
         let dom_parser_constructor = Self::new_dom_parser_constructor_value();
         let document_constructor = Self::new_document_constructor_value();
@@ -331,6 +370,10 @@ impl Harness {
             &event_constructor,
             &custom_event_constructor,
             &mouse_event_constructor,
+            &keyboard_event_constructor,
+            &wheel_event_constructor,
+            &navigate_event_constructor,
+            &pointer_event_constructor,
             &iterator_constructor,
             &cookie_store,
             &caches,
@@ -353,6 +396,32 @@ impl Harness {
             &node_filter_constants,
             &local_storage,
             &close_callable,
+            &stop_callable,
+            &focus_callable,
+            &scroll_callable,
+            &scroll_by_callable,
+            &scroll_to_callable,
+            &move_by_callable,
+            &move_to_callable,
+            &resize_by_callable,
+            &resize_to_callable,
+            &post_message_callable,
+            &get_computed_style_callable,
+            &alert_callable,
+            &confirm_callable,
+            &prompt_callable,
+            &print_callable,
+            &report_error_callable,
+            &atob_callable,
+            &btoa_callable,
+            &structured_clone_callable,
+            &request_animation_frame_callable,
+            &set_timeout_callable,
+            &set_interval_callable,
+            &cancel_animation_frame_callable,
+            &clear_interval_callable,
+            &clear_timeout_callable,
+            &queue_microtask_callable,
         );
         {
             let mut window_entries = self.dom_runtime.window_object.borrow_mut();
@@ -388,6 +457,11 @@ impl Harness {
             );
             Self::object_set_entry(
                 &mut window_entries,
+                "Option".to_string(),
+                option_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
                 "TextEncoder".to_string(),
                 text_encoder_constructor.clone(),
             );
@@ -408,8 +482,38 @@ impl Harness {
             );
             Self::object_set_entry(
                 &mut window_entries,
+                "CSSStyleSheet".to_string(),
+                css_style_sheet_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "KeyboardEvent".to_string(),
+                keyboard_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "WheelEvent".to_string(),
+                wheel_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "NavigateEvent".to_string(),
+                navigate_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "PointerEvent".to_string(),
+                pointer_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
                 "HTMLSelectElement".to_string(),
                 html_select_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLOptionElement".to_string(),
+                html_option_element_constructor.clone(),
             );
         }
 
@@ -449,6 +553,18 @@ impl Harness {
             .insert("MouseEvent".to_string(), mouse_event_constructor);
         self.script_runtime
             .env
+            .insert("KeyboardEvent".to_string(), keyboard_event_constructor);
+        self.script_runtime
+            .env
+            .insert("WheelEvent".to_string(), wheel_event_constructor);
+        self.script_runtime
+            .env
+            .insert("NavigateEvent".to_string(), navigate_event_constructor);
+        self.script_runtime
+            .env
+            .insert("PointerEvent".to_string(), pointer_event_constructor);
+        self.script_runtime
+            .env
             .insert("Iterator".to_string(), iterator_constructor);
         self.script_runtime
             .env
@@ -459,10 +575,96 @@ impl Harness {
             .insert("fetch".to_string(), fetch_callable);
         self.script_runtime
             .env
+            .insert("close".to_string(), close_callable);
+        self.script_runtime
+            .env
+            .insert("stop".to_string(), stop_callable);
+        self.script_runtime
+            .env
+            .insert("focus".to_string(), focus_callable);
+        self.script_runtime
+            .env
+            .insert("scroll".to_string(), scroll_callable);
+        self.script_runtime
+            .env
+            .insert("scrollBy".to_string(), scroll_by_callable);
+        self.script_runtime
+            .env
+            .insert("scrollTo".to_string(), scroll_to_callable);
+        self.script_runtime
+            .env
+            .insert("moveBy".to_string(), move_by_callable);
+        self.script_runtime
+            .env
+            .insert("moveTo".to_string(), move_to_callable);
+        self.script_runtime
+            .env
+            .insert("resizeBy".to_string(), resize_by_callable);
+        self.script_runtime
+            .env
+            .insert("resizeTo".to_string(), resize_to_callable);
+        self.script_runtime
+            .env
+            .insert("postMessage".to_string(), post_message_callable);
+        self.script_runtime
+            .env
+            .insert("getComputedStyle".to_string(), get_computed_style_callable);
+        self.script_runtime
+            .env
+            .insert("alert".to_string(), alert_callable);
+        self.script_runtime
+            .env
+            .insert("confirm".to_string(), confirm_callable);
+        self.script_runtime
+            .env
+            .insert("prompt".to_string(), prompt_callable);
+        self.script_runtime
+            .env
+            .insert("print".to_string(), print_callable);
+        self.script_runtime
+            .env
+            .insert("reportError".to_string(), report_error_callable);
+        self.script_runtime
+            .env
+            .insert("atob".to_string(), atob_callable);
+        self.script_runtime
+            .env
+            .insert("btoa".to_string(), btoa_callable);
+        self.script_runtime
+            .env
+            .insert("structuredClone".to_string(), structured_clone_callable);
+        self.script_runtime.env.insert(
+            "requestAnimationFrame".to_string(),
+            request_animation_frame_callable,
+        );
+        self.script_runtime
+            .env
+            .insert("setTimeout".to_string(), set_timeout_callable);
+        self.script_runtime
+            .env
+            .insert("setInterval".to_string(), set_interval_callable);
+        self.script_runtime.env.insert(
+            "cancelAnimationFrame".to_string(),
+            cancel_animation_frame_callable,
+        );
+        self.script_runtime
+            .env
+            .insert("clearInterval".to_string(), clear_interval_callable);
+        self.script_runtime
+            .env
+            .insert("clearTimeout".to_string(), clear_timeout_callable);
+        self.script_runtime
+            .env
+            .insert("queueMicrotask".to_string(), queue_microtask_callable);
+        self.script_runtime
+            .env
             .insert("Worker".to_string(), worker_constructor);
         self.script_runtime
             .env
             .insert("DataTransfer".to_string(), data_transfer_constructor);
+        self.script_runtime
+            .env
+            .insert("Option".to_string(), option_constructor);
         self.script_runtime
             .env
             .insert("TextEncoder".to_string(), text_encoder_constructor);
@@ -477,6 +679,9 @@ impl Harness {
             "TextDecoderStream".to_string(),
             text_decoder_stream_constructor,
         );
+        self.script_runtime
+            .env
+            .insert("CSSStyleSheet".to_string(), css_style_sheet_constructor);
         self.script_runtime
             .env
             .insert("decodeURI".to_string(), decode_uri_callable);
@@ -511,6 +716,10 @@ impl Harness {
             html_input_element_constructor,
         );
         self.script_runtime.env.insert(
+            "HTMLOptionElement".to_string(),
+            html_option_element_constructor,
+        );
+        self.script_runtime.env.insert(
             "HTMLSelectElement".to_string(),
             html_select_element_constructor,
         );
@@ -529,6 +738,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("history".to_string(), history);
+        self.script_runtime
+            .env
+            .insert("navigation".to_string(), navigation);
         self.script_runtime
             .env
             .insert("localStorage".to_string(), local_storage);

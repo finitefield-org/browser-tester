@@ -128,7 +128,7 @@ impl Harness {
         }
     }
 
-    fn resolve_dom_query_value_runtime(
+    pub(crate) fn resolve_dom_query_value_runtime(
         &mut self,
         target: &DomQuery,
         env: &HashMap<String, Value>,
@@ -655,6 +655,9 @@ impl Harness {
             DomProp::AriaElementRefSingle(prop_name) => prop_name.clone(),
             DomProp::AriaElementRefList(prop_name) => prop_name.clone(),
             DomProp::ActiveElement => "activeElement".into(),
+            DomProp::ActiveViewTransition => "activeViewTransition".into(),
+            DomProp::AdoptedStyleSheets => "adoptedStyleSheets".into(),
+            DomProp::AdoptedStyleSheetsLength => "adoptedStyleSheets.length".into(),
             DomProp::CharacterSet => "characterSet".into(),
             DomProp::CompatMode => "compatMode".into(),
             DomProp::ContentType => "contentType".into(),

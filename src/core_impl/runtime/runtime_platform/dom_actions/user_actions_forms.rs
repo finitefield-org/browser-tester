@@ -383,15 +383,21 @@ impl Harness {
 
         for option in options {
             let is_target = option == target;
-            let has_selected = self.dom.attr(option, "selected").is_some();
+            let option_element = self
+                .dom
+                .element_mut(option)
+                .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
+            let has_selected = option_element.attrs.contains_key("selected");
             if is_target {
                 if !has_selected {
-                    self.dom.set_attr(option, "selected", "true")?;
+                    option_element
+                        .attrs
+                        .insert("selected".to_string(), "true".to_string());
                 }
                 continue;
             }
             if !is_multiple && has_selected {
-                self.dom.remove_attr(option, "selected")?;
+                option_element.attrs.remove("selected");
             }
         }
 
@@ -470,6 +476,25 @@ impl Harness {
         self.with_script_env_always(|this, env| {
             stacker::grow(32 * 1024 * 1024, || this.click_node_with_env(target, env))
         })
+    }
+
+    pub(crate) fn click_dom_method_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        // HTMLElement.click() must ignore re-entrant activation on the same node.
+        if self.dom_runtime.click_in_progress.contains(&target) {
+            return Ok(());
+        }
+        self.dom_runtime.click_in_progress.insert(target);
+        let result = stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, env));
+        self.dom_runtime.click_in_progress.remove(&target);
+        result
+    }
+
+    pub(crate) fn click_dom_method(&mut self, target: NodeId) -> Result<()> {
+        self.with_script_env_always(|this, env| this.click_dom_method_with_env(target, env))
     }
 
     pub fn focus(&mut self, selector: &str) -> Result<()> {
@@ -804,6 +829,19 @@ impl Harness {
     }
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
+        if let Some(target_object) = self.resolve_dispatch_event_target_object(selector) {
+            let event_payload = Value::String(event.to_string());
+            return self.with_script_env(|this, env| {
+                stacker::grow(32 * 1024 * 1024, || {
+                    let _ = this.dispatch_event_target_with_env(
+                        target_object.clone(),
+                        event_payload.clone(),
+                        env,
+                    )?;
+                    Ok(())
+                })
+            });
+        }
         let target = self.resolve_dispatch_target(selector)?;
         self.with_script_env(|this, env| {
             stacker::grow(32 * 1024 * 1024, || {
@@ -819,6 +857,40 @@ impl Harness {
         event: &str,
         init: KeyboardEventInit,
     ) -> Result<()> {
+        if let Some(target_object) = self.resolve_dispatch_event_target_object(selector) {
+            let event_payload = Self::new_object_value(vec![
+                (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
+                (
+                    INTERNAL_KEYBOARD_EVENT_OBJECT_KEY.to_string(),
+                    Value::Bool(true),
+                ),
+                ("type".to_string(), Value::String(event.to_string())),
+                ("bubbles".to_string(), Value::Bool(false)),
+                ("cancelable".to_string(), Value::Bool(false)),
+                ("key".to_string(), Value::String(init.key.clone())),
+                (
+                    "code".to_string(),
+                    Value::String(init.code.clone().unwrap_or_default()),
+                ),
+                ("location".to_string(), Value::Number(init.location)),
+                ("ctrlKey".to_string(), Value::Bool(init.ctrl_key)),
+                ("metaKey".to_string(), Value::Bool(init.meta_key)),
+                ("shiftKey".to_string(), Value::Bool(init.shift_key)),
+                ("altKey".to_string(), Value::Bool(init.alt_key)),
+                ("repeat".to_string(), Value::Bool(init.repeat)),
+                ("isComposing".to_string(), Value::Bool(init.is_composing)),
+            ]);
+            return self.with_script_env(move |this, env| {
+                stacker::grow(32 * 1024 * 1024, || {
+                    let _ = this.dispatch_event_target_with_env(
+                        target_object.clone(),
+                        event_payload.clone(),
+                        env,
+                    )?;
+                    Ok(())
+                })
+            });
+        }
         let target = self.resolve_dispatch_target(selector)?;
         self.with_script_env(move |this, env| {
             stacker::grow(32 * 1024 * 1024, || {
@@ -826,6 +898,7 @@ impl Harness {
                     EventState::new_untrusted(event, target, this.scheduler.now_ms);
                 dispatched.key = Some(init.key.clone());
                 dispatched.code = init.code.clone();
+                dispatched.location = init.location;
                 dispatched.ctrl_key = init.ctrl_key;
                 dispatched.meta_key = init.meta_key;
                 dispatched.shift_key = init.shift_key;
@@ -838,9 +911,29 @@ impl Harness {
         })
     }
 
+    fn resolve_dispatch_event_target_object(
+        &self,
+        selector: &str,
+    ) -> Option<Rc<RefCell<ObjectValue>>> {
+        let selector = selector.trim();
+        if !matches!(
+            selector,
+            "window" | "self" | "top" | "parent" | "frames" | "globalThis"
+        ) {
+            return None;
+        }
+        match self.script_runtime.env.get("window") {
+            Some(Value::Object(window)) => Some(window.clone()),
+            _ => None,
+        }
+    }
+
     fn resolve_dispatch_target(&self, selector: &str) -> Result<NodeId> {
         let selector = selector.trim();
-        if matches!(selector, "window" | "document" | "window.document") {
+        if matches!(selector, "document" | "window.document") {
+            return Ok(self.dom.root);
+        }
+        if selector == "window" {
             return Ok(self.dom.root);
         }
         self.select_one(selector)

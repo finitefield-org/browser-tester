@@ -28,8 +28,8 @@ fn element_set_attribute_ns_sets_namespaced_attribute_and_returns_undefined() ->
 }
 
 #[test]
-fn element_set_attribute_ns_replaces_existing_attribute_with_same_namespace_and_local_name()
--> Result<()> {
+fn element_set_attribute_ns_replaces_existing_attribute_with_same_namespace_and_local_name(
+) -> Result<()> {
     let html = r#"
         <a id='link'
            xmlns:x='http://example.com/ns'

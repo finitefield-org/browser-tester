@@ -1,6 +1,16 @@
 use super::*;
 
 impl Harness {
+    fn resolve_target_value_with_pending(
+        &self,
+        env: &HashMap<String, Value>,
+        target: &str,
+    ) -> Option<Value> {
+        self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+    }
+
     pub(crate) fn eval_expr_json_object_array(
         &mut self,
         expr: &Expr,
@@ -204,7 +214,7 @@ impl Harness {
                     }
                     Ok(Self::new_object_value(object_entries))
                 }
-                Expr::ObjectGet { target, key } => match env.get(target) {
+                Expr::ObjectGet { target, key } => match self.resolve_target_value_with_pending(env, target) {
                     _ if target == "super" => {
                         let super_prototype = Self::super_prototype_from_env(env)?;
                         let this_value = Self::super_this_from_env(env)?;
@@ -215,7 +225,7 @@ impl Harness {
                         )
                     }
                     Some(value) => {
-                        self.object_property_from_value(value, key)
+                        self.object_property_from_value(&value, key)
                             .map_err(|err| match err {
                                 Error::ScriptRuntime(msg) if msg == "value is not an object" => {
                                     Error::ScriptRuntime(format!(
@@ -248,7 +258,8 @@ impl Harness {
                         }
                         Ok(value)
                     } else {
-                        let Some(mut value) = env.get(target).cloned() else {
+                        let Some(mut value) = self.resolve_target_value_with_pending(env, target)
+                        else {
                             return Err(Error::ScriptRuntime(format!(
                                 "unknown variable: {}",
                                 target
@@ -385,7 +396,7 @@ impl Harness {
                 Expr::ObjectHasOwnProperty { target, key } => {
                     let key = self.eval_expr(key, env, event_param, event)?;
                     let key = self.property_key_to_storage_key(&key);
-                    match env.get(target) {
+                    match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Object(entries)) => Ok(Value::Bool(
                             Self::object_get_entry(&entries.borrow(), &key).is_some(),
                         )),
@@ -450,13 +461,13 @@ impl Harness {
                     }
                     Ok(Self::new_array_value(values))
                 }
-                Expr::ArrayLength(target) => match env.get(target) {
+                Expr::ArrayLength(target) => match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
                     Some(Value::TypedArray(values)) => {
                         Ok(Value::Number(values.borrow().observed_length() as i64))
                     }
                     Some(Value::NodeList(nodes)) => {
-                        Ok(Value::Number(self.node_list_len(nodes) as i64))
+                        Ok(Value::Number(self.node_list_len(&nodes) as i64))
                     }
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                     Some(Value::Function(function)) => {
@@ -491,7 +502,7 @@ impl Harness {
                                 .unwrap_or(Value::Undefined))
                         }
                     }
-                    Some(other) => self.object_property_from_value(other, "length"),
+                    Some(other) => self.object_property_from_value(&other, "length"),
                     None => Err(Error::ScriptRuntime(format!(
                         "unknown variable: {}",
                         target
@@ -509,7 +520,7 @@ impl Harness {
                             &this_value,
                         );
                     }
-                    match env.get(target) {
+                    match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Object(entries)) => {
                             let entries_ref = entries.borrow();
                             if let Some(value) =
@@ -550,14 +561,14 @@ impl Harness {
                             let Some(index) = self.value_as_index(&index) else {
                                 return Ok(Value::Undefined);
                             };
-                            self.typed_array_get_index(values, index)
+                            self.typed_array_get_index(&values, index)
                         }
                         Some(Value::NodeList(nodes)) => {
                             let Some(index) = self.value_as_index(&index) else {
                                 return Ok(Value::Undefined);
                             };
                             Ok(self
-                                .node_list_get(nodes, index)
+                                .node_list_get(&nodes, index)
                                 .map(Value::Node)
                                 .unwrap_or(Value::Undefined))
                         }
@@ -612,7 +623,8 @@ impl Harness {
                     }
                     Ok(Value::Number(values.len() as i64))
                 }
-                Expr::ArrayMap { target, callback } => match env.get(target) {
+                Expr::ArrayMap { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         let mut out = Vec::with_capacity(input.len());
@@ -632,7 +644,7 @@ impl Harness {
                         Ok(Self::new_array_value(out))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         let kind = values.borrow().kind;
                         let mut out = Vec::with_capacity(input.len());
                         for (idx, item) in input.into_iter().enumerate() {
@@ -658,8 +670,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArrayFilter { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArrayFilter { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         let mut out = Vec::new();
@@ -681,7 +695,7 @@ impl Harness {
                         Ok(Self::new_array_value(out))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         let kind = values.borrow().kind;
                         let mut out = Vec::new();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -709,12 +723,14 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
+                    }
+                }
                 Expr::ArrayReduce {
                     target,
                     callback,
                     initial,
-                } => match env.get(target) {
+                } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         let mut start_index = 0usize;
@@ -745,7 +761,7 @@ impl Harness {
                         Ok(acc)
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         let mut start_index = 0usize;
                         let mut acc = if let Some(initial) = initial {
                             self.eval_expr(initial, env, event_param, event)?
@@ -781,8 +797,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArrayForEach { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArrayForEach { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -800,7 +818,7 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         for (idx, item) in input.into_iter().enumerate() {
                             let _ = self.execute_array_callback(
                                 callback,
@@ -823,8 +841,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArrayFind { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArrayFind { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -845,7 +865,7 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         for (idx, item) in input.into_iter().enumerate() {
                             let matched = self.execute_array_callback(
                                 callback,
@@ -871,8 +891,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArrayFindIndex { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArrayFindIndex { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -893,7 +915,7 @@ impl Harness {
                         Ok(Value::Number(-1))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         for (idx, item) in input.into_iter().enumerate() {
                             let matched = self.execute_array_callback(
                                 callback,
@@ -919,8 +941,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArraySome { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArraySome { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -941,7 +965,7 @@ impl Harness {
                         Ok(Value::Bool(false))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         for (idx, item) in input.into_iter().enumerate() {
                             let matched = self.execute_array_callback(
                                 callback,
@@ -967,8 +991,10 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
-                Expr::ArrayEvery { target, callback } => match env.get(target) {
+                    }
+                }
+                Expr::ArrayEvery { target, callback } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         for (idx, item) in input.into_iter().enumerate() {
@@ -989,7 +1015,7 @@ impl Harness {
                         Ok(Value::Bool(true))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(values)?;
+                        let input = self.typed_array_snapshot(&values)?;
                         for (idx, item) in input.into_iter().enumerate() {
                             let matched = self.execute_array_callback(
                                 callback,
@@ -1015,14 +1041,15 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
+                    }
+                }
                 Expr::ArrayIncludes {
                     target,
                     search,
                     from_index,
                 } => {
                     let search = self.eval_expr(search, env, event_param, event)?;
-                    match env.get(target) {
+                    match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Array(values)) => {
                             let values = values.borrow();
                             let len = values.len() as i64;
@@ -1044,7 +1071,7 @@ impl Harness {
                             Ok(Value::Bool(false))
                         }
                         Some(Value::TypedArray(values)) => {
-                            let values_vec = self.typed_array_snapshot(values)?;
+                            let values_vec = self.typed_array_snapshot(&values)?;
                             let len = values_vec.len() as i64;
                             let mut start = from_index
                                 .as_ref()
@@ -1076,7 +1103,7 @@ impl Harness {
                                 start = (len + start).max(0);
                             }
                             let start = start.min(len) as usize;
-                            let start_byte = Self::char_index_to_byte(value, start);
+                            let start_byte = Self::char_index_to_byte(&value, start);
                             Ok(Value::Bool(value[start_byte..].contains(&search)))
                         }
                         Some(_) => Err(Error::ScriptRuntime(format!(
@@ -1089,7 +1116,8 @@ impl Harness {
                         ))),
                     }
                 }
-                Expr::ArraySlice { target, start, end } => match env.get(target) {
+                Expr::ArraySlice { target, start, end } => {
+                    match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let values = values.borrow();
                         let len = values.len();
@@ -1111,7 +1139,7 @@ impl Harness {
                         Ok(Self::new_array_value(values[start..end].to_vec()))
                     }
                     Some(Value::TypedArray(values)) => {
-                        let snapshot = self.typed_array_snapshot(values)?;
+                        let snapshot = self.typed_array_snapshot(&values)?;
                         let kind = values.borrow().kind;
                         let len = snapshot.len();
                         let start = start
@@ -1132,7 +1160,7 @@ impl Harness {
                         self.new_typed_array_from_values(kind, &snapshot[start..end])
                     }
                     Some(Value::ArrayBuffer(buffer)) => {
-                        Self::ensure_array_buffer_not_detached(buffer, "slice")?;
+                        Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
                         let source = buffer.borrow();
                         let len = source.bytes.len();
                         let start = start
@@ -1198,7 +1226,7 @@ impl Harness {
                             .map(|value| Self::normalize_slice_index(len, value))
                             .unwrap_or(len);
                         let end = end.max(start);
-                        Ok(Value::String(Self::substring_chars(value, start, end)))
+                        Ok(Value::String(Self::substring_chars(&value, start, end)))
                     }
                     Some(_) => Err(Error::ScriptRuntime(format!(
                         "variable '{}' is not an array",
@@ -1208,7 +1236,8 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                },
+                    }
+                }
                 Expr::ArraySplice {
                     target,
                     start,
@@ -1248,9 +1277,9 @@ impl Harness {
                         .transpose()?
                         .map(|value| value.as_string())
                         .unwrap_or_else(|| ",".to_string());
-                    let values = match env.get(target) {
+                    let values = match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Array(values)) => values.borrow().clone(),
-                        Some(Value::TypedArray(values)) => self.typed_array_snapshot(values)?,
+                        Some(Value::TypedArray(values)) => self.typed_array_snapshot(&values)?,
                         Some(_) => {
                             return Err(Error::ScriptRuntime(format!(
                                 "variable '{}' is not an array",

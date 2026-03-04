@@ -15,11 +15,11 @@ fn is_window_alias_target(target: &DomQuery) -> bool {
     }
 }
 
-fn is_window_alias_close_call(stmt: &str) -> bool {
+fn is_window_alias_member_call(stmt: &str, method: &str) -> bool {
     let stmt = stmt.trim_start();
     ["window", "self", "top", "parent", "frames"]
         .iter()
-        .any(|base| stmt.starts_with(&format!("{base}.close")))
+        .any(|base| stmt.starts_with(&format!("{base}.{method}")))
 }
 
 pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -105,7 +105,15 @@ pub(crate) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     // `window.close()` should be treated as a regular callable member access,
     // not as `<dialog>.close()`.
     if method_name == "close"
-        && (is_window_alias_target(&target) || is_window_alias_close_call(stmt))
+        && (is_window_alias_target(&target) || is_window_alias_member_call(stmt, "close"))
+    {
+        return Ok(None);
+    }
+
+    // `window.focus()` should be treated as a regular callable member access,
+    // not as a DOM element focus method statement.
+    if method_name == "focus"
+        && (is_window_alias_target(&target) || is_window_alias_member_call(stmt, "focus"))
     {
         return Ok(None);
     }

@@ -249,9 +249,8 @@ impl Harness {
                         IntlFormatterKind::NumberFormat => {
                             let (locale, options) =
                                 self.resolve_intl_number_format_options(&formatter)?;
-                            let number = Self::coerce_number_for_global(&value);
-                            Ok(Value::String(self.intl_format_number_with_options(
-                                number, &locale, &options,
+                            Ok(Value::String(self.intl_format_number_value_with_options(
+                                &value, &locale, &options,
                             )))
                         }
                         IntlFormatterKind::DateTimeFormat => {
@@ -373,7 +372,7 @@ impl Harness {
                         let timestamp_ms = if matches!(value, Value::Undefined) {
                             self.scheduler.now_ms
                         } else {
-                            self.coerce_date_timestamp_ms(&value)
+                            self.coerce_intl_date_time_timestamp_ms(&value)?
                         };
                         let parts =
                             self.intl_format_date_time_to_parts(timestamp_ms, &locale, &options);
@@ -406,8 +405,8 @@ impl Harness {
                         } else {
                             Value::Undefined
                         };
-                        let number = Self::coerce_number_for_global(&value);
-                        let parts = self.intl_number_format_to_parts(number, &locale, &options);
+                        let parts =
+                            self.intl_number_format_value_to_parts(&value, &locale, &options);
                         Ok(self.intl_date_time_parts_to_value(&parts, None))
                     }
                     _ => Err(Error::ScriptRuntime(

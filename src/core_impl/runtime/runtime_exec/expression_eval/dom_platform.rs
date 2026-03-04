@@ -1,6 +1,24 @@
 use super::*;
 
 impl Harness {
+    fn dom_prop_non_node_fallback_path(prop: &DomProp) -> Option<Vec<&'static str>> {
+        match prop {
+            DomProp::ValueLength => Some(vec!["value", "length"]),
+            DomProp::FilesLength => Some(vec!["files", "length"]),
+            DomProp::ClassListLength => Some(vec!["classList", "length"]),
+            DomProp::PartLength => Some(vec!["part", "length"]),
+            DomProp::AdoptedStyleSheetsLength => Some(vec!["adoptedStyleSheets", "length"]),
+            DomProp::HistoryLength => Some(vec!["history", "length"]),
+            DomProp::FormsLength => Some(vec!["forms", "length"]),
+            DomProp::ImagesLength => Some(vec!["images", "length"]),
+            DomProp::LinksLength => Some(vec!["links", "length"]),
+            DomProp::ScriptsLength => Some(vec!["scripts", "length"]),
+            DomProp::ChildrenLength => Some(vec!["children", "length"]),
+            DomProp::AnchorRelListLength => Some(vec!["relList", "length"]),
+            _ => Self::object_key_from_dom_prop(prop).map(|key| vec![key]),
+        }
+    }
+
     pub(crate) fn eval_expr_dom_and_platform(
         &mut self,
         expr: &Expr,
@@ -11,22 +29,20 @@ impl Harness {
         let result = (|| -> Result<Value> {
             match expr {
                 Expr::DomRead { target, prop } => {
-                    let target_value = match target {
-                        DomQuery::Var(name) => env.get(name).cloned(),
-                        DomQuery::VarPath { base, path } => {
-                            self.resolve_dom_query_var_path_value(base, path, env)?
-                        }
-                        _ => None,
-                    };
+                    let target_value = self.resolve_dom_query_value_runtime(target, env)?;
                     if let Some(value) = target_value {
                         if !matches!(value, Value::Node(_) | Value::NodeList(_)) {
-                            if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                            if let Some(path) = Self::dom_prop_non_node_fallback_path(prop) {
                                 let variable_name = target.describe_call();
-                                return self.object_property_from_named_value(
-                                    &variable_name,
-                                    &value,
-                                    key,
-                                );
+                                let mut current = value;
+                                for key in path {
+                                    current = self.object_property_from_named_value(
+                                        &variable_name,
+                                        &current,
+                                        key,
+                                    )?;
+                                }
+                                return Ok(current);
                             }
                         }
                     }
@@ -331,11 +347,19 @@ impl Harness {
                         DomProp::ScrollLeftMax => Ok(Value::Number(0)),
                         DomProp::ScrollTopMax => Ok(Value::Number(0)),
                         DomProp::ShadowRoot => Ok(self.shadow_root_property_value(node)),
-                        DomProp::ActiveElement => Ok(self
-                            .dom
-                            .active_element()
-                            .map(Value::Node)
-                            .unwrap_or(Value::Null)),
+                        DomProp::ActiveElement => Ok(self.document_active_element_property_value()),
+                        DomProp::ActiveViewTransition => Ok(Value::Null),
+                        DomProp::AdoptedStyleSheets => {
+                            Ok(self.ensure_document_adopted_style_sheets_property())
+                        }
+                        DomProp::AdoptedStyleSheetsLength => {
+                            let adopted = self.ensure_document_adopted_style_sheets_property();
+                            let len = match adopted {
+                                Value::Array(values) => values.borrow().len() as i64,
+                                _ => 0,
+                            };
+                            Ok(Value::Number(len))
+                        }
                         DomProp::CharacterSet => Ok(Value::String("UTF-8".to_string())),
                         DomProp::CompatMode => Ok(Value::String("CSS1Compat".to_string())),
                         DomProp::ContentType => Ok(Value::String("text/html".to_string())),
@@ -713,7 +737,9 @@ impl Harness {
                 }
                 Expr::DomComputedStyleProperty { target, property } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
-                    Ok(Value::String(self.dom.style_get(node, property)?))
+                    Ok(Value::String(
+                        self.computed_style_property_value(node, None, property)?,
+                    ))
                 }
                 Expr::ClassListContains { target, class_name } => {
                     let node = self.resolve_dom_query_required_runtime(target, env)?;
@@ -982,6 +1008,21 @@ impl Harness {
             return Ok(self.viewport_inner_height_value());
         }
         self.dom.client_height(node)
+    }
+
+    fn document_active_element_property_value(&self) -> Value {
+        if let Some(active) = self.dom.active_element() {
+            if self.dom.is_connected(active) {
+                return Value::Node(active);
+            }
+        }
+        if let Some(body) = self.dom.body() {
+            return Value::Node(body);
+        }
+        if let Some(document_element) = self.dom.document_element() {
+            return Value::Node(document_element);
+        }
+        Value::Null
     }
 
     pub(crate) fn node_type_number(&self, node: NodeId) -> i64 {

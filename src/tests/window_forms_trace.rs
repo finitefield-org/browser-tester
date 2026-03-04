@@ -230,6 +230,295 @@ fn window_read_only_core_properties_are_rejected() {
 }
 
 #[test]
+fn window_close_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.close = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.close should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.close is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_stop_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.stop = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.stop should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.stop is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_focus_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.focus = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.focus should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.focus is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.scroll = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.scroll should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.scroll is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_by_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.scrollBy = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.scrollBy should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.scrollBy is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_to_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.scrollTo = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.scrollTo should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.scrollTo is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_print_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.print = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.print should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.print is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_prompt_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.prompt = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.prompt should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.prompt is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_queue_microtask_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.queueMicrotask = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.queueMicrotask should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.queueMicrotask is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_report_error_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.reportError = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.reportError should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.reportError is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_set_interval_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.setInterval = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.setInterval should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.setInterval is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_set_timeout_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.setTimeout = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.setTimeout should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.setTimeout is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_move_by_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.moveBy = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.moveBy should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.moveBy is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_move_to_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.moveTo = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.moveTo should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.moveTo is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_resize_by_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.resizeBy = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.resizeBy should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.resizeBy is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_resize_to_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.resizeTo = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.resizeTo should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.resizeTo is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_post_message_property_is_read_only() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          window.postMessage = 1;
+        </script>
+        "#,
+    )
+    .expect_err("window.postMessage should be read-only");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "window.postMessage is read-only"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn window_closed_reflects_close_calls() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -251,6 +540,644 @@ fn window_closed_reflects_close_calls() -> Result<()> {
     h.click("#run")?;
     h.assert_text("#result", "false:true:true")?;
     Ok(())
+}
+
+#[test]
+fn window_close_global_alias_and_method_reference_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = window.closed;
+            const closeRef = window.close;
+            const ret1 = closeRef();
+            const ret2 = close();
+            const after = window.closed;
+            document.getElementById('result').textContent =
+              String(before) + ':' + String(after) + ':' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_stop_global_alias_and_method_reference_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = window.closed;
+            const stopRef = window.stop;
+            const ret1 = stopRef();
+            const ret2 = stop();
+            const ret3 = window.stop();
+            const after = window.closed;
+            document.getElementById('result').textContent =
+              String(before) + ':' + String(after) + ':' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined) + ':' + String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:false:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_report_error_dispatches_global_error_event() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const err = { message: 'boom' };
+            const logs = [];
+            window.addEventListener('error', (event) => {
+              event.preventDefault();
+              logs.push(event.type);
+              logs.push(event.error === err);
+              logs.push(String(event.error.message || ''));
+            });
+            const ref = window.reportError;
+            const ret = ref(err);
+            document.getElementById('result').textContent =
+              String(ret === undefined) + '|' + logs.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|error|true|boom")?;
+    Ok(())
+}
+
+#[test]
+fn window_report_error_requires_argument() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            reportError();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("TypeError: reportError requires one argument"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn window_report_error_supports_only_one_argument() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            reportError('a', 'b');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#run") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("reportError supports only one argument"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn window_focus_global_alias_and_method_reference_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const focusRef = window.focus;
+            const ret1 = window.focus();
+            const ret2 = focus();
+            const ret3 = focusRef('extra', 1);
+            document.getElementById('result').textContent =
+              String(window.closed) + ':' +
+              String(ret1 === undefined) + ':' +
+              String(ret2 === undefined) + ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_scroll_updates_document_position_and_supports_options() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='spacer' style='height: 2000px; width: 2000px;'>
+          <div id='target' style='margin-top: 300px;'>x</div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const before = target.getBoundingClientRect().top;
+
+            const scrollRef = window.scroll;
+            const ret1 = window.scroll(0, 100);
+            const afterFirst = target.getBoundingClientRect().top;
+            const ret2 = scroll({ top: 120, left: 30, behavior: 'smooth' });
+            const afterSecond = target.getBoundingClientRect().top;
+            const ret3 = scrollRef({ top: 130, left: 15, behavior: 'instant' });
+            const afterThird = target.getBoundingClientRect().top;
+
+            document.getElementById('result').textContent =
+              String(before - afterFirst) + ':' +
+              String(afterFirst - afterSecond) + ':' +
+              String(afterSecond - afterThird) + '|' +
+              String(ret1 === undefined) + ':' +
+              String(ret2 === undefined) + ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "100:20:10|true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_scroll_by_updates_document_position_and_supports_options() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='spacer' style='height: 2000px; width: 2000px;'>
+          <div id='target' style='margin-top: 300px;'>x</div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const before = target.getBoundingClientRect().top;
+
+            const scrollByRef = window.scrollBy;
+            const ret1 = window.scrollBy(0, 100);
+            const afterFirst = target.getBoundingClientRect().top;
+            const ret2 = scrollBy({ top: 20, left: 30, behavior: 'smooth' });
+            const afterSecond = target.getBoundingClientRect().top;
+            const ret3 = scrollByRef({ top: -10, left: 15, behavior: 'instant' });
+            const afterThird = target.getBoundingClientRect().top;
+
+            document.getElementById('result').textContent =
+              String(before - afterFirst) + ':' +
+              String(afterFirst - afterSecond) + ':' +
+              String(afterSecond - afterThird) + '|' +
+              String(ret1 === undefined) + ':' +
+              String(ret2 === undefined) + ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "100:20:-10|true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_scroll_to_updates_document_position_and_supports_options() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='spacer' style='height: 2000px; width: 2000px;'>
+          <div id='target' style='margin-top: 300px;'>x</div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const before = target.getBoundingClientRect().top;
+
+            const scrollToRef = window.scrollTo;
+            const ret1 = window.scrollTo(0, 100);
+            const afterFirst = target.getBoundingClientRect().top;
+            const ret2 = scrollTo({ top: 120, left: 30, behavior: 'smooth' });
+            const afterSecond = target.getBoundingClientRect().top;
+            const ret3 = scrollToRef({ top: 130, left: 15, behavior: 'instant' });
+            const afterThird = target.getBoundingClientRect().top;
+
+            document.getElementById('result').textContent =
+              String(before - afterFirst) + ':' +
+              String(afterFirst - afterSecond) + ':' +
+              String(afterSecond - afterThird) + '|' +
+              String(ret1 === undefined) + ':' +
+              String(ret2 === undefined) + ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "100:20:10|true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_print_global_alias_and_method_reference_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const printRef = window.print;
+            const ret1 = window.print();
+            const ret2 = print();
+            const ret3 = printRef('extra', 1);
+            document.getElementById('result').textContent =
+              String(ret1 === undefined) + ':' +
+              String(ret2 === undefined) + ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true")?;
+    assert_eq!(h.take_print_call_count(), 3);
+    Ok(())
+}
+
+#[test]
+fn window_move_by_updates_screen_coordinates_and_supports_alias() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            const moveByRef = window.moveBy;
+            const ret1 = window.moveBy(10, -5);
+            const mid = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            const ret2 = moveByRef(3, 4);
+            const ret3 = moveBy(-8, 1);
+            const after = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            document.getElementById('result').textContent =
+              before + '|' + mid + '|' + after + '|' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined) + ':' + String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "0:0:0:0|10:-5:10:-5|5:0:5:0|true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_move_to_sets_absolute_coordinates_and_supports_alias() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            const moveToRef = window.moveTo;
+            const ret1 = window.moveBy(10, 10);
+            const ret2 = window.moveTo(30, 40);
+            const mid = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            const ret3 = moveToRef(-5, 10);
+            const ret4 = moveTo(0, 0);
+            const after = [window.screenX, window.screenY, window.screenLeft, window.screenTop].join(':');
+            document.getElementById('result').textContent =
+              before + '|' + mid + '|' + after + '|' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined) + ':' +
+              String(ret3 === undefined) + ':' + String(ret4 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "0:0:0:0|30:40:30:40|0:0:0:0|true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_resize_by_updates_dimensions_and_supports_alias() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            window.innerWidth = 1000;
+            window.innerHeight = 800;
+            const before = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            const resizeByRef = window.resizeBy;
+            const ret1 = window.resizeBy(20, -10);
+            const mid = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            const ret2 = resizeByRef(5, 15);
+            const ret3 = resizeBy(-10, -5);
+            const after = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            document.getElementById('result').textContent =
+              before + '|' + mid + '|' + after + '|' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined) + ':' + String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1000:800::|1020:790:1020:790|1015:800:1015:800|true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn window_resize_to_sets_dimensions_absolutely_and_supports_alias() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            window.innerWidth = 1000;
+            window.innerHeight = 800;
+            const before = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            const resizeToRef = window.resizeTo;
+            const ret1 = window.resizeTo(320, 240);
+            const mid = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            const ret2 = resizeToRef(640, 480);
+            const ret3 = resizeTo(200, 100);
+            const after = [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight].join(':');
+            document.getElementById('result').textContent =
+              before + '|' + mid + '|' + after + '|' +
+              String(ret1 === undefined) + ':' + String(ret2 === undefined) + ':' + String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1000:800::|320:240:320:240|200:100:200:100|true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn window_post_message_dispatches_message_events_and_supports_alias() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const payload = { kind: 'obj' };
+            const log = [];
+            window.addEventListener('message', (event) => {
+              const value =
+                typeof event.data === 'object' ? event.data.kind : String(event.data);
+              const cloned =
+                typeof event.data === 'object' ? String(event.data !== payload) : 'n/a';
+              log.push(
+                value +
+                  ',' +
+                  String(event.origin === window.origin) +
+                  ',' +
+                  String(event.source === window) +
+                  ',' +
+                  cloned,
+              );
+            });
+
+            const postRef = window.postMessage;
+            const ret1 = window.postMessage(payload, '*');
+            const ret2 = postRef('text', '*');
+            const ret3 = postMessage('slash', '/');
+
+            document.getElementById('result').textContent =
+              log.join('|') +
+              '|' +
+              String(ret1 === undefined) +
+              ':' +
+              String(ret2 === undefined) +
+              ':' +
+              String(ret3 === undefined);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "obj,true,true,true|text,true,true,n/a|slash,true,true,n/a|true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn window_post_message_honors_target_origin_and_options_overload() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const seen = [];
+            window.addEventListener('message', () => {
+              seen.push('x');
+            });
+            window.postMessage('default');
+            window.postMessage('drop', 'https://evil.example');
+            window.postMessage('exact', window.origin);
+            window.postMessage('options', { targetOrigin: window.origin });
+            window.postMessage('wildcard', { targetOrigin: '*' });
+            window.postMessage('legacy', window.origin, [1, 2, 3]);
+            window.postMessage('drop-options', { targetOrigin: 'https://evil.example' });
+            document.getElementById('result').textContent = String(seen.length);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "5")?;
+    Ok(())
+}
+
+#[test]
+fn window_move_by_requires_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          moveBy(1);
+        </script>
+        "#,
+    )
+    .expect_err("moveBy with one argument should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "moveBy requires exactly two arguments"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_move_to_requires_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          moveTo(1);
+        </script>
+        "#,
+    )
+    .expect_err("moveTo with one argument should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "moveTo requires exactly two arguments"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_resize_by_requires_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          resizeBy(1);
+        </script>
+        "#,
+    )
+    .expect_err("resizeBy with one argument should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "resizeBy requires exactly two arguments"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_resize_to_requires_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          resizeTo(1);
+        </script>
+        "#,
+    )
+    .expect_err("resizeTo with one argument should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => assert_eq!(msg, "resizeTo requires exactly two arguments"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_post_message_requires_one_to_three_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          postMessage();
+        </script>
+        "#,
+    )
+    .expect_err("postMessage with no arguments should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "postMessage requires one to three arguments")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_supports_zero_one_or_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          scroll(1, 2, 3);
+        </script>
+        "#,
+    )
+    .expect_err("scroll with three arguments should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "scroll supports zero, one, or two arguments")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_by_supports_zero_one_or_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          scrollBy(1, 2, 3);
+        </script>
+        "#,
+    )
+    .expect_err("scrollBy with three arguments should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "scrollBy supports zero, one, or two arguments")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_scroll_to_supports_zero_one_or_two_arguments() {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          scrollTo(1, 2, 3);
+        </script>
+        "#,
+    )
+    .expect_err("scrollTo with three arguments should fail");
+
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert_eq!(msg, "scrollTo supports zero, one, or two arguments")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -1032,10 +1959,9 @@ fn trace_categories_can_disable_event_logs() -> Result<()> {
     h.click("#btn")?;
 
     let logs = h.take_trace_logs();
-    assert!(
-        logs.iter()
-            .any(|line| line.contains("[timer] schedule timeout id=1"))
-    );
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("[timer] schedule timeout id=1")));
     assert!(logs.iter().all(|line| !line.contains("[event]")));
     Ok(())
 }
@@ -1071,10 +1997,9 @@ fn trace_logs_capture_timer_lifecycle_when_enabled() -> Result<()> {
     h.click("#btn")?;
 
     let logs = h.take_trace_logs();
-    assert!(
-        logs.iter()
-            .any(|line| line.contains("[timer] schedule timeout id=1"))
-    );
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("[timer] schedule timeout id=1")));
     assert!(logs.iter().any(|line| line.contains("due_at=5")));
     assert!(logs.iter().any(|line| line.contains("delay_ms=5")));
 
@@ -1105,24 +2030,21 @@ fn trace_logs_capture_timer_api_summaries() -> Result<()> {
 
     h.advance_time(5)?;
     let logs = h.take_trace_logs();
-    assert!(
-        logs.iter()
-            .any(|line| line.contains("[timer] advance delta_ms=5 from=0 to=5 ran_due=1"))
-    );
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("[timer] advance delta_ms=5 from=0 to=5 ran_due=1")));
 
     assert_eq!(h.run_due_timers()?, 0);
     let logs = h.take_trace_logs();
-    assert!(
-        logs.iter()
-            .any(|line| line.contains("[timer] run_due now_ms=5 ran=0"))
-    );
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("[timer] run_due now_ms=5 ran=0")));
 
     h.flush()?;
     let logs = h.take_trace_logs();
-    assert!(
-        logs.iter()
-            .any(|line| line.contains("[timer] flush from=5 to=10 ran=1"))
-    );
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("[timer] flush from=5 to=10 ran=1")));
     Ok(())
 }
 

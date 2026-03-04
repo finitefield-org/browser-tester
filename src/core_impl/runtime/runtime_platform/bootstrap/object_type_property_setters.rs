@@ -75,6 +75,13 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_navigation_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_NAVIGATION_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_window_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_WINDOW_OBJECT_KEY),
@@ -115,13 +122,69 @@ impl Harness {
 
     pub(crate) fn set_window_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
-            "window" | "self" | "top" | "parent" | "frames" | "length" | "closed" | "history"
-            | "navigator" | "clientInformation" | "document" | "origin" | "isSecureContext"
-            | "cookieStore" | "caches" | "fetch" | "Request" | "Headers" | "URL" | "Element"
-            | "DataTransfer" | "HTMLElement" | "HTMLInputElement" | "HTMLSelectElement"
-            | "DOMParser" | "Document" | "Node" | "NodeFilter" => {
-                Err(Error::ScriptRuntime(format!("window.{key} is read-only")))
-            }
+            "window"
+            | "self"
+            | "top"
+            | "parent"
+            | "frames"
+            | "length"
+            | "closed"
+            | "close"
+            | "stop"
+            | "focus"
+            | "scroll"
+            | "scrollBy"
+            | "scrollTo"
+            | "moveBy"
+            | "moveTo"
+            | "resizeBy"
+            | "resizeTo"
+            | "postMessage"
+            | "history"
+            | "navigation"
+            | "navigator"
+            | "clientInformation"
+            | "document"
+            | "origin"
+            | "isSecureContext"
+            | "cookieStore"
+            | "caches"
+            | "fetch"
+            | "getComputedStyle"
+            | "alert"
+            | "confirm"
+            | "prompt"
+            | "print"
+            | "reportError"
+            | "atob"
+            | "btoa"
+            | "structuredClone"
+            | "requestAnimationFrame"
+            | "setTimeout"
+            | "setInterval"
+            | "cancelAnimationFrame"
+            | "clearInterval"
+            | "clearTimeout"
+            | "queueMicrotask"
+            | "screenX"
+            | "screenY"
+            | "screenLeft"
+            | "screenTop"
+            | "Request"
+            | "Headers"
+            | "URL"
+            | "Element"
+            | "DataTransfer"
+            | "Option"
+            | "HTMLElement"
+            | "HTMLInputElement"
+            | "HTMLOptionElement"
+            | "HTMLSelectElement"
+            | "DOMParser"
+            | "Document"
+            | "Node"
+            | "NodeFilter"
+            | "getSelection" => Err(Error::ScriptRuntime(format!("window.{key} is read-only"))),
             "location" => self.set_location_property("href", value),
             "localStorage" => {
                 Self::object_set_entry(
@@ -241,6 +304,265 @@ impl Harness {
         }
     }
 
+    pub(crate) fn set_canvas_2d_context_property(
+        &mut self,
+        context_object: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+        value: Value,
+    ) -> Result<()> {
+        match key {
+            "canvas" => Ok(()),
+            "lineWidth" => {
+                let next = Self::coerce_number_for_number_constructor(&value);
+                if next.is_finite() && next > 0.0 {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "lineWidth".to_string(),
+                        Self::number_value(next),
+                    );
+                }
+                Ok(())
+            }
+            "miterLimit" => {
+                let next = Self::coerce_number_for_number_constructor(&value);
+                if next.is_finite() && next > 0.0 {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "miterLimit".to_string(),
+                        Self::number_value(next),
+                    );
+                }
+                Ok(())
+            }
+            "lineDashOffset" => {
+                let next = Self::coerce_number_for_number_constructor(&value);
+                if next.is_finite() {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "lineDashOffset".to_string(),
+                        Self::number_value(next),
+                    );
+                }
+                Ok(())
+            }
+            "globalAlpha" => {
+                let next = Self::coerce_number_for_number_constructor(&value);
+                if next.is_finite() {
+                    let next = next.clamp(0.0, 1.0);
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "globalAlpha".to_string(),
+                        Self::number_value(next),
+                    );
+                }
+                Ok(())
+            }
+            "lineCap" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "butt" | "round" | "square") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "lineCap".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "lineJoin" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "round" | "bevel" | "miter") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "lineJoin".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "textAlign" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "start" | "end" | "left" | "right" | "center") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "textAlign".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "textBaseline" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(
+                    next.as_str(),
+                    "top" | "hanging" | "middle" | "alphabetic" | "ideographic" | "bottom"
+                ) {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "textBaseline".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "direction" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "ltr" | "rtl" | "inherit") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "direction".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "fontKerning" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "auto" | "normal" | "none") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "fontKerning".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "fontStretch" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(
+                    next.as_str(),
+                    "ultra-condensed"
+                        | "extra-condensed"
+                        | "condensed"
+                        | "semi-condensed"
+                        | "normal"
+                        | "semi-expanded"
+                        | "expanded"
+                        | "extra-expanded"
+                        | "ultra-expanded"
+                ) {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "fontStretch".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "fontVariantCaps" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(
+                    next.as_str(),
+                    "normal"
+                        | "small-caps"
+                        | "all-small-caps"
+                        | "petite-caps"
+                        | "all-petite-caps"
+                        | "unicase"
+                        | "titling-caps"
+                ) {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "fontVariantCaps".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "textRendering" => {
+                let next = value.as_string();
+                if matches!(
+                    next.as_str(),
+                    "auto" | "optimizeSpeed" | "optimizeLegibility" | "geometricPrecision"
+                ) {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "textRendering".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "globalCompositeOperation" => {
+                let next = value.as_string();
+                if matches!(
+                    next.as_str(),
+                    "source-over"
+                        | "source-in"
+                        | "source-out"
+                        | "source-atop"
+                        | "destination-over"
+                        | "destination-in"
+                        | "destination-out"
+                        | "destination-atop"
+                        | "lighter"
+                        | "copy"
+                        | "xor"
+                        | "multiply"
+                        | "screen"
+                        | "overlay"
+                        | "darken"
+                        | "lighten"
+                        | "color-dodge"
+                        | "color-burn"
+                        | "hard-light"
+                        | "soft-light"
+                        | "difference"
+                        | "exclusion"
+                        | "hue"
+                        | "saturation"
+                        | "color"
+                        | "luminosity"
+                ) {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "globalCompositeOperation".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "imageSmoothingEnabled" => {
+                Self::object_set_entry(
+                    &mut context_object.borrow_mut(),
+                    "imageSmoothingEnabled".to_string(),
+                    Value::Bool(value.truthy()),
+                );
+                Ok(())
+            }
+            "imageSmoothingQuality" => {
+                let next = value.as_string().to_ascii_lowercase();
+                if matches!(next.as_str(), "low" | "medium" | "high") {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        "imageSmoothingQuality".to_string(),
+                        Value::String(next),
+                    );
+                }
+                Ok(())
+            }
+            "fillStyle" | "strokeStyle" | "font" | "letterSpacing" | "wordSpacing"
+            | "shadowColor" | "filter" | "lang" => {
+                Self::object_set_entry(&mut context_object.borrow_mut(), key.to_string(), value);
+                Ok(())
+            }
+            "shadowBlur" | "shadowOffsetX" | "shadowOffsetY" => {
+                let next = Self::coerce_number_for_number_constructor(&value);
+                if next.is_finite() {
+                    Self::object_set_entry(
+                        &mut context_object.borrow_mut(),
+                        key.to_string(),
+                        Self::number_value(next),
+                    );
+                }
+                Ok(())
+            }
+            _ => {
+                Self::object_set_entry(&mut context_object.borrow_mut(), key.to_string(), value);
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn set_history_property(&mut self, key: &str, value: Value) -> Result<()> {
         match key {
             "length" => Err(Error::ScriptRuntime("history.length is read-only".into())),
@@ -268,6 +590,22 @@ impl Harness {
         }
     }
 
+    pub(crate) fn set_navigation_property(&mut self, key: &str, value: Value) -> Result<()> {
+        match key {
+            "activation" | "canGoBack" | "canGoForward" | "currentEntry" | "transition" => Err(
+                Error::ScriptRuntime(format!("navigation.{key} is read-only")),
+            ),
+            _ => {
+                Self::object_set_entry(
+                    &mut self.location_history.navigation_object.borrow_mut(),
+                    key.to_string(),
+                    value,
+                );
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn set_document_property(
         &mut self,
         document_object: &Rc<RefCell<ObjectValue>>,
@@ -285,6 +623,7 @@ impl Harness {
                 self.sync_document_cookie_property();
                 Ok(())
             }
+            "adoptedStyleSheets" => self.set_document_adopted_style_sheets_property(value),
             "head" => Ok(()),
             "textContent" => Ok(()),
             _ => {
@@ -363,6 +702,80 @@ impl Harness {
         Ok(true)
     }
 
+    pub(crate) fn set_event_target_event_handler_property(
+        &mut self,
+        object: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+        value: Value,
+    ) -> Result<bool> {
+        let Some(raw_event_type) = key.strip_prefix("on") else {
+            return Ok(false);
+        };
+        if raw_event_type.is_empty() {
+            return Ok(false);
+        }
+        let is_event_target = {
+            let entries = object.borrow();
+            Self::is_event_target_object(&entries)
+        };
+        if !is_event_target {
+            return Ok(false);
+        }
+
+        let event_type = raw_event_type.to_ascii_lowercase();
+        let node = self.event_target_listener_node_id(object);
+        let previous_handler = {
+            let entries = object.borrow();
+            match Self::object_get_entry(&entries, key) {
+                Some(Value::Function(function)) => Some(function.handler.clone()),
+                _ => None,
+            }
+        };
+
+        if let Value::Function(function) = value {
+            let listener = Listener {
+                capture: false,
+                is_event_handler_property: true,
+                handler: function.handler.clone(),
+                captured_env: function.captured_env.clone(),
+                captured_pending_function_decls: function.captured_pending_function_decls.clone(),
+            };
+            let replaced = previous_handler.as_ref().is_some_and(|previous| {
+                self.listeners.replace_event_handler_property(
+                    node,
+                    &event_type,
+                    previous,
+                    listener.clone(),
+                )
+            });
+            if !replaced {
+                if let Some(previous_handler) = previous_handler.as_ref() {
+                    let _ = self.listeners.remove_event_handler_property(
+                        node,
+                        &event_type,
+                        previous_handler,
+                    );
+                }
+                self.listeners.add(node, event_type, listener);
+            }
+            Self::object_set_entry(
+                &mut object.borrow_mut(),
+                key.to_string(),
+                Value::Function(function),
+            );
+        } else {
+            if let Some(previous_handler) = previous_handler {
+                let _ = self.listeners.remove_event_handler_property(
+                    node,
+                    &event_type,
+                    &previous_handler,
+                );
+            }
+            Self::object_set_entry(&mut object.borrow_mut(), key.to_string(), Value::Null);
+        }
+        Ok(true)
+    }
+
     pub(crate) fn set_node_assignment_property(
         &mut self,
         node: NodeId,
@@ -388,6 +801,44 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("input"));
+
+        if is_select {
+            if let Ok(index) = key.parse::<usize>() {
+                match value {
+                    Value::Null | Value::Undefined => {
+                        if let Some(option) = self.select_option_nodes(node).get(index).copied() {
+                            self.dom.remove_node(option)?;
+                        }
+                        self.dom.sync_select_value(node)?;
+                        return Ok(());
+                    }
+                    Value::Node(option) => {
+                        let option_tag = self.dom.tag_name(option).unwrap_or_default();
+                        if !option_tag.eq_ignore_ascii_case("option")
+                            && !option_tag.eq_ignore_ascii_case("optgroup")
+                        {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: Failed to set an indexed property on 'HTMLSelectElement': value is not an HTMLOptionElement or HTMLOptGroupElement".into(),
+                            ));
+                        }
+
+                        let options = self.select_option_nodes(node);
+                        if let Some(existing) = options.get(index).copied() {
+                            self.dom.replace_child(node, option, existing)?;
+                        } else {
+                            self.dom.append_child(node, option)?;
+                        }
+                        self.dom.sync_select_value(node)?;
+                        return Ok(());
+                    }
+                    _ => {
+                        return Err(Error::ScriptRuntime(
+                            "TypeError: Failed to set an indexed property on 'HTMLSelectElement': value is not an HTMLOptionElement or HTMLOptGroupElement".into(),
+                        ));
+                    }
+                }
+            }
+        }
 
         match key {
             "textContent" | "innerText" | "text" => {
@@ -751,26 +1202,35 @@ impl Harness {
         match container {
             Value::Object(object) => {
                 let key = self.property_key_to_storage_key(key_value);
+                if self.set_event_target_event_handler_property(object, &key, value.clone())? {
+                    return Ok(());
+                }
                 let (
                     is_location,
                     is_history,
+                    is_navigation,
                     is_window,
                     is_navigator,
                     is_document,
                     is_url,
                     is_storage,
                     is_data_transfer,
+                    is_computed_style,
+                    is_canvas_2d_context,
                 ) = {
                     let entries = object.borrow();
                     (
                         Self::is_location_object(&entries),
                         Self::is_history_object(&entries),
+                        Self::is_navigation_object(&entries),
                         Self::is_window_object(&entries),
                         Self::is_navigator_object(&entries),
                         Self::is_document_object(&entries),
                         Self::is_url_object(&entries),
                         Self::is_storage_object(&entries),
                         Self::is_data_transfer_object(&entries),
+                        Self::is_computed_style_object(&entries),
+                        Self::is_canvas_2d_context_object(&entries),
                     )
                 };
                 if is_location {
@@ -779,6 +1239,10 @@ impl Harness {
                 }
                 if is_history {
                     self.set_history_property(&key, value)?;
+                    return Ok(());
+                }
+                if is_navigation {
+                    self.set_navigation_property(&key, value)?;
                     return Ok(());
                 }
                 if is_window {
@@ -803,6 +1267,15 @@ impl Harness {
                 }
                 if is_data_transfer {
                     self.set_data_transfer_object_property(object, &key, value)?;
+                    return Ok(());
+                }
+                if is_computed_style {
+                    return Err(Error::ScriptRuntime(
+                        "CSSStyleProperties is read-only".into(),
+                    ));
+                }
+                if is_canvas_2d_context {
+                    self.set_canvas_2d_context_property(object, &key, value)?;
                     return Ok(());
                 }
                 let (own_setter, own_getter, own_data, mut prototype) = {

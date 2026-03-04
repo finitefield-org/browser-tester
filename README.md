@@ -83,6 +83,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 
 - `fetch` is designed to be replaced with mocks during tests.
 - `confirm` / `prompt` provide APIs for injecting mocked return values.
+- `window.print()` invocation count can be observed deterministically in tests.
 - `location` navigation can load mocked HTML for a target URL.
 - `navigator.clipboard` can be seeded with deterministic text for clipboard read/write tests.
 - `navigator.clipboard` read/write rejection paths can be injected deterministically for tests.
@@ -110,6 +111,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
   - `Harness::clear_location_mock_pages()`
   - `Harness::take_location_navigations()`
   - `Harness::take_downloads()`
+  - `Harness::take_print_call_count()`
   - `Harness::location_reload_count()`
   - `Harness::set_input_files(selector, &[MockFile { ... }, ...])`
 - For `History API` tests (`history.go(0)` / `history.back()` / `history.forward()`), you can reuse
@@ -511,8 +513,14 @@ Unsupported selectors must return explicit errors (no silent ignore).
   `autoplay`, `controls`, `controlsList`, `crossOrigin`, `disableRemotePlayback`, `loop`, `muted`, and `preload`
 - HTMLCanvasElement subset: `width`/`height` property reflection (defaults `300x150` when unset),
   `getContext('2d'[, { alpha }])`, `toDataURL([type])`, and 2D context basics
-  (`fillStyle`, `strokeStyle`, `lineWidth`, `fillRect`, `strokeRect`, `clearRect`,
-  `beginPath`, `closePath`, `moveTo`, `lineTo`, `arc`, `fill`, `stroke`, `getContextAttributes`)
+  (`fillStyle`, `strokeStyle`, line style/text/shadow/compositing/image-smoothing properties,
+  rectangle/path/text/image APIs including `fillRect`/`strokeRect`/`clearRect`,
+  `fillText`/`strokeText`/`measureText`, path primitives (`arc`, `arcTo`, `ellipse`,
+  `bezierCurveTo`, `quadraticCurveTo`, `rect`, `roundRect`), drawing ops (`fill`, `stroke`,
+  `clip`, `drawImage`), gradient/pattern creation, pixel data APIs (`createImageData`,
+  `getImageData`, `putImageData`), transforms (`getTransform`, `setTransform`, `transform`,
+  `resetTransform`, `rotate`, `scale`, `translate`), state ops (`save`, `restore`, `reset`),
+  and context utilities (`getContextAttributes`, `isContextLost`, `getLineDash`, `setLineDash`))
 - History API: `history.length`, `history.state`, `history.scrollRestoration`,
   `history.back()`, `history.forward()`, `history.go([delta])`,
   `history.pushState(state, title, url?)`, `history.replaceState(state, title, url?)`
@@ -733,6 +741,7 @@ impl Harness {
     pub fn enqueue_prompt_response(&mut self, value: Option<&str>);
     pub fn set_default_prompt_response(&mut self, value: Option<&str>);
     pub fn take_alert_messages(&mut self) -> Vec<String>;
+    pub fn take_print_call_count(&mut self) -> usize;
 
     // Assert
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()>;

@@ -68,6 +68,10 @@ pub(super) mod api {
         super::parser_expr::expression_syntax_utils::parse_string_literal_exact(src)
     }
 
+    pub(crate) fn normalize_malformed_escaped_empty_string_literals(src: &str) -> String {
+        super::parser_expr::expression_syntax_utils::normalize_malformed_escaped_empty_string_literals(src)
+    }
+
     pub(crate) fn strip_outer_parens(src: &str) -> &str {
         super::parser_expr::expression_syntax_utils::strip_outer_parens(src)
     }

@@ -29,6 +29,55 @@ fn timer_interval_supports_multiple_additional_parameters() -> Result<()> {
 }
 
 #[test]
+fn timer_interval_supports_string_code_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setInterval(
+              "document.getElementById('result').textContent = document.getElementById('result').textContent + 'X';",
+              5
+            );
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "X")?;
+    assert!(h.clear_timer(1));
+    Ok(())
+}
+
+#[test]
+fn timer_timeout_supports_string_code_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            setTimeout(
+              "document.getElementById('result').textContent = document.getElementById('result').textContent + 'Y';",
+              5
+            );
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "")?;
+    h.advance_time(5)?;
+    h.assert_text("#result", "Y")?;
+    h.advance_time(20)?;
+    h.assert_text("#result", "Y")?;
+    Ok(())
+}
+
+#[test]
 fn line_and_block_comments_are_ignored_in_script_parser() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -413,6 +462,57 @@ fn queue_microtask_runs_after_synchronous_task_body() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "ACB")?;
+    Ok(())
+}
+
+#[test]
+fn queue_microtask_window_method_supports_function_reference_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const result = document.getElementById('result');
+            function appendB() {
+              result.textContent = result.textContent + 'B';
+            }
+            const api = window.queueMicrotask;
+            const returned = api(appendB);
+            result.textContent = String(returned === undefined) + ':A';
+            window.queueMicrotask(() => {
+              result.textContent = result.textContent + 'C';
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:ABC")?;
+    Ok(())
+}
+
+#[test]
+fn queue_microtask_requires_callable_callback() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            queueMicrotask(42);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#btn") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("queueMicrotask callback must be callable"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
     Ok(())
 }
 

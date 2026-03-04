@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Default)]
+struct StructuredCloneState {
+    transfer_array_buffers: HashSet<usize>,
+    dates: HashMap<usize, Rc<RefCell<i64>>>,
+    regexps: HashMap<usize, Rc<RefCell<RegexValue>>>,
+    arrays: HashMap<usize, Rc<RefCell<ArrayValue>>>,
+    objects: HashMap<usize, Rc<RefCell<ObjectValue>>>,
+    array_buffers: HashMap<usize, Rc<RefCell<ArrayBufferValue>>>,
+    typed_arrays: HashMap<usize, Rc<RefCell<TypedArrayValue>>>,
+    blobs: HashMap<usize, Rc<RefCell<BlobValue>>>,
+    maps: HashMap<usize, Rc<RefCell<MapValue>>>,
+    sets: HashMap<usize, Rc<RefCell<SetValue>>>,
+}
+
 impl Harness {
     pub(crate) fn json_stringify_top_level(
         value: &Value,
@@ -202,11 +216,103 @@ impl Harness {
         out
     }
 
-    pub(crate) fn structured_clone_value(
-        value: &Value,
-        array_stack: &mut Vec<usize>,
-        object_stack: &mut Vec<usize>,
-    ) -> Result<Value> {
+    fn structured_clone_not_cloneable_error() -> Error {
+        Error::ScriptRuntime("DataCloneError: structuredClone value is not cloneable".into())
+    }
+
+    fn structured_clone_transfer_error(message: &str) -> Error {
+        Error::ScriptRuntime(format!("DataCloneError: {message}"))
+    }
+
+    fn structured_clone_transfer_array_buffer_ids(options: Option<&Value>) -> Result<HashSet<usize>> {
+        let Some(options) = options else {
+            return Ok(HashSet::new());
+        };
+
+        match options {
+            Value::Undefined | Value::Null => Ok(HashSet::new()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                let transfer = Self::object_get_entry(&entries, "transfer");
+                match transfer {
+                    None | Some(Value::Undefined | Value::Null) => Ok(HashSet::new()),
+                    Some(Value::Array(values)) => {
+                        let values = values.borrow();
+                        let mut ids = HashSet::new();
+                        for value in values.iter() {
+                            let Value::ArrayBuffer(buffer) = value else {
+                                return Err(Self::structured_clone_transfer_error(
+                                    "structuredClone transfer list items must be transferable",
+                                ));
+                            };
+                            if buffer.borrow().detached {
+                                return Err(Self::structured_clone_transfer_error(
+                                    "Cannot transfer a detached ArrayBuffer",
+                                ));
+                            }
+                            let id = Rc::as_ptr(&buffer) as usize;
+                            if !ids.insert(id) {
+                                return Err(Self::structured_clone_transfer_error(
+                                    "structuredClone transfer list contains duplicate items",
+                                ));
+                            }
+                        }
+                        Ok(ids)
+                    }
+                    Some(_) => Err(Self::structured_clone_transfer_error(
+                        "structuredClone transfer option must be an array",
+                    )),
+                }
+            }
+            _ => Err(Error::ScriptRuntime(
+                "TypeError: structuredClone options must be an object".into(),
+            )),
+        }
+    }
+
+    fn structured_clone_array_buffer_ref(
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        state: &mut StructuredCloneState,
+    ) -> Result<Rc<RefCell<ArrayBufferValue>>> {
+        let source_id = Rc::as_ptr(buffer) as usize;
+        if let Some(cloned) = state.array_buffers.get(&source_id) {
+            return Ok(cloned.clone());
+        }
+
+        let cloned = if state.transfer_array_buffers.contains(&source_id) {
+            let mut source = buffer.borrow_mut();
+            if source.detached {
+                return Err(Self::structured_clone_transfer_error(
+                    "Cannot transfer a detached ArrayBuffer",
+                ));
+            }
+
+            let bytes = source.bytes.clone();
+            let max_byte_length = source.max_byte_length;
+            source.bytes.clear();
+            source.max_byte_length = None;
+            source.detached = true;
+            drop(source);
+
+            Rc::new(RefCell::new(ArrayBufferValue {
+                bytes,
+                max_byte_length,
+                detached: false,
+            }))
+        } else {
+            let source = buffer.borrow();
+            Rc::new(RefCell::new(ArrayBufferValue {
+                bytes: source.bytes.clone(),
+                max_byte_length: source.max_byte_length,
+                detached: source.detached,
+            }))
+        };
+
+        state.array_buffers.insert(source_id, cloned.clone());
+        Ok(cloned)
+    }
+
+    fn structured_clone_internal(value: &Value, state: &mut StructuredCloneState) -> Result<Value> {
         match value {
             Value::String(v) => Ok(Value::String(v.clone())),
             Value::Bool(v) => Ok(Value::Bool(*v)),
@@ -215,112 +321,160 @@ impl Harness {
             Value::BigInt(v) => Ok(Value::BigInt(v.clone())),
             Value::Null => Ok(Value::Null),
             Value::Undefined => Ok(Value::Undefined),
-            Value::Date(v) => Ok(Value::Date(Rc::new(RefCell::new(*v.borrow())))),
+            Value::Date(v) => {
+                let source_id = Rc::as_ptr(v) as usize;
+                if let Some(cloned) = state.dates.get(&source_id) {
+                    return Ok(Value::Date(cloned.clone()));
+                }
+                let cloned = Rc::new(RefCell::new(*v.borrow()));
+                state.dates.insert(source_id, cloned.clone());
+                Ok(Value::Date(cloned))
+            }
             Value::RegExp(v) => {
+                let source_id = Rc::as_ptr(v) as usize;
+                if let Some(cloned) = state.regexps.get(&source_id) {
+                    return Ok(Value::RegExp(cloned.clone()));
+                }
+
                 let v = v.borrow();
                 let cloned = Self::new_regex_value(v.source.clone(), v.flags.clone())?;
                 let Value::RegExp(cloned_regex) = &cloned else {
                     unreachable!("RegExp clone must produce RegExp value");
                 };
+                state.regexps.insert(source_id, cloned_regex.clone());
                 {
                     let mut cloned_regex = cloned_regex.borrow_mut();
                     cloned_regex.last_index = v.last_index;
                     cloned_regex.properties = v.properties.clone();
                 }
-                Ok(cloned)
+                Ok(Value::RegExp(cloned_regex.clone()))
             }
             Value::ArrayBuffer(buffer) => {
-                let buffer = buffer.borrow();
-                Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
-                    ArrayBufferValue {
-                        bytes: buffer.bytes.clone(),
-                        max_byte_length: buffer.max_byte_length,
-                        detached: buffer.detached,
-                    },
-                ))))
+                let cloned = Self::structured_clone_array_buffer_ref(buffer, state)?;
+                Ok(Value::ArrayBuffer(cloned))
             }
             Value::TypedArray(array) => {
-                let array = array.borrow();
-                let buffer = array.buffer.borrow();
-                let cloned_buffer = Rc::new(RefCell::new(ArrayBufferValue {
-                    bytes: buffer.bytes.clone(),
-                    max_byte_length: buffer.max_byte_length,
-                    detached: buffer.detached,
-                }));
-                Ok(Value::TypedArray(Rc::new(RefCell::new(TypedArrayValue {
-                    kind: array.kind,
+                let source_id = Rc::as_ptr(array) as usize;
+                if let Some(cloned) = state.typed_arrays.get(&source_id) {
+                    return Ok(Value::TypedArray(cloned.clone()));
+                }
+
+                let source = array.borrow();
+                let cloned_buffer = Self::structured_clone_array_buffer_ref(&source.buffer, state)?;
+                let cloned = Rc::new(RefCell::new(TypedArrayValue {
+                    kind: source.kind,
                     buffer: cloned_buffer,
-                    byte_offset: array.byte_offset,
-                    fixed_length: array.fixed_length,
-                }))))
+                    byte_offset: source.byte_offset,
+                    fixed_length: source.fixed_length,
+                }));
+                state.typed_arrays.insert(source_id, cloned.clone());
+                Ok(Value::TypedArray(cloned))
             }
             Value::Blob(blob) => {
+                let source_id = Rc::as_ptr(blob) as usize;
+                if let Some(cloned) = state.blobs.get(&source_id) {
+                    return Ok(Value::Blob(cloned.clone()));
+                }
+
                 let blob = blob.borrow();
-                Ok(Self::new_blob_value(
-                    blob.bytes.clone(),
-                    blob.mime_type.clone(),
-                ))
+                let cloned = match Self::new_blob_value(blob.bytes.clone(), blob.mime_type.clone()) {
+                    Value::Blob(cloned) => cloned,
+                    _ => unreachable!("Blob clone must produce Blob value"),
+                };
+                state.blobs.insert(source_id, cloned.clone());
+                Ok(Value::Blob(cloned))
             }
             Value::Map(map) => {
-                let map = map.borrow();
-                Ok(Value::Map(Rc::new(RefCell::new(MapValue {
-                    entries: map.entries.clone(),
-                    properties: map.properties.clone(),
-                }))))
-            }
-            Value::WeakMap(_) => Err(Error::ScriptRuntime(
-                "structuredClone value is not cloneable".into(),
-            )),
-            Value::Set(set) => {
-                let set = set.borrow();
-                Ok(Value::Set(Rc::new(RefCell::new(SetValue {
-                    values: set.values.clone(),
-                    properties: set.properties.clone(),
-                }))))
-            }
-            Value::WeakSet(_) => Err(Error::ScriptRuntime(
-                "structuredClone value is not cloneable".into(),
-            )),
-            Value::Array(values) => {
-                let ptr = Rc::as_ptr(values) as usize;
-                if array_stack.contains(&ptr) {
-                    return Err(Error::ScriptRuntime(
-                        "structuredClone does not support circular values".into(),
-                    ));
+                let source_id = Rc::as_ptr(map) as usize;
+                if let Some(cloned) = state.maps.get(&source_id) {
+                    return Ok(Value::Map(cloned.clone()));
                 }
-                array_stack.push(ptr);
+
+                let map = map.borrow();
+                let cloned = Rc::new(RefCell::new(MapValue {
+                    entries: Vec::with_capacity(map.entries.len()),
+                    properties: map.properties.clone(),
+                }));
+                state.maps.insert(source_id, cloned.clone());
+
+                let mut cloned_entries = Vec::with_capacity(map.entries.len());
+                for (key, value) in map.entries.iter() {
+                    let cloned_key = Self::structured_clone_internal(key, state)?;
+                    let cloned_value = Self::structured_clone_internal(value, state)?;
+                    cloned_entries.push((cloned_key, cloned_value));
+                }
+                cloned.borrow_mut().entries = cloned_entries;
+
+                Ok(Value::Map(cloned))
+            }
+            Value::WeakMap(_) => Err(Self::structured_clone_not_cloneable_error()),
+            Value::Set(set) => {
+                let source_id = Rc::as_ptr(set) as usize;
+                if let Some(cloned) = state.sets.get(&source_id) {
+                    return Ok(Value::Set(cloned.clone()));
+                }
+
+                let set = set.borrow();
+                let cloned = Rc::new(RefCell::new(SetValue {
+                    values: Vec::with_capacity(set.values.len()),
+                    properties: set.properties.clone(),
+                }));
+                state.sets.insert(source_id, cloned.clone());
+
+                let mut cloned_values = Vec::with_capacity(set.values.len());
+                for value in set.values.iter() {
+                    cloned_values.push(Self::structured_clone_internal(value, state)?);
+                }
+                cloned.borrow_mut().values = cloned_values;
+
+                Ok(Value::Set(cloned))
+            }
+            Value::WeakSet(_) => Err(Self::structured_clone_not_cloneable_error()),
+            Value::Array(values) => {
+                let source_id = Rc::as_ptr(values) as usize;
+                if let Some(cloned) = state.arrays.get(&source_id) {
+                    return Ok(Value::Array(cloned.clone()));
+                }
 
                 let items = values.borrow();
-                let mut cloned = Vec::with_capacity(items.len());
-                for item in items.iter() {
-                    cloned.push(Self::structured_clone_value(
-                        item,
-                        array_stack,
-                        object_stack,
-                    )?);
-                }
-                array_stack.pop();
+                let cloned = Rc::new(RefCell::new(ArrayValue::new(Vec::new())));
+                state.arrays.insert(source_id, cloned.clone());
 
-                Ok(Self::new_array_value(cloned))
+                let mut cloned_items = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    cloned_items.push(Self::structured_clone_internal(item, state)?);
+                }
+                let mut cloned_properties = Vec::with_capacity(items.properties.len());
+                for (key, value) in items.properties.iter() {
+                    let value = Self::structured_clone_internal(value, state)?;
+                    cloned_properties.push((key.clone(), value));
+                }
+
+                let mut cloned_ref = cloned.borrow_mut();
+                cloned_ref.elements = cloned_items;
+                cloned_ref.properties = ObjectValue::from(cloned_properties);
+                drop(cloned_ref);
+
+                Ok(Value::Array(cloned))
             }
             Value::Object(entries) => {
-                let ptr = Rc::as_ptr(entries) as usize;
-                if object_stack.contains(&ptr) {
-                    return Err(Error::ScriptRuntime(
-                        "structuredClone does not support circular values".into(),
-                    ));
+                let source_id = Rc::as_ptr(entries) as usize;
+                if let Some(cloned) = state.objects.get(&source_id) {
+                    return Ok(Value::Object(cloned.clone()));
                 }
-                object_stack.push(ptr);
+
+                let cloned = Rc::new(RefCell::new(ObjectValue::default()));
+                state.objects.insert(source_id, cloned.clone());
 
                 let entries = entries.borrow();
-                let mut cloned = Vec::with_capacity(entries.len());
+                let mut cloned_entries = Vec::with_capacity(entries.len());
                 for (key, value) in entries.iter() {
-                    let value = Self::structured_clone_value(value, array_stack, object_stack)?;
-                    cloned.push((key.clone(), value));
+                    let value = Self::structured_clone_internal(value, state)?;
+                    cloned_entries.push((key.clone(), value));
                 }
-                object_stack.pop();
+                *cloned.borrow_mut() = ObjectValue::from(cloned_entries);
 
-                Ok(Self::new_object_value(cloned))
+                Ok(Value::Object(cloned))
             }
             Value::Node(_)
             | Value::NodeList(_)
@@ -340,9 +494,27 @@ impl Harness {
             | Value::SymbolConstructor
             | Value::RegExpConstructor
             | Value::PromiseCapability(_)
-            | Value::Function(_) => Err(Error::ScriptRuntime(
-                "structuredClone value is not cloneable".into(),
-            )),
+            | Value::Function(_) => Err(Self::structured_clone_not_cloneable_error()),
         }
+    }
+
+    pub(crate) fn structured_clone_value_with_options(
+        value: &Value,
+        options: Option<&Value>,
+    ) -> Result<Value> {
+        let transfer_array_buffers = Self::structured_clone_transfer_array_buffer_ids(options)?;
+        let mut state = StructuredCloneState {
+            transfer_array_buffers,
+            ..StructuredCloneState::default()
+        };
+        Self::structured_clone_internal(value, &mut state)
+    }
+
+    pub(crate) fn structured_clone_value(
+        value: &Value,
+        _array_stack: &mut Vec<usize>,
+        _object_stack: &mut Vec<usize>,
+    ) -> Result<Value> {
+        Self::structured_clone_value_with_options(value, None)
     }
 }

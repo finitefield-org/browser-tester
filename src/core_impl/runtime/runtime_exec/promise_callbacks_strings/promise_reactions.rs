@@ -2,7 +2,11 @@ use super::*;
 
 impl Harness {
     pub(crate) fn promise_error_reason(err: Error) -> Value {
-        Value::String(format!("{err}"))
+        match err {
+            Error::ScriptThrown(thrown) => thrown.into_value(),
+            Error::ScriptRuntime(message) => Value::String(message),
+            other => Value::String(format!("{other}")),
+        }
     }
 
     pub(crate) fn new_pending_promise(&mut self) -> Rc<RefCell<PromiseValue>> {

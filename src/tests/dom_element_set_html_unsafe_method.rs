@@ -120,8 +120,8 @@ fn element_set_html_unsafe_creates_declarative_shadow_root() -> Result<()> {
 }
 
 #[test]
-fn element_set_html_unsafe_second_declarative_template_becomes_template_in_shadow_root()
--> Result<()> {
+fn element_set_html_unsafe_second_declarative_template_becomes_template_in_shadow_root(
+) -> Result<()> {
     let html = r#"
         <div id='host'></div>
         <button id='run'>run</button>

@@ -168,6 +168,7 @@ impl Harness {
             DomProp::ScrollLeftMax => Some("scrollLeftMax"),
             DomProp::ScrollTopMax => Some("scrollTopMax"),
             DomProp::ShadowRoot => Some("shadowRoot"),
+            DomProp::AdoptedStyleSheets => Some("adoptedStyleSheets"),
             DomProp::Children => Some("children"),
             DomProp::ChildElementCount => Some("childElementCount"),
             DomProp::FirstElementChild => Some("firstElementChild"),
@@ -235,6 +236,8 @@ impl Harness {
             | DomProp::ValidityValid
             | DomProp::ValidityCustomError
             | DomProp::ActiveElement
+            | DomProp::ActiveViewTransition
+            | DomProp::AdoptedStyleSheetsLength
             | DomProp::CharacterSet
             | DomProp::CompatMode
             | DomProp::ContentType

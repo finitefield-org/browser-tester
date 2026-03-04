@@ -470,12 +470,20 @@ impl Harness {
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value < 0 { None } else { Some(value) }
+        if value < 0 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value <= 0 { None } else { Some(value) }
+        if value <= 0 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     pub(crate) fn col_span_value(&self, node: NodeId) -> i64 {
@@ -510,9 +518,44 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_match_media_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_MATCH_MEDIA_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_event_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_keyboard_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_KEYBOARD_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_wheel_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_WHEEL_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_navigate_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_NAVIGATE_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_pointer_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_POINTER_EVENT_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -560,6 +603,13 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_selection_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_SELECTION_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_clipboard_data_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_CLIPBOARD_DATA_OBJECT_KEY),
@@ -603,6 +653,92 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_MOCK_FILE_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn keyboard_key_code_for_key(key: &str) -> i64 {
+        if let Some(ch) = key.chars().next().filter(|_| key.chars().count() == 1) {
+            return ch as i64;
+        }
+        match key {
+            "Backspace" => 8,
+            "Tab" => 9,
+            "Enter" => 13,
+            "Shift" => 16,
+            "Control" => 17,
+            "Alt" => 18,
+            "Pause" => 19,
+            "CapsLock" => 20,
+            "Escape" => 27,
+            " " => 32,
+            "PageUp" => 33,
+            "PageDown" => 34,
+            "End" => 35,
+            "Home" => 36,
+            "ArrowLeft" => 37,
+            "ArrowUp" => 38,
+            "ArrowRight" => 39,
+            "ArrowDown" => 40,
+            "Insert" => 45,
+            "Delete" => 46,
+            "Meta" => 91,
+            "ContextMenu" => 93,
+            "NumLock" => 144,
+            "ScrollLock" => 145,
+            "F1" => 112,
+            "F2" => 113,
+            "F3" => 114,
+            "F4" => 115,
+            "F5" => 116,
+            "F6" => 117,
+            "F7" => 118,
+            "F8" => 119,
+            "F9" => 120,
+            "F10" => 121,
+            "F11" => 122,
+            "F12" => 123,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn keyboard_char_code_for_event(event_type: &str, key: &str) -> i64 {
+        if !event_type.eq_ignore_ascii_case("keypress") {
+            return 0;
+        }
+        if let Some(ch) = key.chars().next().filter(|_| key.chars().count() == 1) {
+            return ch as i64;
+        }
+        if key == "Enter" {
+            13
+        } else {
+            0
+        }
+    }
+
+    pub(crate) fn event_modifier_state_from_entries(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        modifier: &str,
+    ) -> bool {
+        let normalized = modifier.trim();
+        match normalized {
+            "Alt" | "alt" => {
+                Self::object_get_entry(entries, "altKey").is_some_and(|value| value.truthy())
+            }
+            "Control" | "control" | "Ctrl" | "ctrl" => {
+                Self::object_get_entry(entries, "ctrlKey").is_some_and(|value| value.truthy())
+            }
+            "Meta" | "meta" => {
+                Self::object_get_entry(entries, "metaKey").is_some_and(|value| value.truthy())
+            }
+            "Shift" | "shift" => {
+                Self::object_get_entry(entries, "shiftKey").is_some_and(|value| value.truthy())
+            }
+            "AltGraph" | "altgraph" => {
+                Self::object_get_entry(entries, "altKey").is_some_and(|value| value.truthy())
+                    && Self::object_get_entry(entries, "ctrlKey")
+                        .is_some_and(|value| value.truthy())
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn new_attr_object_value(name: &str, value: &str, owner: Option<NodeId>) -> Value {
@@ -882,6 +1018,90 @@ impl Harness {
         ])
     }
 
+    pub(crate) fn new_selection_object_value(root: NodeId) -> Value {
+        let range = Self::new_range_object_value(root);
+        Self::new_object_value(vec![
+            (INTERNAL_SELECTION_OBJECT_KEY.to_string(), Value::Bool(true)),
+            (INTERNAL_SELECTION_RANGE_KEY.to_string(), range),
+            ("anchorNode".to_string(), Value::Null),
+            ("anchorOffset".to_string(), Value::Number(0)),
+            ("focusNode".to_string(), Value::Null),
+            ("focusOffset".to_string(), Value::Number(0)),
+            ("isCollapsed".to_string(), Value::Bool(true)),
+            ("rangeCount".to_string(), Value::Number(0)),
+            ("type".to_string(), Value::String("None".to_string())),
+            ("direction".to_string(), Value::String("none".to_string())),
+            (
+                "addRange".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "collapse".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "collapseToEnd".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "collapseToStart".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "containsNode".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "deleteFromDocument".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "empty".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "extend".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getComposedRanges".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getRangeAt".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "modify".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "removeAllRanges".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "removeRange".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "selectAllChildren".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setBaseAndExtent".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setPosition".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "toString".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ])
+    }
+
     pub(crate) fn new_animation_object_value(
         id: String,
         keyframes: Value,
@@ -996,13 +1216,29 @@ impl Harness {
         self.dom.set_attr(node, name, &next.to_string())
     }
 
-    pub(crate) fn new_canvas_2d_context_value(&self, alpha: bool) -> Value {
+    pub(crate) fn new_canvas_2d_context_value(&self, canvas_node: NodeId, alpha: bool) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CANVAS_2D_CONTEXT_OBJECT_KEY.to_string(),
                 Value::Bool(true),
             ),
             (INTERNAL_CANVAS_2D_ALPHA_KEY.to_string(), Value::Bool(alpha)),
+            (
+                INTERNAL_CANVAS_2D_LINE_DASH_KEY.to_string(),
+                Self::new_array_value(Vec::new()),
+            ),
+            (
+                INTERNAL_CANVAS_2D_TRANSFORM_KEY.to_string(),
+                Self::new_array_value(vec![
+                    Value::Number(1),
+                    Value::Number(0),
+                    Value::Number(0),
+                    Value::Number(1),
+                    Value::Number(0),
+                    Value::Number(0),
+                ]),
+            ),
+            ("canvas".to_string(), Value::Node(canvas_node)),
             (
                 "fillStyle".to_string(),
                 Value::String("#000000".to_string()),
@@ -1012,6 +1248,233 @@ impl Harness {
                 Value::String("#000000".to_string()),
             ),
             ("lineWidth".to_string(), Value::Number(1)),
+            ("lineCap".to_string(), Value::String("butt".to_string())),
+            ("lineJoin".to_string(), Value::String("miter".to_string())),
+            ("miterLimit".to_string(), Value::Number(10)),
+            ("lineDashOffset".to_string(), Value::Number(0)),
+            (
+                "font".to_string(),
+                Value::String("10px sans-serif".to_string()),
+            ),
+            ("textAlign".to_string(), Value::String("start".to_string())),
+            (
+                "textBaseline".to_string(),
+                Value::String("alphabetic".to_string()),
+            ),
+            (
+                "direction".to_string(),
+                Value::String("inherit".to_string()),
+            ),
+            (
+                "letterSpacing".to_string(),
+                Value::String("0px".to_string()),
+            ),
+            ("fontKerning".to_string(), Value::String("auto".to_string())),
+            (
+                "fontStretch".to_string(),
+                Value::String("normal".to_string()),
+            ),
+            (
+                "fontVariantCaps".to_string(),
+                Value::String("normal".to_string()),
+            ),
+            (
+                "textRendering".to_string(),
+                Value::String("auto".to_string()),
+            ),
+            ("wordSpacing".to_string(), Value::String("0px".to_string())),
+            ("lang".to_string(), Value::String("inherit".to_string())),
+            ("shadowBlur".to_string(), Value::Number(0)),
+            (
+                "shadowColor".to_string(),
+                Value::String("rgba(0, 0, 0, 0)".to_string()),
+            ),
+            ("shadowOffsetX".to_string(), Value::Number(0)),
+            ("shadowOffsetY".to_string(), Value::Number(0)),
+            ("globalAlpha".to_string(), Value::Number(1)),
+            (
+                "globalCompositeOperation".to_string(),
+                Value::String("source-over".to_string()),
+            ),
+            ("imageSmoothingEnabled".to_string(), Value::Bool(true)),
+            (
+                "imageSmoothingQuality".to_string(),
+                Value::String("low".to_string()),
+            ),
+            ("filter".to_string(), Value::String("none".to_string())),
+            (
+                "clearRect".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "fillRect".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "strokeRect".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "fillText".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "strokeText".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "measureText".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "beginPath".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "closePath".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "moveTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "lineTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "bezierCurveTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "quadraticCurveTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("arc".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "arcTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "ellipse".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("rect".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "roundRect".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("fill".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "stroke".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "drawFocusIfNeeded".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("clip".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "isPointInPath".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "isPointInStroke".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setLineDash".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getLineDash".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createConicGradient".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createLinearGradient".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createRadialGradient".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createPattern".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "drawImage".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "createImageData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getImageData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "putImageData".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getTransform".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "rotate".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "scale".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "translate".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "transform".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "setTransform".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "resetTransform".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            ("save".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "restore".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "reset".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getContextAttributes".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "isContextLost".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "toString".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "Symbol.toStringTag".to_string(),
+                Value::String("CanvasRenderingContext2D".to_string()),
+            ),
         ])
     }
 
@@ -1188,6 +1651,112 @@ impl Harness {
         constructor
     }
 
+    pub(crate) fn new_keyboard_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("keyboard_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+            ("DOM_KEY_LOCATION_STANDARD".to_string(), Value::Number(0x00)),
+            ("DOM_KEY_LOCATION_LEFT".to_string(), Value::Number(0x01)),
+            ("DOM_KEY_LOCATION_RIGHT".to_string(), Value::Number(0x02)),
+            ("DOM_KEY_LOCATION_NUMPAD".to_string(), Value::Number(0x03)),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_wheel_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("wheel_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+            ("DOM_DELTA_PIXEL".to_string(), Value::Number(0)),
+            ("DOM_DELTA_LINE".to_string(), Value::Number(1)),
+            ("DOM_DELTA_PAGE".to_string(), Value::Number(2)),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_navigate_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("navigate_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_pointer_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("pointer_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_navigate_event_default_signal_value() -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            ("aborted".to_string(), Value::Bool(false)),
+            ("onabort".to_string(), Value::Null),
+            (
+                "addEventListener".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "removeEventListener".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "dispatchEvent".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ])
+    }
+
     pub(crate) fn new_dom_parser_constructor_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -1238,6 +1807,118 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_window_stop_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_stop_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_focus_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_focus_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_scroll_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_scroll_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_scroll_by_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_scroll_by_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_scroll_to_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_scroll_to_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_move_by_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_move_by_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_move_to_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_move_to_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_resize_by_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_resize_by_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_resize_to_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_resize_to_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_post_message_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_post_message_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_get_computed_style_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_get_computed_style_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_alert_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_alert_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_confirm_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_confirm_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_print_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_print_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_report_error_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_report_error_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_window_prompt_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_prompt_function".to_string()),
+        )])
+    }
+
     pub(crate) fn new_request_constructor_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -1277,6 +1958,13 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("data_transfer_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_option_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("option_constructor".to_string()),
         )])
     }
 
@@ -1343,6 +2031,25 @@ impl Harness {
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
                 Value::String("text_decoder_stream_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_css_style_sheet_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("css_style_sheet_constructor".to_string()),
             ),
             ("prototype".to_string(), prototype.clone()),
         ]);
@@ -1458,6 +2165,27 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("text_decoder_stream_get_writable".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_css_style_sheet_replace_sync_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("css_style_sheet_replace_sync".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_css_style_sheet_insert_rule_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("css_style_sheet_insert_rule".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_computed_style_get_property_value_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("computed_style_get_property_value".to_string()),
         )])
     }
 
@@ -1602,6 +2330,386 @@ impl Harness {
         ])
     }
 
+    pub(crate) fn new_css_style_sheet_instance_value(owner_document: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CSS_STYLE_SHEET_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_CSS_STYLE_SHEET_OWNER_DOCUMENT_KEY.to_string(),
+                owner_document,
+            ),
+            (
+                INTERNAL_CSS_STYLE_SHEET_RULES_KEY.to_string(),
+                Self::new_array_value(Vec::new()),
+            ),
+            (
+                "replaceSync".to_string(),
+                Self::new_css_style_sheet_replace_sync_callable(),
+            ),
+            (
+                "insertRule".to_string(),
+                Self::new_css_style_sheet_insert_rule_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn is_css_style_sheet_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_CSS_STYLE_SHEET_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn css_style_sheet_owner_document(
+        entries: &[(String, Value)],
+    ) -> Option<Rc<RefCell<ObjectValue>>> {
+        match Self::object_get_entry(entries, INTERNAL_CSS_STYLE_SHEET_OWNER_DOCUMENT_KEY) {
+            Some(Value::Object(document)) => Some(document),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_css_style_sheet_for_document(
+        &self,
+        value: &Value,
+        document_object: &Rc<RefCell<ObjectValue>>,
+    ) -> bool {
+        let Value::Object(entries) = value else {
+            return false;
+        };
+        let entries = entries.borrow();
+        if !Self::is_css_style_sheet_object(&entries) {
+            return false;
+        }
+        let Some(owner_document) = Self::css_style_sheet_owner_document(&entries) else {
+            return false;
+        };
+        Rc::ptr_eq(&owner_document, document_object)
+    }
+
+    pub(crate) fn new_adopted_style_sheets_array_value(owner_document: Value) -> Value {
+        let array = Self::new_array_value(Vec::new());
+        if let Value::Array(values) = &array {
+            let mut values_ref = values.borrow_mut();
+            Self::object_set_entry(
+                &mut values_ref.properties,
+                INTERNAL_ADOPTED_STYLE_SHEETS_ARRAY_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(
+                &mut values_ref.properties,
+                INTERNAL_ADOPTED_STYLE_SHEETS_OWNER_DOCUMENT_KEY.to_string(),
+                owner_document,
+            );
+        }
+        array
+    }
+
+    pub(crate) fn mark_as_adopted_style_sheets_array(
+        &self,
+        values: &Rc<RefCell<ArrayValue>>,
+        owner_document: Value,
+    ) {
+        let mut values_ref = values.borrow_mut();
+        Self::object_set_entry(
+            &mut values_ref.properties,
+            INTERNAL_ADOPTED_STYLE_SHEETS_ARRAY_KEY.to_string(),
+            Value::Bool(true),
+        );
+        Self::object_set_entry(
+            &mut values_ref.properties,
+            INTERNAL_ADOPTED_STYLE_SHEETS_OWNER_DOCUMENT_KEY.to_string(),
+            owner_document,
+        );
+    }
+
+    pub(crate) fn adopted_style_sheets_owner_document(
+        values: &ArrayValue,
+    ) -> Option<Rc<RefCell<ObjectValue>>> {
+        let is_adopted_array = matches!(
+            Self::object_get_entry(&values.properties, INTERNAL_ADOPTED_STYLE_SHEETS_ARRAY_KEY),
+            Some(Value::Bool(true))
+        );
+        if !is_adopted_array {
+            return None;
+        }
+        match Self::object_get_entry(
+            &values.properties,
+            INTERNAL_ADOPTED_STYLE_SHEETS_OWNER_DOCUMENT_KEY,
+        ) {
+            Some(Value::Object(document)) => Some(document),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn adopted_style_sheets_not_allowed_error() -> Error {
+        Error::ScriptRuntime(
+            "NotAllowedError: adoptedStyleSheets items must be CSSStyleSheet instances created in the same document".into(),
+        )
+    }
+
+    pub(crate) fn ensure_document_adopted_style_sheets_property(&mut self) -> Value {
+        if let Some(existing) = Self::object_get_entry(
+            &self.dom_runtime.document_object.borrow(),
+            "adoptedStyleSheets",
+        ) {
+            return existing;
+        }
+        let value = Self::new_adopted_style_sheets_array_value(Value::Object(
+            self.dom_runtime.document_object.clone(),
+        ));
+        Self::object_set_entry(
+            &mut self.dom_runtime.document_object.borrow_mut(),
+            "adoptedStyleSheets".to_string(),
+            value.clone(),
+        );
+        value
+    }
+
+    pub(crate) fn set_document_adopted_style_sheets_property(
+        &mut self,
+        value: Value,
+    ) -> Result<()> {
+        let Value::Array(values) = value else {
+            return Err(Self::adopted_style_sheets_not_allowed_error());
+        };
+        let owner_document = self.dom_runtime.document_object.clone();
+        for item in values.borrow().iter() {
+            if !self.is_css_style_sheet_for_document(item, &owner_document) {
+                return Err(Self::adopted_style_sheets_not_allowed_error());
+            }
+        }
+        self.mark_as_adopted_style_sheets_array(
+            &values,
+            Value::Object(self.dom_runtime.document_object.clone()),
+        );
+        Self::object_set_entry(
+            &mut self.dom_runtime.document_object.borrow_mut(),
+            "adoptedStyleSheets".to_string(),
+            Value::Array(values),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn new_computed_style_object_value(node: NodeId, pseudo: Option<String>) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_COMPUTED_STYLE_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_COMPUTED_STYLE_TARGET_NODE_KEY.to_string(),
+                Value::Node(node),
+            ),
+            (
+                INTERNAL_COMPUTED_STYLE_PSEUDO_KEY.to_string(),
+                pseudo.map(Value::String).unwrap_or(Value::Null),
+            ),
+            (
+                "getPropertyValue".to_string(),
+                Self::new_computed_style_get_property_value_callable(),
+            ),
+        ])
+    }
+
+    pub(crate) fn is_computed_style_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_COMPUTED_STYLE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn computed_style_target_node(entries: &[(String, Value)]) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_COMPUTED_STYLE_TARGET_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn computed_style_pseudo(entries: &[(String, Value)]) -> Option<String> {
+        match Self::object_get_entry(entries, INTERNAL_COMPUTED_STYLE_PSEUDO_KEY) {
+            Some(Value::String(pseudo)) => Some(pseudo),
+            _ => None,
+        }
+    }
+
+    fn computed_style_rule_value_from_style_nodes(
+        &self,
+        node: NodeId,
+        pseudo: Option<&str>,
+        property_name: &str,
+    ) -> Option<String> {
+        let mut resolved = None;
+        for index in 0..self.dom.nodes.len() {
+            let node_id = NodeId(index);
+            let is_style_tag = self
+                .dom
+                .tag_name(node_id)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("style"));
+            if !is_style_tag {
+                continue;
+            }
+            let css_source = self.dom.text_content(node_id);
+            for (selector_text, declarations_text) in Self::parse_css_rule_blocks(&css_source) {
+                for selector in selector_text.split(',').map(str::trim) {
+                    if selector.is_empty() {
+                        continue;
+                    }
+                    let (base_selector, selector_pseudo) =
+                        Self::split_selector_and_pseudo(selector);
+
+                    let pseudo_matches = match (pseudo, selector_pseudo.as_deref()) {
+                        (None, None) => true,
+                        (Some(expected), Some(actual)) => actual.eq_ignore_ascii_case(expected),
+                        _ => false,
+                    };
+                    if !pseudo_matches {
+                        continue;
+                    }
+
+                    let selector_matches = if base_selector.is_empty() || base_selector == "*" {
+                        true
+                    } else {
+                        matches!(
+                            self.eval_matches_selector_value(node, base_selector),
+                            Ok(Value::Bool(true))
+                        )
+                    };
+                    if !selector_matches {
+                        continue;
+                    }
+
+                    for (name, value) in parse_style_declarations(Some(declarations_text)) {
+                        if name == property_name {
+                            resolved = Some(value);
+                        }
+                    }
+                }
+            }
+        }
+        resolved
+    }
+
+    fn split_selector_and_pseudo(selector: &str) -> (&str, Option<String>) {
+        let normalized = selector.trim();
+        let Some(pseudo_pos) = normalized.find("::") else {
+            return (normalized, None);
+        };
+        let base = normalized[..pseudo_pos].trim_end();
+        let pseudo = normalized[pseudo_pos..].trim();
+        (base, Some(pseudo.to_string()))
+    }
+
+    fn parse_css_rule_blocks(css_source: &str) -> Vec<(&str, &str)> {
+        let bytes = css_source.as_bytes();
+        let mut blocks = Vec::new();
+        let mut cursor = 0usize;
+        let mut selector_start = 0usize;
+        while cursor < bytes.len() {
+            if bytes[cursor] != b'{' {
+                cursor += 1;
+                continue;
+            }
+            let selector_end = cursor;
+            cursor += 1;
+            let declarations_start = cursor;
+            let mut depth = 1usize;
+            while cursor < bytes.len() && depth > 0 {
+                match bytes[cursor] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            if depth != 0 || cursor == 0 {
+                break;
+            }
+            let declarations_end = cursor.saturating_sub(1);
+            let selector = css_source[selector_start..selector_end].trim();
+            let declarations = css_source[declarations_start..declarations_end].trim();
+            if !selector.is_empty() && !declarations.is_empty() {
+                blocks.push((selector, declarations));
+            }
+            selector_start = cursor;
+        }
+        blocks
+    }
+
+    pub(crate) fn computed_style_property_value(
+        &self,
+        node: NodeId,
+        pseudo: Option<&str>,
+        property_name: &str,
+    ) -> Result<String> {
+        if self.dom.element(node).is_none() {
+            return Err(Error::ScriptRuntime(
+                "TypeError: getComputedStyle target must be an Element".into(),
+            ));
+        }
+        let css_property = js_prop_to_css_name(property_name.trim());
+
+        if pseudo.is_none() {
+            let inline = self.dom.style_get(node, &css_property)?;
+            if !inline.is_empty() {
+                return Ok(inline);
+            }
+        }
+
+        if let Some(from_rules) =
+            self.computed_style_rule_value_from_style_nodes(node, pseudo, &css_property)
+        {
+            return Ok(from_rules);
+        }
+
+        Ok(String::new())
+    }
+
+    pub(crate) fn computed_style_object_property_from_entries(
+        &self,
+        entries: &[(String, Value)],
+        key: &str,
+    ) -> Result<Option<Value>> {
+        if !Self::is_computed_style_object(entries) {
+            return Ok(None);
+        }
+
+        match key {
+            "getPropertyValue" => Ok(Some(
+                Self::object_get_entry(entries, "getPropertyValue").unwrap_or(Value::Undefined),
+            )),
+            "setProperty" | "removeProperty" | "item" => {
+                Ok(Some(Self::new_builtin_placeholder_function()))
+            }
+            "cssText" => Ok(Some(Value::String(String::new()))),
+            "length" => Ok(Some(Value::Number(0))),
+            "parentRule" => Ok(Some(Value::Null)),
+            "constructor" => Ok(Some(Value::Undefined)),
+            _ => {
+                let reserved = matches!(
+                    key,
+                    "__proto__"
+                        | "toString"
+                        | "valueOf"
+                        | "hasOwnProperty"
+                        | "isPrototypeOf"
+                        | "propertyIsEnumerable"
+                );
+                if reserved {
+                    return Ok(None);
+                }
+                let Some(node) = Self::computed_style_target_node(entries) else {
+                    return Ok(Some(Value::Undefined));
+                };
+                let pseudo = Self::computed_style_pseudo(entries);
+                let value = self.computed_style_property_value(node, pseudo.as_deref(), key)?;
+                Ok(Some(Value::String(value)))
+            }
+        }
+    }
+
     pub(crate) fn new_worker_main_post_message_callable(worker: Value) -> Value {
         Self::new_object_value(vec![
             (
@@ -1641,6 +2749,76 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String(kind.to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_atob_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_atob".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_btoa_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_btoa".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_structured_clone_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_structured_clone".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_request_animation_frame_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_request_animation_frame".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_set_timeout_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_set_timeout".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_set_interval_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_set_interval".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_cancel_animation_frame_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_cancel_animation_frame".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_clear_interval_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_clear_interval".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_clear_timeout_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_clear_timeout".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_global_queue_microtask_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_queue_microtask".to_string()),
         )])
     }
 
@@ -1821,18 +2999,39 @@ impl Harness {
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
                 "mouse_event_constructor" => "mouse_event_constructor",
+                "keyboard_event_constructor" => "keyboard_event_constructor",
+                "wheel_event_constructor" => "wheel_event_constructor",
+                "navigate_event_constructor" => "navigate_event_constructor",
+                "pointer_event_constructor" => "pointer_event_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
                 "document_constructor" => "document_constructor",
                 "document_parse_html" => "document_parse_html",
                 "document_parse_html_unsafe" => "document_parse_html_unsafe",
                 "fetch_function" => "fetch_function",
                 "window_close_function" => "window_close_function",
+                "window_stop_function" => "window_stop_function",
+                "window_focus_function" => "window_focus_function",
+                "window_scroll_function" => "window_scroll_function",
+                "window_scroll_by_function" => "window_scroll_by_function",
+                "window_scroll_to_function" => "window_scroll_to_function",
+                "window_move_by_function" => "window_move_by_function",
+                "window_move_to_function" => "window_move_to_function",
+                "window_resize_by_function" => "window_resize_by_function",
+                "window_resize_to_function" => "window_resize_to_function",
+                "window_post_message_function" => "window_post_message_function",
+                "window_get_computed_style_function" => "window_get_computed_style_function",
+                "window_alert_function" => "window_alert_function",
+                "window_confirm_function" => "window_confirm_function",
+                "window_print_function" => "window_print_function",
+                "window_report_error_function" => "window_report_error_function",
+                "window_prompt_function" => "window_prompt_function",
                 "request_constructor" => "request_constructor",
                 "clipboard_item_constructor" => "clipboard_item_constructor",
                 "clipboard_write" => "clipboard_write",
                 "headers_constructor" => "headers_constructor",
                 "worker_constructor" => "worker_constructor",
                 "data_transfer_constructor" => "data_transfer_constructor",
+                "option_constructor" => "option_constructor",
                 "text_encoder_constructor" => "text_encoder_constructor",
                 "text_decoder_constructor" => "text_decoder_constructor",
                 "text_encoder_stream_constructor" => "text_encoder_stream_constructor",
@@ -1852,11 +3051,25 @@ impl Harness {
                 "text_decoder_stream_get_ignore_bom" => "text_decoder_stream_get_ignore_bom",
                 "text_decoder_stream_get_readable" => "text_decoder_stream_get_readable",
                 "text_decoder_stream_get_writable" => "text_decoder_stream_get_writable",
+                "css_style_sheet_constructor" => "css_style_sheet_constructor",
+                "css_style_sheet_replace_sync" => "css_style_sheet_replace_sync",
+                "css_style_sheet_insert_rule" => "css_style_sheet_insert_rule",
+                "computed_style_get_property_value" => "computed_style_get_property_value",
                 "worker_main_post_message" => "worker_main_post_message",
                 "worker_context_post_message" => "worker_context_post_message",
                 "worker_terminate" => "worker_terminate",
                 "global_decode_uri" => "global_decode_uri",
                 "global_decode_uri_component" => "global_decode_uri_component",
+                "global_atob" => "global_atob",
+                "global_btoa" => "global_btoa",
+                "global_structured_clone" => "global_structured_clone",
+                "global_request_animation_frame" => "global_request_animation_frame",
+                "global_set_timeout" => "global_set_timeout",
+                "global_set_interval" => "global_set_interval",
+                "global_cancel_animation_frame" => "global_cancel_animation_frame",
+                "global_clear_interval" => "global_clear_interval",
+                "global_clear_timeout" => "global_clear_timeout",
+                "global_queue_microtask" => "global_queue_microtask",
                 "create_image_bitmap" => "create_image_bitmap",
                 "string_static_from_char_code" => "string_static_from_char_code",
                 "string_static_from_code_point" => "string_static_from_code_point",
@@ -1890,7 +3103,11 @@ impl Harness {
                 out.push(ch);
             }
         }
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
@@ -1932,6 +3149,16 @@ impl Harness {
                     })
                     .unwrap_or(false);
                 let select_options = || self.select_option_nodes(*node);
+
+                if is_select {
+                    if let Ok(index) = key.parse::<usize>() {
+                        return Ok(select_options()
+                            .get(index)
+                            .copied()
+                            .map(Value::Node)
+                            .unwrap_or(Value::Undefined));
+                    }
+                }
 
                 match key {
                     "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
@@ -2425,6 +3652,11 @@ impl Harness {
                         return Ok(value);
                     }
                 }
+                if let Some(value) =
+                    self.computed_style_object_property_from_entries(&entries, key)?
+                {
+                    return Ok(value);
+                }
                 if let Some(value) = self.fetch_response_property_from_entries(&entries, key) {
                     return Ok(value);
                 }
@@ -2465,6 +3697,27 @@ impl Harness {
                     .and_then(|symbol| symbol.description.as_deref())
                     .is_some_and(|description| description == "Symbol.toStringTag")
                     || key == "Symbol.toStringTag";
+                if Self::is_match_media_object(&entries) {
+                    let query = Self::object_get_entry(&entries, INTERNAL_MATCH_MEDIA_QUERY_KEY)
+                        .or_else(|| Self::object_get_entry(&entries, "media"))
+                        .map(|value| value.as_string())
+                        .unwrap_or_default();
+                    if key == "matches" {
+                        let matches = self
+                            .platform_mocks
+                            .match_media_mocks
+                            .get(&query)
+                            .copied()
+                            .unwrap_or(self.platform_mocks.default_match_media_matches);
+                        return Ok(Value::Bool(matches));
+                    }
+                    if key == "media" {
+                        return Ok(Value::String(query));
+                    }
+                    if key_is_to_string_tag {
+                        return Ok(Value::String("MediaQueryList".to_string()));
+                    }
+                }
                 if Self::is_named_node_map_object(&entries) {
                     let owner = Self::named_node_map_owner_node(&entries)
                         .filter(|node| self.dom.element(*node).is_some());
@@ -2643,6 +3896,9 @@ impl Harness {
                         }
                         "visibilityState" => {
                             Value::String(self.dom_runtime.document_visibility_state.clone())
+                        }
+                        "adoptedStyleSheets" => {
+                            self.ensure_document_adopted_style_sheets_property()
                         }
                         _ if key.starts_with("on") => self
                             .dom_runtime

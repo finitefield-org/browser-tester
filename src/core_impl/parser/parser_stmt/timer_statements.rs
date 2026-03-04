@@ -22,10 +22,13 @@ pub(crate) fn parse_set_timer_call(
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.is_empty() {
+    if args.is_empty() || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(format!(
             "{timer_name} requires at least 1 argument"
         )));

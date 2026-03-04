@@ -13,7 +13,8 @@ pub(crate) fn parse_block_statements_with_flags(
     allow_top_level_export: bool,
     allow_top_level_import: bool,
 ) -> Result<Vec<Stmt>> {
-    let sanitized = strip_js_comments(body);
+    let normalized = normalize_malformed_escaped_empty_string_literals(body);
+    let sanitized = strip_js_comments(normalized.as_str());
     let raw_stmts = split_top_level_statements(sanitized.as_str());
     let mut stmts = Vec::new();
 

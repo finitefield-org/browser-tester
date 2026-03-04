@@ -716,9 +716,13 @@ impl Harness {
                     }
                     Ok(Value::String(value.as_string()))
                 }
-                Expr::StructuredClone(value) => {
+                Expr::StructuredClone { value, options } => {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    Self::structured_clone_value(&value, &mut Vec::new(), &mut Vec::new())
+                    let options = options
+                        .as_ref()
+                        .map(|options| self.eval_expr(options, env, event_param, event))
+                        .transpose()?;
+                    Self::structured_clone_value_with_options(&value, options.as_ref())
                 }
                 Expr::Fetch { request, options } => {
                     self.eval_fetch_call(request, options.as_deref(), env, event_param, event)
@@ -733,8 +737,35 @@ impl Harness {
                         .copied()
                         .unwrap_or(self.platform_mocks.default_match_media_matches);
                     Ok(Self::new_object_value(vec![
+                        (INTERNAL_MATCH_MEDIA_OBJECT_KEY.into(), Value::Bool(true)),
+                        (
+                            INTERNAL_MATCH_MEDIA_QUERY_KEY.into(),
+                            Value::String(query.clone()),
+                        ),
+                        (INTERNAL_EVENT_TARGET_OBJECT_KEY.into(), Value::Bool(true)),
                         ("matches".into(), Value::Bool(matches)),
                         ("media".into(), Value::String(query)),
+                        ("onchange".into(), Value::Null),
+                        (
+                            "addEventListener".into(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
+                        (
+                            "removeEventListener".into(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
+                        (
+                            "dispatchEvent".into(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
+                        (
+                            "addListener".into(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
+                        (
+                            "removeListener".into(),
+                            Self::new_builtin_placeholder_function(),
+                        ),
                     ]))
                 }
                 Expr::MatchMediaProp { query, prop } => {

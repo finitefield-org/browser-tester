@@ -219,7 +219,7 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(value) = parse_structured_clone_expr(src)? {
-        return Ok(Expr::StructuredClone(Box::new(value)));
+        return Ok(value);
     }
 
     if let Some(value) = parse_fetch_expr(src)? {

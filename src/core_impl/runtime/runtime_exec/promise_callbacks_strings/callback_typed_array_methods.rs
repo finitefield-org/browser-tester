@@ -266,6 +266,26 @@ impl Harness {
                         ))),
                     };
                 }
+
+                if Self::is_canvas_2d_context_object(&entries.borrow()) {
+                    let canvas_member = match method {
+                        TypedArrayInstanceMethod::Fill => Some("fill"),
+                        _ => None,
+                    };
+                    if let Some(canvas_member) = canvas_member {
+                        let mut evaluated_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
+                        }
+                        if let Some(value) = self.eval_canvas_2d_context_member_call(
+                            entries,
+                            canvas_member,
+                            &evaluated_args,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
+                }
             }
 
             if matches!(method, TypedArrayInstanceMethod::At) {

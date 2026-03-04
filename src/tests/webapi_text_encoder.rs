@@ -70,8 +70,8 @@ fn text_encoder_encode_into_reports_read_and_written_and_writes_bytes() -> Resul
 }
 
 #[test]
-fn text_encoder_encode_into_stops_before_incomplete_code_point_and_validates_destination_type()
--> Result<()> {
+fn text_encoder_encode_into_stops_before_incomplete_code_point_and_validates_destination_type(
+) -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
         <p id='result'></p>

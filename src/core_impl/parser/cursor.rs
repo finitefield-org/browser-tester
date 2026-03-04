@@ -250,32 +250,52 @@ impl<'a> Cursor<'a> {
         let start = self.i;
         let bytes = self.bytes();
 
-        let mut depth = 1usize;
+        if !matches!((open, close), (b'(', b')') | (b'[', b']') | (b'{', b'}')) {
+            return Err(self.parse_error_at(
+                format!(
+                    "unsupported balanced block delimiter pair: '{}{}'",
+                    open as char, close as char
+                ),
+                start.saturating_sub(1),
+            ));
+        }
+
         let mut idx = self.i;
         let mut scanner = JsLexScanner::new();
+        scanner.consume_significant_bytes(&[open]);
+
+        let is_closed = |scanner: &JsLexScanner| match (open, close) {
+            (b'(', b')') => scanner.in_normal() && scanner.paren == 0,
+            (b'[', b']') => scanner.in_normal() && scanner.bracket == 0,
+            (b'{', b'}') => scanner.in_normal() && scanner.brace == 0,
+            _ => false,
+        };
 
         while idx < bytes.len() {
-            let b = bytes[idx];
-            let was_normal = scanner.in_normal();
             idx = scanner.advance(bytes, idx);
-            if was_normal {
-                if b == open {
-                    depth += 1;
-                } else if b == close {
-                    depth -= 1;
-                    if depth == 0 {
-                        let body = self
-                            .src
-                            .get(start..idx - 1)
-                            .ok_or_else(|| Error::ScriptParse("invalid block".into()))?
-                            .to_string();
-                        self.i = idx;
-                        return Ok(body);
-                    }
-                }
+            if is_closed(&scanner) {
+                let body = self
+                    .src
+                    .get(start..idx - 1)
+                    .ok_or_else(|| Error::ScriptParse("invalid block".into()))?
+                    .to_string();
+                self.i = idx;
+                return Ok(body);
             }
         }
 
-        Err(Error::ScriptParse("unclosed block".into()))
+        Err(self.parse_error_at(
+            format!(
+                "unclosed block (open='{}', close='{}', mode={:?}, paren={}, bracket={}, brace={}, scanned={})",
+                open as char,
+                close as char,
+                scanner.mode,
+                scanner.paren,
+                scanner.bracket,
+                scanner.brace,
+                idx
+            ),
+            idx,
+        ))
     }
 }

@@ -52,6 +52,9 @@ pub(crate) fn parse_request_animation_frame_call(
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
@@ -94,33 +97,44 @@ pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
 
 pub(crate) fn parse_queue_microtask_call(cursor: &mut Cursor<'_>) -> Result<Option<ScriptHandler>> {
     cursor.skip_ws();
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
     if !cursor.consume_ascii("queueMicrotask") {
         return Ok(None);
     }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
 
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.is_empty() {
+    if args.len() != 1 || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "queueMicrotask requires 1 argument".into(),
-        ));
-    }
-    if args.len() != 1 {
-        return Err(Error::ScriptParse(
-            "queueMicrotask supports only 1 argument".into(),
+            "queueMicrotask requires exactly one argument".into(),
         ));
     }
 
     let callback_arg = strip_js_comments(args[0]);
     let mut callback_cursor = Cursor::new(callback_arg.as_str().trim());
-    let (params, body, _) = parse_callback(&mut callback_cursor, 1, "callback parameters")?;
+    let (params, body, _) = match parse_callback(&mut callback_cursor, 1, "callback parameters") {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
     callback_cursor.skip_ws();
     if !callback_cursor.eof() {
-        return Err(Error::ScriptParse(format!(
-            "unsupported queueMicrotask callback: {}",
-            args[0].trim()
-        )));
+        return Ok(None);
     }
 
     Ok(Some(ScriptHandler {
@@ -194,7 +208,13 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             DomQuery::Var(name)
                 if matches!(
                     name.as_str(),
-                    "location" | "history" | "window" | "document" | "navigator" | "clipboard"
+                    "location"
+                        | "history"
+                        | "navigation"
+                        | "window"
+                        | "document"
+                        | "navigator"
+                        | "clipboard"
                 )
         );
     let is_media_target = is_anchor_target;
@@ -350,6 +370,17 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("shadowRoot", None) => DomProp::ShadowRoot,
         ("activeElement", None) if matches!(target, DomQuery::DocumentRoot) => {
             DomProp::ActiveElement
+        }
+        ("activeViewTransition", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::ActiveViewTransition
+        }
+        ("adoptedStyleSheets", None) if matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::AdoptedStyleSheets
+        }
+        ("adoptedStyleSheets", Some(length))
+            if matches!(target, DomQuery::DocumentRoot) && length == "length" =>
+        {
+            DomProp::AdoptedStyleSheetsLength
         }
         ("characterSet", None) | ("charset", None) | ("inputEncoding", None)
             if matches!(target, DomQuery::DocumentRoot) =>
@@ -742,23 +773,48 @@ pub(crate) fn parse_dom_computed_style_property_expr(
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let args = split_top_level_by_char(&args_src, b',');
+    if args.len() != 1 {
+        return Ok(None);
+    }
+    let mut arg_cursor = Cursor::new(args[0]);
+    arg_cursor.skip_ws();
+    let target = match parse_element_target(&mut arg_cursor) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+    arg_cursor.skip_ws();
+    if !arg_cursor.eof() {
+        return Ok(None);
+    }
     cursor.skip_ws();
-    let target = parse_element_target(&mut cursor)?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
-    cursor.skip_ws();
-    cursor.expect_byte(b'.')?;
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.consume_ascii("getPropertyValue") {
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
-    cursor.skip_ws();
-    let property = cursor.parse_string_literal()?;
-    cursor.skip_ws();
-    cursor.expect_byte(b')')?;
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+    let method_args = cursor.read_balanced_block(b'(', b')')?;
+    let method_args = split_top_level_by_char(&method_args, b',');
+    if method_args.len() != 1 {
+        return Ok(None);
+    }
+    let mut property_cursor = Cursor::new(method_args[0]);
+    property_cursor.skip_ws();
+    let property = match property_cursor.parse_string_literal() {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    property_cursor.skip_ws();
+    if !property_cursor.eof() {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);

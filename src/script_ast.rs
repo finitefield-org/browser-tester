@@ -559,7 +559,10 @@ pub(crate) enum Expr {
     StringToWellFormed(Box<Expr>),
     StringValueOf(Box<Expr>),
     StringToString(Box<Expr>),
-    StructuredClone(Box<Expr>),
+    StructuredClone {
+        value: Box<Expr>,
+        options: Option<Box<Expr>>,
+    },
     Fetch {
         request: Box<Expr>,
         options: Option<Box<Expr>>,

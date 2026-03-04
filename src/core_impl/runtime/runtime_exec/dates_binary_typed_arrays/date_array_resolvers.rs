@@ -10,8 +10,11 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<i64>>> {
-        match env.get(target) {
-            Some(Value::Date(value)) => Ok(value.clone()),
+        match self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+        {
+            Some(Value::Date(value)) => Ok(value),
             Some(_) => Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not a Date",
                 target
@@ -31,13 +34,26 @@ impl Harness {
         }
     }
 
+    pub(crate) fn coerce_intl_date_time_timestamp_ms(&self, value: &Value) -> Result<i64> {
+        let numeric = Self::coerce_number_for_global(value);
+        if !numeric.is_finite() {
+            return Err(Error::ScriptRuntime(
+                "RangeError: Invalid time value".into(),
+            ));
+        }
+        Ok(numeric.trunc() as i64)
+    }
+
     pub(crate) fn resolve_array_from_env(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<ArrayValue>>> {
-        match env.get(target) {
-            Some(Value::Array(values)) => Ok(values.clone()),
+        match self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+        {
+            Some(Value::Array(values)) => Ok(values),
             Some(_) => Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not an array",
                 target
@@ -54,8 +70,11 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<ArrayBufferValue>>> {
-        match env.get(target) {
-            Some(Value::ArrayBuffer(buffer)) => Ok(buffer.clone()),
+        match self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+        {
+            Some(Value::ArrayBuffer(buffer)) => Ok(buffer),
             Some(_) => Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not an ArrayBuffer",
                 target
@@ -72,8 +91,11 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<TypedArrayValue>>> {
-        match env.get(target) {
-            Some(Value::TypedArray(array)) => Ok(array.clone()),
+        match self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+        {
+            Some(Value::TypedArray(array)) => Ok(array),
             Some(_) => Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not a TypedArray",
                 target

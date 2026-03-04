@@ -95,6 +95,90 @@ fn canvas_get_context_2d_supports_fill_style_and_fill_rect_calls() -> Result<()>
 }
 
 #[test]
+fn canvas_get_context_allows_2d_after_unsupported_context_request() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas' width='120' height='120'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const webgl = canvas.getContext('webgl');
+            const first2d = canvas.getContext('2d');
+            const second2d = canvas.getContext('2d');
+            const bitmap = canvas.getContext('bitmaprenderer');
+            document.getElementById('result').textContent =
+              (webgl === null) + '|' +
+              (first2d !== null) + '|' +
+              (first2d === second2d) + '|' +
+              (bitmap === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn canvas_get_context_throws_after_transfer_control_to_offscreen() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas' width='120' height='120'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const offscreen = canvas.transferControlToOffscreen();
+            let threw = false;
+            try {
+              canvas.getContext('2d');
+            } catch (err) {
+              threw = String(err).includes('InvalidStateError');
+            }
+            document.getElementById('result').textContent =
+              (offscreen !== null) + '|' + threw;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|true")?;
+    Ok(())
+}
+
+#[test]
+fn canvas_transfer_control_to_offscreen_throws_after_context_creation() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas' width='120' height='120'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            let threw = false;
+            try {
+              canvas.transferControlToOffscreen();
+            } catch (err) {
+              threw = String(err).includes('InvalidStateError');
+            }
+            document.getElementById('result').textContent =
+              (ctx !== null) + '|' + threw;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|true")?;
+    Ok(())
+}
+
+#[test]
 fn canvas_to_data_url_returns_data_url_prefixes() -> Result<()> {
     let html = r#"
         <canvas id='canvas'></canvas>

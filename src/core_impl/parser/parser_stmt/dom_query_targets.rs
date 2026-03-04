@@ -25,6 +25,8 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
     matches!(
         ident,
         "activeElement"
+            | "activeViewTransition"
+            | "adoptedStyleSheets"
             | "addEventListener"
             | "after"
             | "animate"

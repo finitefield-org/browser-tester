@@ -30,12 +30,14 @@ impl Harness {
             "URL",
             "documentURI",
             "cookie",
+            "adoptedStyleSheets",
             "createElement",
             "createElementNS",
             "createTextNode",
             "createAttribute",
             "createDocumentFragment",
             "createRange",
+            "getSelection",
             "append",
             "getElementById",
             "getElementsByClassName",
@@ -50,10 +52,15 @@ impl Harness {
 
     pub(crate) fn sync_document_object(&mut self) {
         let mut extras = Vec::new();
+        let mut adopted_style_sheets: Option<Value> = None;
         {
             let entries = self.dom_runtime.document_object.borrow();
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if key == "adoptedStyleSheets" {
+                    adopted_style_sheets = Some(value.clone());
                     continue;
                 }
                 if Self::document_builtin_keys()
@@ -64,6 +71,18 @@ impl Harness {
                 }
                 extras.push((key.clone(), value.clone()));
             }
+        }
+
+        let adopted_style_sheets = adopted_style_sheets.unwrap_or_else(|| {
+            Self::new_adopted_style_sheets_array_value(Value::Object(
+                self.dom_runtime.document_object.clone(),
+            ))
+        });
+        if let Value::Array(values) = &adopted_style_sheets {
+            self.mark_as_adopted_style_sheets_array(
+                values,
+                Value::Object(self.dom_runtime.document_object.clone()),
+            );
         }
 
         let mut entries = vec![
@@ -85,6 +104,7 @@ impl Harness {
                 "cookie".to_string(),
                 Value::String(self.document_cookie_string()),
             ),
+            ("adoptedStyleSheets".to_string(), adopted_style_sheets),
             (
                 "createElement".to_string(),
                 Self::new_builtin_placeholder_function(),
@@ -107,6 +127,10 @@ impl Harness {
             ),
             (
                 "createRange".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "getSelection".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
             (
@@ -161,8 +185,39 @@ impl Harness {
             "length",
             "closed",
             "close",
+            "stop",
+            "focus",
+            "scroll",
+            "scrollBy",
+            "scrollTo",
+            "moveBy",
+            "moveTo",
+            "resizeBy",
+            "resizeTo",
+            "postMessage",
+            "getComputedStyle",
+            "alert",
+            "confirm",
+            "prompt",
+            "print",
+            "reportError",
+            "atob",
+            "btoa",
+            "structuredClone",
+            "requestAnimationFrame",
+            "setTimeout",
+            "setInterval",
+            "cancelAnimationFrame",
+            "clearInterval",
+            "clearTimeout",
+            "queueMicrotask",
+            "screenX",
+            "screenY",
+            "screenLeft",
+            "screenTop",
             "location",
             "history",
+            "navigation",
             "navigator",
             "clientInformation",
             "localStorage",
@@ -176,6 +231,10 @@ impl Harness {
             "Event",
             "CustomEvent",
             "MouseEvent",
+            "KeyboardEvent",
+            "WheelEvent",
+            "NavigateEvent",
+            "PointerEvent",
             "Iterator",
             "cookieStore",
             "caches",
@@ -197,6 +256,7 @@ impl Harness {
             "Node",
             "NodeFilter",
             "name",
+            "getSelection",
         ]
     }
 
@@ -210,6 +270,10 @@ impl Harness {
         event_constructor: &Value,
         custom_event_constructor: &Value,
         mouse_event_constructor: &Value,
+        keyboard_event_constructor: &Value,
+        wheel_event_constructor: &Value,
+        navigate_event_constructor: &Value,
+        pointer_event_constructor: &Value,
         iterator_constructor: &Value,
         cookie_store: &Value,
         caches: &Value,
@@ -232,6 +296,32 @@ impl Harness {
         node_filter_constants: &Value,
         local_storage: &Value,
         close_callable: &Value,
+        stop_callable: &Value,
+        focus_callable: &Value,
+        scroll_callable: &Value,
+        scroll_by_callable: &Value,
+        scroll_to_callable: &Value,
+        move_by_callable: &Value,
+        move_to_callable: &Value,
+        resize_by_callable: &Value,
+        resize_to_callable: &Value,
+        post_message_callable: &Value,
+        get_computed_style_callable: &Value,
+        alert_callable: &Value,
+        confirm_callable: &Value,
+        prompt_callable: &Value,
+        print_callable: &Value,
+        report_error_callable: &Value,
+        atob_callable: &Value,
+        btoa_callable: &Value,
+        structured_clone_callable: &Value,
+        request_animation_frame_callable: &Value,
+        set_timeout_callable: &Value,
+        set_interval_callable: &Value,
+        cancel_animation_frame_callable: &Value,
+        clear_interval_callable: &Value,
+        clear_timeout_callable: &Value,
+        queue_microtask_callable: &Value,
     ) {
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
@@ -274,6 +364,63 @@ impl Harness {
                 Value::Bool(self.browser_apis.window_closed),
             ),
             ("close".to_string(), close_callable.clone()),
+            ("stop".to_string(), stop_callable.clone()),
+            ("focus".to_string(), focus_callable.clone()),
+            ("scroll".to_string(), scroll_callable.clone()),
+            ("scrollBy".to_string(), scroll_by_callable.clone()),
+            ("scrollTo".to_string(), scroll_to_callable.clone()),
+            ("moveBy".to_string(), move_by_callable.clone()),
+            ("moveTo".to_string(), move_to_callable.clone()),
+            ("resizeBy".to_string(), resize_by_callable.clone()),
+            ("resizeTo".to_string(), resize_to_callable.clone()),
+            ("postMessage".to_string(), post_message_callable.clone()),
+            (
+                "getComputedStyle".to_string(),
+                get_computed_style_callable.clone(),
+            ),
+            ("alert".to_string(), alert_callable.clone()),
+            ("confirm".to_string(), confirm_callable.clone()),
+            ("prompt".to_string(), prompt_callable.clone()),
+            ("print".to_string(), print_callable.clone()),
+            ("reportError".to_string(), report_error_callable.clone()),
+            ("atob".to_string(), atob_callable.clone()),
+            ("btoa".to_string(), btoa_callable.clone()),
+            (
+                "structuredClone".to_string(),
+                structured_clone_callable.clone(),
+            ),
+            (
+                "requestAnimationFrame".to_string(),
+                request_animation_frame_callable.clone(),
+            ),
+            ("setTimeout".to_string(), set_timeout_callable.clone()),
+            ("setInterval".to_string(), set_interval_callable.clone()),
+            (
+                "cancelAnimationFrame".to_string(),
+                cancel_animation_frame_callable.clone(),
+            ),
+            ("clearInterval".to_string(), clear_interval_callable.clone()),
+            ("clearTimeout".to_string(), clear_timeout_callable.clone()),
+            (
+                "queueMicrotask".to_string(),
+                queue_microtask_callable.clone(),
+            ),
+            (
+                "screenX".to_string(),
+                Value::Number(self.browser_apis.window_screen_x),
+            ),
+            (
+                "screenY".to_string(),
+                Value::Number(self.browser_apis.window_screen_y),
+            ),
+            (
+                "screenLeft".to_string(),
+                Value::Number(self.browser_apis.window_screen_x),
+            ),
+            (
+                "screenTop".to_string(),
+                Value::Number(self.browser_apis.window_screen_y),
+            ),
             (
                 "location".to_string(),
                 Value::Object(self.dom_runtime.location_object.clone()),
@@ -281,6 +428,10 @@ impl Harness {
             (
                 "history".to_string(),
                 Value::Object(self.location_history.history_object.clone()),
+            ),
+            (
+                "navigation".to_string(),
+                Value::Object(self.location_history.navigation_object.clone()),
             ),
             ("navigator".to_string(), navigator.clone()),
             ("clientInformation".to_string(), navigator.clone()),
@@ -304,6 +455,19 @@ impl Harness {
             ("Event".to_string(), event_constructor.clone()),
             ("CustomEvent".to_string(), custom_event_constructor.clone()),
             ("MouseEvent".to_string(), mouse_event_constructor.clone()),
+            (
+                "KeyboardEvent".to_string(),
+                keyboard_event_constructor.clone(),
+            ),
+            ("WheelEvent".to_string(), wheel_event_constructor.clone()),
+            (
+                "NavigateEvent".to_string(),
+                navigate_event_constructor.clone(),
+            ),
+            (
+                "PointerEvent".to_string(),
+                pointer_event_constructor.clone(),
+            ),
             ("Iterator".to_string(), iterator_constructor.clone()),
             ("cookieStore".to_string(), cookie_store.clone()),
             ("caches".to_string(), caches.clone()),
@@ -340,6 +504,10 @@ impl Harness {
             ("Node".to_string(), node_constants.clone()),
             ("NodeFilter".to_string(), node_filter_constants.clone()),
             ("name".to_string(), name_value),
+            (
+                "getSelection".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ];
         entries.extend(extras);
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
@@ -370,6 +538,26 @@ impl Harness {
             &mut entries,
             "closed".to_string(),
             Value::Bool(self.browser_apis.window_closed),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "screenX".to_string(),
+            Value::Number(self.browser_apis.window_screen_x),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "screenY".to_string(),
+            Value::Number(self.browser_apis.window_screen_y),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "screenLeft".to_string(),
+            Value::Number(self.browser_apis.window_screen_x),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "screenTop".to_string(),
+            Value::Number(self.browser_apis.window_screen_y),
         );
         Self::object_set_entry(&mut entries, "cookieStore".to_string(), cookie_store);
         Self::object_set_entry(&mut entries, "caches".to_string(), caches);
@@ -483,6 +671,26 @@ impl Harness {
         ]
     }
 
+    pub(crate) fn navigation_builtin_keys() -> &'static [&'static str] {
+        &[
+            "activation",
+            "canGoBack",
+            "canGoForward",
+            "currentEntry",
+            "transition",
+            "back",
+            "entries",
+            "forward",
+            "navigate",
+            "reload",
+            "traverseTo",
+            "updateCurrentEntry",
+            "addEventListener",
+            "removeEventListener",
+            "dispatchEvent",
+        ]
+    }
+
     pub(crate) fn current_history_state(&self) -> Value {
         self.location_history
             .history_entries
@@ -537,5 +745,88 @@ impl Harness {
         ];
         entries.extend(extras);
         *self.location_history.history_object.borrow_mut() = entries.into();
+    }
+
+    pub(crate) fn sync_navigation_object(&mut self) {
+        let mut extras = Vec::new();
+        {
+            let entries = self.location_history.navigation_object.borrow();
+            for (key, value) in entries.iter() {
+                if Self::is_internal_object_key(key) {
+                    continue;
+                }
+                if Self::navigation_builtin_keys()
+                    .iter()
+                    .any(|builtin| builtin == key)
+                {
+                    continue;
+                }
+                extras.push((key.clone(), value.clone()));
+            }
+        }
+
+        let mut entries = vec![
+            (
+                INTERNAL_NAVIGATION_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_EVENT_TARGET_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            ("activation".to_string(), Value::Null),
+            (
+                "canGoBack".to_string(),
+                Value::Bool(self.navigation_can_go_back()),
+            ),
+            (
+                "canGoForward".to_string(),
+                Value::Bool(self.navigation_can_go_forward()),
+            ),
+            (
+                "currentEntry".to_string(),
+                self.navigation_current_entry_value(),
+            ),
+            ("transition".to_string(), Value::Null),
+            ("back".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "entries".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "forward".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "navigate".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "reload".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "traverseTo".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "updateCurrentEntry".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "addEventListener".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "removeEventListener".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "dispatchEvent".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ];
+        entries.extend(extras);
+        *self.location_history.navigation_object.borrow_mut() = entries.into();
     }
 }

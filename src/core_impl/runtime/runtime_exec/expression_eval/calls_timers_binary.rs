@@ -1,6 +1,49 @@
 use super::*;
 
 impl Harness {
+    fn execute_callable_value_with_env_and_sync(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+        env: &HashMap<String, Value>,
+    ) -> Result<Value> {
+        let result = self.execute_callable_value_with_env(callable, args, event, Some(env))?;
+        self.sync_listener_capture_env_if_shared(env);
+        Ok(result)
+    }
+
+    fn execute_callable_value_with_this_and_env_and_sync(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+        env: &HashMap<String, Value>,
+        this_arg: Option<Value>,
+    ) -> Result<Value> {
+        let result = self.execute_callable_value_with_this_and_env(
+            callable,
+            args,
+            event,
+            Some(env),
+            this_arg,
+        )?;
+        self.sync_listener_capture_env_if_shared(env);
+        Ok(result)
+    }
+
+    pub(crate) fn resolve_listener_capture_pending_value(
+        &self,
+        name: &str,
+    ) -> Option<Option<Value>> {
+        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
+            if let Some(value) = frame.pending_env_updates.get(name) {
+                return Some(value.clone());
+            }
+        }
+        None
+    }
+
     fn current_dynamic_import_referrer(&self) -> String {
         self.script_runtime
             .module_referrer_stack
@@ -223,7 +266,16 @@ impl Harness {
                         return Ok(super_result);
                     }
                     self.ensure_binding_initialized(env, target)?;
-                    let callee = if let Some(callee) = env.get(target).cloned() {
+                    let callee = if let Some(pending) =
+                        self.resolve_listener_capture_pending_value(target)
+                    {
+                        let Some(callee) = pending else {
+                            return Err(Error::ScriptRuntime(format!(
+                                "unknown variable: {target}"
+                            )));
+                        };
+                        callee
+                    } else if let Some(callee) = env.get(target).cloned() {
                         callee
                     } else if let Some(callee) = self.resolve_pending_function_decl(target, env) {
                         callee
@@ -232,8 +284,13 @@ impl Harness {
                     };
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
-                    self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
-                        .map_err(|err| match err {
+                    self.execute_callable_value_with_env_and_sync(
+                        &callee,
+                        &evaluated_args,
+                        event,
+                        env,
+                    )
+                    .map_err(|err| match err {
                             Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                                 Error::ScriptRuntime(format!("'{target}' is not a function"))
                             }
@@ -254,8 +311,13 @@ impl Harness {
                     }
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
-                    self.execute_callable_value_with_env(&callee, &evaluated_args, event, Some(env))
-                        .map_err(|err| match err {
+                    self.execute_callable_value_with_env_and_sync(
+                        &callee,
+                        &evaluated_args,
+                        event,
+                        env,
+                    )
+                    .map_err(|err| match err {
                             Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
                                 Error::ScriptRuntime("call target is not a function".into())
                             }
@@ -280,11 +342,11 @@ impl Harness {
                             &this_value,
                         )?;
                         return self
-                            .execute_callable_value_with_this_and_env(
+                            .execute_callable_value_with_this_and_env_and_sync(
                                 &callee,
                                 &evaluated_args,
                                 event,
-                                Some(env),
+                                env,
                                 Some(this_value),
                             )
                             .map_err(|err| match err {
@@ -321,11 +383,11 @@ impl Harness {
                         let evaluated_args =
                             self.eval_call_args_with_spread(args, env, event_param, event)?;
                         return self
-                            .execute_callable_value_with_this_and_env(
+                            .execute_callable_value_with_this_and_env_and_sync(
                                 &callee,
                                 &evaluated_args,
                                 event,
-                                Some(env),
+                                env,
                                 Some(receiver.clone()),
                             )
                             .map_err(|err| match err {
@@ -454,11 +516,11 @@ impl Harness {
                         };
                         if let Some(callee) = map_member_override {
                             return self
-                                .execute_callable_value_with_env(
+                                .execute_callable_value_with_env_and_sync(
                                     &callee,
                                     &evaluated_args,
                                     event,
-                                    Some(env),
+                                    env,
                                 )
                                 .map_err(|err| match err {
                                     Error::ScriptRuntime(msg)
@@ -489,11 +551,11 @@ impl Harness {
                         };
                         if let Some(callee) = weak_map_member_override {
                             return self
-                                .execute_callable_value_with_env(
+                                .execute_callable_value_with_env_and_sync(
                                     &callee,
                                     &evaluated_args,
                                     event,
-                                    Some(env),
+                                    env,
                                 )
                                 .map_err(|err| match err {
                                     Error::ScriptRuntime(msg)
@@ -524,11 +586,11 @@ impl Harness {
                         };
                         if let Some(callee) = weak_set_member_override {
                             return self
-                                .execute_callable_value_with_env(
+                                .execute_callable_value_with_env_and_sync(
                                     &callee,
                                     &evaluated_args,
                                     event,
-                                    Some(env),
+                                    env,
                                 )
                                 .map_err(|err| match err {
                                     Error::ScriptRuntime(msg)
@@ -558,11 +620,11 @@ impl Harness {
                         };
                         if let Some(callee) = url_constructor_override {
                             return self
-                                .execute_callable_value_with_env(
+                                .execute_callable_value_with_env_and_sync(
                                     &callee,
                                     &evaluated_args,
                                     event,
-                                    Some(env),
+                                    env,
                                 )
                                 .map_err(|err| match err {
                                     Error::ScriptRuntime(msg)
@@ -584,6 +646,29 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        if let Some(value) =
+                            self.eval_event_target_member_call(object, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
+                        if let Some(value) = self.eval_named_node_map_member_call(
+                            object,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
+                            return Ok(value);
+                        }
+                        if let Some(value) =
+                            self.eval_event_member_call(object, member, &evaluated_args, event)?
+                        {
+                            return Ok(value);
+                        }
+                        if let Some(value) =
+                            self.eval_navigation_member_call(object, member, &evaluated_args)?
+                        {
+                            return Ok(value);
+                        }
                         if let Some(value) =
                             self.eval_mock_file_member_call(object, member, &evaluated_args)?
                         {
@@ -738,6 +823,17 @@ impl Harness {
                                 return Ok(value);
                             }
                         }
+                        let is_selection_object = {
+                            let entries = object.borrow();
+                            Self::is_selection_object(&entries)
+                        };
+                        if is_selection_object {
+                            if let Some(value) =
+                                self.eval_selection_member_call(object, member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
 
                         let is_iterator_constructor = {
                             let entries = object.borrow();
@@ -789,6 +885,17 @@ impl Harness {
                                 return Ok(value);
                             }
                         }
+                        let is_window_object = {
+                            let entries = object.borrow();
+                            Self::is_window_object(&entries)
+                        };
+                        if is_window_object {
+                            if let Some(value) =
+                                self.eval_window_member_call(member, &evaluated_args)?
+                            {
+                                return Ok(value);
+                            }
+                        }
                         if Self::is_url_object(&object.borrow()) {
                             if let Some(value) =
                                 self.eval_url_member_call(object, member, &evaluated_args)?
@@ -826,11 +933,11 @@ impl Harness {
                             other => other,
                         },
                     )?;
-                    self.execute_callable_value_with_this_and_env(
+                    self.execute_callable_value_with_this_and_env_and_sync(
                         &callee,
                         &evaluated_args,
                         event,
-                        Some(env),
+                        env,
                         Some(receiver.clone()),
                     )
                     .map_err(|err| match err {
@@ -913,7 +1020,13 @@ impl Harness {
                         return Self::super_prototype_from_env(env);
                     }
                     self.ensure_binding_initialized(env, name)?;
-                    if let Some(value) = env.get(name).cloned() {
+                    if let Some(pending) = self.resolve_listener_capture_pending_value(name) {
+                        if let Some(value) = pending {
+                            Ok(value)
+                        } else {
+                            Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
+                        }
+                    } else if let Some(value) = env.get(name).cloned() {
                         Ok(value)
                     } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
                         Ok(value)
@@ -1017,7 +1130,7 @@ impl Harness {
                 }
                 Expr::QueueMicrotask { handler } => {
                     self.queue_microtask(handler.clone(), env);
-                    Ok(Value::Null)
+                    Ok(Value::Undefined)
                 }
                 Expr::Binary { left, op, right } => match op {
                     BinaryOp::And => {

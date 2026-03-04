@@ -20,6 +20,12 @@ impl Harness {
             .push_back(ScheduledMicrotask::Promise { reaction, settled });
     }
 
+    pub(crate) fn queue_callable_microtask(&mut self, callback: Value) {
+        self.scheduler
+            .microtask_queue
+            .push_back(ScheduledMicrotask::Callable { callback });
+    }
+
     pub(crate) fn run_microtask_queue(&mut self) -> Result<usize> {
         self.with_task_depth(|this| {
             let mut steps = 0usize;
@@ -39,6 +45,9 @@ impl Harness {
                 match task {
                     ScheduledMicrotask::Script { handler, mut env } => {
                         this.run_script_microtask_handler(&handler, &mut env)?;
+                    }
+                    ScheduledMicrotask::Callable { callback } => {
+                        this.run_callable_microtask(&callback)?;
                     }
                     ScheduledMicrotask::Promise { reaction, settled } => {
                         this.run_promise_reaction_task(reaction, settled)?;
@@ -132,7 +141,13 @@ impl Harness {
         } else {
             Value::Undefined
         };
-        Self::new_object_value(vec![
+        let error_value = if event.event_type.eq_ignore_ascii_case("error") {
+            event.detail.as_ref().cloned().unwrap_or(Value::Undefined)
+        } else {
+            Value::Undefined
+        };
+        let mut entries = vec![
+            (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("type".to_string(), Value::String(event.event_type.clone())),
             ("target".to_string(), target),
             ("currentTarget".to_string(), current_target),
@@ -149,6 +164,7 @@ impl Harness {
                 "detail".to_string(),
                 event.detail.as_ref().cloned().unwrap_or(Value::Undefined),
             ),
+            ("error".to_string(), error_value),
             (
                 "eventPhase".to_string(),
                 Value::Number(event.event_phase as i64),
@@ -196,13 +212,214 @@ impl Harness {
                     .map(|value| Value::String(value.clone()))
                     .unwrap_or(Value::Undefined),
             ),
-        ])
+            (
+                "preventDefault".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "stopPropagation".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+            (
+                "stopImmediatePropagation".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
+        ];
+
+        if matches!(
+            event.event_type.to_ascii_lowercase().as_str(),
+            "keydown" | "keyup" | "keypress"
+        ) {
+            let key = event.key.clone().unwrap_or_default();
+            let key_code = Self::keyboard_key_code_for_key(&key);
+            let char_code = Self::keyboard_char_code_for_event(&event.event_type, &key);
+            entries.push((
+                INTERNAL_KEYBOARD_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("location".to_string(), Value::Number(event.location)));
+            entries.push(("keyCode".to_string(), Value::Number(key_code)));
+            entries.push(("charCode".to_string(), Value::Number(char_code)));
+            entries.push((
+                "keyIdentifier".to_string(),
+                Value::String(if key.is_empty() {
+                    "Unidentified".to_string()
+                } else {
+                    key
+                }),
+            ));
+            entries.push((
+                "getModifierState".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+        }
+
+        if event.event_type.eq_ignore_ascii_case("wheel") {
+            entries.push((
+                INTERNAL_WHEEL_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("deltaX".to_string(), Value::Float(event.delta_x)));
+            entries.push(("deltaY".to_string(), Value::Float(event.delta_y)));
+            entries.push(("deltaZ".to_string(), Value::Float(event.delta_z)));
+            entries.push(("deltaMode".to_string(), Value::Number(event.delta_mode)));
+        }
+
+        if Self::event_is_pointer_event(&event.event_type) {
+            entries.push((
+                INTERNAL_POINTER_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("pointerId".to_string(), Value::Number(event.pointer_id)));
+            entries.push(("width".to_string(), Value::Float(event.pointer_width)));
+            entries.push(("height".to_string(), Value::Float(event.pointer_height)));
+            entries.push(("pressure".to_string(), Value::Float(event.pointer_pressure)));
+            entries.push((
+                "tangentialPressure".to_string(),
+                Value::Float(event.pointer_tangential_pressure),
+            ));
+            entries.push(("tiltX".to_string(), Value::Number(event.pointer_tilt_x)));
+            entries.push(("tiltY".to_string(), Value::Number(event.pointer_tilt_y)));
+            entries.push(("twist".to_string(), Value::Number(event.pointer_twist)));
+            entries.push((
+                "pointerType".to_string(),
+                Value::String(event.pointer_type.clone()),
+            ));
+            entries.push((
+                "isPrimary".to_string(),
+                Value::Bool(event.pointer_is_primary),
+            ));
+            entries.push((
+                "altitudeAngle".to_string(),
+                Value::Float(event.pointer_altitude_angle),
+            ));
+            entries.push((
+                "azimuthAngle".to_string(),
+                Value::Float(event.pointer_azimuth_angle),
+            ));
+            entries.push((
+                "persistentDeviceId".to_string(),
+                Value::Number(event.pointer_persistent_device_id),
+            ));
+            entries.push((
+                "getCoalescedEvents".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+            entries.push((
+                "getPredictedEvents".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+        }
+
+        if event.event_type.eq_ignore_ascii_case("navigate") {
+            entries.push((
+                INTERNAL_NAVIGATE_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push((
+                "canIntercept".to_string(),
+                Value::Bool(event.navigate_can_intercept),
+            ));
+            entries.push((
+                "destination".to_string(),
+                event.navigate_destination.clone().unwrap_or(Value::Null),
+            ));
+            entries.push((
+                "downloadRequest".to_string(),
+                event
+                    .navigate_download_request
+                    .clone()
+                    .unwrap_or(Value::Null),
+            ));
+            entries.push((
+                "formData".to_string(),
+                event.navigate_form_data.clone().unwrap_or(Value::Null),
+            ));
+            entries.push((
+                "hashChange".to_string(),
+                Value::Bool(event.navigate_hash_change),
+            ));
+            entries.push((
+                "hasUAVisualTransition".to_string(),
+                Value::Bool(event.navigate_has_ua_visual_transition),
+            ));
+            entries.push((
+                "info".to_string(),
+                event.navigate_info.clone().unwrap_or(Value::Undefined),
+            ));
+            entries.push((
+                "navigationType".to_string(),
+                Value::String(
+                    event
+                        .navigate_navigation_type
+                        .clone()
+                        .unwrap_or_else(|| "push".to_string()),
+                ),
+            ));
+            entries.push((
+                "signal".to_string(),
+                event
+                    .navigate_signal
+                    .clone()
+                    .unwrap_or_else(Self::new_navigate_event_default_signal_value),
+            ));
+            entries.push((
+                "sourceElement".to_string(),
+                event.navigate_source_element.clone().unwrap_or(Value::Null),
+            ));
+            entries.push((
+                "userInitiated".to_string(),
+                Value::Bool(event.navigate_user_initiated),
+            ));
+            entries.push((
+                "intercept".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+            entries.push((
+                "scroll".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ));
+        }
+
+        if event.event_type.eq_ignore_ascii_case("message") {
+            entries.push((
+                "data".to_string(),
+                event.message_data.clone().unwrap_or(Value::Undefined),
+            ));
+            entries.push((
+                "origin".to_string(),
+                Value::String(event.message_origin.clone().unwrap_or_default()),
+            ));
+            entries.push((
+                "source".to_string(),
+                event.message_source.clone().unwrap_or(Value::Null),
+            ));
+        }
+
+        Self::new_object_value(entries)
     }
 
     fn event_exposes_data_transfer(event_type: &str) -> bool {
         matches!(
             event_type.to_ascii_lowercase().as_str(),
             "drag" | "dragstart" | "dragend" | "dragenter" | "dragover" | "dragleave" | "drop"
+        )
+    }
+
+    fn event_is_pointer_event(event_type: &str) -> bool {
+        matches!(
+            event_type.to_ascii_lowercase().as_str(),
+            "pointerover"
+                | "pointerenter"
+                | "pointerdown"
+                | "pointermove"
+                | "pointerrawupdate"
+                | "pointerup"
+                | "pointercancel"
+                | "pointerout"
+                | "pointerleave"
+                | "gotpointercapture"
+                | "lostpointercapture"
         )
     }
 
@@ -278,6 +495,12 @@ impl Harness {
                 run.map(|_| ())
             })
         })
+    }
+
+    fn run_callable_microtask(&mut self, callback: &Value) -> Result<()> {
+        let event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
+        let _ = self.execute_callable_value_with_env(callback, &[], &event, None)?;
+        Ok(())
     }
 
     pub(crate) fn with_callback_scope_depth<T>(

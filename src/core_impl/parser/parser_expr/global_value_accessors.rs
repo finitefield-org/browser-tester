@@ -117,7 +117,7 @@ pub(crate) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     let Some(target) = cursor.parse_identifier() else {
         return Ok(None);
     };
-    if target == "cookieStore" {
+    if target == "cookieStore" || target == "navigation" {
         return Ok(None);
     }
     cursor.skip_ws();

@@ -91,7 +91,7 @@ fn focus_and_blur_update_active_element_and_events() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "aFaBbFbB:none")?;
+    h.assert_text("#result", "aFaBbFbB:active")?;
     Ok(())
 }
 
@@ -168,7 +168,7 @@ fn focus_in_and_focus_out_events_are_dispatched() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "aIaFaOaBbIbFbObB:none")?;
+    h.assert_text("#result", "aIaFaOaBbIbFbObB:active")?;
     Ok(())
 }
 
@@ -518,7 +518,7 @@ fn html_input_hidden_cannot_focus_and_user_typing_is_ignored() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.type_text("#token", "changed-by-user")?;
     h.click("#run")?;
-    h.assert_text("#result", "[token-1]:none::true:true:false")?;
+    h.assert_text("#result", "[token-1]:has::true:true:false")?;
     Ok(())
 }
 
@@ -2820,7 +2820,7 @@ fn focus_skips_disabled_element() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "none")?;
+    h.assert_text("#result", "has")?;
     Ok(())
 }
 

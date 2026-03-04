@@ -40,8 +40,15 @@ pub(crate) const INTERNAL_CANVAS_2D_CONTEXT_OBJECT_KEY: &str = "\u{0}\u{0}bt_can
 pub(crate) const INTERNAL_CANVAS_2D_ALPHA_KEY: &str = "\u{0}\u{0}bt_canvas:2d_alpha";
 pub(crate) const INTERNAL_CANVAS_2D_CONTEXT_NODE_EXPANDO_KEY: &str =
     "\u{0}\u{0}bt_canvas:2d_context_value";
+pub(crate) const INTERNAL_CANVAS_CONTEXT_MODE_NODE_EXPANDO_KEY: &str =
+    "\u{0}\u{0}bt_canvas:context_mode";
+pub(crate) const INTERNAL_CANVAS_TRANSFERRED_TO_OFFSCREEN_NODE_EXPANDO_KEY: &str =
+    "\u{0}\u{0}bt_canvas:transferred_to_offscreen";
+pub(crate) const INTERNAL_CANVAS_2D_LINE_DASH_KEY: &str = "\u{0}\u{0}bt_canvas:2d_line_dash";
+pub(crate) const INTERNAL_CANVAS_2D_TRANSFORM_KEY: &str = "\u{0}\u{0}bt_canvas:2d_transform";
 pub(crate) const INTERNAL_LOCATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_location";
 pub(crate) const INTERNAL_HISTORY_OBJECT_KEY: &str = "\u{0}\u{0}bt_history";
+pub(crate) const INTERNAL_NAVIGATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_navigation";
 pub(crate) const INTERNAL_WINDOW_OBJECT_KEY: &str = "\u{0}\u{0}bt_window";
 pub(crate) const INTERNAL_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_document";
 pub(crate) const INTERNAL_ATTR_OBJECT_KEY: &str = "\u{0}\u{0}bt_attr";
@@ -103,7 +110,13 @@ pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parse
 pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =
     "\u{0}\u{0}bt_parsed_document:root_node";
 pub(crate) const INTERNAL_EVENT_TARGET_OBJECT_KEY: &str = "\u{0}\u{0}bt_event_target:object";
+pub(crate) const INTERNAL_MATCH_MEDIA_OBJECT_KEY: &str = "\u{0}\u{0}bt_match_media:object";
+pub(crate) const INTERNAL_MATCH_MEDIA_QUERY_KEY: &str = "\u{0}\u{0}bt_match_media:query";
 pub(crate) const INTERNAL_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:object";
+pub(crate) const INTERNAL_KEYBOARD_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:keyboard";
+pub(crate) const INTERNAL_WHEEL_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:wheel";
+pub(crate) const INTERNAL_NAVIGATE_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:navigate";
+pub(crate) const INTERNAL_POINTER_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:pointer";
 pub(crate) const INTERNAL_TREE_WALKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_tree_walker";
 pub(crate) const INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY: &str =
     "\u{0}\u{0}bt_tree_walker:traversal_nodes";
@@ -111,11 +124,13 @@ pub(crate) const INTERNAL_TREE_WALKER_INDEX_KEY: &str = "\u{0}\u{0}bt_tree_walke
 pub(crate) const INTERNAL_TREE_WALKER_WHAT_TO_SHOW_KEY: &str =
     "\u{0}\u{0}bt_tree_walker:what_to_show";
 pub(crate) const INTERNAL_RANGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_range";
+pub(crate) const INTERNAL_SELECTION_OBJECT_KEY: &str = "\u{0}\u{0}bt_selection";
 pub(crate) const INTERNAL_ANIMATION_OBJECT_KEY: &str = "\u{0}\u{0}bt_animation";
 pub(crate) const INTERNAL_RANGE_START_CONTAINER_KEY: &str = "\u{0}\u{0}bt_range:start_container";
 pub(crate) const INTERNAL_RANGE_START_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:start_offset";
 pub(crate) const INTERNAL_RANGE_END_CONTAINER_KEY: &str = "\u{0}\u{0}bt_range:end_container";
 pub(crate) const INTERNAL_RANGE_END_OFFSET_KEY: &str = "\u{0}\u{0}bt_range:end_offset";
+pub(crate) const INTERNAL_SELECTION_RANGE_KEY: &str = "\u{0}\u{0}bt_selection:range";
 pub(crate) const INTERNAL_READABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_readable_stream";
 pub(crate) const INTERNAL_WRITABLE_STREAM_OBJECT_KEY: &str = "\u{0}\u{0}bt_writable_stream";
 pub(crate) const INTERNAL_TEXT_DECODER_ENCODING_KEY: &str = "\u{0}\u{0}bt_text_decoder:encoding";
@@ -140,6 +155,20 @@ pub(crate) const INTERNAL_TEXT_DECODER_STREAM_READABLE_KEY: &str =
     "\u{0}\u{0}bt_text_decoder_stream:readable";
 pub(crate) const INTERNAL_TEXT_DECODER_STREAM_WRITABLE_KEY: &str =
     "\u{0}\u{0}bt_text_decoder_stream:writable";
+pub(crate) const INTERNAL_CSS_STYLE_SHEET_KEY_PREFIX: &str = "\u{0}\u{0}bt_css_style_sheet:";
+pub(crate) const INTERNAL_CSS_STYLE_SHEET_OBJECT_KEY: &str = "\u{0}\u{0}bt_css_style_sheet:object";
+pub(crate) const INTERNAL_CSS_STYLE_SHEET_OWNER_DOCUMENT_KEY: &str =
+    "\u{0}\u{0}bt_css_style_sheet:owner_document";
+pub(crate) const INTERNAL_CSS_STYLE_SHEET_RULES_KEY: &str = "\u{0}\u{0}bt_css_style_sheet:rules";
+pub(crate) const INTERNAL_ADOPTED_STYLE_SHEETS_ARRAY_KEY: &str =
+    "\u{0}\u{0}bt_adopted_style_sheets:array";
+pub(crate) const INTERNAL_ADOPTED_STYLE_SHEETS_OWNER_DOCUMENT_KEY: &str =
+    "\u{0}\u{0}bt_adopted_style_sheets:owner_document";
+pub(crate) const INTERNAL_COMPUTED_STYLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_computed_style:";
+pub(crate) const INTERNAL_COMPUTED_STYLE_OBJECT_KEY: &str = "\u{0}\u{0}bt_computed_style:object";
+pub(crate) const INTERNAL_COMPUTED_STYLE_TARGET_NODE_KEY: &str =
+    "\u{0}\u{0}bt_computed_style:target_node";
+pub(crate) const INTERNAL_COMPUTED_STYLE_PSEUDO_KEY: &str = "\u{0}\u{0}bt_computed_style:pseudo";
 pub(crate) const INTERNAL_IMPORT_META_OBJECT_KEY: &str = "\u{0}\u{0}bt_import_meta:object";
 pub(crate) const INTERNAL_NEW_TARGET_KEY: &str = "\u{0}\u{0}bt_new_target";
 pub(crate) const INTERNAL_URL_OBJECT_KEY: &str = "\u{0}\u{0}bt_url:object";
@@ -1300,7 +1329,11 @@ pub(crate) fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
         return f64::NAN;
     }
 
-    if negative { -value } else { value }
+    if negative {
+        -value
+    } else {
+        value
+    }
 }
 
 pub(crate) fn encode_binary_string_to_base64(src: &str) -> Result<String> {
@@ -1311,7 +1344,7 @@ pub(crate) fn encode_binary_string_to_base64(src: &str) -> Result<String> {
         let code = ch as u32;
         if code > 0xFF {
             return Err(Error::ScriptRuntime(
-                "btoa input contains non-Latin1 character".into(),
+                "InvalidCharacterError: btoa input contains non-Latin1 character".into(),
             ));
         }
         bytes.push(code as u8);
@@ -1361,7 +1394,9 @@ pub(crate) fn decode_base64_to_binary_string(src: &str) -> Result<String> {
         2 => bytes.extend_from_slice(b"=="),
         3 => bytes.push(b'='),
         _ => {
-            return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+            return Err(Error::ScriptRuntime(
+                "InvalidCharacterError: atob invalid base64 input".into(),
+            ));
         }
     }
 
@@ -1379,7 +1414,9 @@ pub(crate) fn decode_base64_to_binary_string(src: &str) -> Result<String> {
 
         if b2 == b'=' {
             if b3 != b'=' {
-                return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+                return Err(Error::ScriptRuntime(
+                    "InvalidCharacterError: atob invalid base64 input".into(),
+                ));
             }
             i += 4;
             continue;
@@ -1409,7 +1446,9 @@ pub(crate) fn decode_base64_char(ch: u8) -> Result<u8> {
         b'+' => 62,
         b'/' => 63,
         _ => {
-            return Err(Error::ScriptRuntime("atob invalid base64 input".into()));
+            return Err(Error::ScriptRuntime(
+                "InvalidCharacterError: atob invalid base64 input".into(),
+            ));
         }
     };
     Ok(value)

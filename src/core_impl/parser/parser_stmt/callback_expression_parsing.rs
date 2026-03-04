@@ -519,6 +519,12 @@ pub(crate) fn parse_timer_callback(timer_name: &str, src: &str) -> Result<TimerC
     match parse_expr(src)? {
         Expr::Function { handler, .. } => Ok(TimerCallback::Inline(handler)),
         Expr::Var(name) => Ok(TimerCallback::Reference(name)),
+        Expr::String(source) if matches!(timer_name, "setTimeout" | "setInterval") => {
+            Ok(TimerCallback::Inline(ScriptHandler {
+                params: Vec::new(),
+                stmts: parse_block_statements(&source)?,
+            }))
+        }
         _ => Err(Error::ScriptParse(format!(
             "unsupported {timer_name} callback: {src}"
         ))),

@@ -832,7 +832,7 @@ fn document_core_properties_and_collections_work() -> Result<()> {
     h.click("#btn")?;
     h.assert_text(
         "#result",
-        "Initial:UTF-8:CSS1Compat:text/html:complete::about:blank:about:blank:about:blank:about:blank:visible:false:body:head:doc:1:1:doc:doc:1:1:1:1:none:name:yes",
+        "Initial:UTF-8:CSS1Compat:text/html:complete::about:blank:about:blank:about:blank:about:blank:visible:false:body:head:doc:1:1:doc:doc:1:1:1:1:body:name:yes",
     )?;
     Ok(())
 }

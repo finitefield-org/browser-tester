@@ -28,8 +28,8 @@ fn data_transfer_get_data_returns_string_for_existing_formats_during_dragstart()
 }
 
 #[test]
-fn data_transfer_get_data_returns_empty_string_during_dragover_even_when_types_are_listed()
--> Result<()> {
+fn data_transfer_get_data_returns_empty_string_during_dragover_even_when_types_are_listed(
+) -> Result<()> {
     let html = r#"
       <div id='source' draggable='true'></div>
       <p id='out'></p>
