@@ -35,8 +35,8 @@ fn element_shadow_root_is_null_without_attached_open_shadow_root() -> Result<()>
 }
 
 #[test]
-fn element_shadow_root_returns_open_shadow_root_and_updates_style_node_like_mdn_example(
-) -> Result<()> {
+fn element_shadow_root_returns_open_shadow_root_and_updates_style_node_like_mdn_example()
+-> Result<()> {
     let html = r#"
         <div id='host' l='120' c='tomato'></div>
         <button id='run'>run</button>

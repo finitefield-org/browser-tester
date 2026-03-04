@@ -214,7 +214,9 @@ impl Harness {
                     }
                     Ok(Self::new_object_value(object_entries))
                 }
-                Expr::ObjectGet { target, key } => match self.resolve_target_value_with_pending(env, target) {
+                Expr::ObjectGet { target, key } => match self
+                    .resolve_target_value_with_pending(env, target)
+                {
                     _ if target == "super" => {
                         let super_prototype = Self::super_prototype_from_env(env)?;
                         let this_value = Self::super_this_from_env(env)?;
@@ -461,7 +463,9 @@ impl Harness {
                     }
                     Ok(Self::new_array_value(values))
                 }
-                Expr::ArrayLength(target) => match self.resolve_target_value_with_pending(env, target) {
+                Expr::ArrayLength(target) => match self
+                    .resolve_target_value_with_pending(env, target)
+                {
                     Some(Value::Array(values)) => Ok(Value::Number(values.borrow().len() as i64)),
                     Some(Value::TypedArray(values)) => {
                         Ok(Value::Number(values.borrow().observed_length() as i64))
@@ -625,112 +629,111 @@ impl Harness {
                 }
                 Expr::ArrayMap { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        let mut out = Vec::with_capacity(input.len());
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let mapped = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            out.push(mapped);
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            let mut out = Vec::with_capacity(input.len());
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let mapped = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                out.push(mapped);
+                            }
+                            Ok(Self::new_array_value(out))
                         }
-                        Ok(Self::new_array_value(out))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        let kind = values.borrow().kind;
-                        let mut out = Vec::with_capacity(input.len());
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let mapped = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            out.push(mapped);
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            let kind = values.borrow().kind;
+                            let mut out = Vec::with_capacity(input.len());
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let mapped = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                out.push(mapped);
+                            }
+                            self.new_typed_array_from_values(kind, &out)
                         }
-                        self.new_typed_array_from_values(kind, &out)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayFilter { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        let mut out = Vec::new();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let keep = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if keep.truthy() {
-                                out.push(item);
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            let mut out = Vec::new();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let keep = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item.clone(),
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if keep.truthy() {
+                                    out.push(item);
+                                }
                             }
+                            Ok(Self::new_array_value(out))
                         }
-                        Ok(Self::new_array_value(out))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        let kind = values.borrow().kind;
-                        let mut out = Vec::new();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let keep = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if keep.truthy() {
-                                out.push(item);
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            let kind = values.borrow().kind;
+                            let mut out = Vec::new();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let keep = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item.clone(),
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if keep.truthy() {
+                                    out.push(item);
+                                }
                             }
+                            self.new_typed_array_from_values(kind, &out)
                         }
-                        self.new_typed_array_from_values(kind, &out)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayReduce {
                     target,
                     callback,
                     initial,
-                } => {
-                    match self.resolve_target_value_with_pending(env, target) {
+                } => match self.resolve_target_value_with_pending(env, target) {
                     Some(Value::Array(values)) => {
                         let input = values.borrow().clone();
                         let mut start_index = 0usize;
@@ -797,250 +800,249 @@ impl Harness {
                         "unknown variable: {}",
                         target
                     ))),
-                    }
-                }
+                },
                 Expr::ArrayForEach { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let _ = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let _ = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                            }
+                            Ok(Value::Undefined)
                         }
-                        Ok(Value::Undefined)
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let _ = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let _ = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                            }
+                            Ok(Value::Undefined)
                         }
-                        Ok(Value::Undefined)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayFind { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(item);
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item.clone(),
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(item);
+                                }
                             }
+                            Ok(Value::Undefined)
                         }
-                        Ok(Value::Undefined)
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item.clone(),
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(item);
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item.clone(),
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(item);
+                                }
                             }
+                            Ok(Value::Undefined)
                         }
-                        Ok(Value::Undefined)
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayFindIndex { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Number(idx as i64));
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(Value::Number(idx as i64));
+                                }
                             }
+                            Ok(Value::Number(-1))
                         }
-                        Ok(Value::Number(-1))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Number(idx as i64));
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(Value::Number(idx as i64));
+                                }
                             }
+                            Ok(Value::Number(-1))
                         }
-                        Ok(Value::Number(-1))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArraySome { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Bool(true));
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(Value::Bool(true));
+                                }
                             }
+                            Ok(Value::Bool(false))
                         }
-                        Ok(Value::Bool(false))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if matched.truthy() {
-                                return Ok(Value::Bool(true));
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if matched.truthy() {
+                                    return Ok(Value::Bool(true));
+                                }
                             }
+                            Ok(Value::Bool(false))
                         }
-                        Ok(Value::Bool(false))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayEvery { target, callback } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let input = values.borrow().clone();
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::Array(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if !matched.truthy() {
-                                return Ok(Value::Bool(false));
+                        Some(Value::Array(values)) => {
+                            let input = values.borrow().clone();
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::Array(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if !matched.truthy() {
+                                    return Ok(Value::Bool(false));
+                                }
                             }
+                            Ok(Value::Bool(true))
                         }
-                        Ok(Value::Bool(true))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let input = self.typed_array_snapshot(&values)?;
-                        for (idx, item) in input.into_iter().enumerate() {
-                            let matched = self.execute_array_callback(
-                                callback,
-                                &[
-                                    item,
-                                    Value::Number(idx as i64),
-                                    Value::TypedArray(values.clone()),
-                                ],
-                                env,
-                                event,
-                            )?;
-                            if !matched.truthy() {
-                                return Ok(Value::Bool(false));
+                        Some(Value::TypedArray(values)) => {
+                            let input = self.typed_array_snapshot(&values)?;
+                            for (idx, item) in input.into_iter().enumerate() {
+                                let matched = self.execute_array_callback(
+                                    callback,
+                                    &[
+                                        item,
+                                        Value::Number(idx as i64),
+                                        Value::TypedArray(values.clone()),
+                                    ],
+                                    env,
+                                    event,
+                                )?;
+                                if !matched.truthy() {
+                                    return Ok(Value::Bool(false));
+                                }
                             }
+                            Ok(Value::Bool(true))
                         }
-                        Ok(Value::Bool(true))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArrayIncludes {
@@ -1118,124 +1120,124 @@ impl Harness {
                 }
                 Expr::ArraySlice { target, start, end } => {
                     match self.resolve_target_value_with_pending(env, target) {
-                    Some(Value::Array(values)) => {
-                        let values = values.borrow();
-                        let len = values.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Self::new_array_value(values[start..end].to_vec()))
-                    }
-                    Some(Value::TypedArray(values)) => {
-                        let snapshot = self.typed_array_snapshot(&values)?;
-                        let kind = values.borrow().kind;
-                        let len = snapshot.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        self.new_typed_array_from_values(kind, &snapshot[start..end])
-                    }
-                    Some(Value::ArrayBuffer(buffer)) => {
-                        Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
-                        let source = buffer.borrow();
-                        let len = source.bytes.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
-                            ArrayBufferValue {
-                                bytes: source.bytes[start..end].to_vec(),
-                                max_byte_length: None,
-                                detached: false,
-                            },
-                        ))))
-                    }
-                    Some(Value::Blob(blob)) => {
-                        let source = blob.borrow();
-                        let len = source.bytes.len();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Self::new_blob_value(
-                            source.bytes[start..end].to_vec(),
-                            String::new(),
-                        ))
-                    }
-                    Some(Value::String(value)) => {
-                        let len = value.chars().count();
-                        let start = start
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(0);
-                        let end = end
-                            .as_ref()
-                            .map(|value| self.eval_expr(value, env, event_param, event))
-                            .transpose()?
-                            .map(|value| Self::value_to_i64(&value))
-                            .map(|value| Self::normalize_slice_index(len, value))
-                            .unwrap_or(len);
-                        let end = end.max(start);
-                        Ok(Value::String(Self::substring_chars(&value, start, end)))
-                    }
-                    Some(_) => Err(Error::ScriptRuntime(format!(
-                        "variable '{}' is not an array",
-                        target
-                    ))),
-                    None => Err(Error::ScriptRuntime(format!(
-                        "unknown variable: {}",
-                        target
-                    ))),
+                        Some(Value::Array(values)) => {
+                            let values = values.borrow();
+                            let len = values.len();
+                            let start = start
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = end
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            Ok(Self::new_array_value(values[start..end].to_vec()))
+                        }
+                        Some(Value::TypedArray(values)) => {
+                            let snapshot = self.typed_array_snapshot(&values)?;
+                            let kind = values.borrow().kind;
+                            let len = snapshot.len();
+                            let start = start
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = end
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            self.new_typed_array_from_values(kind, &snapshot[start..end])
+                        }
+                        Some(Value::ArrayBuffer(buffer)) => {
+                            Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
+                            let source = buffer.borrow();
+                            let len = source.bytes.len();
+                            let start = start
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = end
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+                                ArrayBufferValue {
+                                    bytes: source.bytes[start..end].to_vec(),
+                                    max_byte_length: None,
+                                    detached: false,
+                                },
+                            ))))
+                        }
+                        Some(Value::Blob(blob)) => {
+                            let source = blob.borrow();
+                            let len = source.bytes.len();
+                            let start = start
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = end
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            Ok(Self::new_blob_value(
+                                source.bytes[start..end].to_vec(),
+                                String::new(),
+                            ))
+                        }
+                        Some(Value::String(value)) => {
+                            let len = value.chars().count();
+                            let start = start
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = end
+                                .as_ref()
+                                .map(|value| self.eval_expr(value, env, event_param, event))
+                                .transpose()?
+                                .map(|value| Self::value_to_i64(&value))
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            Ok(Value::String(Self::substring_chars(&value, start, end)))
+                        }
+                        Some(_) => Err(Error::ScriptRuntime(format!(
+                            "variable '{}' is not an array",
+                            target
+                        ))),
+                        None => Err(Error::ScriptRuntime(format!(
+                            "unknown variable: {}",
+                            target
+                        ))),
                     }
                 }
                 Expr::ArraySplice {

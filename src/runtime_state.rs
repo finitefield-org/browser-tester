@@ -834,6 +834,7 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) next_private_slot_id: usize,
     pub(crate) function_private_bindings: HashMap<usize, HashMap<String, PrivateBindingRuntime>>,
     pub(crate) function_public_properties: HashMap<usize, ObjectValue>,
+    pub(crate) function_registry: HashMap<usize, Rc<FunctionValue>>,
     pub(crate) constructor_instance_initializers:
         HashMap<usize, Vec<ConstructorInstanceInitializerRuntime>>,
     pub(crate) constructor_call_stack: Vec<usize>,

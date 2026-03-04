@@ -278,7 +278,7 @@ impl Harness {
 
     pub(crate) fn new_builtin_placeholder_function() -> Value {
         Value::Function(Rc::new(FunctionValue {
-            function_id: 0,
+            function_id: usize::MAX,
             handler: ScriptHandler {
                 params: Vec::new(),
                 stmts: Vec::new(),

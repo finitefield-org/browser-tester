@@ -873,7 +873,10 @@ impl Harness {
                 let next_len = Self::value_to_i64(&value).max(0) as usize;
                 self.set_select_length(node, next_len)?;
             }
-            "files" => {}
+            "files" => {
+                let files = self.mock_files_from_input_assignment_value(&value)?;
+                self.dom.set_file_input_files(node, &files)?;
+            }
             "checked" => self.dom.set_checked(node, value.truthy())?,
             "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
             "open" => {

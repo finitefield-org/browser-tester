@@ -23,6 +23,254 @@ impl Harness {
             .collect()
     }
 
+    fn dom_method_member_name(method: &DomMethod) -> &'static str {
+        match method {
+            DomMethod::Focus => "focus",
+            DomMethod::Blur => "blur",
+            DomMethod::Click => "click",
+            DomMethod::ScrollIntoView => "scrollIntoView",
+            DomMethod::Submit => "submit",
+            DomMethod::RequestSubmit => "requestSubmit",
+            DomMethod::Reset => "reset",
+            DomMethod::Show => "show",
+            DomMethod::ShowModal => "showModal",
+            DomMethod::Close => "close",
+            DomMethod::RequestClose => "requestClose",
+        }
+    }
+
+    fn try_execute_non_dom_method_call_with_env(
+        &mut self,
+        target: &DomQuery,
+        method: &DomMethod,
+        arg_value: Option<Value>,
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<bool> {
+        let Some(receiver) = self.resolve_dom_query_value_runtime(target, env)? else {
+            return Ok(false);
+        };
+        if matches!(receiver, Value::Node(_)) {
+            return Ok(false);
+        }
+
+        let member = Self::dom_method_member_name(method);
+        let callee = match self.object_property_from_value(&receiver, member) {
+            Ok(callee) if self.is_callable_value(&callee) => callee,
+            _ => return Ok(false),
+        };
+
+        let mut evaluated_args = Vec::new();
+        if let Some(arg_value) = arg_value {
+            evaluated_args.push(arg_value);
+        }
+        let _ = self.execute_callable_value_with_this_and_env(
+            &callee,
+            &evaluated_args,
+            event,
+            Some(env),
+            Some(receiver),
+        )?;
+        self.sync_listener_capture_env_if_shared(env);
+        Ok(true)
+    }
+
+    fn eval_dom_method_call_arg(
+        &mut self,
+        arg: &Option<Expr>,
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &mut EventState,
+    ) -> Result<Option<Value>> {
+        arg.as_ref()
+            .map(|expr| self.eval_expr(expr, env, event_param, event))
+            .transpose()
+    }
+
+    fn try_execute_canvas_context_reset_with_env(
+        &mut self,
+        target: &DomQuery,
+        method: &DomMethod,
+        env: &HashMap<String, Value>,
+    ) -> Result<bool> {
+        if !matches!(method, DomMethod::Reset) {
+            return Ok(false);
+        }
+        let DomQuery::Var(name) = target else {
+            return Ok(false);
+        };
+        let Some(Value::Object(context_object)) = env.get(name) else {
+            return Ok(false);
+        };
+
+        let is_canvas_context = {
+            let entries = context_object.borrow();
+            Self::is_canvas_2d_context_object(&entries)
+        };
+        if !is_canvas_context {
+            return Ok(false);
+        }
+
+        let _ = self.eval_canvas_2d_context_member_call(context_object, "reset", &[])?;
+        Ok(true)
+    }
+
+    fn resolve_dom_method_call_node_with_fallback(
+        &mut self,
+        target: &DomQuery,
+        method: &DomMethod,
+        arg_value: &Option<Value>,
+        env: &mut HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Option<NodeId>> {
+        match self.resolve_dom_query_required_runtime(target, env) {
+            Ok(node) => Ok(Some(node)),
+            Err(dom_resolution_error) => {
+                if self.try_execute_non_dom_method_call_with_env(
+                    target,
+                    method,
+                    arg_value.clone(),
+                    env,
+                    event,
+                )? {
+                    return Ok(None);
+                }
+                Err(dom_resolution_error)
+            }
+        }
+    }
+
+    fn execute_dom_method_on_node_with_env(
+        &mut self,
+        node: NodeId,
+        method: &DomMethod,
+        arg_value: Option<Value>,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        match method {
+            DomMethod::Focus => self.focus_node_with_env(node, env)?,
+            DomMethod::Blur => self.blur_node_with_env(node, env)?,
+            DomMethod::Click => self.click_dom_method_with_env(node, env)?,
+            DomMethod::Submit => self.submit_form_with_env(node, env)?,
+            DomMethod::RequestSubmit => self.request_submit_form_with_env(node, arg_value, env)?,
+            DomMethod::Reset => self.reset_form_with_env(node, env)?,
+            DomMethod::ScrollIntoView => self.scroll_into_view_node_with_env(node, env)?,
+            DomMethod::Show => self.show_dialog_with_env(node, false, env)?,
+            DomMethod::ShowModal => self.show_dialog_with_env(node, true, env)?,
+            DomMethod::Close => self.close_dialog_with_env(node, arg_value, env)?,
+            DomMethod::RequestClose => self.request_close_dialog_with_env(node, arg_value, env)?,
+        }
+        Ok(())
+    }
+
+    fn execute_dom_method_call_stmt_with_env(
+        &mut self,
+        target: &DomQuery,
+        method: &DomMethod,
+        arg: &Option<Expr>,
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &mut EventState,
+    ) -> Result<()> {
+        let arg_value = self.eval_dom_method_call_arg(arg, env, event_param, event)?;
+        if self.try_execute_canvas_context_reset_with_env(target, method, env)? {
+            return Ok(());
+        }
+
+        let Some(node) = self
+            .resolve_dom_method_call_node_with_fallback(target, method, &arg_value, env, event)?
+        else {
+            return Ok(());
+        };
+
+        self.execute_dom_method_on_node_with_env(node, method, arg_value, env)
+    }
+
+    fn apply_listener_mutation_on_node_with_env(
+        &mut self,
+        node: NodeId,
+        op: &ListenerRegistrationOp,
+        event_type: &str,
+        capture: bool,
+        handler: &ScriptHandler,
+        env: &HashMap<String, Value>,
+    ) {
+        match op {
+            ListenerRegistrationOp::Add => {
+                let captured_env = self.ensure_listener_capture_env();
+                *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+                self.listeners.add(
+                    node,
+                    event_type.to_string(),
+                    Listener {
+                        capture,
+                        is_event_handler_property: false,
+                        handler: handler.clone(),
+                        captured_env,
+                        captured_pending_function_decls: self
+                            .script_runtime
+                            .pending_function_decls
+                            .clone(),
+                    },
+                );
+            }
+            ListenerRegistrationOp::Remove => {
+                let _ = self.listeners.remove(node, event_type, capture, handler);
+            }
+        }
+    }
+
+    fn execute_listener_mutation_stmt_with_env(
+        &mut self,
+        target: &DomQuery,
+        op: &ListenerRegistrationOp,
+        event_type_expr: &Expr,
+        capture: bool,
+        handler: &ScriptHandler,
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &mut EventState,
+    ) -> Result<()> {
+        let event_type = self
+            .eval_expr(event_type_expr, env, event_param, event)?
+            .as_string();
+        if let Some(target_object) = self.resolve_event_target_object_for_query(target, env)? {
+            let node = self.event_target_listener_node_id(&target_object);
+            self.apply_listener_mutation_on_node_with_env(
+                node,
+                op,
+                &event_type,
+                capture,
+                handler,
+                env,
+            );
+            return Ok(());
+        }
+
+        let node = self.resolve_dom_query_required_runtime(target, env)?;
+        self.apply_listener_mutation_on_node_with_env(node, op, &event_type, capture, handler, env);
+        Ok(())
+    }
+
+    fn execute_dispatch_event_stmt_with_env(
+        &mut self,
+        target: &DomQuery,
+        event_type_expr: &Expr,
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &mut EventState,
+    ) -> Result<()> {
+        let event_payload = self.eval_expr(event_type_expr, env, event_param, event)?;
+        if let Some(target_object) = self.resolve_event_target_object_for_query(target, env)? {
+            let _ = self.dispatch_event_target_with_env(target_object, event_payload, env)?;
+            return Ok(());
+        }
+
+        let node = self.resolve_dom_query_required_runtime(target, env)?;
+        let _ = self.dispatch_dom_event_payload_with_env(node, event_payload, env)?;
+        Ok(())
+    }
+
     fn enumerable_own_keys_for_object_destructure(value: &Value) -> Vec<String> {
         match value {
             Value::Object(entries) => entries
@@ -1827,6 +2075,10 @@ impl Harness {
                                         name,
                                         &Value::Undefined,
                                     );
+                                    self.sync_scheduled_task_captures_for_binding(
+                                        name,
+                                        &Value::Undefined,
+                                    );
                                 }
                                 continue;
                             }
@@ -1836,6 +2088,8 @@ impl Harness {
                             if matches!(kind, VarDeclKind::Let | VarDeclKind::Const) {
                                 self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
                             }
+                            self.sync_global_binding_if_needed(env, name, &value);
+                            self.sync_scheduled_task_captures_for_binding(name, &value);
                             self.bind_timer_id_to_task_env(name, expr, &value);
                             if matches!(kind, VarDeclKind::Var) && !matches!(expr, Expr::Undefined)
                             {
@@ -2555,6 +2809,7 @@ impl Harness {
                             env.insert(name.clone(), next.clone());
                             self.sync_arguments_after_param_write(env, name, &next);
                             self.sync_global_binding_if_needed(env, name, &next);
+                            self.sync_scheduled_task_captures_for_binding(name, &next);
                             self.bind_timer_id_to_task_env(name, expr, &next);
                         }
                         Stmt::PrivateAssign {
@@ -2589,6 +2844,7 @@ impl Harness {
                             env.insert(name.clone(), next.clone());
                             self.sync_arguments_after_param_write(env, name, &next);
                             self.sync_global_binding_if_needed(env, name, &next);
+                            self.sync_scheduled_task_captures_for_binding(name, &next);
                         }
                         Stmt::ArrayDestructureAssign {
                             pattern,
@@ -2631,6 +2887,7 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
+                                self.sync_scheduled_task_captures_for_binding(target_name, &next);
                             }
                             if let Some(rest_name) = &pattern.rest {
                                 if !is_declaration {
@@ -2658,6 +2915,7 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, rest_name, &next);
+                                self.sync_scheduled_task_captures_for_binding(rest_name, &next);
                             }
                         }
                         Stmt::ObjectDestructureAssign {
@@ -2703,6 +2961,7 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
+                                self.sync_scheduled_task_captures_for_binding(target_name, &next);
                             }
                             if let Some(rest_name) = &pattern.rest {
                                 if !is_declaration {
@@ -2740,6 +2999,7 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, rest_name, &next);
+                                self.sync_scheduled_task_captures_for_binding(rest_name, &next);
                             }
                         }
                         Stmt::ObjectAssign {
@@ -3332,9 +3592,13 @@ impl Harness {
                                     let attr_name = Self::aria_property_to_attr_name(prop_name);
                                     self.dom.set_attr(node, &attr_name, &value.as_string())?
                                 }
+                                DomProp::Files => {
+                                    let files =
+                                        self.mock_files_from_input_assignment_value(&value)?;
+                                    self.dom.set_file_input_files(node, &files)?;
+                                }
                                 DomProp::Attributes
                                 | DomProp::AssignedSlot
-                                | DomProp::Files
                                 | DomProp::FilesLength
                                 | DomProp::ValidationMessage
                                 | DomProp::Validity
@@ -3811,12 +4075,14 @@ impl Harness {
                                 .iter()
                                 .map(|arg| self.eval_expr(arg, env, event_param, event))
                                 .collect::<Result<Vec<_>>>()?;
-                            let _ = self.schedule_timeout(
-                                handler.callback.clone(),
-                                delay,
-                                callback_args,
-                                env,
-                            );
+                            let (callback, timer_env) = self
+                                .materialize_timer_callback_for_schedule(
+                                    &handler.callback,
+                                    env,
+                                    "timeout",
+                                );
+                            let _ =
+                                self.schedule_timeout(callback, delay, callback_args, &timer_env);
                         }
                         Stmt::SetInterval { handler, delay_ms } => {
                             let interval = self.eval_expr(delay_ms, env, event_param, event)?;
@@ -3826,11 +4092,17 @@ impl Harness {
                                 .iter()
                                 .map(|arg| self.eval_expr(arg, env, event_param, event))
                                 .collect::<Result<Vec<_>>>()?;
+                            let (callback, timer_env) = self
+                                .materialize_timer_callback_for_schedule(
+                                    &handler.callback,
+                                    env,
+                                    "interval",
+                                );
                             let _ = self.schedule_interval(
-                                handler.callback.clone(),
+                                callback,
                                 interval,
                                 callback_args,
-                                env,
+                                &timer_env,
                             );
                         }
                         Stmt::QueueMicrotask { handler } => {
@@ -4679,11 +4951,23 @@ impl Harness {
                                 }
                             }
 
+                            let try_return_slot = if matches!(completion, Ok(ExecFlow::Return)) {
+                                env.get(INTERNAL_RETURN_SLOT).cloned()
+                            } else {
+                                None
+                            };
+
                             if let Some(finally_stmts) = finally_stmts {
                                 match self.execute_stmts(finally_stmts, event_param, event, env) {
                                     Ok(ExecFlow::Continue) => {}
                                     Ok(flow) => return Ok(flow),
                                     Err(err) => return Err(err),
+                                }
+                            }
+
+                            if matches!(completion, Ok(ExecFlow::Return)) {
+                                if let Some(value) = try_return_slot {
+                                    env.insert(INTERNAL_RETURN_SLOT.to_string(), value);
                                 }
                             }
 
@@ -4741,139 +5025,39 @@ impl Harness {
                             capture,
                             handler,
                         } => {
-                            let event_type = self
-                                .eval_expr(event_type, env, event_param, event)?
-                                .as_string();
-                            if let Some(target_object) =
-                                self.resolve_event_target_object_for_query(target, env)?
-                            {
-                                let node = self.event_target_listener_node_id(&target_object);
-                                match op {
-                                    ListenerRegistrationOp::Add => {
-                                        let captured_env = self.ensure_listener_capture_env();
-                                        *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
-                                        self.listeners.add(
-                                            node,
-                                            event_type.clone(),
-                                            Listener {
-                                                capture: *capture,
-                                                is_event_handler_property: false,
-                                                handler: handler.clone(),
-                                                captured_env,
-                                                captured_pending_function_decls: self
-                                                    .script_runtime
-                                                    .pending_function_decls
-                                                    .clone(),
-                                            },
-                                        );
-                                    }
-                                    ListenerRegistrationOp::Remove => {
-                                        let _ = self.listeners.remove(
-                                            node,
-                                            &event_type,
-                                            *capture,
-                                            handler,
-                                        );
-                                    }
-                                }
-                                continue;
-                            }
-
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
-                            match op {
-                                ListenerRegistrationOp::Add => {
-                                    let captured_env = self.ensure_listener_capture_env();
-                                    *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
-                                    self.listeners.add(
-                                        node,
-                                        event_type.clone(),
-                                        Listener {
-                                            capture: *capture,
-                                            is_event_handler_property: false,
-                                            handler: handler.clone(),
-                                            captured_env,
-                                            captured_pending_function_decls: self
-                                                .script_runtime
-                                                .pending_function_decls
-                                                .clone(),
-                                        },
-                                    );
-                                }
-                                ListenerRegistrationOp::Remove => {
-                                    let _ =
-                                        self.listeners.remove(node, &event_type, *capture, handler);
-                                }
-                            }
+                            self.execute_listener_mutation_stmt_with_env(
+                                target,
+                                op,
+                                event_type,
+                                *capture,
+                                handler,
+                                env,
+                                event_param,
+                                event,
+                            )?;
                         }
                         Stmt::DomMethodCall {
                             target,
                             method,
                             arg,
                         } => {
-                            if matches!(method, DomMethod::Reset) {
-                                if let DomQuery::Var(name) = target {
-                                    if let Some(Value::Object(context_object)) = env.get(name) {
-                                        let is_canvas_context = {
-                                            let entries = context_object.borrow();
-                                            Self::is_canvas_2d_context_object(&entries)
-                                        };
-                                        if is_canvas_context {
-                                            let _ = self.eval_canvas_2d_context_member_call(
-                                                context_object,
-                                                "reset",
-                                                &[],
-                                            )?;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
-                            let arg_value = arg
-                                .as_ref()
-                                .map(|expr| self.eval_expr(expr, env, event_param, event))
-                                .transpose()?;
-                            match method {
-                                DomMethod::Focus => self.focus_node_with_env(node, env)?,
-                                DomMethod::Blur => self.blur_node_with_env(node, env)?,
-                                DomMethod::Click => self.click_dom_method_with_env(node, env)?,
-                                DomMethod::Submit => self.submit_form_with_env(node, env)?,
-                                DomMethod::RequestSubmit => {
-                                    self.request_submit_form_with_env(node, arg_value, env)?
-                                }
-                                DomMethod::Reset => self.reset_form_with_env(node, env)?,
-                                DomMethod::ScrollIntoView => {
-                                    self.scroll_into_view_node_with_env(node, env)?
-                                }
-                                DomMethod::Show => self.show_dialog_with_env(node, false, env)?,
-                                DomMethod::ShowModal => {
-                                    self.show_dialog_with_env(node, true, env)?
-                                }
-                                DomMethod::Close => {
-                                    self.close_dialog_with_env(node, arg_value, env)?
-                                }
-                                DomMethod::RequestClose => {
-                                    self.request_close_dialog_with_env(node, arg_value, env)?
-                                }
-                            }
+                            self.execute_dom_method_call_stmt_with_env(
+                                target,
+                                method,
+                                arg,
+                                env,
+                                event_param,
+                                event,
+                            )?;
                         }
                         Stmt::DispatchEvent { target, event_type } => {
-                            let event_payload =
-                                self.eval_expr(event_type, env, event_param, event)?;
-                            if let Some(target_object) =
-                                self.resolve_event_target_object_for_query(target, env)?
-                            {
-                                let _ = self.dispatch_event_target_with_env(
-                                    target_object,
-                                    event_payload,
-                                    env,
-                                )?;
-                                continue;
-                            }
-
-                            let node = self.resolve_dom_query_required_runtime(target, env)?;
-                            let _ =
-                                self.dispatch_dom_event_payload_with_env(node, event_payload, env)?;
+                            self.execute_dispatch_event_stmt_with_env(
+                                target,
+                                event_type,
+                                env,
+                                event_param,
+                                event,
+                            )?;
                         }
                         Stmt::Expr(expr) => {
                             let _ = self.eval_expr(expr, env, event_param, event)?;

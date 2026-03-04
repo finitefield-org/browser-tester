@@ -62,7 +62,7 @@ impl Harness {
                 .function_private_bindings
                 .insert(function_id, captured_private_bindings);
         }
-        Value::Function(Rc::new(FunctionValue {
+        let function = Rc::new(FunctionValue {
             function_id,
             handler,
             expression_name: None,
@@ -79,7 +79,11 @@ impl Harness {
             is_class_constructor,
             class_super_constructor,
             class_super_prototype,
-        }))
+        });
+        self.script_runtime
+            .function_registry
+            .insert(function_id, function.clone());
+        Value::Function(function)
     }
 
     pub(crate) fn make_function_value(
@@ -590,6 +594,26 @@ impl Harness {
         target_origin == recipient_origin
     }
 
+    fn class_list_node_from_receiver(receiver: Option<&Value>) -> Result<NodeId> {
+        let Some(Value::Object(entries)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "DOMTokenList method called on incompatible receiver".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        if !Self::is_class_list_object(&entries) {
+            return Err(Error::ScriptRuntime(
+                "DOMTokenList method called on incompatible receiver".into(),
+            ));
+        }
+        match Self::object_get_entry(&entries, INTERNAL_CLASS_LIST_NODE_KEY) {
+            Some(Value::Node(node)) => Ok(node),
+            _ => Err(Error::ScriptRuntime(
+                "DOMTokenList method called on incompatible receiver".into(),
+            )),
+        }
+    }
+
     fn text_decoder_input_bytes(&self, input: Option<&Value>) -> Result<Vec<u8>> {
         let Some(input) = input else {
             return Ok(Vec::new());
@@ -740,9 +764,29 @@ impl Harness {
             })
     }
 
-    fn execute_worker_script_source(
+    fn function_to_string_reference(function_id: usize) -> String {
+        format!("__bt_function_ref__({function_id})")
+    }
+
+    fn worker_function_id_from_source(source: &str) -> Option<usize> {
+        fn parse_marker(value: &str) -> Option<usize> {
+            let marker = value
+                .strip_prefix("__bt_function_ref__(")?
+                .strip_suffix(')')?;
+            marker.trim().parse::<usize>().ok()
+        }
+
+        let trimmed = source.trim();
+        if let Some(id) = parse_marker(trimmed) {
+            return Some(id);
+        }
+        let wrapped = trimmed.strip_prefix('(')?.strip_suffix(")()")?;
+        parse_marker(wrapped.trim())
+    }
+
+    fn execute_worker_stmts(
         &mut self,
-        source: &str,
+        stmts: &[Stmt],
         worker: &Value,
         worker_global: &Value,
     ) -> Result<()> {
@@ -754,11 +798,10 @@ impl Harness {
         worker_env.insert("onmessage".to_string(), Value::Null);
         worker_env.insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(1));
 
-        let stmts = parse_block_statements(source)?;
         let mut worker_event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
         self.run_in_task_context(|inner| {
             inner
-                .execute_stmts(&stmts, &None, &mut worker_event, &mut worker_env)
+                .execute_stmts(stmts, &None, &mut worker_event, &mut worker_env)
                 .map(|_| ())
         })?;
 
@@ -778,6 +821,30 @@ impl Harness {
             );
         }
         Ok(())
+    }
+
+    fn execute_worker_script_source(
+        &mut self,
+        source: &str,
+        worker: &Value,
+        worker_global: &Value,
+    ) -> Result<()> {
+        if let Some(function_id) = Self::worker_function_id_from_source(source) {
+            let function = self
+                .script_runtime
+                .function_registry
+                .get(&function_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::ScriptRuntime(format!(
+                        "Worker script function reference is not available: {function_id}"
+                    ))
+                })?;
+            return self.execute_worker_stmts(&function.handler.stmts, worker, worker_global);
+        }
+
+        let stmts = parse_block_statements(source)?;
+        self.execute_worker_stmts(&stmts, worker, worker_global)
     }
 
     fn new_worker_instance_from_script_source(&mut self, source: &str) -> Result<Value> {
@@ -1289,6 +1356,19 @@ impl Harness {
                     bound_args,
                 ))
             }
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Function.prototype.toString does not take arguments".into(),
+                    ));
+                }
+                match receiver {
+                    Value::Function(function) => Ok(Value::String(
+                        Self::function_to_string_reference(function.function_id),
+                    )),
+                    _ => Ok(Value::String("function () { [native code] }".to_string())),
+                }
+            }
             _ => Err(Error::ScriptRuntime(format!(
                 "unsupported Function.prototype method: {member}"
             ))),
@@ -1509,6 +1589,12 @@ impl Harness {
                         let target = self.callable_receiver_from_this_arg(this_arg, "bind")?;
                         self.execute_function_prototype_member(
                             "bind", &target, args, event, caller_env,
+                        )
+                    }
+                    "function_to_string" => {
+                        let target = self.callable_receiver_from_this_arg(this_arg, "toString")?;
+                        self.execute_function_prototype_member(
+                            "toString", &target, args, event, caller_env,
                         )
                     }
                     "bound_function" => {
@@ -2229,6 +2315,11 @@ impl Harness {
                     }
                     "clipboard_write" => self.eval_clipboard_write_call(args),
                     "request_constructor" => self.new_fetch_request_value_from_call_args(args),
+                    "file_constructor" => {
+                        let mut instance = self.new_file_value_from_constructor_args(args)?;
+                        self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
+                        Ok(instance)
+                    }
                     "headers_constructor" => self.new_headers_value_from_call_args(args),
                     "text_encoder_constructor" => {
                         if !args.is_empty() {
@@ -2476,6 +2567,113 @@ impl Harness {
                             &property_name,
                         )?;
                         Ok(Value::String(value))
+                    }
+                    "class_list_add" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        for class_name in args {
+                            self.dom.class_add(node, &class_name.as_string())?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "class_list_remove" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        for class_name in args {
+                            self.dom.class_remove(node, &class_name.as_string())?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "class_list_toggle" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        let Some(class_name) = args.first() else {
+                            return Err(Error::ScriptRuntime(
+                                "DOMTokenList.toggle requires at least one argument".into(),
+                            ));
+                        };
+                        let class_name = class_name.as_string();
+                        let toggled = if let Some(force) = args.get(1) {
+                            if force.truthy() {
+                                self.dom.class_add(node, &class_name)?;
+                                true
+                            } else {
+                                self.dom.class_remove(node, &class_name)?;
+                                false
+                            }
+                        } else {
+                            self.dom.class_toggle(node, &class_name)?
+                        };
+                        Ok(Value::Bool(toggled))
+                    }
+                    "class_list_contains" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        let Some(class_name) = args.first() else {
+                            return Ok(Value::Bool(false));
+                        };
+                        Ok(Value::Bool(
+                            self.dom.class_contains(node, &class_name.as_string())?,
+                        ))
+                    }
+                    "class_list_replace" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        let Some(old_class_name) = args.first() else {
+                            return Ok(Value::Bool(false));
+                        };
+                        let Some(new_class_name) = args.get(1) else {
+                            return Ok(Value::Bool(false));
+                        };
+                        Ok(Value::Bool(self.dom.class_replace(
+                            node,
+                            &old_class_name.as_string(),
+                            &new_class_name.as_string(),
+                        )?))
+                    }
+                    "class_list_item" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        let index = args.first().map(Self::value_to_i64).unwrap_or(0);
+                        if index < 0 {
+                            return Ok(Value::Null);
+                        }
+                        let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+                        Ok(classes
+                            .get(index as usize)
+                            .cloned()
+                            .map(Value::String)
+                            .unwrap_or(Value::Null))
+                    }
+                    "class_list_for_each" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        if args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DOMTokenList.forEach requires a callback".into(),
+                            ));
+                        }
+                        let callback = args[0].clone();
+                        if !self.is_callable_value(&callback) {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        }
+                        let this_value = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let class_list_object = this_arg.clone().unwrap_or(Value::Undefined);
+                        let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+                        for (index, class_name) in classes.iter().enumerate() {
+                            let callback_args = [
+                                Value::String(class_name.clone()),
+                                Value::Number(index as i64),
+                                class_list_object.clone(),
+                            ];
+                            let _ = self.execute_callable_value_with_this_and_env(
+                                &callback,
+                                &callback_args,
+                                event,
+                                caller_env,
+                                Some(this_value.clone()),
+                            )?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "class_list_to_string" => {
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        Ok(Value::String(
+                            class_tokens(self.dom.attr(node, "class").as_deref()).join(" "),
+                        ))
                     }
                     "worker_constructor" => {
                         if args.is_empty() || args.len() > 2 {
@@ -3558,11 +3756,14 @@ impl Harness {
                         }
                         global_sync_keys.insert(name.clone());
                         if let Some(global_value) = this.script_runtime.env.get(name).cloned() {
-                            call_env.insert(name.clone(), global_value);
-                        } else if let Some(value) =
-                            caller_view.and_then(|env| env.get(name)).cloned()
-                        {
-                            call_env.insert(name.clone(), value);
+                            if function.global_scope || !call_env.contains_key(name) {
+                                call_env.insert(name.clone(), global_value);
+                            }
+                        } else if !call_env.contains_key(name) {
+                            if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned()
+                            {
+                                call_env.insert(name.clone(), value);
+                            }
                         }
                     }
                     for (name, global_value) in this.script_runtime.env.iter() {

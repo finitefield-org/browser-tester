@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn element_insert_adjacent_element_inserts_at_all_positions_and_returns_inserted_element(
-) -> Result<()> {
+fn element_insert_adjacent_element_inserts_at_all_positions_and_returns_inserted_element()
+-> Result<()> {
     let html = r#"
         <div id='root'><span id='b'>B</span></div>
         <button id='run'>run</button>

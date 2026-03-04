@@ -39,8 +39,8 @@ fn issue_107_datetime_format_to_parts_matches_expected_tokens() -> Result<()> {
 }
 
 #[test]
-fn issue_107_datetime_format_to_parts_uses_now_for_undefined_and_rejects_invalid_string(
-) -> Result<()> {
+fn issue_107_datetime_format_to_parts_uses_now_for_undefined_and_rejects_invalid_string()
+-> Result<()> {
     let html = r#"
       <p id='out'></p>
       <script>

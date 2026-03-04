@@ -15,225 +15,90 @@ impl Harness {
         String::new()
     }
 
+    fn resolved_static_role_for_tag(tag: &str) -> Option<&'static str> {
+        match tag {
+            "address" => Some("group"),
+            "aside" => Some("complementary"),
+            "article" => Some("article"),
+            "blockquote" => Some("blockquote"),
+            "body" | "b" | "bdi" | "bdo" | "data" | "div" | "i" | "pre" | "q" | "samp"
+            | "small" | "u" => Some("generic"),
+            "button" => Some("button"),
+            "caption" => Some("caption"),
+            "code" => Some("code"),
+            "datalist" => Some("listbox"),
+            "details" | "fieldset" | "hgroup" | "optgroup" => Some("group"),
+            "dialog" => Some("dialog"),
+            "del" | "s" => Some("deletion"),
+            "dfn" => Some("term"),
+            "em" => Some("emphasis"),
+            "figure" => Some("figure"),
+            "form" => Some("form"),
+            "hr" => Some("separator"),
+            "html" => Some("document"),
+            "ins" => Some("insertion"),
+            "main" => Some("main"),
+            "ol" | "menu" | "ul" => Some("list"),
+            "meter" => Some("meter"),
+            "nav" => Some("navigation"),
+            "option" => Some("option"),
+            "output" => Some("status"),
+            "p" => Some("paragraph"),
+            "progress" => Some("progressbar"),
+            "strong" => Some("strong"),
+            "sub" => Some("subscript"),
+            "sup" => Some("superscript"),
+            "table" => Some("table"),
+            "tbody" | "tfoot" | "thead" => Some("rowgroup"),
+            "tr" => Some("row"),
+            "textarea" => Some("textbox"),
+            "time" => Some("time"),
+            "search" => Some("search"),
+            _ => None,
+        }
+    }
+
+    fn is_heading_tag(tag: &str) -> bool {
+        matches!(tag.as_bytes(), [b'h' | b'H', b'1'..=b'6'])
+    }
+
     pub(crate) fn resolved_role_for_node(&self, node: NodeId) -> String {
         if let Some(explicit) = self.dom.attr(node, "role") {
             return explicit;
         }
-        if let Some(tag) = self.dom.tag_name(node) {
-            if tag.eq_ignore_ascii_case("address") {
-                return "group".to_string();
-            }
-            if tag.eq_ignore_ascii_case("aside") {
-                return "complementary".to_string();
-            }
-            if tag.eq_ignore_ascii_case("article") {
-                return "article".to_string();
-            }
-            if tag.eq_ignore_ascii_case("blockquote") {
-                return "blockquote".to_string();
-            }
-            if tag.eq_ignore_ascii_case("body") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("button") {
-                return "button".to_string();
-            }
-            if tag.eq_ignore_ascii_case("caption") {
-                return "caption".to_string();
-            }
-            if tag.eq_ignore_ascii_case("code") {
-                return "code".to_string();
-            }
-            if tag.eq_ignore_ascii_case("datalist") {
-                return "listbox".to_string();
-            }
-            if tag.eq_ignore_ascii_case("details") {
-                return "group".to_string();
-            }
-            if tag.eq_ignore_ascii_case("div") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("dialog") {
-                return "dialog".to_string();
-            }
-            if tag.eq_ignore_ascii_case("del") {
-                return "deletion".to_string();
-            }
-            if tag.eq_ignore_ascii_case("dfn") {
-                return "term".to_string();
-            }
-            if tag.eq_ignore_ascii_case("em") {
-                return "emphasis".to_string();
-            }
-            if tag.eq_ignore_ascii_case("fieldset") {
-                return "group".to_string();
-            }
-            if tag.eq_ignore_ascii_case("figure") {
-                return "figure".to_string();
-            }
-            if tag.eq_ignore_ascii_case("form") {
-                return "form".to_string();
-            }
-            if tag.eq_ignore_ascii_case("header") {
-                return self.resolved_header_role(node);
-            }
-            if tag.eq_ignore_ascii_case("hgroup") {
-                return "group".to_string();
-            }
-            if tag.eq_ignore_ascii_case("hr") {
-                return "separator".to_string();
-            }
-            if tag.eq_ignore_ascii_case("html") {
-                return "document".to_string();
-            }
-            if tag.eq_ignore_ascii_case("input") {
-                return self.resolved_input_role(node);
-            }
-            if tag.len() == 2 {
-                let mut chars = tag.chars();
-                if let (Some(prefix), Some(level), None) =
-                    (chars.next(), chars.next(), chars.next())
-                {
-                    if (prefix == 'h' || prefix == 'H') && ('1'..='6').contains(&level) {
-                        return "heading".to_string();
-                    }
-                }
-            }
-            if tag.eq_ignore_ascii_case("footer") {
-                return self.resolved_footer_role(node);
-            }
-            if tag.eq_ignore_ascii_case("b") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("bdi") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("bdo") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("data") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("i") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("img") {
+        let Some(tag) = self.dom.tag_name(node) else {
+            return String::new();
+        };
+        let normalized_tag = tag.to_ascii_lowercase();
+
+        match normalized_tag.as_str() {
+            "header" => return self.resolved_header_role(node),
+            "input" => return self.resolved_input_role(node),
+            "footer" => return self.resolved_footer_role(node),
+            "img" => {
                 if self.dom.attr(node, "alt").is_some_and(|alt| alt.is_empty()) {
                     return "presentation".to_string();
                 }
                 return "img".to_string();
             }
-            if tag.eq_ignore_ascii_case("ins") {
-                return "insertion".to_string();
-            }
-            if tag.eq_ignore_ascii_case("li") {
-                return self.resolved_list_item_role(node);
-            }
-            if tag.eq_ignore_ascii_case("main") {
-                return "main".to_string();
-            }
-            if tag.eq_ignore_ascii_case("ol") {
-                return "list".to_string();
-            }
-            if tag.eq_ignore_ascii_case("menu") {
-                return "list".to_string();
-            }
-            if tag.eq_ignore_ascii_case("ul") {
-                return "list".to_string();
-            }
-            if tag.eq_ignore_ascii_case("meter") {
-                return "meter".to_string();
-            }
-            if tag.eq_ignore_ascii_case("nav") {
-                return "navigation".to_string();
-            }
-            if tag.eq_ignore_ascii_case("optgroup") {
-                return "group".to_string();
-            }
-            if tag.eq_ignore_ascii_case("option") {
-                return "option".to_string();
-            }
-            if tag.eq_ignore_ascii_case("output") {
-                return "status".to_string();
-            }
-            if tag.eq_ignore_ascii_case("p") {
-                return "paragraph".to_string();
-            }
-            if tag.eq_ignore_ascii_case("pre") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("progress") {
-                return "progressbar".to_string();
-            }
-            if tag.eq_ignore_ascii_case("q") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("s") {
-                return "deletion".to_string();
-            }
-            if tag.eq_ignore_ascii_case("samp") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("small") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("strong") {
-                return "strong".to_string();
-            }
-            if tag.eq_ignore_ascii_case("sub") {
-                return "subscript".to_string();
-            }
-            if tag.eq_ignore_ascii_case("sup") {
-                return "superscript".to_string();
-            }
-            if tag.eq_ignore_ascii_case("table") {
-                return "table".to_string();
-            }
-            if tag.eq_ignore_ascii_case("tbody") {
-                return "rowgroup".to_string();
-            }
-            if tag.eq_ignore_ascii_case("tfoot") {
-                return "rowgroup".to_string();
-            }
-            if tag.eq_ignore_ascii_case("thead") {
-                return "rowgroup".to_string();
-            }
-            if tag.eq_ignore_ascii_case("tr") {
-                return "row".to_string();
-            }
-            if tag.eq_ignore_ascii_case("th") {
-                return self.resolved_table_header_role(node);
-            }
-            if tag.eq_ignore_ascii_case("td") {
-                return self.resolved_table_data_cell_role(node);
-            }
-            if tag.eq_ignore_ascii_case("textarea") {
-                return "textbox".to_string();
-            }
-            if tag.eq_ignore_ascii_case("time") {
-                return "time".to_string();
-            }
-            if tag.eq_ignore_ascii_case("u") {
-                return "generic".to_string();
-            }
-            if tag.eq_ignore_ascii_case("select") {
-                return self.resolved_select_role(node);
-            }
-            if tag.eq_ignore_ascii_case("section") {
-                return self.resolved_section_role(node);
-            }
-            if tag.eq_ignore_ascii_case("search") {
-                return "search".to_string();
-            }
-            if (tag.eq_ignore_ascii_case("a")
-                || tag.eq_ignore_ascii_case("area")
-                || tag.eq_ignore_ascii_case("link"))
-                && self.dom.attr(node, "href").is_some()
-            {
+            "li" => return self.resolved_list_item_role(node),
+            "th" => return self.resolved_table_header_role(node),
+            "td" => return self.resolved_table_data_cell_role(node),
+            "select" => return self.resolved_select_role(node),
+            "section" => return self.resolved_section_role(node),
+            "a" | "area" | "link" if self.dom.attr(node, "href").is_some() => {
                 return "link".to_string();
             }
+            _ => {}
         }
-        String::new()
+
+        if Self::is_heading_tag(normalized_tag.as_str()) {
+            return "heading".to_string();
+        }
+
+        Self::resolved_static_role_for_tag(normalized_tag.as_str())
+            .unwrap_or_default()
+            .to_string()
     }
 
     pub(crate) fn footer_has_scoped_ancestor(&self, node: NodeId) -> bool {
@@ -651,6 +516,13 @@ impl Harness {
     pub(crate) fn is_mock_file_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_MOCK_FILE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_class_list_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_CLASS_LIST_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -1554,6 +1426,145 @@ impl Harness {
         ])
     }
 
+    fn input_files_type_error() -> Error {
+        Error::ScriptRuntime(
+            "TypeError: Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'."
+                .into(),
+        )
+    }
+
+    fn mock_file_from_input_assignment_value(&self, value: &Value) -> Result<MockFile> {
+        let Value::Object(entries) = value else {
+            return Err(Self::input_files_type_error());
+        };
+        let entries = entries.borrow();
+        if !Self::is_mock_file_object(&entries) {
+            return Err(Self::input_files_type_error());
+        }
+
+        let (bytes, blob_mime_type) =
+            match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
+                Some(Value::Blob(blob)) => {
+                    let blob = blob.borrow();
+                    (blob.bytes.clone(), blob.mime_type.clone())
+                }
+                _ => (Vec::new(), String::new()),
+            };
+
+        let explicit_mime_type = Self::object_get_entry(&entries, "type")
+            .map(|value| Self::normalize_blob_type(&value.as_string()))
+            .unwrap_or_default();
+        let mime_type = if explicit_mime_type.is_empty() {
+            blob_mime_type
+        } else {
+            explicit_mime_type
+        };
+        let size = Self::object_get_entry(&entries, "size")
+            .map(|value| Self::value_to_i64(&value).max(0))
+            .unwrap_or(bytes.len() as i64);
+        let file = MockFile {
+            name: Self::object_get_entry(&entries, "name")
+                .map(|value| value.as_string())
+                .unwrap_or_default(),
+            size,
+            mime_type,
+            last_modified: Self::object_get_entry(&entries, "lastModified")
+                .map(|value| Self::value_to_i64(&value))
+                .unwrap_or(0),
+            webkit_relative_path: Self::object_get_entry(&entries, "webkitRelativePath")
+                .map(|value| value.as_string())
+                .unwrap_or_default(),
+            bytes,
+        };
+        Ok(normalize_mock_file(&file))
+    }
+
+    pub(crate) fn mock_files_from_input_assignment_value(
+        &self,
+        value: &Value,
+    ) -> Result<Vec<MockFile>> {
+        if matches!(value, Value::Null | Value::Undefined) {
+            return Ok(Vec::new());
+        }
+
+        let file_values = match value {
+            Value::Array(values) => values.borrow().clone(),
+            Value::Object(entries) => {
+                let (is_mock_file, is_iterator, has_length) = {
+                    let entries_ref = entries.borrow();
+                    (
+                        Self::is_mock_file_object(&entries_ref),
+                        Self::is_iterator_object(&entries_ref),
+                        Self::object_get_entry(&entries_ref, "length").is_some(),
+                    )
+                };
+                if is_mock_file || (!is_iterator && !has_length) {
+                    return Err(Self::input_files_type_error());
+                }
+                self.array_like_values_from_value(value)
+                    .map_err(|_| Self::input_files_type_error())?
+            }
+            _ => self
+                .array_like_values_from_value(value)
+                .map_err(|_| Self::input_files_type_error())?,
+        };
+
+        let mut files = Vec::with_capacity(file_values.len());
+        for file_value in file_values {
+            files.push(self.mock_file_from_input_assignment_value(&file_value)?);
+        }
+        Ok(files)
+    }
+
+    fn new_class_list_method_callable(kind: &str) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String(kind.to_string()),
+        )])
+    }
+
+    pub(crate) fn new_class_list_value(node: NodeId) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CLASS_LIST_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (INTERNAL_CLASS_LIST_NODE_KEY.to_string(), Value::Node(node)),
+            (
+                "add".to_string(),
+                Self::new_class_list_method_callable("class_list_add"),
+            ),
+            (
+                "remove".to_string(),
+                Self::new_class_list_method_callable("class_list_remove"),
+            ),
+            (
+                "toggle".to_string(),
+                Self::new_class_list_method_callable("class_list_toggle"),
+            ),
+            (
+                "contains".to_string(),
+                Self::new_class_list_method_callable("class_list_contains"),
+            ),
+            (
+                "replace".to_string(),
+                Self::new_class_list_method_callable("class_list_replace"),
+            ),
+            (
+                "item".to_string(),
+                Self::new_class_list_method_callable("class_list_item"),
+            ),
+            (
+                "forEach".to_string(),
+                Self::new_class_list_method_callable("class_list_for_each"),
+            ),
+            (
+                "toString".to_string(),
+                Self::new_class_list_method_callable("class_list_to_string"),
+            ),
+        ])
+    }
+
     pub(crate) fn input_files_value(&self, node: NodeId) -> Result<Value> {
         let element = self
             .dom
@@ -1924,6 +1935,25 @@ impl Harness {
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("request_constructor".to_string()),
         )])
+    }
+
+    pub(crate) fn new_file_constructor_value() -> Value {
+        let prototype = Self::new_object_value(vec![]);
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("file_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
     }
 
     pub(crate) fn new_clipboard_item_constructor_value() -> Value {
@@ -2857,6 +2887,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_function_to_string_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("function_to_string".to_string()),
+        )])
+    }
+
     pub(crate) fn new_string_static_from_char_code_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -3026,6 +3063,7 @@ impl Harness {
                 "window_report_error_function" => "window_report_error_function",
                 "window_prompt_function" => "window_prompt_function",
                 "request_constructor" => "request_constructor",
+                "file_constructor" => "file_constructor",
                 "clipboard_item_constructor" => "clipboard_item_constructor",
                 "clipboard_write" => "clipboard_write",
                 "headers_constructor" => "headers_constructor",
@@ -3055,6 +3093,14 @@ impl Harness {
                 "css_style_sheet_replace_sync" => "css_style_sheet_replace_sync",
                 "css_style_sheet_insert_rule" => "css_style_sheet_insert_rule",
                 "computed_style_get_property_value" => "computed_style_get_property_value",
+                "class_list_add" => "class_list_add",
+                "class_list_remove" => "class_list_remove",
+                "class_list_toggle" => "class_list_toggle",
+                "class_list_contains" => "class_list_contains",
+                "class_list_replace" => "class_list_replace",
+                "class_list_item" => "class_list_item",
+                "class_list_for_each" => "class_list_for_each",
+                "class_list_to_string" => "class_list_to_string",
                 "worker_main_post_message" => "worker_main_post_message",
                 "worker_context_post_message" => "worker_context_post_message",
                 "worker_terminate" => "worker_terminate",
@@ -3077,6 +3123,7 @@ impl Harness {
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
+                "function_to_string" => "function_to_string",
                 "bound_function" => "bound_function",
                 _ => return None,
             }),
@@ -3126,1014 +3173,1302 @@ impl Harness {
         entries
     }
 
-    pub(crate) fn object_property_from_value(&mut self, value: &Value, key: &str) -> Result<Value> {
-        match value {
-            Value::Node(node) => {
-                let is_select = self
-                    .dom
-                    .tag_name(*node)
-                    .map(|tag| tag.eq_ignore_ascii_case("select"))
-                    .unwrap_or(false);
-                let is_input = self
-                    .dom
-                    .tag_name(*node)
-                    .map(|tag| tag.eq_ignore_ascii_case("input"))
-                    .unwrap_or(false);
-                let is_form_associated_control = is_form_control(&self.dom, *node);
-                let is_labelable_control = self.is_labelable_control(*node);
-                let is_col_or_colgroup = self
-                    .dom
-                    .tag_name(*node)
-                    .map(|tag| {
-                        tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
-                    })
-                    .unwrap_or(false);
-                let select_options = || self.select_option_nodes(*node);
+    fn is_to_string_tag_property_key(&self, key: &str) -> bool {
+        Self::symbol_id_from_storage_key(key)
+            .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+            .and_then(|symbol| symbol.description.as_deref())
+            .is_some_and(|description| description == "Symbol.toStringTag")
+            || key == "Symbol.toStringTag"
+    }
 
-                if is_select {
-                    if let Ok(index) = key.parse::<usize>() {
-                        return Ok(select_options()
-                            .get(index)
-                            .copied()
-                            .map(Value::Node)
-                            .unwrap_or(Value::Undefined));
+    fn function_own_property_value(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+        include_to_string: bool,
+    ) -> Value {
+        match key {
+            "constructor" => {
+                if function.is_generator {
+                    if function.is_async {
+                        self.new_async_generator_function_constructor_value()
+                    } else {
+                        self.new_generator_function_constructor_value()
                     }
-                }
-
-                match key {
-                    "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
-                    "nodeName" => Ok(Value::String(self.node_name(*node))),
-                    "nodeValue" => Ok(self.node_value(*node)),
-                    "ownerDocument" => Ok(self
-                        .node_owner_document(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "parentNode" => Ok(self
-                        .dom
-                        .parent(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "parentElement" => Ok(self
-                        .node_parent_element(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "nextSibling" => Ok(self
-                        .node_next_sibling(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "previousSibling" => Ok(self
-                        .node_previous_sibling(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "isConnected" => Ok(Value::Bool(self.dom.is_connected(*node))),
-                    "childNodes" => Ok(self.child_nodes_live_list_value(*node)),
-                    "attributes" => {
-                        if self.dom.element(*node).is_some() {
-                            Ok(self.named_node_map_live_value(*node))
-                        } else {
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    "children" => Ok(self.child_elements_live_list_value(*node)),
-                    "childElementCount" => {
-                        Ok(Value::Number(self.dom.child_element_count(*node) as i64))
-                    }
-                    "firstChild" => Ok(self.dom.nodes[node.0]
-                        .children
-                        .first()
-                        .copied()
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "lastChild" => Ok(self.dom.nodes[node.0]
-                        .children
-                        .last()
-                        .copied()
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "firstElementChild" => Ok(self
-                        .dom
-                        .first_element_child(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "lastElementChild" => Ok(self
-                        .dom
-                        .last_element_child(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "nextElementSibling" => Ok(self
-                        .dom
-                        .next_element_sibling(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "previousElementSibling" => Ok(self
-                        .dom
-                        .previous_element_sibling(*node)
-                        .map(Value::Node)
-                        .unwrap_or(Value::Null)),
-                    "shadowRoot" => Ok(self.shadow_root_property_value(*node)),
-                    "content"
-                        if self
-                            .dom
-                            .tag_name(*node)
-                            .is_some_and(|tag| tag.eq_ignore_ascii_case("template")) =>
-                    {
-                        self.template_content_fragment_value(*node)
-                    }
-                    "textContent" => Ok(self.node_text_content_value(*node)),
-                    "innerText" => Ok(Value::String(self.dom.text_content(*node))),
-                    "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
-                    "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
-                    "value" => Ok(Value::String(self.dom.value(*node)?)),
-                    "files" => self.input_files_value(*node),
-                    "valueAsNumber" => Ok(Self::number_value(self.input_value_as_number(*node)?)),
-                    "valueAsDate" => Ok(self
-                        .input_value_as_date_ms(*node)?
-                        .map(Self::new_date_value)
-                        .unwrap_or(Value::Null)),
-                    "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
-                    "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
-                    "required" => Ok(Value::Bool(self.dom.required(*node))),
-                    "multiple" => {
-                        if is_select || is_input {
-                            Ok(Value::Bool(self.dom.attr(*node, "multiple").is_some()))
-                        } else {
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
-                    "autocomplete" => Ok(Value::String(
-                        self.dom.attr(*node, "autocomplete").unwrap_or_default(),
-                    )),
-                    "form" => {
-                        if is_form_associated_control {
-                            Ok(self
-                                .resolve_form_for_submit(*node)
-                                .map(Value::Node)
-                                .unwrap_or(Value::Null))
-                        } else {
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    "labels" => {
-                        if is_labelable_control {
-                            Ok(Self::new_static_node_list_value(
-                                self.labels_for_control_node(*node),
-                            ))
-                        } else {
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    "id" => Ok(Value::String(
-                        self.dom.attr(*node, "id").unwrap_or_default(),
-                    )),
-                    "name" => Ok(Value::String(
-                        self.dom.attr(*node, "name").unwrap_or_default(),
-                    )),
-                    "lang" => Ok(Value::String(
-                        self.dom.attr(*node, "lang").unwrap_or_default(),
-                    )),
-                    "dir" => Ok(Value::String(self.resolved_dir_for_node(*node))),
-                    "accessKey" | "accesskey" => Ok(Value::String(
-                        self.dom.attr(*node, "accesskey").unwrap_or_default(),
-                    )),
-                    "autocapitalize" => Ok(Value::String(
-                        self.dom.attr(*node, "autocapitalize").unwrap_or_default(),
-                    )),
-                    "autocorrect" => Ok(Value::String(
-                        self.dom.attr(*node, "autocorrect").unwrap_or_default(),
-                    )),
-                    "contentEditable" | "contenteditable" => Ok(Value::String(
-                        self.dom
-                            .attr(*node, "contenteditable")
-                            .unwrap_or_else(|| "inherit".to_string()),
-                    )),
-                    "draggable" => Ok(Value::Bool(
-                        self.dom
-                            .attr(*node, "draggable")
-                            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
-                    )),
-                    "enterKeyHint" | "enterkeyhint" => Ok(Value::String(
-                        self.dom.attr(*node, "enterkeyhint").unwrap_or_default(),
-                    )),
-                    "inert" => Ok(Value::Bool(self.dom.has_attr(*node, "inert")?)),
-                    "inputMode" | "inputmode" => Ok(Value::String(
-                        self.dom.attr(*node, "inputmode").unwrap_or_default(),
-                    )),
-                    "nonce" => Ok(Value::String(
-                        self.dom.attr(*node, "nonce").unwrap_or_default(),
-                    )),
-                    "popover" => Ok(Value::String(
-                        self.dom.attr(*node, "popover").unwrap_or_default(),
-                    )),
-                    "spellcheck" => Ok(Value::Bool(
-                        self.dom
-                            .attr(*node, "spellcheck")
-                            .is_some_and(|value| !value.eq_ignore_ascii_case("false")),
-                    )),
-                    "tabIndex" | "tabindex" => Ok(Value::Number(
-                        self.dom
-                            .attr(*node, "tabindex")
-                            .and_then(|raw| raw.trim().parse::<i64>().ok())
-                            .unwrap_or(-1),
-                    )),
-                    "translate" => Ok(Value::Bool(
-                        !self
-                            .dom
-                            .attr(*node, "translate")
-                            .is_some_and(|value| value.eq_ignore_ascii_case("no")),
-                    )),
-                    "cite" => Ok(Value::String(
-                        self.dom.attr(*node, "cite").unwrap_or_default(),
-                    )),
-                    "dateTime" | "datetime" => Ok(Value::String(
-                        self.dom.attr(*node, "datetime").unwrap_or_default(),
-                    )),
-                    "clear" => Ok(Value::String(
-                        self.dom.attr(*node, "clear").unwrap_or_default(),
-                    )),
-                    "align" => Ok(Value::String(
-                        self.dom.attr(*node, "align").unwrap_or_default(),
-                    )),
-                    "aLink" | "alink" => Ok(Value::String(
-                        self.dom.attr(*node, "alink").unwrap_or_default(),
-                    )),
-                    "background" => Ok(Value::String(
-                        self.dom.attr(*node, "background").unwrap_or_default(),
-                    )),
-                    "bgColor" | "bgcolor" => Ok(Value::String(
-                        self.dom.attr(*node, "bgcolor").unwrap_or_default(),
-                    )),
-                    "bottomMargin" | "bottommargin" => Ok(Value::String(
-                        self.dom.attr(*node, "bottommargin").unwrap_or_default(),
-                    )),
-                    "leftMargin" | "leftmargin" => Ok(Value::String(
-                        self.dom.attr(*node, "leftmargin").unwrap_or_default(),
-                    )),
-                    "link" => Ok(Value::String(
-                        self.dom.attr(*node, "link").unwrap_or_default(),
-                    )),
-                    "rightMargin" | "rightmargin" => Ok(Value::String(
-                        self.dom.attr(*node, "rightmargin").unwrap_or_default(),
-                    )),
-                    "text" => Ok(Value::String(
-                        if self
-                            .dom
-                            .tag_name(*node)
-                            .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
-                        {
-                            self.dom.attr(*node, "text").unwrap_or_default()
-                        } else {
-                            self.dom.text_content(*node)
-                        },
-                    )),
-                    "topMargin" | "topmargin" => Ok(Value::String(
-                        self.dom.attr(*node, "topmargin").unwrap_or_default(),
-                    )),
-                    "vLink" | "vlink" => Ok(Value::String(
-                        self.dom.attr(*node, "vlink").unwrap_or_default(),
-                    )),
-                    "title" => Ok(Value::String(
-                        self.dom.attr(*node, "title").unwrap_or_default(),
-                    )),
-                    "span" if is_col_or_colgroup => Ok(Value::Number(self.col_span_value(*node))),
-                    "type" => {
-                        if is_select {
-                            Ok(Value::String(self.select_type_property_value(*node)))
-                        } else if self
-                            .dom
-                            .tag_name(*node)
-                            .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
-                        {
-                            let normalized = self
-                                .dom
-                                .attr(*node, "type")
-                                .map(|value| value.trim().to_string())
-                                .filter(|value| !value.is_empty())
-                                .map(|value| {
-                                    if value.eq_ignore_ascii_case("reset") {
-                                        "reset".to_string()
-                                    } else if value.eq_ignore_ascii_case("button") {
-                                        "button".to_string()
-                                    } else {
-                                        "submit".to_string()
-                                    }
-                                })
-                                .unwrap_or_else(|| "submit".to_string());
-                            Ok(Value::String(normalized))
-                        } else {
-                            Ok(Value::String(
-                                self.dom.attr(*node, "type").unwrap_or_default(),
-                            ))
-                        }
-                    }
-                    "kind" if self.is_track_element(*node) => {
-                        Ok(Value::String(self.normalized_track_kind(*node)))
-                    }
-                    "srclang" | "srcLang" if self.is_track_element(*node) => Ok(Value::String(
-                        self.dom.attr(*node, "srclang").unwrap_or_default(),
-                    )),
-                    "label" if self.is_track_element(*node) => Ok(Value::String(
-                        self.dom.attr(*node, "label").unwrap_or_default(),
-                    )),
-                    "default" if self.is_track_element(*node) => {
-                        Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
-                    }
-                    "disablePictureInPicture" | "disablepictureinpicture" => Ok(Value::Bool(
-                        self.dom.attr(*node, "disablepictureinpicture").is_some(),
-                    )),
-                    "media" => Ok(Value::String(
-                        self.dom.attr(*node, "media").unwrap_or_default(),
-                    )),
-                    "playsInline" | "playsinline" => {
-                        Ok(Value::Bool(self.dom.attr(*node, "playsinline").is_some()))
-                    }
-                    "poster" => Ok(Value::String(
-                        self.dom
-                            .attr(*node, "poster")
-                            .map(|raw| self.resolve_document_target_url(&raw))
-                            .unwrap_or_default(),
-                    )),
-                    "sizes" => Ok(Value::String(
-                        self.dom.attr(*node, "sizes").unwrap_or_default(),
-                    )),
-                    "srcset" | "srcSet" => Ok(Value::String(
-                        self.dom.attr(*node, "srcset").unwrap_or_default(),
-                    )),
-                    "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
-                    "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
-                    "tagName" => Ok(Value::String(self.element_tag_name(*node))),
-                    "localName" => Ok(Value::String(
-                        self.dom
-                            .tag_name(*node)
-                            .map(|name| {
-                                name.rsplit_once(':')
-                                    .map(|(_, local)| local)
-                                    .unwrap_or(name)
-                                    .to_ascii_lowercase()
-                            })
-                            .unwrap_or_default(),
-                    )),
-                    "namespaceURI" => Ok(self
-                        .dom
-                        .element(*node)
-                        .and_then(|element| element.namespace_uri.clone())
-                        .map(Value::String)
-                        .unwrap_or(Value::Null)),
-                    "prefix" => Ok(self
-                        .dom
-                        .tag_name(*node)
-                        .and_then(|name| name.split_once(':').map(|(prefix, _)| prefix))
-                        .map(|prefix| Value::String(prefix.to_string()))
-                        .unwrap_or(Value::Null)),
-                    "className" => Ok(Value::String(
-                        self.dom.attr(*node, "class").unwrap_or_default(),
-                    )),
-                    "slot" => Ok(Value::String(
-                        self.dom.attr(*node, "slot").unwrap_or_default(),
-                    )),
-                    "role" => Ok(self
-                        .dom
-                        .attr(*node, "role")
-                        .map(Value::String)
-                        .unwrap_or(Value::Null)),
-                    "baseURI" => Ok(Value::String(self.document_base_url())),
-                    "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
-                    "options" => {
-                        if !is_select {
-                            return Ok(Value::Undefined);
-                        }
-                        Ok(Self::new_static_node_list_value(select_options()))
-                    }
-                    "selectedIndex" => {
-                        if !is_select {
-                            return Ok(Value::Undefined);
-                        }
-                        Ok(Value::Number(self.select_selected_index_value(*node)))
-                    }
-                    "selectedOptions" => {
-                        if !is_select {
-                            return Ok(Value::Undefined);
-                        }
-                        Ok(Self::new_static_node_list_value(
-                            self.select_selected_option_nodes(*node),
-                        ))
-                    }
-                    "size" => {
-                        if !is_select {
-                            return Ok(Value::Undefined);
-                        }
-                        Ok(Value::Number(self.select_size_property_value(*node)))
-                    }
-                    "validationMessage" => {
-                        let validity = self.compute_input_validity(*node)?;
-                        if validity.custom_error {
-                            Ok(Value::String(self.dom.custom_validity_message(*node)?))
-                        } else {
-                            Ok(Value::String(String::new()))
-                        }
-                    }
-                    "validity" => {
-                        let validity = self.compute_input_validity(*node)?;
-                        Ok(Self::input_validity_to_value(&validity))
-                    }
-                    "willValidate" => {
-                        let will_validate = if is_select {
-                            self.select_will_validate(*node)
-                        } else if self
-                            .dom
-                            .tag_name(*node)
-                            .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
-                        {
-                            !self.is_effectively_disabled(*node)
-                        } else if self
-                            .dom
-                            .tag_name(*node)
-                            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
-                        {
-                            Self::input_participates_in_constraint_validation(
-                                self.normalized_input_type(*node).as_str(),
-                            ) && !self.is_effectively_disabled(*node)
-                        } else {
-                            false
-                        };
-                        Ok(Value::Bool(will_validate))
-                    }
-                    "length" => {
-                        if !is_select {
-                            return Ok(Value::Undefined);
-                        }
-                        Ok(Value::Number(select_options().len() as i64))
-                    }
-                    _ if key.starts_with("on") => Ok(self
-                        .dom_runtime
-                        .node_expando_props
-                        .get(&(*node, key.to_string()))
-                        .cloned()
-                        .unwrap_or(Value::Null)),
-                    _ => Ok(self
-                        .dom_runtime
-                        .node_expando_props
-                        .get(&(*node, key.to_string()))
-                        .cloned()
-                        .unwrap_or(Value::Undefined)),
+                } else {
+                    Value::Undefined
                 }
             }
-            Value::String(text) => {
-                if key == "length" {
-                    Ok(Value::Number(text.chars().count() as i64))
-                } else if key == "constructor" {
-                    Ok(Value::StringConstructor)
-                } else if let Ok(index) = key.parse::<usize>() {
-                    Ok(text
-                        .chars()
-                        .nth(index)
-                        .map(|ch| Value::String(ch.to_string()))
-                        .unwrap_or(Value::Undefined))
+            "prototype" => {
+                if function.is_arrow || function.is_method {
+                    Value::Undefined
+                } else {
+                    Value::Object(function.prototype_object.clone())
+                }
+            }
+            "length" => {
+                let mut length = 0_i64;
+                for param in &function.handler.params {
+                    if param.is_rest || param.default.is_some() {
+                        break;
+                    }
+                    length += 1;
+                }
+                Value::Number(length)
+            }
+            "call" => Self::new_function_call_callable(),
+            "apply" => Self::new_function_apply_callable(),
+            "bind" => Self::new_function_bind_callable(),
+            "toString" if include_to_string => Self::new_function_to_string_callable(),
+            _ => Value::Undefined,
+        }
+    }
+
+    fn object_property_from_string_value(text: &str, key: &str) -> Value {
+        if key == "length" {
+            Value::Number(text.chars().count() as i64)
+        } else if key == "constructor" {
+            Value::StringConstructor
+        } else if let Ok(index) = key.parse::<usize>() {
+            text.chars()
+                .nth(index)
+                .map(|ch| Value::String(ch.to_string()))
+                .unwrap_or(Value::Undefined)
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_array_value(values: &Rc<RefCell<ArrayValue>>, key: &str) -> Value {
+        let values = values.borrow();
+        if key == "length" {
+            Value::Number(values.len() as i64)
+        } else if let Ok(index) = key.parse::<usize>() {
+            values.get(index).cloned().unwrap_or(Value::Undefined)
+        } else if let Some(value) = Self::object_get_entry(&values.properties, key) {
+            value
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_node_list_value(
+        &self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        key: &str,
+    ) -> Value {
+        if key == "length" {
+            Value::Number(self.node_list_len(nodes) as i64)
+        } else if let Ok(index) = key.parse::<usize>() {
+            self.node_list_get(nodes, index)
+                .map(Value::Node)
+                .unwrap_or(Value::Undefined)
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_typed_array_value(
+        &self,
+        values: &Rc<RefCell<TypedArrayValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        let snapshot = self.typed_array_snapshot(values)?;
+        if key == "length" {
+            Ok(Value::Number(snapshot.len() as i64))
+        } else if let Ok(index) = key.parse::<usize>() {
+            Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
+        } else {
+            Ok(Value::Undefined)
+        }
+    }
+
+    fn object_property_from_promise_value(promise: &Rc<RefCell<PromiseValue>>, key: &str) -> Value {
+        if key == "constructor" {
+            return Value::PromiseConstructor;
+        }
+        let promise = promise.borrow();
+        if key == "status" {
+            let status = match &promise.state {
+                PromiseState::Pending => "pending",
+                PromiseState::Fulfilled(_) => "fulfilled",
+                PromiseState::Rejected(_) => "rejected",
+            };
+            Value::String(status.to_string())
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_map_value(&self, map: &Rc<RefCell<MapValue>>, key: &str) -> Value {
+        let map = map.borrow();
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if key == "size" {
+            Value::Number(map.entries.len() as i64)
+        } else if key_is_to_string_tag {
+            Value::String("Map".to_string())
+        } else if key == "constructor" {
+            Value::MapConstructor
+        } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
+            value
+        } else if Self::is_map_method_name(key) {
+            Self::new_builtin_placeholder_function()
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_weak_map_value(
+        &self,
+        weak_map: &Rc<RefCell<WeakMapValue>>,
+        key: &str,
+    ) -> Value {
+        let weak_map = weak_map.borrow();
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if key_is_to_string_tag {
+            Value::String("WeakMap".to_string())
+        } else if key == "constructor" {
+            Value::WeakMapConstructor
+        } else if let Some(value) = Self::object_get_entry(&weak_map.properties, key) {
+            value
+        } else if Self::is_weak_map_method_name(key) {
+            Self::new_builtin_placeholder_function()
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_weak_set_value(
+        &self,
+        weak_set: &Rc<RefCell<WeakSetValue>>,
+        key: &str,
+    ) -> Value {
+        let weak_set = weak_set.borrow();
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if key_is_to_string_tag {
+            Value::String("WeakSet".to_string())
+        } else if key == "constructor" {
+            Value::WeakSetConstructor
+        } else if let Some(value) = Self::object_get_entry(&weak_set.properties, key) {
+            value
+        } else if Self::is_weak_set_method_name(key) {
+            Self::new_builtin_placeholder_function()
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_set_value(&self, set: &Rc<RefCell<SetValue>>, key: &str) -> Value {
+        let set = set.borrow();
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if key == "size" {
+            Value::Number(set.values.len() as i64)
+        } else if key_is_to_string_tag {
+            Value::String("Set".to_string())
+        } else if key == "constructor" {
+            Value::SetConstructor
+        } else {
+            Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined)
+        }
+    }
+
+    fn object_property_from_blob_value(blob: &Rc<RefCell<BlobValue>>, key: &str) -> Value {
+        let blob = blob.borrow();
+        match key {
+            "size" => Value::Number(blob.bytes.len() as i64),
+            "type" => Value::String(blob.mime_type.clone()),
+            "constructor" => Value::BlobConstructor,
+            _ => Value::Undefined,
+        }
+    }
+
+    fn object_property_from_array_buffer_value(key: &str) -> Value {
+        if key == "constructor" {
+            Value::ArrayBufferConstructor
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_symbol_value(symbol: &Rc<SymbolValue>, key: &str) -> Value {
+        match key {
+            "description" => symbol
+                .description
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Undefined),
+            "constructor" => Value::SymbolConstructor,
+            _ => Value::Undefined,
+        }
+    }
+
+    fn object_property_from_regexp_value(regex: &Rc<RefCell<RegexValue>>, key: &str) -> Value {
+        let regex = regex.borrow();
+        match key {
+            "source" => Value::String(regex.source.clone()),
+            "flags" => Value::String(regex.flags.clone()),
+            "global" => Value::Bool(regex.global),
+            "ignoreCase" => Value::Bool(regex.ignore_case),
+            "multiline" => Value::Bool(regex.multiline),
+            "dotAll" => Value::Bool(regex.dot_all),
+            "sticky" => Value::Bool(regex.sticky),
+            "hasIndices" => Value::Bool(regex.has_indices),
+            "unicode" => Value::Bool(regex.unicode),
+            "unicodeSets" => Value::Bool(regex.unicode_sets),
+            "lastIndex" => Value::Number(regex.last_index as i64),
+            "constructor" => Value::RegExpConstructor,
+            _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
+        }
+    }
+
+    fn object_property_from_node_value(&mut self, node: &NodeId, key: &str) -> Result<Value> {
+        let is_canvas = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("canvas"))
+            .unwrap_or(false);
+        let is_select = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("select"))
+            .unwrap_or(false);
+        let is_input = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("input"))
+            .unwrap_or(false);
+        let is_form_associated_control = is_form_control(&self.dom, *node);
+        let is_labelable_control = self.is_labelable_control(*node);
+        let is_col_or_colgroup = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup"))
+            .unwrap_or(false);
+        let select_options = || self.select_option_nodes(*node);
+
+        if is_select {
+            if let Ok(index) = key.parse::<usize>() {
+                return Ok(select_options()
+                    .get(index)
+                    .copied()
+                    .map(Value::Node)
+                    .unwrap_or(Value::Undefined));
+            }
+        }
+
+        match key {
+            "nodeType" => Ok(Value::Number(self.node_type_number(*node))),
+            "nodeName" => Ok(Value::String(self.node_name(*node))),
+            "nodeValue" => Ok(self.node_value(*node)),
+            "ownerDocument" => Ok(self
+                .node_owner_document(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "parentNode" => Ok(self
+                .dom
+                .parent(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "parentElement" => Ok(self
+                .node_parent_element(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "nextSibling" => Ok(self
+                .node_next_sibling(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "previousSibling" => Ok(self
+                .node_previous_sibling(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "isConnected" => Ok(Value::Bool(self.dom.is_connected(*node))),
+            "childNodes" => Ok(self.child_nodes_live_list_value(*node)),
+            "attributes" => {
+                if self.dom.element(*node).is_some() {
+                    Ok(self.named_node_map_live_value(*node))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
-            Value::Array(values) => {
-                let values = values.borrow();
-                if key == "length" {
-                    Ok(Value::Number(values.len() as i64))
-                } else if let Ok(index) = key.parse::<usize>() {
-                    Ok(values.get(index).cloned().unwrap_or(Value::Undefined))
-                } else if let Some(value) = Self::object_get_entry(&values.properties, key) {
-                    Ok(value)
+            "children" => Ok(self.child_elements_live_list_value(*node)),
+            "childElementCount" => Ok(Value::Number(self.dom.child_element_count(*node) as i64)),
+            "firstChild" => Ok(self.dom.nodes[node.0]
+                .children
+                .first()
+                .copied()
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "lastChild" => Ok(self.dom.nodes[node.0]
+                .children
+                .last()
+                .copied()
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "firstElementChild" => Ok(self
+                .dom
+                .first_element_child(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "lastElementChild" => Ok(self
+                .dom
+                .last_element_child(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "nextElementSibling" => Ok(self
+                .dom
+                .next_element_sibling(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "previousElementSibling" => Ok(self
+                .dom
+                .previous_element_sibling(*node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "shadowRoot" => Ok(self.shadow_root_property_value(*node)),
+            "content"
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("template")) =>
+            {
+                self.template_content_fragment_value(*node)
+            }
+            "textContent" => Ok(self.node_text_content_value(*node)),
+            "innerText" => Ok(Value::String(self.dom.text_content(*node))),
+            "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
+            "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
+            "value" => Ok(Value::String(self.dom.value(*node)?)),
+            "files" => self.input_files_value(*node),
+            "valueAsNumber" => Ok(Self::number_value(self.input_value_as_number(*node)?)),
+            "valueAsDate" => Ok(self
+                .input_value_as_date_ms(*node)?
+                .map(Self::new_date_value)
+                .unwrap_or(Value::Null)),
+            "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
+            "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
+            "required" => Ok(Value::Bool(self.dom.required(*node))),
+            "multiple" => {
+                if is_select || is_input {
+                    Ok(Value::Bool(self.dom.attr(*node, "multiple").is_some()))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
-            Value::NodeList(nodes) => {
-                if key == "length" {
-                    Ok(Value::Number(self.node_list_len(nodes) as i64))
-                } else if let Ok(index) = key.parse::<usize>() {
+            "readonly" | "readOnly" => Ok(Value::Bool(self.dom.readonly(*node))),
+            "autocomplete" => Ok(Value::String(
+                self.dom.attr(*node, "autocomplete").unwrap_or_default(),
+            )),
+            "form" => {
+                if is_form_associated_control {
                     Ok(self
-                        .node_list_get(nodes, index)
+                        .resolve_form_for_submit(*node)
                         .map(Value::Node)
-                        .unwrap_or(Value::Undefined))
+                        .unwrap_or(Value::Null))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
-            Value::TypedArray(values) => {
-                let snapshot = self.typed_array_snapshot(values)?;
-                if key == "length" {
-                    Ok(Value::Number(snapshot.len() as i64))
-                } else if let Ok(index) = key.parse::<usize>() {
-                    Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
+            "labels" => {
+                if is_labelable_control {
+                    Ok(Self::new_static_node_list_value(
+                        self.labels_for_control_node(*node),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
-            Value::Object(entries) => {
-                let entries = entries.borrow();
-                if Self::is_attr_object(&entries) {
-                    let value = match key {
-                        "ownerElement" => {
-                            Self::object_get_entry(&entries, "ownerElement").unwrap_or(Value::Null)
-                        }
-                        "name" => Self::object_get_entry(&entries, "name")
-                            .unwrap_or_else(|| Value::String(String::new())),
-                        "value" => Self::object_get_entry(&entries, "value")
-                            .unwrap_or_else(|| Value::String(String::new())),
-                        "nodeType" => Value::Number(2),
-                        "nodeName" => Self::object_get_entry(&entries, "name")
-                            .unwrap_or_else(|| Value::String(String::new())),
-                        "nodeValue" => Self::object_get_entry(&entries, "value")
-                            .unwrap_or_else(|| Value::String(String::new())),
-                        "parentNode" | "parentElement" | "previousSibling" | "nextSibling" => {
-                            Value::Null
-                        }
-                        _ => Value::Undefined,
-                    };
-                    if !matches!(value, Value::Undefined) {
-                        return Ok(value);
-                    }
-                }
-                if let Some(value) =
-                    self.computed_style_object_property_from_entries(&entries, key)?
+            "id" => Ok(Value::String(
+                self.dom.attr(*node, "id").unwrap_or_default(),
+            )),
+            "name" => Ok(Value::String(
+                self.dom.attr(*node, "name").unwrap_or_default(),
+            )),
+            "lang" => Ok(Value::String(
+                self.dom.attr(*node, "lang").unwrap_or_default(),
+            )),
+            "dir" => Ok(Value::String(self.resolved_dir_for_node(*node))),
+            "accessKey" | "accesskey" => Ok(Value::String(
+                self.dom.attr(*node, "accesskey").unwrap_or_default(),
+            )),
+            "autocapitalize" => Ok(Value::String(
+                self.dom.attr(*node, "autocapitalize").unwrap_or_default(),
+            )),
+            "autocorrect" => Ok(Value::String(
+                self.dom.attr(*node, "autocorrect").unwrap_or_default(),
+            )),
+            "contentEditable" | "contenteditable" => Ok(Value::String(
+                self.dom
+                    .attr(*node, "contenteditable")
+                    .unwrap_or_else(|| "inherit".to_string()),
+            )),
+            "draggable" => Ok(Value::Bool(
+                self.dom
+                    .attr(*node, "draggable")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+            )),
+            "enterKeyHint" | "enterkeyhint" => Ok(Value::String(
+                self.dom.attr(*node, "enterkeyhint").unwrap_or_default(),
+            )),
+            "inert" => Ok(Value::Bool(self.dom.has_attr(*node, "inert")?)),
+            "inputMode" | "inputmode" => Ok(Value::String(
+                self.dom.attr(*node, "inputmode").unwrap_or_default(),
+            )),
+            "nonce" => Ok(Value::String(
+                self.dom.attr(*node, "nonce").unwrap_or_default(),
+            )),
+            "popover" => Ok(Value::String(
+                self.dom.attr(*node, "popover").unwrap_or_default(),
+            )),
+            "spellcheck" => Ok(Value::Bool(
+                self.dom
+                    .attr(*node, "spellcheck")
+                    .is_some_and(|value| !value.eq_ignore_ascii_case("false")),
+            )),
+            "tabIndex" | "tabindex" => Ok(Value::Number(
+                self.dom
+                    .attr(*node, "tabindex")
+                    .and_then(|raw| raw.trim().parse::<i64>().ok())
+                    .unwrap_or(-1),
+            )),
+            "translate" => Ok(Value::Bool(
+                !self
+                    .dom
+                    .attr(*node, "translate")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("no")),
+            )),
+            "cite" => Ok(Value::String(
+                self.dom.attr(*node, "cite").unwrap_or_default(),
+            )),
+            "dateTime" | "datetime" => Ok(Value::String(
+                self.dom.attr(*node, "datetime").unwrap_or_default(),
+            )),
+            "clear" => Ok(Value::String(
+                self.dom.attr(*node, "clear").unwrap_or_default(),
+            )),
+            "align" => Ok(Value::String(
+                self.dom.attr(*node, "align").unwrap_or_default(),
+            )),
+            "aLink" | "alink" => Ok(Value::String(
+                self.dom.attr(*node, "alink").unwrap_or_default(),
+            )),
+            "background" => Ok(Value::String(
+                self.dom.attr(*node, "background").unwrap_or_default(),
+            )),
+            "bgColor" | "bgcolor" => Ok(Value::String(
+                self.dom.attr(*node, "bgcolor").unwrap_or_default(),
+            )),
+            "bottomMargin" | "bottommargin" => Ok(Value::String(
+                self.dom.attr(*node, "bottommargin").unwrap_or_default(),
+            )),
+            "leftMargin" | "leftmargin" => Ok(Value::String(
+                self.dom.attr(*node, "leftmargin").unwrap_or_default(),
+            )),
+            "link" => Ok(Value::String(
+                self.dom.attr(*node, "link").unwrap_or_default(),
+            )),
+            "rightMargin" | "rightmargin" => Ok(Value::String(
+                self.dom.attr(*node, "rightmargin").unwrap_or_default(),
+            )),
+            "text" => Ok(Value::String(
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
                 {
-                    return Ok(value);
-                }
-                if let Some(value) = self.fetch_response_property_from_entries(&entries, key) {
-                    return Ok(value);
-                }
-                if let Some(value) = self.fetch_request_property_from_entries(&entries, key) {
-                    return Ok(value);
-                }
-                if let Some(value) = self.headers_property_from_entries(&entries, key) {
-                    return Ok(value);
-                }
-                if matches!(
-                    Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                ) {
-                    if let Some(value) = self.dom_parser_object_property(&entries, key) {
-                        return Ok(value);
-                    }
-                }
-                if matches!(
-                    Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                ) {
-                    if let Some(value) =
-                        self.parsed_document_property_from_entries(&entries, key)?
-                    {
-                        return Ok(value);
-                    }
-                }
-                if matches!(
-                    Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                ) {
-                    if let Some(value) = self.tree_walker_property_from_entries(&entries, key)? {
-                        return Ok(value);
-                    }
-                }
-                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
-                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
-                    .and_then(|symbol| symbol.description.as_deref())
-                    .is_some_and(|description| description == "Symbol.toStringTag")
-                    || key == "Symbol.toStringTag";
-                if Self::is_match_media_object(&entries) {
-                    let query = Self::object_get_entry(&entries, INTERNAL_MATCH_MEDIA_QUERY_KEY)
-                        .or_else(|| Self::object_get_entry(&entries, "media"))
-                        .map(|value| value.as_string())
-                        .unwrap_or_default();
-                    if key == "matches" {
-                        let matches = self
-                            .platform_mocks
-                            .match_media_mocks
-                            .get(&query)
-                            .copied()
-                            .unwrap_or(self.platform_mocks.default_match_media_matches);
-                        return Ok(Value::Bool(matches));
-                    }
-                    if key == "media" {
-                        return Ok(Value::String(query));
-                    }
-                    if key_is_to_string_tag {
-                        return Ok(Value::String("MediaQueryList".to_string()));
-                    }
-                }
-                if Self::is_named_node_map_object(&entries) {
-                    let owner = Self::named_node_map_owner_node(&entries)
-                        .filter(|node| self.dom.element(*node).is_some());
-                    let attrs = owner
-                        .map(|owner_node| self.named_node_map_entries(owner_node))
-                        .unwrap_or_default();
-                    if key == "length" {
-                        return Ok(Value::Number(attrs.len() as i64));
-                    }
-                    if let Ok(index) = key.parse::<usize>() {
-                        let value = attrs
-                            .get(index)
-                            .and_then(|(name, value)| {
-                                owner.map(|owner_node| {
-                                    Self::new_attr_object_value(name, value, Some(owner_node))
-                                })
-                            })
-                            .unwrap_or(Value::Undefined);
-                        return Ok(value);
-                    }
-                    if let Some(owner_node) = owner {
-                        if let Some((name, value)) = attrs.iter().find(|(name, _)| name == key) {
-                            return Ok(Self::new_attr_object_value(name, value, Some(owner_node)));
-                        }
-                    }
-                }
-                if let Some(text) = Self::string_wrapper_value_from_object(&entries) {
-                    if key == "length" {
-                        return Ok(Value::Number(text.chars().count() as i64));
-                    }
-                    if key == "constructor" {
-                        return Ok(Value::StringConstructor);
-                    }
-                    if let Ok(index) = key.parse::<usize>() {
-                        return Ok(text
-                            .chars()
-                            .nth(index)
-                            .map(|ch| Value::String(ch.to_string()))
-                            .unwrap_or(Value::Undefined));
-                    }
-                }
-                if matches!(key, "call" | "apply" | "bind")
-                    && Self::callable_kind_from_value(value).is_some()
+                    self.dom.attr(*node, "text").unwrap_or_default()
+                } else {
+                    self.dom.text_content(*node)
+                },
+            )),
+            "topMargin" | "topmargin" => Ok(Value::String(
+                self.dom.attr(*node, "topmargin").unwrap_or_default(),
+            )),
+            "vLink" | "vlink" => Ok(Value::String(
+                self.dom.attr(*node, "vlink").unwrap_or_default(),
+            )),
+            "title" => Ok(Value::String(
+                self.dom.attr(*node, "title").unwrap_or_default(),
+            )),
+            "span" if is_col_or_colgroup => Ok(Value::Number(self.col_span_value(*node))),
+            "type" => {
+                if is_select {
+                    Ok(Value::String(self.select_type_property_value(*node)))
+                } else if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
                 {
-                    if let Some(existing) = Self::object_get_entry(&entries, key) {
-                        return Ok(existing);
-                    }
-                    let function_method = match key {
-                        "call" => Self::new_function_call_callable(),
-                        "apply" => Self::new_function_apply_callable(),
-                        _ => Self::new_function_bind_callable(),
-                    };
-                    return Ok(function_method);
+                    let normalized = self
+                        .dom
+                        .attr(*node, "type")
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .map(|value| {
+                            if value.eq_ignore_ascii_case("reset") {
+                                "reset".to_string()
+                            } else if value.eq_ignore_ascii_case("button") {
+                                "button".to_string()
+                            } else {
+                                "submit".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "submit".to_string());
+                    Ok(Value::String(normalized))
+                } else {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "type").unwrap_or_default(),
+                    ))
                 }
-                if Self::is_generator_object(&entries) && key == "constructor" {
-                    let constructor = self.new_generator_function_constructor_value();
-                    if let Value::Object(constructor_entries) = constructor {
-                        let constructor_entries = constructor_entries.borrow();
-                        if let Some(value) =
-                            Self::object_get_entry(&constructor_entries, "prototype")
-                        {
-                            return Ok(value);
-                        }
-                    }
-                }
-                if Self::is_async_generator_object(&entries) && key == "constructor" {
-                    let constructor = self.new_async_generator_function_constructor_value();
-                    if let Value::Object(constructor_entries) = constructor {
-                        let constructor_entries = constructor_entries.borrow();
-                        if let Some(value) =
-                            Self::object_get_entry(&constructor_entries, "prototype")
-                        {
-                            return Ok(value);
-                        }
-                    }
-                }
-                if Self::is_generator_function_prototype_object(&entries) && key_is_to_string_tag {
-                    return Ok(Value::String("GeneratorFunction".to_string()));
-                }
-                if Self::is_generator_object(&entries)
-                    || Self::is_generator_prototype_object(&entries)
-                {
-                    if key_is_to_string_tag {
-                        return Ok(Value::String("Generator".to_string()));
-                    }
-                }
-                if key_is_to_string_tag {
-                    let looks_like_generator_prototype = matches!(
-                        Self::object_get_entry(&entries, "constructor"),
-                        Some(Value::Object(constructor))
-                            if Self::is_generator_function_prototype_object(&constructor.borrow())
-                    ) && Self::object_get_entry(
-                        &entries, "next",
-                    )
-                    .is_some()
-                        && Self::object_get_entry(&entries, "return").is_some()
-                        && Self::object_get_entry(&entries, "throw").is_some();
-                    if looks_like_generator_prototype {
-                        return Ok(Value::String("Generator".to_string()));
-                    }
-                }
-                if Self::is_async_generator_function_prototype_object(&entries)
-                    && key_is_to_string_tag
-                {
-                    return Ok(Value::String("AsyncGeneratorFunction".to_string()));
-                }
-                if Self::is_async_generator_object(&entries)
-                    || Self::is_async_generator_prototype_object(&entries)
-                {
-                    if key_is_to_string_tag {
-                        return Ok(Value::String("AsyncGenerator".to_string()));
-                    }
-                }
-                if key_is_to_string_tag {
-                    let looks_like_async_generator_prototype =
-                        matches!(
-                            Self::object_get_entry(&entries, "constructor"),
-                            Some(Value::Object(constructor))
-                                if Self::is_async_generator_function_prototype_object(
-                                    &constructor.borrow()
-                                )
-                        ) && Self::object_get_entry(&entries, "next").is_some()
-                            && Self::object_get_entry(&entries, "return").is_some()
-                            && Self::object_get_entry(&entries, "throw").is_some();
-                    if looks_like_async_generator_prototype {
-                        return Ok(Value::String("AsyncGenerator".to_string()));
-                    }
-                }
-                if Self::is_url_search_params_object(&entries) {
-                    if key == "size" {
-                        let size =
-                            Self::url_search_params_pairs_from_object_entries(&entries).len();
-                        return Ok(Value::Number(size as i64));
-                    }
-                }
-                if Self::is_storage_object(&entries) {
-                    if key == "length" {
-                        let len = Self::storage_pairs_from_object_entries(&entries).len();
-                        return Ok(Value::Number(len as i64));
-                    }
-                    if let Some(value) = Self::object_get_entry(&entries, key) {
-                        return Ok(value);
-                    }
-                    if Self::is_storage_method_name(key) {
-                        return Ok(Self::new_builtin_placeholder_function());
-                    }
-                    if let Some((_, value)) = Self::storage_pairs_from_object_entries(&entries)
-                        .into_iter()
-                        .find(|(name, _)| name == key)
-                    {
-                        return Ok(Value::String(value));
-                    }
+            }
+            "kind" if self.is_track_element(*node) => {
+                Ok(Value::String(self.normalized_track_kind(*node)))
+            }
+            "srclang" | "srcLang" if self.is_track_element(*node) => Ok(Value::String(
+                self.dom.attr(*node, "srclang").unwrap_or_default(),
+            )),
+            "label" if self.is_track_element(*node) => Ok(Value::String(
+                self.dom.attr(*node, "label").unwrap_or_default(),
+            )),
+            "default" if self.is_track_element(*node) => {
+                Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
+            }
+            "disablePictureInPicture" | "disablepictureinpicture" => Ok(Value::Bool(
+                self.dom.attr(*node, "disablepictureinpicture").is_some(),
+            )),
+            "media" => Ok(Value::String(
+                self.dom.attr(*node, "media").unwrap_or_default(),
+            )),
+            "playsInline" | "playsinline" => {
+                Ok(Value::Bool(self.dom.attr(*node, "playsinline").is_some()))
+            }
+            "poster" => Ok(Value::String(
+                self.dom
+                    .attr(*node, "poster")
+                    .map(|raw| self.resolve_document_target_url(&raw))
+                    .unwrap_or_default(),
+            )),
+            "sizes" => Ok(Value::String(
+                self.dom.attr(*node, "sizes").unwrap_or_default(),
+            )),
+            "srcset" | "srcSet" => Ok(Value::String(
+                self.dom.attr(*node, "srcset").unwrap_or_default(),
+            )),
+            "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
+            "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
+            "tagName" => Ok(Value::String(self.element_tag_name(*node))),
+            "localName" => Ok(Value::String(
+                self.dom
+                    .tag_name(*node)
+                    .map(|name| {
+                        name.rsplit_once(':')
+                            .map(|(_, local)| local)
+                            .unwrap_or(name)
+                            .to_ascii_lowercase()
+                    })
+                    .unwrap_or_default(),
+            )),
+            "namespaceURI" => Ok(self
+                .dom
+                .element(*node)
+                .and_then(|element| element.namespace_uri.clone())
+                .map(Value::String)
+                .unwrap_or(Value::Null)),
+            "prefix" => Ok(self
+                .dom
+                .tag_name(*node)
+                .and_then(|name| name.split_once(':').map(|(prefix, _)| prefix))
+                .map(|prefix| Value::String(prefix.to_string()))
+                .unwrap_or(Value::Null)),
+            "className" => Ok(Value::String(
+                self.dom.attr(*node, "class").unwrap_or_default(),
+            )),
+            "classList" => Ok(Self::new_class_list_value(*node)),
+            "slot" => Ok(Value::String(
+                self.dom.attr(*node, "slot").unwrap_or_default(),
+            )),
+            "role" => Ok(self
+                .dom
+                .attr(*node, "role")
+                .map(Value::String)
+                .unwrap_or(Value::Null)),
+            "baseURI" => Ok(Value::String(self.document_base_url())),
+            "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
+            "options" => {
+                if !is_select {
                     return Ok(Value::Undefined);
                 }
-                let is_document_object = matches!(
-                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
-                    Some(Value::Bool(true))
-                );
-                if is_document_object {
-                    let value = match key {
-                        "nodeType" => Value::Number(self.node_type_number(self.dom.root)),
-                        "textContent" => self.node_text_content_value(self.dom.root),
-                        "body" => self.dom.body().map(Value::Node).unwrap_or(Value::Null),
-                        "head" => self.dom.head().map(Value::Node).unwrap_or(Value::Null),
-                        "documentElement" => self
-                            .dom
-                            .document_element()
-                            .map(Value::Node)
-                            .unwrap_or(Value::Null),
-                        "readyState" => {
-                            Value::String(self.dom_runtime.document_ready_state.clone())
-                        }
-                        "cookie" => Value::String(self.document_cookie_string()),
-                        "hidden" => {
-                            Value::Bool(self.dom_runtime.document_visibility_state == "hidden")
-                        }
-                        "visibilityState" => {
-                            Value::String(self.dom_runtime.document_visibility_state.clone())
-                        }
-                        "adoptedStyleSheets" => {
-                            self.ensure_document_adopted_style_sheets_property()
-                        }
-                        _ if key.starts_with("on") => self
-                            .dom_runtime
-                            .node_expando_props
-                            .get(&(self.dom.root, key.to_string()))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                        _ => Value::Undefined,
-                    };
-                    if !matches!(value, Value::Undefined) {
-                        return Ok(value);
-                    }
+                Ok(Self::new_static_node_list_value(select_options()))
+            }
+            "selectedIndex" => {
+                if !is_select {
+                    return Ok(Value::Undefined);
                 }
-                if Self::is_url_object(&entries) && key == "constructor" {
-                    return Ok(Value::UrlConstructor);
+                Ok(Value::Number(self.select_selected_index_value(*node)))
+            }
+            "selectedOptions" => {
+                if !is_select {
+                    return Ok(Value::Undefined);
                 }
-                if let Some(value) =
-                    self.object_property_from_entries_with_getter(value, &entries, key)?
+                Ok(Self::new_static_node_list_value(
+                    self.select_selected_option_nodes(*node),
+                ))
+            }
+            "size" => {
+                if !is_select {
+                    return Ok(Value::Undefined);
+                }
+                Ok(Value::Number(self.select_size_property_value(*node)))
+            }
+            "validationMessage" => {
+                let validity = self.compute_input_validity(*node)?;
+                if validity.custom_error {
+                    Ok(Value::String(self.dom.custom_validity_message(*node)?))
+                } else {
+                    Ok(Value::String(String::new()))
+                }
+            }
+            "validity" => {
+                let validity = self.compute_input_validity(*node)?;
+                Ok(Self::input_validity_to_value(&validity))
+            }
+            "willValidate" => {
+                let will_validate = if is_select {
+                    self.select_will_validate(*node)
+                } else if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
                 {
-                    return Ok(value);
-                }
-
-                let mut prototype = Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
-                drop(entries);
-
-                while let Some(Value::Object(object)) = prototype {
-                    let object_ref = object.borrow();
-                    if let Some(value) =
-                        self.object_property_from_entries_with_getter(value, &object_ref, key)?
-                    {
-                        return Ok(value);
-                    }
-                    prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
-                }
-                Ok(Value::Undefined)
-            }
-            Value::Promise(promise) => {
-                if key == "constructor" {
-                    Ok(Value::PromiseConstructor)
+                    !self.is_effectively_disabled(*node)
+                } else if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                {
+                    Self::input_participates_in_constraint_validation(
+                        self.normalized_input_type(*node).as_str(),
+                    ) && !self.is_effectively_disabled(*node)
                 } else {
-                    let promise = promise.borrow();
-                    if key == "status" {
-                        let status = match &promise.state {
-                            PromiseState::Pending => "pending",
-                            PromiseState::Fulfilled(_) => "fulfilled",
-                            PromiseState::Rejected(_) => "rejected",
-                        };
-                        Ok(Value::String(status.to_string()))
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                }
-            }
-            Value::Map(map) => {
-                let map = map.borrow();
-                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
-                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
-                    .and_then(|symbol| symbol.description.as_deref())
-                    .is_some_and(|description| description == "Symbol.toStringTag")
-                    || key == "Symbol.toStringTag";
-                if key == "size" {
-                    Ok(Value::Number(map.entries.len() as i64))
-                } else if key_is_to_string_tag {
-                    Ok(Value::String("Map".to_string()))
-                } else if key == "constructor" {
-                    Ok(Value::MapConstructor)
-                } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
-                    Ok(value)
-                } else if Self::is_map_method_name(key) {
-                    Ok(Self::new_builtin_placeholder_function())
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
-            Value::WeakMap(weak_map) => {
-                let weak_map = weak_map.borrow();
-                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
-                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
-                    .and_then(|symbol| symbol.description.as_deref())
-                    .is_some_and(|description| description == "Symbol.toStringTag")
-                    || key == "Symbol.toStringTag";
-                if key_is_to_string_tag {
-                    Ok(Value::String("WeakMap".to_string()))
-                } else if key == "constructor" {
-                    Ok(Value::WeakMapConstructor)
-                } else if let Some(value) = Self::object_get_entry(&weak_map.properties, key) {
-                    Ok(value)
-                } else if Self::is_weak_map_method_name(key) {
-                    Ok(Self::new_builtin_placeholder_function())
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
-            Value::WeakSet(weak_set) => {
-                let weak_set = weak_set.borrow();
-                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
-                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
-                    .and_then(|symbol| symbol.description.as_deref())
-                    .is_some_and(|description| description == "Symbol.toStringTag")
-                    || key == "Symbol.toStringTag";
-                if key_is_to_string_tag {
-                    Ok(Value::String("WeakSet".to_string()))
-                } else if key == "constructor" {
-                    Ok(Value::WeakSetConstructor)
-                } else if let Some(value) = Self::object_get_entry(&weak_set.properties, key) {
-                    Ok(value)
-                } else if Self::is_weak_set_method_name(key) {
-                    Ok(Self::new_builtin_placeholder_function())
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
-            Value::Set(set) => {
-                let set = set.borrow();
-                let key_is_to_string_tag = Self::symbol_id_from_storage_key(key)
-                    .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
-                    .and_then(|symbol| symbol.description.as_deref())
-                    .is_some_and(|description| description == "Symbol.toStringTag")
-                    || key == "Symbol.toStringTag";
-                if key == "size" {
-                    Ok(Value::Number(set.values.len() as i64))
-                } else if key_is_to_string_tag {
-                    Ok(Value::String("Set".to_string()))
-                } else if key == "constructor" {
-                    Ok(Value::SetConstructor)
-                } else {
-                    Ok(Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined))
-                }
-            }
-            Value::Blob(blob) => {
-                let blob = blob.borrow();
-                match key {
-                    "size" => Ok(Value::Number(blob.bytes.len() as i64)),
-                    "type" => Ok(Value::String(blob.mime_type.clone())),
-                    "constructor" => Ok(Value::BlobConstructor),
-                    _ => Ok(Value::Undefined),
-                }
-            }
-            Value::ArrayBuffer(_) => {
-                if key == "constructor" {
-                    Ok(Value::ArrayBufferConstructor)
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
-            Value::Symbol(symbol) => {
-                let value = match key {
-                    "description" => symbol
-                        .description
-                        .as_ref()
-                        .map(|value| Value::String(value.clone()))
-                        .unwrap_or(Value::Undefined),
-                    "constructor" => Value::SymbolConstructor,
-                    _ => Value::Undefined,
+                    false
                 };
-                Ok(value)
+                Ok(Value::Bool(will_validate))
             }
-            Value::RegExp(regex) => {
-                let regex = regex.borrow();
-                let value = match key {
-                    "source" => Value::String(regex.source.clone()),
-                    "flags" => Value::String(regex.flags.clone()),
-                    "global" => Value::Bool(regex.global),
-                    "ignoreCase" => Value::Bool(regex.ignore_case),
-                    "multiline" => Value::Bool(regex.multiline),
-                    "dotAll" => Value::Bool(regex.dot_all),
-                    "sticky" => Value::Bool(regex.sticky),
-                    "hasIndices" => Value::Bool(regex.has_indices),
-                    "unicode" => Value::Bool(regex.unicode),
-                    "unicodeSets" => Value::Bool(regex.unicode_sets),
-                    "lastIndex" => Value::Number(regex.last_index as i64),
-                    "constructor" => Value::RegExpConstructor,
-                    _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
-                };
-                Ok(value)
+            "length" => {
+                if !is_select {
+                    return Ok(Value::Undefined);
+                }
+                Ok(Value::Number(select_options().len() as i64))
             }
-            Value::Function(function) => {
-                if let Some(entries) = self
-                    .script_runtime
-                    .function_public_properties
-                    .get(&function.function_id)
+            "getContext" | "toDataURL" | "toBlob" | "transferControlToOffscreen" => {
+                if !is_canvas {
+                    return Ok(Value::Undefined);
+                }
+                Ok(self
+                    .dom_runtime
+                    .node_expando_props
+                    .get(&(*node, key.to_string()))
                     .cloned()
-                {
-                    if let Some(custom_value) =
-                        self.object_property_from_entries_with_getter(value, &entries, key)?
-                    {
-                        return Ok(custom_value);
-                    }
+                    .unwrap_or_else(Self::new_builtin_placeholder_function))
+            }
+            _ if key.starts_with("on") => Ok(self
+                .dom_runtime
+                .node_expando_props
+                .get(&(*node, key.to_string()))
+                .cloned()
+                .unwrap_or(Value::Null)),
+            _ => Ok(self
+                .dom_runtime
+                .node_expando_props
+                .get(&(*node, key.to_string()))
+                .cloned()
+                .unwrap_or(Value::Undefined)),
+        }
+    }
+
+    fn object_property_from_attr_or_class_list_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::is_attr_object(entries) {
+            let value = match key {
+                "ownerElement" => {
+                    Self::object_get_entry(entries, "ownerElement").unwrap_or(Value::Null)
                 }
-                let own_value = match key {
-                    "constructor" => {
-                        if function.is_generator {
-                            if function.is_async {
-                                self.new_async_generator_function_constructor_value()
-                            } else {
-                                self.new_generator_function_constructor_value()
-                            }
-                        } else {
-                            Value::Undefined
-                        }
-                    }
-                    "prototype" => {
-                        if function.is_arrow || function.is_method {
-                            Value::Undefined
-                        } else {
-                            Value::Object(function.prototype_object.clone())
-                        }
-                    }
-                    "length" => {
-                        let mut length = 0_i64;
-                        for param in &function.handler.params {
-                            if param.is_rest || param.default.is_some() {
-                                break;
-                            }
-                            length += 1;
-                        }
-                        Value::Number(length)
-                    }
-                    "call" => Self::new_function_call_callable(),
-                    "apply" => Self::new_function_apply_callable(),
-                    "bind" => Self::new_function_bind_callable(),
-                    _ => Value::Undefined,
-                };
-                if !matches!(own_value, Value::Undefined) {
-                    return Ok(own_value);
+                "name" => Self::object_get_entry(entries, "name")
+                    .unwrap_or_else(|| Value::String(String::new())),
+                "value" => Self::object_get_entry(entries, "value")
+                    .unwrap_or_else(|| Value::String(String::new())),
+                "nodeType" => Value::Number(2),
+                "nodeName" => Self::object_get_entry(entries, "name")
+                    .unwrap_or_else(|| Value::String(String::new())),
+                "nodeValue" => Self::object_get_entry(entries, "value")
+                    .unwrap_or_else(|| Value::String(String::new())),
+                "parentNode" | "parentElement" | "previousSibling" | "nextSibling" => Value::Null,
+                _ => Value::Undefined,
+            };
+            if !matches!(value, Value::Undefined) {
+                return Some(value);
+            }
+        }
+
+        if Self::is_class_list_object(entries) {
+            let Some(node) = (match Self::object_get_entry(entries, INTERNAL_CLASS_LIST_NODE_KEY) {
+                Some(Value::Node(node)) => Some(node),
+                _ => None,
+            }) else {
+                return Some(Value::Undefined);
+            };
+            let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+            let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+            if key == "length" {
+                return Some(Value::Number(classes.len() as i64));
+            }
+            if key == "value" {
+                return Some(Value::String(classes.join(" ")));
+            }
+            if key == "constructor" {
+                return Some(Value::Undefined);
+            }
+            if key_is_to_string_tag {
+                return Some(Value::String("DOMTokenList".to_string()));
+            }
+            if let Ok(index) = key.parse::<usize>() {
+                return Some(
+                    classes
+                        .get(index)
+                        .cloned()
+                        .map(Value::String)
+                        .unwrap_or(Value::Undefined),
+                );
+            }
+            if let Some(value) = Self::object_get_entry(entries, key) {
+                return Some(value);
+            }
+            return Some(Value::Undefined);
+        }
+
+        None
+    }
+
+    fn object_property_from_web_api_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        if let Some(value) = self.computed_style_object_property_from_entries(entries, key)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.fetch_response_property_from_entries(entries, key) {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.fetch_request_property_from_entries(entries, key) {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.headers_property_from_entries(entries, key) {
+            return Ok(Some(value));
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            if let Some(value) = self.dom_parser_object_property(entries, key) {
+                return Ok(Some(value));
+            }
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            if let Some(value) = self.parsed_document_property_from_entries(entries, key)? {
+                return Ok(Some(value));
+            }
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            if let Some(value) = self.tree_walker_property_from_entries(entries, key)? {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
+    fn object_property_from_match_media_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+        key_is_to_string_tag: bool,
+    ) -> Option<Value> {
+        if !Self::is_match_media_object(entries) {
+            return None;
+        }
+        let query = Self::object_get_entry(entries, INTERNAL_MATCH_MEDIA_QUERY_KEY)
+            .or_else(|| Self::object_get_entry(entries, "media"))
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        if key == "matches" {
+            let matches = self
+                .platform_mocks
+                .match_media_mocks
+                .get(&query)
+                .copied()
+                .unwrap_or(self.platform_mocks.default_match_media_matches);
+            return Some(Value::Bool(matches));
+        }
+        if key == "media" {
+            return Some(Value::String(query));
+        }
+        if key_is_to_string_tag {
+            return Some(Value::String("MediaQueryList".to_string()));
+        }
+        None
+    }
+
+    fn object_property_from_named_node_map_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !Self::is_named_node_map_object(entries) {
+            return None;
+        }
+        let owner =
+            Self::named_node_map_owner_node(entries).filter(|node| self.dom.element(*node).is_some());
+        let attrs = owner
+            .map(|owner_node| self.named_node_map_entries(owner_node))
+            .unwrap_or_default();
+        if key == "length" {
+            return Some(Value::Number(attrs.len() as i64));
+        }
+        if let Ok(index) = key.parse::<usize>() {
+            let value = attrs
+                .get(index)
+                .and_then(|(name, value)| {
+                    owner.map(|owner_node| Self::new_attr_object_value(name, value, Some(owner_node)))
+                })
+                .unwrap_or(Value::Undefined);
+            return Some(value);
+        }
+        if let Some(owner_node) = owner {
+            if let Some((name, value)) = attrs.iter().find(|(name, _)| name == key) {
+                return Some(Self::new_attr_object_value(name, value, Some(owner_node)));
+            }
+        }
+        None
+    }
+
+    fn object_property_from_string_wrapper_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+        let text = Self::string_wrapper_value_from_object(entries)?;
+        if key == "length" {
+            return Some(Value::Number(text.chars().count() as i64));
+        }
+        if key == "constructor" {
+            return Some(Value::StringConstructor);
+        }
+        if let Ok(index) = key.parse::<usize>() {
+            return Some(
+                text.chars()
+                    .nth(index)
+                    .map(|ch| Value::String(ch.to_string()))
+                    .unwrap_or(Value::Undefined),
+            );
+        }
+        None
+    }
+
+    fn object_property_from_match_media_named_node_map_or_string_wrapper_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if let Some(value) =
+            self.object_property_from_match_media_entries(entries, key, key_is_to_string_tag)
+        {
+            return Some(value);
+        }
+        if let Some(value) = self.object_property_from_named_node_map_entries(entries, key) {
+            return Some(value);
+        }
+        Self::object_property_from_string_wrapper_entries(entries, key)
+    }
+
+    fn callable_method_value_for_key(key: &str) -> Option<Value> {
+        let method = match key {
+            "call" => Self::new_function_call_callable(),
+            "apply" => Self::new_function_apply_callable(),
+            "bind" => Self::new_function_bind_callable(),
+            _ => return None,
+        };
+        Some(method)
+    }
+
+    fn generator_constructor_prototype_value(&mut self, is_async: bool) -> Option<Value> {
+        let constructor = if is_async {
+            self.new_async_generator_function_constructor_value()
+        } else {
+            self.new_generator_function_constructor_value()
+        };
+        let Value::Object(constructor_entries) = constructor else {
+            return None;
+        };
+        let constructor_entries = constructor_entries.borrow();
+        Self::object_get_entry(&constructor_entries, "prototype")
+    }
+
+    fn object_property_from_generator_constructor_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if key != "constructor" {
+            return None;
+        }
+        if Self::is_generator_object(entries) {
+            return self.generator_constructor_prototype_value(false);
+        }
+        if Self::is_async_generator_object(entries) {
+            return self.generator_constructor_prototype_value(true);
+        }
+        None
+    }
+
+    fn looks_like_iterator_prototype_entries(entries: &ObjectValue, is_async: bool) -> bool {
+        let constructor_matches = matches!(
+            Self::object_get_entry(entries, "constructor"),
+            Some(Value::Object(constructor)) if {
+                let constructor = constructor.borrow();
+                if is_async {
+                    Self::is_async_generator_function_prototype_object(&constructor)
+                } else {
+                    Self::is_generator_function_prototype_object(&constructor)
                 }
-                if let Some(super_constructor) = function.class_super_constructor.clone() {
-                    if !matches!(super_constructor, Value::Null) {
-                        let inherited = self.object_property_from_value(&super_constructor, key)?;
-                        if !matches!(inherited, Value::Undefined) {
-                            return Ok(inherited);
-                        }
-                    }
-                }
-                Ok(Value::Undefined)
+            }
+        );
+        constructor_matches
+            && Self::object_get_entry(entries, "next").is_some()
+            && Self::object_get_entry(entries, "return").is_some()
+            && Self::object_get_entry(entries, "throw").is_some()
+    }
+
+    fn object_property_from_generator_to_string_tag_entries(
+        &self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !self.is_to_string_tag_property_key(key) {
+            return None;
+        }
+        if Self::is_generator_function_prototype_object(entries) {
+            return Some(Value::String("GeneratorFunction".to_string()));
+        }
+        if Self::is_generator_object(entries)
+            || Self::is_generator_prototype_object(entries)
+            || Self::looks_like_iterator_prototype_entries(entries, false)
+        {
+            return Some(Value::String("Generator".to_string()));
+        }
+        if Self::is_async_generator_function_prototype_object(entries) {
+            return Some(Value::String("AsyncGeneratorFunction".to_string()));
+        }
+        if Self::is_async_generator_object(entries)
+            || Self::is_async_generator_prototype_object(entries)
+            || Self::looks_like_iterator_prototype_entries(entries, true)
+        {
+            return Some(Value::String("AsyncGenerator".to_string()));
+        }
+        None
+    }
+
+    fn object_property_from_callable_and_generator_entries(
+        &mut self,
+        value: &Value,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::callable_kind_from_value(value).is_some() {
+            if let Some(function_method) = Self::callable_method_value_for_key(key) {
+                return Some(Self::object_get_entry(entries, key).unwrap_or(function_method));
+            }
+        }
+        if let Some(value) = self.object_property_from_generator_constructor_entries(entries, key) {
+            return Some(value);
+        }
+        self.object_property_from_generator_to_string_tag_entries(entries, key)
+    }
+
+    fn object_property_from_url_search_params_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+        if Self::is_url_search_params_object(entries) && key == "size" {
+            let size = Self::url_search_params_pairs_from_object_entries(entries).len();
+            return Some(Value::Number(size as i64));
+        }
+        None
+    }
+
+    fn object_property_from_storage_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+        if !Self::is_storage_object(entries) {
+            return None;
+        }
+        if key == "length" {
+            let len = Self::storage_pairs_from_object_entries(entries).len();
+            return Some(Value::Number(len as i64));
+        }
+        if let Some(value) = Self::object_get_entry(entries, key) {
+            return Some(value);
+        }
+        if Self::is_storage_method_name(key) {
+            return Some(Self::new_builtin_placeholder_function());
+        }
+        if let Some((_, value)) = Self::storage_pairs_from_object_entries(entries)
+            .into_iter()
+            .find(|(name, _)| name == key)
+        {
+            return Some(Value::String(value));
+        }
+        Some(Value::Undefined)
+    }
+
+    fn object_property_from_document_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        let is_document_object = matches!(
+            Self::object_get_entry(entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        );
+        if !is_document_object {
+            return None;
+        }
+        let value = match key {
+            "nodeType" => Value::Number(self.node_type_number(self.dom.root)),
+            "textContent" => self.node_text_content_value(self.dom.root),
+            "body" => self.dom.body().map(Value::Node).unwrap_or(Value::Null),
+            "head" => self.dom.head().map(Value::Node).unwrap_or(Value::Null),
+            "documentElement" => self
+                .dom
+                .document_element()
+                .map(Value::Node)
+                .unwrap_or(Value::Null),
+            "readyState" => Value::String(self.dom_runtime.document_ready_state.clone()),
+            "cookie" => Value::String(self.document_cookie_string()),
+            "hidden" => Value::Bool(self.dom_runtime.document_visibility_state == "hidden"),
+            "visibilityState" => Value::String(self.dom_runtime.document_visibility_state.clone()),
+            "adoptedStyleSheets" => self.ensure_document_adopted_style_sheets_property(),
+            _ if key.starts_with("on") => self
+                .dom_runtime
+                .node_expando_props
+                .get(&(self.dom.root, key.to_string()))
+                .cloned()
+                .unwrap_or(Value::Null),
+            _ => Value::Undefined,
+        };
+        if matches!(value, Value::Undefined) {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
+    fn object_property_from_url_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+        if Self::is_url_object(entries) && key == "constructor" {
+            return Some(Value::UrlConstructor);
+        }
+        None
+    }
+
+    fn object_property_from_storage_document_and_url_entries(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(value) = Self::object_property_from_url_search_params_entries(entries, key) {
+            return Some(value);
+        }
+        if let Some(value) = Self::object_property_from_storage_entries(entries, key) {
+            return Some(value);
+        }
+        if let Some(value) = self.object_property_from_document_entries(entries, key) {
+            return Some(value);
+        }
+        Self::object_property_from_url_entries(entries, key)
+    }
+
+    fn object_property_from_entries_via_prototype_chain(
+        &mut self,
+        receiver: &Value,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Result<Value> {
+        if let Some(value) = self.object_property_from_entries_with_getter(receiver, entries, key)? {
+            return Ok(value);
+        }
+        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        while let Some(Value::Object(object)) = prototype {
+            let object_ref = object.borrow();
+            if let Some(value) =
+                self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
+            {
+                return Ok(value);
+            }
+            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn function_public_property_from_entries_with_receiver(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+        receiver: &Value,
+    ) -> Result<Option<Value>> {
+        let Some(entries) = self
+            .script_runtime
+            .function_public_properties
+            .get(&function.function_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        self.object_property_from_entries_with_getter(receiver, &entries, key)
+    }
+
+    fn inherited_property_from_function_super_constructor(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+        receiver: Option<&Value>,
+    ) -> Result<Option<Value>> {
+        let Some(super_constructor) = function.class_super_constructor.clone() else {
+            return Ok(None);
+        };
+        if matches!(super_constructor, Value::Null) {
+            return Ok(None);
+        }
+        let inherited = if let Some(receiver) = receiver {
+            self.object_property_from_value_with_receiver(&super_constructor, key, receiver)?
+        } else {
+            self.object_property_from_value(&super_constructor, key)?
+        };
+        if matches!(inherited, Value::Undefined) {
+            Ok(None)
+        } else {
+            Ok(Some(inherited))
+        }
+    }
+
+    fn object_property_from_object_value(
+        &mut self,
+        value: &Value,
+        entries: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        let entries = entries.borrow();
+        if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key) {
+            return Ok(value);
+        }
+        if let Some(value) = self.object_property_from_web_api_entries(&entries, key)? {
+            return Ok(value);
+        }
+        if let Some(value) = self
+            .object_property_from_match_media_named_node_map_or_string_wrapper_entries(
+                &entries, key,
+            )
+        {
+            return Ok(value);
+        }
+        if let Some(value) =
+            self.object_property_from_callable_and_generator_entries(value, &entries, key)
+        {
+            return Ok(value);
+        }
+        if let Some(value) =
+            self.object_property_from_storage_document_and_url_entries(&entries, key)
+        {
+            return Ok(value);
+        }
+        self.object_property_from_entries_via_prototype_chain(value, &entries, key)
+    }
+
+    fn object_property_from_function_value(
+        &mut self,
+        value: &Value,
+        function: &Rc<FunctionValue>,
+        key: &str,
+    ) -> Result<Value> {
+        if let Some(custom_value) =
+            self.function_public_property_from_entries_with_receiver(function, key, value)?
+        {
+            return Ok(custom_value);
+        }
+        let own_value = self.function_own_property_value(function, key, true);
+        if !matches!(own_value, Value::Undefined) {
+            return Ok(own_value);
+        }
+        if let Some(inherited) =
+            self.inherited_property_from_function_super_constructor(function, key, None)?
+        {
+            return Ok(inherited);
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn object_property_from_object_value_with_receiver(
+        &mut self,
+        entries: &Rc<RefCell<ObjectValue>>,
+        key: &str,
+        receiver: &Value,
+    ) -> Result<Value> {
+        let entries = entries.borrow();
+        self.object_property_from_entries_via_prototype_chain(receiver, &entries, key)
+    }
+
+    fn object_property_from_function_value_with_receiver(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+        receiver: &Value,
+    ) -> Result<Value> {
+        if let Some(custom_value) =
+            self.function_public_property_from_entries_with_receiver(function, key, receiver)?
+        {
+            return Ok(custom_value);
+        }
+        let own_value = self.function_own_property_value(function, key, false);
+        if !matches!(own_value, Value::Undefined) {
+            return Ok(own_value);
+        }
+        if let Some(inherited) = self.inherited_property_from_function_super_constructor(
+            function,
+            key,
+            Some(receiver),
+        )? {
+            return Ok(inherited);
+        }
+        Ok(Value::Undefined)
+    }
+
+    pub(crate) fn object_property_from_value(&mut self, value: &Value, key: &str) -> Result<Value> {
+        match value {
+            Value::Node(node) => self.object_property_from_node_value(node, key),
+            Value::String(text) => Ok(Self::object_property_from_string_value(text, key)),
+            Value::Array(values) => Ok(Self::object_property_from_array_value(values, key)),
+            Value::NodeList(nodes) => Ok(self.object_property_from_node_list_value(nodes, key)),
+            Value::TypedArray(values) => self.object_property_from_typed_array_value(values, key),
+            Value::Object(entries) => self.object_property_from_object_value(value, entries, key),
+            Value::Promise(promise) => Ok(Self::object_property_from_promise_value(promise, key)),
+            Value::Map(map) => Ok(self.object_property_from_map_value(map, key)),
+            Value::WeakMap(weak_map) => Ok(self.object_property_from_weak_map_value(weak_map, key)),
+            Value::WeakSet(weak_set) => Ok(self.object_property_from_weak_set_value(weak_set, key)),
+            Value::Set(set) => Ok(self.object_property_from_set_value(set, key)),
+            Value::Blob(blob) => Ok(Self::object_property_from_blob_value(blob, key)),
+            Value::ArrayBuffer(_) => Ok(Self::object_property_from_array_buffer_value(key)),
+            Value::Symbol(symbol) => Ok(Self::object_property_from_symbol_value(symbol, key)),
+            Value::RegExp(regex) => Ok(Self::object_property_from_regexp_value(regex, key)),
+            Value::Function(function) => {
+                self.object_property_from_function_value(value, function, key)
             }
             Value::UrlConstructor => {
                 if let Some(value) = Self::object_get_entry(
@@ -4155,6 +4490,7 @@ impl Harness {
                     "call" => Self::new_function_call_callable(),
                     "apply" => Self::new_function_apply_callable(),
                     "bind" => Self::new_function_bind_callable(),
+                    "toString" => Self::new_function_to_string_callable(),
                     _ => Value::Undefined,
                 };
                 Ok(value)
@@ -4171,88 +4507,10 @@ impl Harness {
     ) -> Result<Value> {
         match value {
             Value::Object(entries) => {
-                let entries = entries.borrow();
-                if let Some(value) =
-                    self.object_property_from_entries_with_getter(receiver, &entries, key)?
-                {
-                    return Ok(value);
-                }
-                let mut prototype = Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
-                drop(entries);
-                while let Some(Value::Object(object)) = prototype {
-                    let object_ref = object.borrow();
-                    if let Some(value) =
-                        self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
-                    {
-                        return Ok(value);
-                    }
-                    prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
-                }
-                Ok(Value::Undefined)
+                self.object_property_from_object_value_with_receiver(entries, key, receiver)
             }
             Value::Function(function) => {
-                if let Some(entries) = self
-                    .script_runtime
-                    .function_public_properties
-                    .get(&function.function_id)
-                    .cloned()
-                {
-                    if let Some(custom_value) =
-                        self.object_property_from_entries_with_getter(receiver, &entries, key)?
-                    {
-                        return Ok(custom_value);
-                    }
-                }
-                let own_value = match key {
-                    "constructor" => {
-                        if function.is_generator {
-                            if function.is_async {
-                                self.new_async_generator_function_constructor_value()
-                            } else {
-                                self.new_generator_function_constructor_value()
-                            }
-                        } else {
-                            Value::Undefined
-                        }
-                    }
-                    "prototype" => {
-                        if function.is_arrow || function.is_method {
-                            Value::Undefined
-                        } else {
-                            Value::Object(function.prototype_object.clone())
-                        }
-                    }
-                    "length" => {
-                        let mut length = 0_i64;
-                        for param in &function.handler.params {
-                            if param.is_rest || param.default.is_some() {
-                                break;
-                            }
-                            length += 1;
-                        }
-                        Value::Number(length)
-                    }
-                    "call" => Self::new_function_call_callable(),
-                    "apply" => Self::new_function_apply_callable(),
-                    "bind" => Self::new_function_bind_callable(),
-                    _ => Value::Undefined,
-                };
-                if !matches!(own_value, Value::Undefined) {
-                    return Ok(own_value);
-                }
-                if let Some(super_constructor) = function.class_super_constructor.clone() {
-                    if !matches!(super_constructor, Value::Null) {
-                        let inherited = self.object_property_from_value_with_receiver(
-                            &super_constructor,
-                            key,
-                            receiver,
-                        )?;
-                        if !matches!(inherited, Value::Undefined) {
-                            return Ok(inherited);
-                        }
-                    }
-                }
-                Ok(Value::Undefined)
+                self.object_property_from_function_value_with_receiver(function, key, receiver)
             }
             _ => self.object_property_from_value(value, key),
         }

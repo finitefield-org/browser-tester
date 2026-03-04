@@ -291,11 +291,11 @@ impl Harness {
                         env,
                     )
                     .map_err(|err| match err {
-                            Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
-                                Error::ScriptRuntime(format!("'{target}' is not a function"))
-                            }
-                            other => other,
-                        })
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime(format!("'{target}' is not a function"))
+                        }
+                        other => other,
+                    })
                 }
                 Expr::ImportCall { module, options } => {
                     Ok(self.eval_import_call(module, options, env, event_param, event))
@@ -318,11 +318,11 @@ impl Harness {
                         env,
                     )
                     .map_err(|err| match err {
-                            Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
-                                Error::ScriptRuntime("call target is not a function".into())
-                            }
-                            other => other,
-                        })
+                        Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                            Error::ScriptRuntime("call target is not a function".into())
+                        }
+                        other => other,
+                    })
                 }
                 Expr::MemberCall {
                     target,
@@ -1104,8 +1104,12 @@ impl Harness {
                         .iter()
                         .map(|arg| self.eval_expr(arg, env, event_param, event))
                         .collect::<Result<Vec<_>>>()?;
-                    let id =
-                        self.schedule_timeout(handler.callback.clone(), delay, callback_args, env);
+                    let (callback, timer_env) = self.materialize_timer_callback_for_schedule(
+                        &handler.callback,
+                        env,
+                        "timeout",
+                    );
+                    let id = self.schedule_timeout(callback, delay, callback_args, &timer_env);
                     Ok(Value::Number(id))
                 }
                 Expr::SetInterval { handler, delay_ms } => {
@@ -1116,16 +1120,18 @@ impl Harness {
                         .iter()
                         .map(|arg| self.eval_expr(arg, env, event_param, event))
                         .collect::<Result<Vec<_>>>()?;
-                    let id = self.schedule_interval(
-                        handler.callback.clone(),
-                        interval,
-                        callback_args,
+                    let (callback, timer_env) = self.materialize_timer_callback_for_schedule(
+                        &handler.callback,
                         env,
+                        "interval",
                     );
+                    let id = self.schedule_interval(callback, interval, callback_args, &timer_env);
                     Ok(Value::Number(id))
                 }
                 Expr::RequestAnimationFrame { callback } => {
-                    let id = self.schedule_animation_frame(callback.clone(), env);
+                    let (callback, timer_env) =
+                        self.materialize_timer_callback_for_schedule(callback, env, "raf");
+                    let id = self.schedule_animation_frame(callback, &timer_env);
                     Ok(Value::Number(id))
                 }
                 Expr::QueueMicrotask { handler } => {

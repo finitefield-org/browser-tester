@@ -70,8 +70,8 @@ fn element_insert_adjacent_text_invalid_position_throws_syntax_error() -> Result
 }
 
 #[test]
-fn element_insert_adjacent_text_beforebegin_and_afterend_are_noop_without_element_parent(
-) -> Result<()> {
+fn element_insert_adjacent_text_beforebegin_and_afterend_are_noop_without_element_parent()
+-> Result<()> {
     let html = r#"
         <button id='run'>run</button>
         <p id='result'></p>

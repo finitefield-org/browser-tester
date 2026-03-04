@@ -276,6 +276,7 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                 dom.tag_name(*node)
                     .is_some_and(|open_tag| open_tag.eq_ignore_ascii_case("template"))
             });
+            let script_src_attr = attrs.get("src").cloned();
             let executable_script = tag.eq_ignore_ascii_case("script")
                 && !inside_template
                 && is_executable_script_type(attrs.get("type").map(String::as_str));
@@ -309,7 +310,16 @@ pub(super) fn parse_html(html: &str) -> Result<ParseOutput> {
                 if let Some(script_body) = html.get(i..close) {
                     if !script_body.is_empty() {
                         dom.create_text(node, script_body.to_string());
-                        if executable_script {
+                    }
+                    if executable_script {
+                        if let Some(src) = script_src_attr.as_deref() {
+                            if let Some(source) = decode_data_script_source(src)? {
+                                scripts.push(ScriptSource {
+                                    code: source,
+                                    is_module: module_script,
+                                });
+                            }
+                        } else if !script_body.is_empty() {
                             scripts.push(ScriptSource {
                                 code: script_body.to_string(),
                                 is_module: module_script,
@@ -659,6 +669,27 @@ fn is_module_script_type(raw_type: Option<&str>) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     media_type == "module"
+}
+
+fn decode_data_script_source(src: &str) -> Result<Option<String>> {
+    let src = src.trim();
+    let Some(rest) = src.strip_prefix("data:") else {
+        return Ok(None);
+    };
+    let Some((meta, payload)) = rest.split_once(',') else {
+        return Err(Error::HtmlParse(format!(
+            "invalid script src data URL: {src}"
+        )));
+    };
+    let is_base64 = meta
+        .split(';')
+        .skip(1)
+        .any(|part| part.trim().eq_ignore_ascii_case("base64"));
+    if is_base64 {
+        let decoded = decode_base64_to_binary_string(payload)?;
+        return Ok(Some(decoded));
+    }
+    Ok(Some(decode_uri_like(payload, true)?))
 }
 
 fn parse_start_tag(

@@ -10,7 +10,8 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<i64>>> {
-        match self.resolve_listener_capture_pending_value(target)
+        match self
+            .resolve_listener_capture_pending_value(target)
             .flatten()
             .or_else(|| env.get(target).cloned())
         {
@@ -49,7 +50,8 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<ArrayValue>>> {
-        match self.resolve_listener_capture_pending_value(target)
+        match self
+            .resolve_listener_capture_pending_value(target)
             .flatten()
             .or_else(|| env.get(target).cloned())
         {
@@ -70,7 +72,8 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<ArrayBufferValue>>> {
-        match self.resolve_listener_capture_pending_value(target)
+        match self
+            .resolve_listener_capture_pending_value(target)
             .flatten()
             .or_else(|| env.get(target).cloned())
         {
@@ -91,7 +94,8 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Result<Rc<RefCell<TypedArrayValue>>> {
-        match self.resolve_listener_capture_pending_value(target)
+        match self
+            .resolve_listener_capture_pending_value(target)
             .flatten()
             .or_else(|| env.get(target).cloned())
         {

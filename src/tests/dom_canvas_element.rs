@@ -259,3 +259,24 @@ fn canvas_to_blob_requires_callable_callback() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn canvas_method_properties_are_exposed_as_functions() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <p id='result'></p>
+        <script>
+          const canvas = document.getElementById('canvas');
+          document.getElementById('result').textContent = [
+            typeof canvas.getContext,
+            typeof canvas.toDataURL,
+            typeof canvas.toBlob,
+            typeof canvas.transferControlToOffscreen,
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function|function|function|function")?;
+    Ok(())
+}

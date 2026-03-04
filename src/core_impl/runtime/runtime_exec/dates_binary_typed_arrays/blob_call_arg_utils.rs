@@ -138,6 +138,61 @@ impl Harness {
         Ok(Self::new_blob_value(bytes, mime_type))
     }
 
+    pub(crate) fn new_file_value_from_constructor_args(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() < 2 {
+            return Err(Error::ScriptRuntime(
+                "File constructor requires at least two arguments".into(),
+            ));
+        }
+
+        let mut bytes = Vec::new();
+        let bits_value = args.first().cloned().unwrap_or(Value::Undefined);
+        if !matches!(bits_value, Value::Undefined | Value::Null) {
+            let items = self
+                .array_like_values_from_value(&bits_value)
+                .map_err(|_| {
+                    Error::ScriptRuntime(
+                        "File constructor first argument must be an array-like or iterable".into(),
+                    )
+                })?;
+            for item in items {
+                bytes.extend(self.blob_part_bytes(&item));
+            }
+        }
+
+        let mut mime_type = String::new();
+        let mut last_modified = self.scheduler.now_ms;
+        if let Some(options) = args.get(2) {
+            match options {
+                Value::Undefined | Value::Null => {}
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::object_get_entry(&entries, "type") {
+                        mime_type = Self::normalize_blob_type(&value.as_string());
+                    }
+                    if let Some(value) = Self::object_get_entry(&entries, "lastModified") {
+                        last_modified = Self::value_to_i64(&value);
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "File options must be an object".into(),
+                    ));
+                }
+            }
+        }
+
+        let file = MockFile {
+            name: args.get(1).map(Value::as_string).unwrap_or_default(),
+            size: bytes.len() as i64,
+            mime_type,
+            last_modified,
+            webkit_relative_path: String::new(),
+            bytes,
+        };
+        Ok(Self::mock_file_to_value(&file))
+    }
+
     pub(crate) fn eval_blob_member_call(
         &mut self,
         blob: &Rc<RefCell<BlobValue>>,

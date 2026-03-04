@@ -89,6 +89,8 @@ pub(crate) const INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipbo
 pub(crate) const INTERNAL_MOCK_FILE_KEY_PREFIX: &str = "\u{0}\u{0}bt_mock_file:";
 pub(crate) const INTERNAL_MOCK_FILE_OBJECT_KEY: &str = "\u{0}\u{0}bt_mock_file:object";
 pub(crate) const INTERNAL_MOCK_FILE_BLOB_KEY: &str = "\u{0}\u{0}bt_mock_file:blob";
+pub(crate) const INTERNAL_CLASS_LIST_OBJECT_KEY: &str = "\u{0}\u{0}bt_class_list:object";
+pub(crate) const INTERNAL_CLASS_LIST_NODE_KEY: &str = "\u{0}\u{0}bt_class_list:node";
 pub(crate) const INTERNAL_COOKIE_STORE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cookie_store";
 pub(crate) const INTERNAL_CACHE_STORAGE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache_storage";
 pub(crate) const INTERNAL_CACHE_OBJECT_KEY: &str = "\u{0}\u{0}bt_cache";
@@ -546,12 +548,13 @@ pub(crate) fn normalize_file_input_name(name: &str) -> String {
 }
 
 pub(crate) fn normalize_mock_file(file: &MockFile) -> MockFile {
-    let normalized_bytes = file.bytes.clone();
-    let normalized_size = if normalized_bytes.is_empty() {
-        file.size.max(0)
-    } else {
-        normalized_bytes.len() as i64
-    };
+    let mut normalized_bytes = file.bytes.clone();
+    if normalized_bytes.is_empty() && file.size > 0 {
+        if let Ok(target_len) = usize::try_from(file.size) {
+            normalized_bytes.resize(target_len, 0);
+        }
+    }
+    let normalized_size = normalized_bytes.len() as i64;
     MockFile {
         name: normalize_file_input_name(&file.name),
         size: normalized_size,
@@ -1329,11 +1332,7 @@ pub(crate) fn parse_js_parse_int(src: &str, radix: Option<i64>) -> f64 {
         return f64::NAN;
     }
 
-    if negative {
-        -value
-    } else {
-        value
-    }
+    if negative { -value } else { value }
 }
 
 pub(crate) fn encode_binary_string_to_base64(src: &str) -> Result<String> {

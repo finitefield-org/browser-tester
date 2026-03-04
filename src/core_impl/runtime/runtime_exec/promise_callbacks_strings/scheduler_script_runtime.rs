@@ -147,6 +147,35 @@ impl Harness {
         (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
     }
 
+    pub(crate) fn materialize_timer_callback_for_schedule(
+        &mut self,
+        callback: &TimerCallback,
+        env: &HashMap<String, Value>,
+        key_prefix: &str,
+    ) -> (TimerCallback, HashMap<String, Value>) {
+        match callback {
+            TimerCallback::Reference(name) => (TimerCallback::Reference(name.clone()), env.clone()),
+            TimerCallback::Inline(handler) => {
+                let callback_value = self.make_function_value(
+                    handler.clone(),
+                    env,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                );
+                let callback_name = format!(
+                    "\u{0}\u{0}bt_{key_prefix}_cb_{}",
+                    self.script_runtime.allocate_function_id()
+                );
+                let mut timer_env = env.clone();
+                timer_env.insert(callback_name.clone(), callback_value);
+                (TimerCallback::Reference(callback_name), timer_env)
+            }
+        }
+    }
+
     pub(crate) fn schedule_timeout(
         &mut self,
         callback: TimerCallback,

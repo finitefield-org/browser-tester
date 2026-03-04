@@ -778,7 +778,13 @@ impl Value {
             Self::Node(node) => format!("node-{}", node.0),
             Self::NodeList(_) => "[object NodeList]".into(),
             Self::FormData(_) => "[object FormData]".into(),
-            Self::Function(_) => "[object Function]".into(),
+            Self::Function(function) => {
+                if function.function_id == usize::MAX {
+                    "function () { [native code] }".to_string()
+                } else {
+                    format!("__bt_function_ref__({})", function.function_id)
+                }
+            }
         }
     }
 }

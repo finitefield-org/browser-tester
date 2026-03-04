@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn issue_101_template_literal_interpolation_uses_plain_object_property_without_typed_array_error(
-) -> Result<()> {
+fn issue_101_template_literal_interpolation_uses_plain_object_property_without_typed_array_error()
+-> Result<()> {
     let html = r#"
       <p id='out'></p>
       <p id='err'></p>

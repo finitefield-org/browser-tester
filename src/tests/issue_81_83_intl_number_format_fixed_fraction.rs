@@ -67,3 +67,26 @@ fn fixed_fraction_and_single_fraction_precision_remain_stable() -> Result<()> {
     harness.assert_text("#out", "1.50 m³|13.02 m³|0.23 m³|1.73 m³|11.5%")?;
     Ok(())
 }
+
+#[test]
+fn inline_number_format_call_honors_variable_fraction_digits() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const digits = 2;
+        const a = new Intl.NumberFormat('en', {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        }).format(1.5);
+        const b = new Intl.NumberFormat('en', {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        }).format(13.015);
+        document.getElementById('out').textContent = `${a}|${b}`;
+      </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "1.50|13.02")?;
+    Ok(())
+}

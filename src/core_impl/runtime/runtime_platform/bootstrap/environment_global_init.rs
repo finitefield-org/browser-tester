@@ -304,6 +304,7 @@ impl Harness {
         let decode_uri_component_callable = Self::new_global_decode_uri_callable(true);
         let create_image_bitmap_callable = Self::new_create_image_bitmap_callable();
         let request_constructor = Self::new_request_constructor_value();
+        let file_constructor = Self::new_file_constructor_value();
         let clipboard_item_constructor = Self::new_clipboard_item_constructor_value();
         let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
@@ -444,6 +445,11 @@ impl Harness {
                 &mut window_entries,
                 "ClipboardItem".to_string(),
                 clipboard_item_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "File".to_string(),
+                file_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -696,6 +702,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Request".to_string(), request_constructor);
+        self.script_runtime
+            .env
+            .insert("File".to_string(), file_constructor);
         self.script_runtime
             .env
             .insert("ClipboardItem".to_string(), clipboard_item_constructor);

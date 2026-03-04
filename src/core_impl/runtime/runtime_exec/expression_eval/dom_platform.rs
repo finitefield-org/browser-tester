@@ -156,12 +156,7 @@ impl Harness {
                         DomProp::ClassName => Ok(Value::String(
                             self.dom.attr(node, "class").unwrap_or_default(),
                         )),
-                        DomProp::ClassList => Ok(Self::new_array_value(
-                            class_tokens(self.dom.attr(node, "class").as_deref())
-                                .into_iter()
-                                .map(Value::String)
-                                .collect::<Vec<_>>(),
-                        )),
+                        DomProp::ClassList => Ok(Self::new_class_list_value(node)),
                         DomProp::ClassListLength => Ok(Value::Number(
                             class_tokens(self.dom.attr(node, "class").as_deref()).len() as i64,
                         )),

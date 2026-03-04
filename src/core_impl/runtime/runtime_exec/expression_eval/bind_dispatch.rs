@@ -21,6 +21,45 @@ impl Harness {
             .filter(|task| task.id == *timer_id)
         {
             task.env.insert(name.to_string(), value.clone());
+            let env_snapshot = task.env.to_map();
+            for entry in env_snapshot.values() {
+                let Value::Function(function) = entry else {
+                    continue;
+                };
+                if function.global_scope || function.local_bindings.contains(name) {
+                    continue;
+                }
+                function
+                    .captured_env
+                    .borrow_mut()
+                    .insert(name.to_string(), value.clone());
+            }
+        }
+    }
+
+    pub(crate) fn sync_scheduled_task_captures_for_binding(&mut self, name: &str, value: &Value) {
+        if Self::is_internal_env_key(name) {
+            return;
+        }
+
+        for task in &mut self.scheduler.task_queue {
+            if task.env.contains_key(name) {
+                task.env.insert(name.to_string(), value.clone());
+            }
+
+            let env_snapshot = task.env.to_map();
+            for entry in env_snapshot.values() {
+                let Value::Function(function) = entry else {
+                    continue;
+                };
+                if function.global_scope || function.local_bindings.contains(name) {
+                    continue;
+                }
+                function
+                    .captured_env
+                    .borrow_mut()
+                    .insert(name.to_string(), value.clone());
+            }
         }
     }
 

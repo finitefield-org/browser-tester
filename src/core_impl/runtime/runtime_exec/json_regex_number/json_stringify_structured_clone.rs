@@ -224,7 +224,9 @@ impl Harness {
         Error::ScriptRuntime(format!("DataCloneError: {message}"))
     }
 
-    fn structured_clone_transfer_array_buffer_ids(options: Option<&Value>) -> Result<HashSet<usize>> {
+    fn structured_clone_transfer_array_buffer_ids(
+        options: Option<&Value>,
+    ) -> Result<HashSet<usize>> {
         let Some(options) = options else {
             return Ok(HashSet::new());
         };
@@ -377,7 +379,8 @@ impl Harness {
                 }
 
                 let blob = blob.borrow();
-                let cloned = match Self::new_blob_value(blob.bytes.clone(), blob.mime_type.clone()) {
+                let cloned = match Self::new_blob_value(blob.bytes.clone(), blob.mime_type.clone())
+                {
                     Value::Blob(cloned) => cloned,
                     _ => unreachable!("Blob clone must produce Blob value"),
                 };
