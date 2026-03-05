@@ -425,42 +425,42 @@ impl Harness {
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
-        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
-            let Some(shared_env) = frame.shared_env.as_ref() else {
-                continue;
-            };
-            if Rc::strong_count(shared_env) <= 1 {
+        let Some(frame) = self.script_runtime.listener_capture_env_stack.last() else {
+            return;
+        };
+        let Some(shared_env) = frame.shared_env.as_ref() else {
+            return;
+        };
+        if Rc::strong_count(shared_env) <= 1 {
+            return;
+        }
+        let snapshot = shared_env.borrow().to_map();
+        let mut next_snapshot = snapshot.clone();
+        let mut changed = false;
+        for (name, previous) in &snapshot {
+            if Self::is_internal_env_key(name) {
                 continue;
             }
-            let snapshot = shared_env.borrow().to_map();
-            let mut next_snapshot = snapshot.clone();
-            let mut changed = false;
-            for (name, previous) in &snapshot {
-                if Self::is_internal_env_key(name) {
-                    continue;
-                }
-                match env.get(name) {
-                    Some(next) => {
-                        if self.strict_equal(previous, next) {
-                            continue;
-                        }
-                        next_snapshot.insert(name.clone(), next.clone());
-                        changed = true;
+            match env.get(name) {
+                Some(next) => {
+                    if self.strict_equal(previous, next) {
+                        continue;
                     }
-                    None => continue,
+                    next_snapshot.insert(name.clone(), next.clone());
+                    changed = true;
                 }
+                None => continue,
             }
-            for (name, next) in env {
-                if Self::is_internal_env_key(name) || snapshot.contains_key(name) {
-                    continue;
-                }
-                next_snapshot.insert(name.clone(), next.clone());
-                changed = true;
+        }
+        for (name, next) in env {
+            if Self::is_internal_env_key(name) || snapshot.contains_key(name) {
+                continue;
             }
-            if changed {
-                *shared_env.borrow_mut() = ScriptEnv::from_snapshot(&next_snapshot);
-            }
-            break;
+            next_snapshot.insert(name.clone(), next.clone());
+            changed = true;
+        }
+        if changed {
+            *shared_env.borrow_mut() = ScriptEnv::from_snapshot(&next_snapshot);
         }
     }
 }

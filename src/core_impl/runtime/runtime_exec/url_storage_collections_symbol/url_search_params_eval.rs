@@ -437,25 +437,91 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
-        if matches!(method, UrlSearchParamsInstanceMethod::GetAll) {
+        if matches!(
+            method,
+            UrlSearchParamsInstanceMethod::Delete | UrlSearchParamsInstanceMethod::Has
+        ) && matches!(
+            env.get(target),
+            Some(
+                Value::Map(_)
+                    | Value::Set(_)
+                    | Value::WeakMap(_)
+                    | Value::WeakSet(_)
+            )
+        ) {
+            let map_method = match method {
+                UrlSearchParamsInstanceMethod::Delete => MapInstanceMethod::Delete,
+                UrlSearchParamsInstanceMethod::Has => MapInstanceMethod::Has,
+                _ => unreachable!(),
+            };
+            let map_args = if args.is_empty() { args } else { &args[..1] };
+            return self.eval_map_method(target, map_method, map_args, env, event_param, event);
+        }
+
+        if matches!(
+            method,
+            UrlSearchParamsInstanceMethod::GetAll
+                | UrlSearchParamsInstanceMethod::Append
+                | UrlSearchParamsInstanceMethod::Delete
+        ) {
             match env.get(target) {
                 Some(Value::FormData(entries)) => {
-                    if args.len() != 1 {
-                        return Err(Error::ScriptRuntime(
-                            "FormData.getAll requires exactly one argument".into(),
-                        ));
-                    }
-                    let name = self
-                        .eval_expr(&args[0], env, event_param, event)?
-                        .as_string();
-                    return Ok(Self::new_array_value(
-                        entries
-                            .iter()
-                            .filter_map(|(entry_name, entry_value)| {
-                                (entry_name == &name).then(|| Value::String(entry_value.clone()))
-                            })
-                            .collect::<Vec<_>>(),
-                    ));
+                    return match method {
+                        UrlSearchParamsInstanceMethod::GetAll => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.getAll requires exactly one argument".into(),
+                                ));
+                            }
+                            let name = self
+                                .eval_expr(&args[0], env, event_param, event)?
+                                .as_string();
+                            let entries = entries.borrow();
+                            Ok(Self::new_array_value(
+                                entries
+                                    .iter()
+                                    .filter_map(|(entry_name, entry_value)| {
+                                        (entry_name == &name)
+                                            .then(|| Value::String(entry_value.clone()))
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ))
+                        }
+                        UrlSearchParamsInstanceMethod::Append => {
+                            if args.len() != 2 && args.len() != 3 {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.append requires two or three arguments".into(),
+                                ));
+                            }
+                            let name = self
+                                .eval_expr(&args[0], env, event_param, event)?
+                                .as_string();
+                            let value = self.eval_expr(&args[1], env, event_param, event)?;
+                            let filename = args
+                                .get(2)
+                                .map(|expr| self.eval_expr(expr, env, event_param, event))
+                                .transpose()?;
+                            let value =
+                                Self::form_data_append_string_value(&value, filename.as_ref());
+                            entries.borrow_mut().push((name, value));
+                            Ok(Value::Undefined)
+                        }
+                        UrlSearchParamsInstanceMethod::Delete => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.delete requires exactly one argument".into(),
+                                ));
+                            }
+                            let name = self
+                                .eval_expr(&args[0], env, event_param, event)?
+                                .as_string();
+                            entries
+                                .borrow_mut()
+                                .retain(|(entry_name, _)| entry_name != &name);
+                            Ok(Value::Undefined)
+                        }
+                        _ => unreachable!(),
+                    };
                 }
                 Some(Value::Object(entries)) => {
                     if Self::is_cookie_store_object(&entries.borrow()) {
@@ -463,8 +529,14 @@ impl Harness {
                         for arg in args {
                             evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
                         }
+                        let method_name = match method {
+                            UrlSearchParamsInstanceMethod::GetAll => "getAll",
+                            UrlSearchParamsInstanceMethod::Append => "append",
+                            UrlSearchParamsInstanceMethod::Delete => "delete",
+                            UrlSearchParamsInstanceMethod::Has => "has",
+                        };
                         if let Some(value) =
-                            self.eval_cookie_store_member_call(entries, "getAll", &evaluated_args)?
+                            self.eval_cookie_store_member_call(entries, method_name, &evaluated_args)?
                         {
                             return Ok(value);
                         }

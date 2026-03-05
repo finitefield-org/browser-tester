@@ -2620,7 +2620,7 @@ fn html_input_radio_form_data_and_default_on_value_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "false:|true:on|phone:false:true:false")?;
+    h.assert_text("#result", "false:null|true:on|phone:false:true:false")?;
     Ok(())
 }
 

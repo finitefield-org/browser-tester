@@ -697,7 +697,8 @@ pub(crate) enum Expr {
         form: DomQuery,
     },
     FormDataNew {
-        form: DomQuery,
+        form: Option<DomQuery>,
+        submitter: Option<DomQuery>,
     },
     FormDataGet {
         source: FormDataSource,
@@ -1161,6 +1162,7 @@ pub(crate) enum Stmt {
         target_var: String,
         name: Expr,
         value: Expr,
+        filename: Option<Expr>,
     },
     DomAssign {
         target: DomQuery,

@@ -269,18 +269,84 @@ impl Harness {
         Ok(true)
     }
 
+    pub(crate) fn eval_form_data_constructor_entries(
+        &mut self,
+        form: Option<&DomQuery>,
+        submitter: Option<&DomQuery>,
+        env: &HashMap<String, Value>,
+    ) -> Result<Vec<(String, String)>> {
+        let Some(form) = form else {
+            if submitter.is_some() {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: FormData constructor submitter requires a form argument".into(),
+                ));
+            }
+            return Ok(Vec::new());
+        };
+
+        let form_node = self.resolve_dom_query_required_runtime(form, env)?;
+        let is_form = self
+            .dom
+            .tag_name(form_node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+        if !is_form {
+            return Err(Error::ScriptRuntime(
+                "TypeError: FormData constructor form argument must be an HTMLFormElement".into(),
+            ));
+        }
+
+        let mut entries = self.form_data_entries(form_node)?;
+
+        if let Some(submitter) = submitter {
+            let submitter_node = self.resolve_dom_query_required_runtime(submitter, env)?;
+            if !is_submit_control(&self.dom, submitter_node) {
+                return Err(Error::ScriptRuntime(
+                    "TypeError: FormData constructor submitter must be a submit button".into(),
+                ));
+            }
+            if self.resolve_form_for_submit(submitter_node) != Some(form_node) {
+                return Err(Error::ScriptRuntime(
+                    "NotFoundError: FormData constructor submitter is not a member of the form"
+                        .into(),
+                ));
+            }
+
+            if !self.is_effectively_disabled(submitter_node) {
+                let name = self.dom.attr(submitter_node, "name").unwrap_or_default();
+                let is_image_submitter = self
+                    .dom
+                    .tag_name(submitter_node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                    && self
+                        .dom
+                        .attr(submitter_node, "type")
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("image"));
+
+                if !name.is_empty() {
+                    entries.push((name, self.form_data_control_value(submitter_node)?));
+                } else if is_image_submitter {
+                    entries.push(("x".to_string(), "0".to_string()));
+                    entries.push(("y".to_string(), "0".to_string()));
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
     pub(crate) fn eval_form_data_source(
         &mut self,
         source: &FormDataSource,
         env: &HashMap<String, Value>,
     ) -> Result<Vec<(String, String)>> {
         match source {
-            FormDataSource::NewForm(form) => {
-                let form_node = self.resolve_dom_query_required_runtime(form, env)?;
-                self.form_data_entries(form_node)
-            }
+            FormDataSource::New { form, submitter } => self.eval_form_data_constructor_entries(
+                form.as_ref(),
+                submitter.as_ref(),
+                env,
+            ),
             FormDataSource::Var(name) => match env.get(name) {
-                Some(Value::FormData(entries)) => Ok(entries.clone()),
+                Some(Value::FormData(entries)) => Ok(entries.borrow().clone()),
                 Some(_) => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not a FormData instance",
                     name

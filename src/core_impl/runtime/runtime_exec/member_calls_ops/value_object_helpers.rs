@@ -520,6 +520,28 @@ impl Harness {
         )
     }
 
+    pub(crate) fn form_data_append_string_value(
+        value: &Value,
+        filename: Option<&Value>,
+    ) -> String {
+        match value {
+            Value::Blob(_) => filename
+                .map(Value::as_string)
+                .unwrap_or_else(|| "blob".to_string()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if Self::is_mock_file_object(&entries) {
+                    return filename
+                        .map(Value::as_string)
+                        .or_else(|| Self::object_get_entry(&entries, "name").map(|v| v.as_string()))
+                        .unwrap_or_else(|| "blob".to_string());
+                }
+                value.as_string()
+            }
+            _ => value.as_string(),
+        }
+    }
+
     pub(crate) fn is_class_list_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_CLASS_LIST_OBJECT_KEY),

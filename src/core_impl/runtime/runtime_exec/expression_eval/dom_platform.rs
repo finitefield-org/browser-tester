@@ -774,17 +774,21 @@ impl Harness {
                     let len = self.form_elements(form_node)?.len() as i64;
                     Ok(Value::Number(len))
                 }
-                Expr::FormDataNew { form } => {
-                    let form_node = self.resolve_dom_query_required_runtime(form, env)?;
-                    Ok(Value::FormData(self.form_data_entries(form_node)?))
-                }
+                Expr::FormDataNew { form, submitter } => Ok(Value::FormData(
+                    Rc::new(RefCell::new(self.eval_form_data_constructor_entries(
+                        form.as_ref(),
+                        submitter.as_ref(),
+                        env,
+                    )?)),
+                )),
                 Expr::FormDataGet { source, name } => {
                     let entries = self.eval_form_data_source(source, env)?;
-                    let value = entries
+                    Ok(entries
                         .iter()
-                        .find_map(|(entry_name, value)| (entry_name == name).then(|| value.clone()))
-                        .unwrap_or_default();
-                    Ok(Value::String(value))
+                        .find_map(|(entry_name, value)| {
+                            (entry_name == name).then(|| Value::String(value.clone()))
+                        })
+                        .unwrap_or(Value::Null))
                 }
                 Expr::FormDataHas { source, name } => {
                     let entries = self.eval_form_data_source(source, env)?;

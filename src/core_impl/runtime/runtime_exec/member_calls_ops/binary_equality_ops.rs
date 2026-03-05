@@ -450,7 +450,7 @@ impl Harness {
                 }
                 Self::object_has_property_in_chain(&entries, &key)
             }
-            Value::FormData(entries) => entries.iter().any(|(name, _)| name == &key),
+            Value::FormData(entries) => entries.borrow().iter().any(|(name, _)| name == &key),
             _ => false,
         };
 

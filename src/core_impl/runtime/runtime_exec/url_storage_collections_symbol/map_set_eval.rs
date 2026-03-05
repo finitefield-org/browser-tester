@@ -251,22 +251,23 @@ impl Harness {
         }
 
         if let Value::FormData(entries) = target_value {
-            let entries = entries.clone();
             return match method {
                 MapInstanceMethod::Get => {
                     if args.len() != 1 {
                         return Err(Error::ScriptRuntime(
-                            "Map.get requires exactly one argument".into(),
+                            "FormData.get requires exactly one argument".into(),
                         ));
                     }
                     let key = self
                         .eval_expr(&args[0], env, event_param, event)?
                         .as_string();
-                    let value = entries
+                    let entries = entries.borrow();
+                    Ok(entries
                         .iter()
-                        .find_map(|(entry_name, value)| (entry_name == &key).then(|| value.clone()))
-                        .unwrap_or_default();
-                    Ok(Value::String(value))
+                        .find_map(|(entry_name, value)| {
+                            (entry_name == &key).then(|| Value::String(value.clone()))
+                        })
+                        .unwrap_or(Value::Null))
                 }
                 MapInstanceMethod::Has => {
                     if args.len() != 1 {
@@ -277,8 +278,23 @@ impl Harness {
                     let key = self
                         .eval_expr(&args[0], env, event_param, event)?
                         .as_string();
+                    let entries = entries.borrow();
                     let has = entries.iter().any(|(entry_name, _)| entry_name == &key);
                     Ok(Value::Bool(has))
+                }
+                MapInstanceMethod::Delete => {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "FormData.delete requires exactly one argument".into(),
+                        ));
+                    }
+                    let key = self
+                        .eval_expr(&args[0], env, event_param, event)?
+                        .as_string();
+                    entries
+                        .borrow_mut()
+                        .retain(|(entry_name, _)| entry_name != &key);
+                    Ok(Value::Undefined)
                 }
                 _ => Err(Error::ScriptRuntime(format!(
                     "variable '{}' is not a Map",

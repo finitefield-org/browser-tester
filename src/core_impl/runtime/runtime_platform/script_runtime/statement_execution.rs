@@ -3022,9 +3022,14 @@ impl Harness {
                             target_var,
                             name,
                             value,
+                            filename,
                         } => {
                             let name = self.eval_expr(name, env, event_param, event)?;
                             let value = self.eval_expr(value, env, event_param, event)?;
+                            let filename = filename
+                                .as_ref()
+                                .map(|expr| self.eval_expr(expr, env, event_param, event))
+                                .transpose()?;
                             let target_node = match env.get(target_var) {
                                 Some(Value::Node(node)) => Some(*node),
                                 Some(_) => None,
@@ -3037,13 +3042,19 @@ impl Harness {
                             };
 
                             if let Some(target_node) = target_node {
-                                let append_args = [name, value];
+                                let mut append_args = vec![name.clone(), value.clone()];
+                                if let Some(filename) = filename.clone() {
+                                    append_args.push(filename);
+                                }
                                 self.eval_document_append_call(target_node, &append_args)?;
                                 continue;
                             }
 
                             let name = name.as_string();
-                            let value = value.as_string();
+                            let value = Self::form_data_append_string_value(
+                                &value,
+                                filename.as_ref(),
+                            );
                             let target = env.get_mut(target_var).ok_or_else(|| {
                                 Error::ScriptRuntime(format!(
                                     "unknown FormData variable: {}",
@@ -3052,7 +3063,7 @@ impl Harness {
                             })?;
                             match target {
                                 Value::FormData(entries) => {
-                                    entries.push((name, value));
+                                    entries.borrow_mut().push((name, value));
                                 }
                                 Value::Object(entries) => {
                                     if !Self::is_url_search_params_object(&entries.borrow()) {
@@ -3060,6 +3071,12 @@ impl Harness {
                                             "variable '{}' is not a FormData instance",
                                             target_var
                                         )));
+                                    }
+                                    if filename.is_some() {
+                                        return Err(Error::ScriptRuntime(
+                                            "URLSearchParams.append requires exactly two arguments"
+                                                .into(),
+                                        ));
                                     }
                                     {
                                         let mut object_ref = entries.borrow_mut();

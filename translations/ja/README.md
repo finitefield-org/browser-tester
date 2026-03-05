@@ -214,13 +214,31 @@ MVP対応:
 - この順序で、既知の `ScriptParse` 例外系（`event` と `DOM` の同名プロパティ衝突）を回避している
 
 `FormData` の簡易仕様（テスト用途）:
+- `new FormData()` は空のスナップショットを作る
 - `new FormData(form)` は `form.elements` を走査してスナップショットを作る
+- `new FormData(form, submitter)` は submitter のペアも追加する
+- コンストラクタ引数は 0 / 1 / 2 個に対応
 - 対象は `name` を持つ有効なコントロールのみ（`disabled` と `button/submit/reset/file/image` は除外）
 - checkbox/radio は `checked=true` のものだけ対象、`value` が空なら `"on"` を使う
-- `.get(name)` は最初の値を返し、存在しない場合は空文字
+- `submitter` について:
+  - submit button でない場合は `TypeError`
+  - submitter が対象 form に属さない場合は `NotFoundError`
+  - `name` を持つ submitter は `name=value` として追加
+- `.get(name)` は最初の値を返し、存在しない場合は `null`
 - `.has(name)` はキー存在判定を返す
+- `.getAll(name)` はキーに対応する全値を返し、存在しない場合は空配列
 - `.getAll(name).length` は同一キーの件数を返す
-- `formData.append(name, value)` は末尾に値を追加する（`FormData` 変数に対するstatementのみ対応）
+- `formData.delete(name)` は該当キーの全値を削除し、`undefined` を返す
+- `formData.entries()` は追加順のキー/値ペアを返す
+- `formData.keys()` は追加順でキーを返す
+- `formData.values()` は追加順で値を返す
+- `formData.set(name, value)` は同名キーの全値を上書きし、未存在なら追加する
+- `formData.set(name, value, filename)` は Blob/File 相当値で利用できる
+- `formData.append(name, value)` は末尾に値を追加する
+- `formData.append(name, value, filename)` は Blob/File 相当値で利用できる
+- `append()` の返り値は `undefined`
+- 文字列以外の値は文字列化される（`true` -> `"true"`, `72` -> `"72"`）
+- このハーネスでは Blob/File 相当値はファイル名文字列として保持される（Blob既定: `"blob"`、File既定: ファイル名）
 - `textarea` の初期値は要素本文テキストを使う
 - `select` の初期値は `selected` 付き `option` を優先し、なければ先頭 `option` を使う
 - `option` に `value` 属性がない場合、`option` のテキストを値として使う

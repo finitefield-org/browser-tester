@@ -405,7 +405,7 @@ pub(crate) enum Value {
     Undefined,
     Node(NodeId),
     NodeList(Rc<RefCell<NodeListValue>>),
-    FormData(Vec<(String, String)>),
+    FormData(Rc<RefCell<Vec<(String, String)>>>),
     Function(Rc<FunctionValue>),
 }
 
@@ -1043,7 +1043,10 @@ pub(crate) enum DomQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FormDataSource {
-    NewForm(DomQuery),
+    New {
+        form: Option<DomQuery>,
+        submitter: Option<DomQuery>,
+    },
     Var(String),
 }
 

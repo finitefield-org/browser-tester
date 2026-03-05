@@ -1446,6 +1446,221 @@ fn form_data_get_and_has_work_with_form_controls() -> Result<()> {
 }
 
 #[test]
+fn form_data_get_returns_first_value_and_null_for_missing_key() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('username', 'Chris');
+            formData.append('username', 'Bob');
+            document.getElementById('result').textContent =
+              formData.get('username') + ':' + (formData.get('missing') === null);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "Chris:true")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_has_is_false_before_append_and_true_after_append() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const formData = new FormData();
+            const before = formData.has('username');
+            formData.append('username', 'Chris');
+            const after = formData.has('username');
+            document.getElementById('result').textContent = before + ':' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "false:true")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_constructor_without_arguments_creates_empty_form_data() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            fd.append('username', 'Chris');
+            document.getElementById('result').textContent =
+              fd.get('username') + ':' +
+              fd.has('missing') + ':' +
+              fd.getAll('username').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "Chris:false:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_constructor_with_submitter_includes_submitter_data() -> Result<()> {
+    let html = r#"
+        <form id='form'>
+          <input type='text' name='text1' value='foo'>
+          <input type='text' name='text2' value='bar'>
+          <input type='text' name='text3' value='baz'>
+          <input type='checkbox' name='check' checked disabled>
+          <button name='intent' value='save'>Save</button>
+          <button name='intent' value='saveAsCopy'>Save As Copy</button>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('form');
+            const submitter = document.querySelector('button[value=save]');
+            const fd = new FormData(form, submitter);
+            document.getElementById('result').textContent =
+              fd.get('text1') + ':' +
+              fd.get('text2') + ':' +
+              fd.get('text3') + ':' +
+              fd.has('check') + ':' +
+              fd.get('intent') + ':' +
+              fd.getAll('intent').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "foo:bar:baz:false:save:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_inline_constructor_without_form_supports_methods() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              new FormData().get('username') + ':' +
+              new FormData().has('username') + ':' +
+              new FormData().getAll('username').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "null:false:0")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_inline_constructor_with_submitter_supports_methods() -> Result<()> {
+    let html = r#"
+        <form id='form'>
+          <input type='text' name='text1' value='foo'>
+          <button name='intent' value='save'>Save</button>
+          <button name='intent' value='saveAsCopy'>Save As Copy</button>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('form');
+            const submitter = document.querySelector('button[value=save]');
+            document.getElementById('result').textContent =
+              new FormData(form, submitter).get('intent') + ':' +
+              new FormData(form, submitter).getAll('intent').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "save:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_constructor_rejects_non_submit_button_submitter() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='field' name='field' value='x'>
+          <button id='ok' name='intent' value='save'>Save</button>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('f');
+            const submitter = document.getElementById('field');
+            new FormData(form, submitter);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("non-submit control must throw a TypeError");
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("TypeError"));
+            assert!(message.contains("submitter must be a submit button"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn form_data_constructor_rejects_submitter_from_another_form() -> Result<()> {
+    let html = r#"
+        <form id='left'>
+          <input name='text1' value='foo'>
+          <button name='intent' value='save'>Save</button>
+        </form>
+        <form id='right'>
+          <button id='foreign' name='intent' value='saveAsCopy'>Save As Copy</button>
+        </form>
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const form = document.getElementById('left');
+            const submitter = document.getElementById('foreign');
+            new FormData(form, submitter);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("foreign submitter must throw NotFoundError");
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("NotFoundError"));
+            assert!(message.contains("member of the form"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn form_data_uses_textarea_and_select_initial_values() -> Result<()> {
     let html = r#"
         <form id='f'>
@@ -1585,7 +1800,7 @@ fn form_data_inline_constructor_call_works() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "Hanako:false:")?;
+    h.assert_text("#result", "Hanako:false:null")?;
     Ok(())
 }
 
@@ -1615,6 +1830,457 @@ fn form_data_get_all_length_and_append_work() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "A:3:1:123")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_append_returns_undefined_and_coerces_non_string_values() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            const returned = fd.append('name', true);
+            fd.append('name', 72);
+            document.getElementById('result').textContent =
+              String(returned) + ':' + fd.getAll('name').join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:true|72")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_append_with_blob_and_filename_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            const blob = new Blob(['abc'], { type: 'text/plain' });
+            fd.append('user-pic', blob, 'chris.jpg');
+            fd.append('raw-blob', blob);
+            document.getElementById('result').textContent =
+              fd.get('user-pic') + ':' +
+              fd.get('raw-blob') + ':' +
+              fd.getAll('user-pic').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "chris.jpg:blob:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_append_three_argument_expression_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            const blob = new Blob(['abc'], { type: 'text/plain' });
+            const returned = fd.append('photo', blob, 'photo.jpg');
+            document.getElementById('result').textContent =
+              String(returned) + ':' + fd.get('photo');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:photo.jpg")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_append_with_file_uses_default_and_override_filenames() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            const f1 = new File(['ab'], 'sample.csv', { type: 'text/csv' });
+            const f2 = new File(['cd'], 'report.csv', { type: 'text/csv' });
+            fd.append('doc', f1);
+            fd.append('doc', f2, 'renamed.csv');
+            document.getElementById('result').textContent =
+              fd.getAll('doc').join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "sample.csv|renamed.csv")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_set_overwrites_existing_values_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            fd.append('username', 'Chris');
+            fd.append('username', 'Bob');
+            const returned = fd.set('username', 'Alice');
+            document.getElementById('result').textContent =
+              String(returned) + ':' +
+              fd.get('username') + ':' +
+              fd.getAll('username').length + ':' +
+              fd.getAll('username').join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:Alice:1:Alice")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_set_with_blob_filename_and_default_name_works() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            const blob = new Blob(['abc'], { type: 'text/plain' });
+            fd.set('user-pic', blob, 'chris.jpg');
+            fd.set('raw-blob', blob);
+            document.getElementById('result').textContent =
+              fd.get('user-pic') + ':' +
+              fd.get('raw-blob') + ':' +
+              fd.getAll('user-pic').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "chris.jpg:blob:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_set_coerces_non_string_value_and_adds_when_missing() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            fd.set('name', 72);
+            document.getElementById('result').textContent =
+              fd.has('name') + ':' + fd.get('name') + ':' + fd.getAll('name').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true:72:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_set_inline_constructor_and_arity_validation_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent =
+              String(new FormData().set('name', 'Chris'));
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined")?;
+
+    let err = Harness::from_html(
+        r#"
+        <script>
+          const fd = new FormData();
+          fd.set('name');
+        </script>
+        "#,
+    )
+    .expect_err("FormData.set should reject invalid arity");
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("FormData.set requires two or three arguments"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn form_data_delete_removes_all_values_for_key_and_returns_undefined() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='t1' name='tag' value='A'>
+          <input id='t2' name='tag' value='B'>
+          <input id='o1' name='other' value='Z'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            fd.append('tag', 'C');
+            const returned = fd.delete('tag');
+            document.getElementById('result').textContent =
+              String(returned) + ':' +
+              fd.has('tag') + ':' +
+              fd.get('tag') + ':' +
+              fd.getAll('tag').length + ':' +
+              fd.get('other');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:false:null:0:Z")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_delete_missing_key_is_noop() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData();
+            fd.append('name', 'A');
+            fd.delete('missing');
+            document.getElementById('result').textContent =
+              fd.get('name') + ':' + fd.getAll('name').length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "A:1")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_entries_returns_all_pairs_in_order() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='k1' name='key1' value='value1'>
+          <input id='k2' name='key2' value='value2'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            fd.append('key1', 'value3');
+            let out = '';
+            for (const pair of fd.entries()) {
+              out = out + pair[0] + '=' + pair[1] + ';';
+            }
+            document.getElementById('result').textContent =
+              out + '|' + fd.entries().length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "key1=value1;key2=value2;key1=value3;|3",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn form_data_entries_rejects_arguments() -> Result<()> {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          const fd = new FormData();
+          fd.entries('extra');
+        </script>
+        "#,
+    )
+    .expect_err("FormData.entries should reject arguments");
+
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("FormData.entries does not take arguments"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn form_data_keys_returns_all_keys_in_order() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('key1', 'value1');
+            formData.append('key2', 'value2');
+            formData.append('key1', 'value3');
+            let out = '';
+            for (const key of formData.keys()) {
+              out = out + key + ';';
+            }
+            document.getElementById('result').textContent =
+              out + '|' + formData.keys().length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "key1;key2;key1;|3")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_keys_rejects_arguments() -> Result<()> {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          const fd = new FormData();
+          fd.keys('extra');
+        </script>
+        "#,
+    )
+    .expect_err("FormData.keys should reject arguments");
+
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("FormData.keys does not take arguments"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn form_data_keys_inline_constructor_returns_keys() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='k1' name='key1' value='value1'>
+          <input id='k2' name='key2' value='value2'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const keys = new FormData(document.getElementById('f')).keys();
+            document.getElementById('result').textContent =
+              keys.length + ':' + keys.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:key1|key2")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_values_returns_all_values_in_order() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('key1', 'value1');
+            formData.append('key2', 'value2');
+            formData.append('key1', 'value3');
+            let out = '';
+            for (const value of formData.values()) {
+              out = out + value + ';';
+            }
+            document.getElementById('result').textContent =
+              out + '|' + formData.values().length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "value1;value2;value3;|3")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_values_rejects_arguments() -> Result<()> {
+    let err = Harness::from_html(
+        r#"
+        <script>
+          const fd = new FormData();
+          fd.values('extra');
+        </script>
+        "#,
+    )
+    .expect_err("FormData.values should reject arguments");
+
+    match err {
+        Error::ScriptRuntime(message) => {
+            assert!(message.contains("FormData.values does not take arguments"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn form_data_values_inline_constructor_returns_values() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='k1' name='key1' value='value1'>
+          <input id='k2' name='key2' value='value2'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const values = new FormData(document.getElementById('f')).values();
+            document.getElementById('result').textContent =
+              values.length + ':' + values.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:value1|value2")?;
     Ok(())
 }
 
@@ -1671,6 +2337,30 @@ fn form_data_get_all_returns_array_values_in_order() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "3:A:B:C:A|B|C:0")?;
+    Ok(())
+}
+
+#[test]
+fn form_data_get_all_returns_all_values_for_same_name() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('username', 'Chris');
+            formData.append('username', 'Bob');
+            const users = formData.getAll('username');
+            const missing = formData.getAll('missing');
+            document.getElementById('result').textContent =
+              users.length + ':' + users.join('|') + ':' + missing.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "2:Chris|Bob:0")?;
     Ok(())
 }
 

@@ -1,15 +1,18 @@
 use super::*;
-pub(crate) fn parse_new_form_data_expr(src: &str) -> Result<Option<DomQuery>> {
+
+pub(crate) fn parse_new_form_data_expr(
+    src: &str,
+) -> Result<Option<(Option<DomQuery>, Option<DomQuery>)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
-    let Some(form) = parse_new_form_data_target(&mut cursor)? else {
+    let Some((form, submitter)) = parse_new_form_data_target(&mut cursor)? else {
         return Ok(None);
     };
     cursor.skip_ws();
     if !cursor.eof() {
         return Ok(None);
     }
-    Ok(Some(form))
+    Ok(Some((form, submitter)))
 }
 
 pub(crate) fn parse_form_data_get_expr(src: &str) -> Result<Option<(FormDataSource, String)>> {
@@ -50,6 +53,9 @@ pub(crate) fn parse_form_data_get_all_length_expr(
     }
 
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let raw_args = split_top_level_by_char(&args_src, b',');
     let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
@@ -59,7 +65,7 @@ pub(crate) fn parse_form_data_get_all_length_expr(
     };
     if args.len() != 1 {
         return match source {
-            FormDataSource::NewForm(_) => Err(Error::ScriptParse(
+            FormDataSource::New { .. } => Err(Error::ScriptParse(
                 "FormData.getAll requires exactly one string argument".into(),
             )),
             FormDataSource::Var(_) => Ok(None),
@@ -70,7 +76,7 @@ pub(crate) fn parse_form_data_get_all_length_expr(
         Ok(name) => name,
         Err(_) => {
             return match source {
-                FormDataSource::NewForm(_) => Err(Error::ScriptParse(
+                FormDataSource::New { .. } => Err(Error::ScriptParse(
                     "FormData.getAll requires exactly one string argument".into(),
                 )),
                 FormDataSource::Var(_) => Ok(None),
@@ -120,6 +126,9 @@ pub(crate) fn parse_form_data_method_expr(
         return Ok(None);
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let raw_args = split_top_level_by_char(&args_src, b',');
     let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
@@ -129,7 +138,7 @@ pub(crate) fn parse_form_data_method_expr(
     };
     if args.len() != 1 {
         return match source {
-            FormDataSource::NewForm(_) => Err(Error::ScriptParse(format!(
+            FormDataSource::New { .. } => Err(Error::ScriptParse(format!(
                 "FormData.{method} requires exactly one string argument"
             ))),
             FormDataSource::Var(_) => Ok(None),
@@ -140,7 +149,7 @@ pub(crate) fn parse_form_data_method_expr(
         Ok(name) => name,
         Err(_) => {
             return match source {
-                FormDataSource::NewForm(_) => Err(Error::ScriptParse(format!(
+                FormDataSource::New { .. } => Err(Error::ScriptParse(format!(
                     "FormData.{method} requires exactly one string argument"
                 ))),
                 FormDataSource::Var(_) => Ok(None),
@@ -156,8 +165,8 @@ pub(crate) fn parse_form_data_method_expr(
 }
 
 pub(crate) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<FormDataSource>> {
-    if let Some(form) = parse_new_form_data_target(cursor)? {
-        return Ok(Some(FormDataSource::NewForm(form)));
+    if let Some((form, submitter)) = parse_new_form_data_target(cursor)? {
+        return Ok(Some(FormDataSource::New { form, submitter }));
     }
 
     if let Some(var_name) = cursor.parse_identifier() {
@@ -167,7 +176,9 @@ pub(crate) fn parse_form_data_source(cursor: &mut Cursor<'_>) -> Result<Option<F
     Ok(None)
 }
 
-pub(crate) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Option<DomQuery>> {
+pub(crate) fn parse_new_form_data_target(
+    cursor: &mut Cursor<'_>,
+) -> Result<Option<(Option<DomQuery>, Option<DomQuery>)>> {
     cursor.skip_ws();
     let start = cursor.pos();
 
@@ -188,23 +199,47 @@ pub(crate) fn parse_new_form_data_target(cursor: &mut Cursor<'_>) -> Result<Opti
     cursor.skip_ws();
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
-    let args = split_top_level_by_char(args_src.trim(), b',');
-    if args.len() != 1 {
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() > 2 {
         return Err(Error::ScriptParse(
-            "new FormData requires exactly one argument".into(),
+            "new FormData supports zero, one, or two arguments".into(),
         ));
     }
 
-    let arg = args[0].trim();
-    let mut arg_cursor = Cursor::new(arg);
+    if args.is_empty() {
+        return Ok(Some((None, None)));
+    }
+
+    let form_arg = args[0].trim();
+    let mut arg_cursor = Cursor::new(form_arg);
     arg_cursor.skip_ws();
     let form = parse_form_elements_base(&mut arg_cursor)?;
     arg_cursor.skip_ws();
     if !arg_cursor.eof() {
         return Err(Error::ScriptParse(format!(
-            "unsupported FormData argument: {arg}"
+            "unsupported FormData form argument: {form_arg}"
         )));
     }
 
-    Ok(Some(form))
+    if args.len() == 1 {
+        return Ok(Some((Some(form), None)));
+    }
+
+    let submitter_arg = args[1].trim();
+    let mut submitter_cursor = Cursor::new(submitter_arg);
+    submitter_cursor.skip_ws();
+    let submitter = parse_form_elements_base(&mut submitter_cursor)?;
+    submitter_cursor.skip_ws();
+    if !submitter_cursor.eof() {
+        return Err(Error::ScriptParse(format!(
+            "unsupported FormData submitter argument: {submitter_arg}"
+        )));
+    }
+
+    Ok(Some((Some(form), Some(submitter))))
 }

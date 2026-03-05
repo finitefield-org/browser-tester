@@ -395,8 +395,8 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(Expr::FormDataHas { source, name });
     }
 
-    if let Some(form) = parse_new_form_data_expr(src)? {
-        return Ok(Expr::FormDataNew { form });
+    if let Some((form, submitter)) = parse_new_form_data_expr(src)? {
+        return Ok(Expr::FormDataNew { form, submitter });
     }
 
     if let Some((target, name)) = parse_get_attribute_expr(src)? {

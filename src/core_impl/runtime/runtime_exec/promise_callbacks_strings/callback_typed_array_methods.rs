@@ -140,6 +140,95 @@ impl Harness {
                 };
             }
 
+            if let Value::FormData(entries) = target_value {
+                return match method {
+                    TypedArrayInstanceMethod::Set => {
+                        if args.len() != 2 && args.len() != 3 {
+                            return Err(Error::ScriptRuntime(
+                                "FormData.set requires two or three arguments".into(),
+                            ));
+                        }
+                        let name = self
+                            .eval_expr(&args[0], env, event_param, event)?
+                            .as_string();
+                        let value = self.eval_expr(&args[1], env, event_param, event)?;
+                        let filename = args
+                            .get(2)
+                            .map(|expr| self.eval_expr(expr, env, event_param, event))
+                            .transpose()?;
+                        let value =
+                            Self::form_data_append_string_value(&value, filename.as_ref());
+                        let mut entries_ref = entries.borrow_mut();
+                        if let Some(first_match) =
+                            entries_ref.iter().position(|(entry_name, _)| entry_name == &name)
+                        {
+                            entries_ref[first_match].1 = value;
+                            let mut index = entries_ref.len();
+                            while index > 0 {
+                                index -= 1;
+                                if index != first_match && entries_ref[index].0 == name {
+                                    entries_ref.remove(index);
+                                }
+                            }
+                        } else {
+                            entries_ref.push((name, value));
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    TypedArrayInstanceMethod::Entries => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "FormData.entries does not take arguments".into(),
+                            ));
+                        }
+                        let snapshot = entries.borrow().clone();
+                        Ok(Self::new_array_value(
+                            snapshot
+                                .into_iter()
+                                .map(|(name, value)| {
+                                    Self::new_array_value(vec![
+                                        Value::String(name),
+                                        Value::String(value),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        ))
+                    }
+                    TypedArrayInstanceMethod::Keys => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "FormData.keys does not take arguments".into(),
+                            ));
+                        }
+                        let snapshot = entries.borrow().clone();
+                        Ok(Self::new_array_value(
+                            snapshot
+                                .into_iter()
+                                .map(|(name, _)| Value::String(name))
+                                .collect::<Vec<_>>(),
+                        ))
+                    }
+                    TypedArrayInstanceMethod::Values => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "FormData.values does not take arguments".into(),
+                            ));
+                        }
+                        let snapshot = entries.borrow().clone();
+                        Ok(Self::new_array_value(
+                            snapshot
+                                .into_iter()
+                                .map(|(_, value)| Value::String(value))
+                                .collect::<Vec<_>>(),
+                        ))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "variable '{}' is not a TypedArray",
+                        target
+                    ))),
+                };
+            }
+
             if let Value::Object(entries) = target_value {
                 if Self::is_cookie_store_object(&entries.borrow()) {
                     if matches!(method, TypedArrayInstanceMethod::Set) {

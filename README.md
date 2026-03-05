@@ -573,13 +573,31 @@ Unsupported selectors must return explicit errors (no silent ignore).
 - This order avoids known `ScriptParse` edge cases (name collisions between `event` and DOM properties).
 
 Simplified `FormData` spec (for testing):
+- `new FormData()` creates an empty snapshot.
 - `new FormData(form)` scans `form.elements` and creates a snapshot.
+- `new FormData(form, submitter)` additionally includes the submitter pair.
+- The constructor supports zero, one, or two arguments.
 - Only valid controls with `name` are included (`disabled` and `button/submit/reset/file/image` are excluded).
 - For checkbox/radio, only `checked=true` entries are included; if `value` is empty, use `"on"`.
-- `.get(name)` returns the first value, or empty string if missing.
+- For `submitter`:
+  - throw `TypeError` if submitter is not a submit button (`<button type=submit>` / `<input type=submit|image>`).
+  - throw `NotFoundError` if submitter does not belong to the target form.
+  - include `name=value` for named submitters.
+- `.get(name)` returns the first value, or `null` if missing.
 - `.has(name)` returns key presence.
+- `.getAll(name)` returns all values for the key, or an empty array if missing.
 - `.getAll(name).length` returns the number of values for the same key.
-- `formData.append(name, value)` appends to the end (supported only as statements against a `FormData` variable).
+- `formData.delete(name)` removes all values for the key and returns `undefined`.
+- `formData.entries()` returns key/value pairs in insertion order.
+- `formData.keys()` returns keys in insertion order.
+- `formData.values()` returns values in insertion order.
+- `formData.set(name, value)` overwrites existing key values or adds a new key.
+- `formData.set(name, value, filename)` supports Blob/File-like values.
+- `formData.append(name, value)` appends to the end.
+- `formData.append(name, value, filename)` is supported for Blob/File-like values.
+- `append()` returns `undefined`.
+- Non-string values are stringified (`true` -> `"true"`, `72` -> `"72"`).
+- For Blob/File-like values in this harness, the stored value is represented by filename (`Blob` default: `"blob"`, `File` default: file name).
 - Initial `textarea` value uses the element body text.
 - Initial `select` value prefers `option` with `selected`; otherwise uses the first `option`.
 - If an `option` has no `value` attribute, use the `option` text as value.

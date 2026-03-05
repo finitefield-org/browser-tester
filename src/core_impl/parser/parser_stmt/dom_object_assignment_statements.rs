@@ -47,12 +47,17 @@ pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
     cursor.skip_ws();
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 2 {
+    if args.len() != 2 && args.len() != 3 {
         return Ok(None);
     }
 
     let name = parse_expr(args[0].trim())?;
     let value = parse_expr(args[1].trim())?;
+    let filename = if args.len() == 3 {
+        Some(parse_expr(args[2].trim())?)
+    } else {
+        None
+    };
 
     cursor.skip_ws();
     cursor.consume_byte(b';');
@@ -67,6 +72,7 @@ pub(crate) fn parse_form_data_append_stmt(stmt: &str) -> Result<Option<Stmt>> {
         target_var,
         name,
         value,
+        filename,
     }))
 }
 
