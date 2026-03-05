@@ -402,6 +402,10 @@ impl Harness {
                 Value::String(options.numeric.clone()),
             ),
             (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+            (
                 "localeMatcher".to_string(),
                 Value::String(options.locale_matcher.clone()),
             ),

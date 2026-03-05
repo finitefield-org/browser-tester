@@ -7,7 +7,7 @@ pub(crate) fn normalize_malformed_escaped_empty_string_literals(src: &str) -> St
 
     let bytes = src.as_bytes();
     let mut scanner = JsLexScanner::new();
-    let mut out = String::with_capacity(src.len());
+    let mut out = Vec::with_capacity(src.len());
     let mut i = 0usize;
 
     while i < bytes.len() {
@@ -25,23 +25,21 @@ pub(crate) fn normalize_malformed_escaped_empty_string_literals(src: &str) -> St
                 && bytes[i + 2] == b'\\'
                 && bytes[i + 3] == b'\'';
             if escaped_double || escaped_single {
-                let quote = if escaped_double { '"' } else { '\'' };
+                let quote = if escaped_double { b'"' } else { b'\'' };
                 out.push(quote);
                 out.push(quote);
-                scanner.consume_significant_bytes(&[quote as u8, quote as u8]);
+                scanner.consume_significant_bytes(&[quote, quote]);
                 i += 4;
                 continue;
             }
         }
 
         let next = scanner.advance(bytes, i);
-        if let Some(chunk) = src.get(i..next) {
-            out.push_str(chunk);
-        }
+        out.extend_from_slice(&bytes[i..next]);
         i = next;
     }
 
-    out
+    String::from_utf8(out).expect("normalized JavaScript source must remain valid UTF-8")
 }
 pub(crate) fn parse_string_literal_exact(src: &str) -> Result<String> {
     let bytes = src.as_bytes();

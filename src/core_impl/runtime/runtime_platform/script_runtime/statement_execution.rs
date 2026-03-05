@@ -3115,21 +3115,29 @@ impl Harness {
                             }
 
                             let value = self.eval_expr(expr, env, event_param, event)?;
-                            if let DomQuery::Var(name) = target {
-                                if let Some(key) = Self::object_key_from_dom_prop(prop) {
-                                    if let Some(receiver) = env.get(name).cloned() {
-                                        if !matches!(receiver, Value::Node(_) | Value::NodeList(_))
-                                        {
-                                            self.set_object_assignment_property(
-                                                &receiver,
-                                                &Value::String(key.to_string()),
-                                                value.clone(),
-                                                name,
-                                                env,
-                                                event,
-                                            )?;
-                                            continue;
-                                        }
+                            if let Some(key) = Self::object_key_from_dom_prop(prop) {
+                                let receiver = match target {
+                                    DomQuery::Var(name) => env.get(name).cloned(),
+                                    DomQuery::VarPath { .. } | DomQuery::Index { .. } => {
+                                        self.resolve_dom_query_value_runtime(target, env)?
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(receiver) = receiver {
+                                    if !matches!(receiver, Value::Node(_) | Value::NodeList(_)) {
+                                        let assignment_target = match target {
+                                            DomQuery::Var(name) => name.clone(),
+                                            _ => target.describe_call(),
+                                        };
+                                        self.set_object_assignment_property(
+                                            &receiver,
+                                            &Value::String(key.to_string()),
+                                            value.clone(),
+                                            &assignment_target,
+                                            env,
+                                            event,
+                                        )?;
+                                        continue;
                                     }
                                 }
                             }
@@ -3531,7 +3539,32 @@ impl Harness {
                                     self.dom.set_attr(node, "hreflang", &value.as_string())?
                                 }
                                 DomProp::AnchorInterestForElement => {
-                                    self.dom.set_attr(node, "interestfor", &value.as_string())?
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                                    {
+                                        match &value {
+                                            Value::Null | Value::Undefined => {
+                                                self.dom.remove_attr(node, "interestfor")?;
+                                            }
+                                            Value::Node(target) => {
+                                                let target_id =
+                                                    self.dom.attr(*target, "id").unwrap_or_default();
+                                                if target_id.is_empty() {
+                                                    self.dom.remove_attr(node, "interestfor")?;
+                                                } else {
+                                                    self.dom.set_attr(node, "interestfor", &target_id)?;
+                                                }
+                                            }
+                                            _ => {
+                                                self.dom
+                                                    .set_attr(node, "interestfor", &value.as_string())?;
+                                            }
+                                        }
+                                    } else {
+                                        self.dom.set_attr(node, "interestfor", &value.as_string())?
+                                    }
                                 }
                                 DomProp::AnchorPassword => {
                                     self.set_anchor_url_property(node, "password", value.clone())?

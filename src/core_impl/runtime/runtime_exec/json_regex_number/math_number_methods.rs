@@ -285,6 +285,11 @@ impl Harness {
                 )))
             }
             NumberInstanceMethod::ToFixed => {
+                let numeric = Self::number_primitive_value(&value).ok_or_else(|| {
+                    Error::ScriptRuntime(
+                        "TypeError: Number.prototype.toFixed requires a Number receiver".into(),
+                    )
+                })?;
                 let fraction_digits = if let Some(arg) = args_value.first() {
                     let fraction_digits = Self::value_to_i64(arg);
                     if !(0..=100).contains(&fraction_digits) {

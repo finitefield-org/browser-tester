@@ -4524,6 +4524,75 @@ fn optional_chaining_function_call_behaviors_work_and_short_circuit_rhs_evaluati
 }
 
 #[test]
+fn optional_chaining_stacked_root_and_method_optional_calls_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const nullRoot = null;
+          const undefinedRoot = undefined;
+          const withMethod = {
+            value: 9,
+            method() {
+              return this.value;
+            },
+          };
+          const withMissingMethod = {};
+          const withNonFunction = { method: 1 };
+
+          const fromNullRoot = nullRoot?.method?.();
+          const fromUndefinedRoot = undefinedRoot?.method?.();
+          const fromMethod = withMethod?.method?.();
+          const fromMissingMethod = withMissingMethod?.method?.();
+
+          let nonFunctionThrows = 'no';
+          try {
+            withNonFunction?.method?.();
+          } catch (e) {
+            nonFunctionThrows = 'yes';
+          }
+
+          document.getElementById('result').textContent = [
+            String(fromNullRoot),
+            String(fromUndefinedRoot),
+            String(fromMethod),
+            String(fromMissingMethod),
+            nonFunctionThrows,
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:undefined:9:undefined:yes")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chaining_direct_optional_call_throws_on_non_function_values() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const missing = undefined;
+          const missingResult = missing?.('x');
+
+          let nonFunctionThrows = 'no';
+          try {
+            const nonCallable = 3;
+            nonCallable?.();
+          } catch (e) {
+            nonFunctionThrows = 'yes';
+          }
+
+          document.getElementById('result').textContent =
+            String(missingResult) + ':' + nonFunctionThrows;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "undefined:yes")?;
+    Ok(())
+}
+
+#[test]
 fn optional_chaining_short_circuits_computed_operands_and_continuous_chains() -> Result<()> {
     let html = r#"
         <p id='result'></p>

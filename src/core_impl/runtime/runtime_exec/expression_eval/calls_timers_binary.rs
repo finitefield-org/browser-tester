@@ -123,6 +123,128 @@ impl Harness {
         Ok(attribute_type)
     }
 
+    fn object_assign_is_copyable_key(key: &str) -> bool {
+        Self::is_symbol_storage_key(key) || !Self::is_internal_object_key(key)
+    }
+
+    fn object_assign_enumerable_keys(value: &Value) -> Vec<String> {
+        match value {
+            Value::Object(entries) => entries
+                .borrow()
+                .iter()
+                .filter(|(key, _)| Self::object_assign_is_copyable_key(key))
+                .map(|(key, _)| key.clone())
+                .collect(),
+            Value::Array(values) => {
+                let values = values.borrow();
+                let mut keys = values
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, _)| {
+                        (!Self::array_index_is_hole(&values, index)).then(|| index.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                keys.extend(
+                    values
+                        .properties
+                        .iter()
+                        .filter(|(key, _)| Self::object_assign_is_copyable_key(key))
+                        .map(|(key, _)| key.clone()),
+                );
+                keys
+            }
+            Value::String(text) => text
+                .chars()
+                .enumerate()
+                .map(|(index, _)| index.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn object_assign_target_to_object(target: Value) -> Result<Value> {
+        match target {
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
+                "Cannot convert undefined or null to object".into(),
+            )),
+            Value::Object(_)
+            | Value::Function(_)
+            | Value::Array(_)
+            | Value::Map(_)
+            | Value::WeakMap(_)
+            | Value::Set(_)
+            | Value::WeakSet(_)
+            | Value::RegExp(_)
+            | Value::Node(_)
+            | Value::UrlConstructor => Ok(target),
+            Value::String(text) => Ok(Self::new_string_wrapper_value(text)),
+            Value::Symbol(symbol) => Ok(Self::new_object_value(vec![(
+                INTERNAL_SYMBOL_WRAPPER_KEY.to_string(),
+                Value::Number(symbol.id as i64),
+            )])),
+            primitive => Ok(Self::new_object_value(vec![(
+                "value".to_string(),
+                Value::String(primitive.as_string()),
+            )])),
+        }
+    }
+
+    fn object_assign_set_target_property(
+        &mut self,
+        target: &Value,
+        key: &str,
+        value: Value,
+        event: &EventState,
+    ) -> Result<()> {
+        let key_value = if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
+            if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
+                Value::Symbol(symbol.clone())
+            } else {
+                Value::String(key.to_string())
+            }
+        } else {
+            Value::String(key.to_string())
+        };
+        let mut assign_env = HashMap::new();
+        self.set_object_assignment_property(
+            target,
+            &key_value,
+            value,
+            "Object.assign target",
+            &mut assign_env,
+            event,
+        )
+        .map_err(|err| match err {
+            Error::ScriptRuntime(msg)
+                if msg == "variable 'Object.assign target' is not an object (assignment target)" =>
+            {
+                Error::ScriptRuntime("Object.assign target must be an object".into())
+            }
+            other => other,
+        })
+    }
+
+    fn eval_object_assign_static_call(&mut self, args: &[Value], event: &EventState) -> Result<Value> {
+        if args.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "Object.assign requires at least one argument".into(),
+            ));
+        }
+        let target = Self::object_assign_target_to_object(args[0].clone())?;
+
+        for source in args.iter().skip(1) {
+            if matches!(source, Value::Null | Value::Undefined) {
+                continue;
+            }
+            for key in Self::object_assign_enumerable_keys(source) {
+                let value = self.object_property_from_value(source, &key)?;
+                self.object_assign_set_target_property(&target, &key, value, event)?;
+            }
+        }
+
+        Ok(target)
+    }
+
     fn eval_import_call(
         &mut self,
         module: &Expr,
@@ -646,6 +768,11 @@ impl Harness {
                     }
 
                     if let Value::Object(object) = &receiver {
+                        let is_object_constructor =
+                            Self::callable_kind_from_value(&receiver) == Some("object_constructor");
+                        if is_object_constructor && member == "assign" {
+                            return self.eval_object_assign_static_call(&evaluated_args, event);
+                        }
                         if let Some(value) =
                             self.eval_event_target_member_call(object, member, &evaluated_args)?
                         {

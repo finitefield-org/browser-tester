@@ -1,4 +1,25 @@
 use super::*;
+
+fn should_fallback_to_generic_member_call(base_src: &str) -> Result<bool> {
+    let base_src = strip_outer_parens(base_src.trim());
+    if base_src.is_empty() {
+        return Ok(false);
+    }
+    if is_ident(base_src) {
+        return Ok(true);
+    }
+    if parse_object_get_expr(base_src)?.is_some() {
+        return Ok(true);
+    }
+    if parse_member_get_expr(base_src)?.is_some() {
+        return Ok(true);
+    }
+    if parse_member_index_get_expr(base_src)?.is_some() {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub(crate) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
     let src = src.trim();
     let dots = collect_top_level_char_positions(src, b'.');
@@ -70,6 +91,9 @@ pub(crate) fn parse_number_method_expr(src: &str) -> Result<Option<Expr>> {
             | NumberInstanceMethod::ToPrecision
             | NumberInstanceMethod::ToString => {
                 if args.len() > 1 {
+                    if should_fallback_to_generic_member_call(base_src)? {
+                        return Ok(None);
+                    }
                     let method_name = match method {
                         NumberInstanceMethod::ToExponential => "toExponential",
                         NumberInstanceMethod::ToFixed => "toFixed",

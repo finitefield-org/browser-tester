@@ -393,6 +393,41 @@ impl Harness {
         self.is_select_element(select_node) && !self.is_effectively_disabled(select_node)
     }
 
+    pub(crate) fn normalized_button_type(&self, button_node: NodeId) -> String {
+        let Some(tag) = self.dom.tag_name(button_node) else {
+            return "submit".to_string();
+        };
+        if !tag.eq_ignore_ascii_case("button") {
+            return "submit".to_string();
+        }
+        let Some(raw) = self.dom.attr(button_node, "type") else {
+            return "submit".to_string();
+        };
+        if raw.eq_ignore_ascii_case("reset") {
+            "reset".to_string()
+        } else if raw.eq_ignore_ascii_case("button") {
+            "button".to_string()
+        } else {
+            "submit".to_string()
+        }
+    }
+
+    pub(crate) fn button_will_validate(&self, button_node: NodeId) -> bool {
+        let Some(tag) = self.dom.tag_name(button_node) else {
+            return false;
+        };
+        if !tag.eq_ignore_ascii_case("button") {
+            return false;
+        }
+        if self.is_effectively_disabled(button_node) {
+            return false;
+        }
+        if self.dom.find_ancestor_by_tag(button_node, "datalist").is_some() {
+            return false;
+        }
+        self.normalized_button_type(button_node) == "submit"
+    }
+
     pub(crate) fn labels_for_control_node(&self, control: NodeId) -> Vec<NodeId> {
         if !self.is_labelable_control(control) {
             return Vec::new();
@@ -5761,6 +5796,15 @@ impl Harness {
             }
             validity.custom_error = !self.dom.custom_validity_message(node)?.is_empty();
             validity.valid = !(validity.value_missing || validity.custom_error);
+            return Ok(validity);
+        }
+        if tag_name.eq_ignore_ascii_case("button") {
+            if !self.button_will_validate(node) {
+                return Ok(validity);
+            }
+            let custom_error = !self.dom.custom_validity_message(node)?.is_empty();
+            validity.custom_error = custom_error;
+            validity.valid = !custom_error;
             return Ok(validity);
         }
         if !tag_name.eq_ignore_ascii_case("input") {

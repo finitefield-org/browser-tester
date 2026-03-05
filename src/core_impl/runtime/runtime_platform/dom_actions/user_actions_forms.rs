@@ -865,8 +865,8 @@ impl Harness {
                     Value::Bool(true),
                 ),
                 ("type".to_string(), Value::String(event.to_string())),
-                ("bubbles".to_string(), Value::Bool(false)),
-                ("cancelable".to_string(), Value::Bool(false)),
+                ("bubbles".to_string(), Value::Bool(true)),
+                ("cancelable".to_string(), Value::Bool(true)),
                 ("key".to_string(), Value::String(init.key.clone())),
                 (
                     "code".to_string(),
@@ -896,6 +896,8 @@ impl Harness {
             stacker::grow(32 * 1024 * 1024, || {
                 let mut dispatched =
                     EventState::new_untrusted(event, target, this.scheduler.now_ms);
+                dispatched.bubbles = true;
+                dispatched.cancelable = true;
                 dispatched.key = Some(init.key.clone());
                 dispatched.code = init.code.clone();
                 dispatched.location = init.location;

@@ -173,10 +173,12 @@ impl Harness {
             | "Request"
             | "Headers"
             | "URL"
+            | "Object"
             | "Element"
             | "DataTransfer"
             | "Option"
             | "HTMLElement"
+            | "HTMLButtonElement"
             | "HTMLInputElement"
             | "HTMLOptionElement"
             | "HTMLSelectElement"
@@ -801,6 +803,10 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("input"));
+        let is_button = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("button"));
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
@@ -938,6 +944,58 @@ impl Harness {
                 .dom
                 .set_attr(node, "elementtiming", &value.as_string())?,
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
+            "command" => {
+                if is_button {
+                    self.dom.set_attr(node, "command", &value.as_string())?;
+                }
+            }
+            "commandForElement" => {
+                if is_button {
+                    match &value {
+                        Value::Null | Value::Undefined => {
+                            self.dom.remove_attr(node, "commandfor")?;
+                        }
+                        Value::Node(target) => {
+                            let target_id = self.dom.attr(*target, "id").unwrap_or_default();
+                            if target_id.is_empty() {
+                                self.dom.remove_attr(node, "commandfor")?;
+                            } else {
+                                self.dom.set_attr(node, "commandfor", &target_id)?;
+                            }
+                        }
+                        _ => self.dom.set_attr(node, "commandfor", &value.as_string())?,
+                    }
+                }
+            }
+            "formAction" => {
+                if is_button {
+                    self.dom.set_attr(node, "formaction", &value.as_string())?;
+                }
+            }
+            "formEnctype" => {
+                if is_button {
+                    self.dom.set_attr(node, "formenctype", &value.as_string())?;
+                }
+            }
+            "formMethod" => {
+                if is_button {
+                    self.dom.set_attr(node, "formmethod", &value.as_string())?;
+                }
+            }
+            "formNoValidate" => {
+                if is_button {
+                    if value.truthy() {
+                        self.dom.set_attr(node, "formnovalidate", "true")?;
+                    } else {
+                        self.dom.remove_attr(node, "formnovalidate")?;
+                    }
+                }
+            }
+            "formTarget" => {
+                if is_button {
+                    self.dom.set_attr(node, "formtarget", &value.as_string())?;
+                }
+            }
             "lang" => self.dom.set_attr(node, "lang", &value.as_string())?,
             "dir" => self.dom.set_attr(node, "dir", &value.as_string())?,
             "accessKey" | "accesskey" => {
@@ -1087,7 +1145,50 @@ impl Harness {
             "hostname" => self.set_anchor_url_property(node, "hostname", value.clone())?,
             "href" => self.set_anchor_url_property(node, "href", value.clone())?,
             "hreflang" => self.dom.set_attr(node, "hreflang", &value.as_string())?,
-            "interestForElement" => self.dom.set_attr(node, "interestfor", &value.as_string())?,
+            "interestForElement" => {
+                if is_button {
+                    match &value {
+                        Value::Null | Value::Undefined => {
+                            self.dom.remove_attr(node, "interestfor")?;
+                        }
+                        Value::Node(target) => {
+                            let target_id = self.dom.attr(*target, "id").unwrap_or_default();
+                            if target_id.is_empty() {
+                                self.dom.remove_attr(node, "interestfor")?;
+                            } else {
+                                self.dom.set_attr(node, "interestfor", &target_id)?;
+                            }
+                        }
+                        _ => self.dom.set_attr(node, "interestfor", &value.as_string())?,
+                    }
+                } else {
+                    self.dom.set_attr(node, "interestfor", &value.as_string())?;
+                }
+            }
+            "popoverTargetAction" => {
+                if is_button {
+                    self.dom
+                        .set_attr(node, "popovertargetaction", &value.as_string())?;
+                }
+            }
+            "popoverTargetElement" => {
+                if is_button {
+                    match &value {
+                        Value::Null | Value::Undefined => {
+                            self.dom.remove_attr(node, "popovertarget")?;
+                        }
+                        Value::Node(target) => {
+                            let target_id = self.dom.attr(*target, "id").unwrap_or_default();
+                            if target_id.is_empty() {
+                                self.dom.remove_attr(node, "popovertarget")?;
+                            } else {
+                                self.dom.set_attr(node, "popovertarget", &target_id)?;
+                            }
+                        }
+                        _ => self.dom.set_attr(node, "popovertarget", &value.as_string())?,
+                    }
+                }
+            }
             "password" => self.set_anchor_url_property(node, "password", value.clone())?,
             "pathname" => self.set_anchor_url_property(node, "pathname", value.clone())?,
             "ping" => self.dom.set_attr(node, "ping", &value.as_string())?,

@@ -210,6 +210,9 @@ impl Harness {
         if !value.is_finite() {
             return Self::format_number_default(value);
         }
+        if value.abs() >= 1e21 {
+            return Self::number_to_exponential(value, None);
+        }
         format!(
             "{:.*}",
             fraction_digits,

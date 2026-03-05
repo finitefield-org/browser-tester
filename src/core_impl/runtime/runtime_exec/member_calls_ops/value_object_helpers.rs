@@ -1586,6 +1586,18 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_object_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("object_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype),
+            ("assign".to_string(), Self::new_builtin_placeholder_function()),
+        ])
+    }
+
     pub(crate) fn new_event_target_constructor_value() -> Value {
         let prototype = Self::new_object_value(Vec::new());
         let constructor = Self::new_object_value(vec![
@@ -3032,6 +3044,7 @@ impl Harness {
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
+                "object_constructor" => "object_constructor",
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
@@ -3437,6 +3450,11 @@ impl Harness {
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("input"))
             .unwrap_or(false);
+        let is_button = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("button"))
+            .unwrap_or(false);
         let is_form_associated_control = is_form_control(&self.dom, *node);
         let is_labelable_control = self.is_labelable_control(*node);
         let is_col_or_colgroup = self
@@ -3568,6 +3586,66 @@ impl Harness {
                     Ok(Value::Undefined)
                 }
             }
+            "command" => {
+                if is_button {
+                    Ok(Value::String(self.dom.attr(*node, "command").unwrap_or_default()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "commandForElement" => {
+                if is_button {
+                    Ok(self
+                        .dom
+                        .attr(*node, "commandfor")
+                        .and_then(|raw| raw.split_whitespace().next().map(str::to_string))
+                        .and_then(|id_ref| self.dom.by_id(&id_ref))
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "formAction" => {
+                if is_button {
+                    let form_action = self
+                        .dom
+                        .attr(*node, "formaction")
+                        .map(|raw| self.resolve_document_target_url(&raw))
+                        .unwrap_or_default();
+                    Ok(Value::String(form_action))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "formEnctype" => {
+                if is_button {
+                    Ok(Value::String(self.dom.attr(*node, "formenctype").unwrap_or_default()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "formMethod" => {
+                if is_button {
+                    Ok(Value::String(self.dom.attr(*node, "formmethod").unwrap_or_default()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "formNoValidate" => {
+                if is_button {
+                    Ok(Value::Bool(self.dom.attr(*node, "formnovalidate").is_some()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "formTarget" => {
+                if is_button {
+                    Ok(Value::String(self.dom.attr(*node, "formtarget").unwrap_or_default()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "labels" => {
                 if is_labelable_control {
                     Ok(Self::new_static_node_list_value(
@@ -3583,6 +3661,41 @@ impl Harness {
             "name" => Ok(Value::String(
                 self.dom.attr(*node, "name").unwrap_or_default(),
             )),
+            "interestForElement" => {
+                if is_button {
+                    Ok(self
+                        .dom
+                        .attr(*node, "interestfor")
+                        .and_then(|raw| raw.split_whitespace().next().map(str::to_string))
+                        .and_then(|id_ref| self.dom.by_id(&id_ref))
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "popoverTargetAction" => {
+                if is_button {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "popovertargetaction").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "popoverTargetElement" => {
+                if is_button {
+                    Ok(self
+                        .dom
+                        .attr(*node, "popovertarget")
+                        .and_then(|raw| raw.split_whitespace().next().map(str::to_string))
+                        .and_then(|id_ref| self.dom.by_id(&id_ref))
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "lang" => Ok(Value::String(
                 self.dom.attr(*node, "lang").unwrap_or_default(),
             )),
@@ -3786,11 +3899,15 @@ impl Harness {
             "slot" => Ok(Value::String(
                 self.dom.attr(*node, "slot").unwrap_or_default(),
             )),
-            "role" => Ok(self
-                .dom
-                .attr(*node, "role")
-                .map(Value::String)
-                .unwrap_or(Value::Null)),
+            "role" => {
+                if let Some(role) = self.dom.attr(*node, "role") {
+                    Ok(Value::String(role))
+                } else if is_button {
+                    Ok(Value::String("button".to_string()))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
             "baseURI" => Ok(Value::String(self.document_base_url())),
             "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
             "options" => {
@@ -3834,6 +3951,8 @@ impl Harness {
             "willValidate" => {
                 let will_validate = if is_select {
                     self.select_will_validate(*node)
+                } else if is_button {
+                    self.button_will_validate(*node)
                 } else if self
                     .dom
                     .tag_name(*node)

@@ -305,16 +305,20 @@ impl Harness {
 
     pub(crate) fn intl_relative_time_options_from_value(
         &self,
+        locale: &str,
         options: Option<&Value>,
     ) -> Result<IntlRelativeTimeOptions> {
         let mut style = "long".to_string();
         let mut numeric = "always".to_string();
+        let mut numbering_system = Self::intl_locale_unicode_extension_value(locale, "nu")
+            .unwrap_or_else(|| Self::intl_default_numbering_system_for_locale(locale));
         let mut locale_matcher = "best fit".to_string();
 
         let Some(options) = options else {
             return Ok(IntlRelativeTimeOptions {
                 style,
                 numeric,
+                numbering_system,
                 locale_matcher,
             });
         };
@@ -345,6 +349,18 @@ impl Harness {
                         numeric = parsed;
                     }
                 }
+                if let Some(value) = Self::object_get_entry(&entries, "numberingSystem") {
+                    if !matches!(value, Value::Undefined) {
+                        let parsed = value.as_string().trim().to_ascii_lowercase();
+                        if parsed.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "RangeError: invalid Intl.RelativeTimeFormat numberingSystem option"
+                                    .into(),
+                            ));
+                        }
+                        numbering_system = parsed;
+                    }
+                }
                 if let Some(value) = Self::object_get_entry(&entries, "localeMatcher") {
                     if !matches!(value, Value::Undefined) {
                         let parsed = value.as_string();
@@ -368,6 +384,7 @@ impl Harness {
         Ok(IntlRelativeTimeOptions {
             style,
             numeric,
+            numbering_system,
             locale_matcher,
         })
     }
@@ -380,6 +397,10 @@ impl Harness {
                 Value::String(options.numeric.clone()),
             ),
             (
+                "numberingSystem".to_string(),
+                Value::String(options.numbering_system.clone()),
+            ),
+            (
                 "localeMatcher".to_string(),
                 Value::String(options.locale_matcher.clone()),
             ),
@@ -388,6 +409,7 @@ impl Harness {
 
     pub(crate) fn intl_relative_time_options_from_internal(
         entries: &[(String, Value)],
+        locale: &str,
     ) -> IntlRelativeTimeOptions {
         if let Some(Value::Object(options)) =
             Self::object_get_entry(entries, INTERNAL_INTL_OPTIONS_KEY)
@@ -401,6 +423,11 @@ impl Harness {
                 Some(Value::String(value)) => value,
                 _ => "always".to_string(),
             };
+            let numbering_system = match Self::object_get_entry(&options, "numberingSystem") {
+                Some(Value::String(value)) => value,
+                _ => Self::intl_locale_unicode_extension_value(locale, "nu")
+                    .unwrap_or_else(|| Self::intl_default_numbering_system_for_locale(locale)),
+            };
             let locale_matcher = match Self::object_get_entry(&options, "localeMatcher") {
                 Some(Value::String(value)) => value,
                 _ => "best fit".to_string(),
@@ -408,6 +435,7 @@ impl Harness {
             return IntlRelativeTimeOptions {
                 style,
                 numeric,
+                numbering_system,
                 locale_matcher,
             };
         }
@@ -415,6 +443,8 @@ impl Harness {
         IntlRelativeTimeOptions {
             style: "long".to_string(),
             numeric: "always".to_string(),
+            numbering_system: Self::intl_locale_unicode_extension_value(locale, "nu")
+                .unwrap_or_else(|| Self::intl_default_numbering_system_for_locale(locale)),
             locale_matcher: "best fit".to_string(),
         }
     }

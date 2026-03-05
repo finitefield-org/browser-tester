@@ -1880,6 +1880,13 @@ impl Harness {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))
                     }
+                    "object_constructor" => {
+                        if args.is_empty() || matches!(args[0], Value::Null | Value::Undefined) {
+                            Ok(Self::new_object_value(Vec::new()))
+                        } else {
+                            Ok(args[0].clone())
+                        }
+                    }
                     "event_target_constructor" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime(

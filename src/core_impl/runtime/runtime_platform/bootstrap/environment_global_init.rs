@@ -253,6 +253,7 @@ impl Harness {
         }
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
+        let object_constructor = Self::new_object_constructor_value();
         let event_target_constructor = Self::new_event_target_constructor_value();
         let event_constructor = Self::new_event_constructor_value();
         let custom_event_constructor = Self::new_custom_event_constructor_value();
@@ -310,6 +311,7 @@ impl Harness {
         let url_constructor = Value::UrlConstructor;
         let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
+        let html_button_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
         let html_option_element_constructor = Self::new_builtin_placeholder_function();
         let html_select_element_constructor = Self::new_builtin_placeholder_function();
@@ -367,6 +369,7 @@ impl Harness {
             &intl,
             &string_constructor,
             &boolean_constructor,
+            &object_constructor,
             &event_target_constructor,
             &event_constructor,
             &custom_event_constructor,
@@ -389,6 +392,7 @@ impl Harness {
             &text_decoder_stream_constructor,
             &element_constructor,
             &html_element_constructor,
+            &html_button_element_constructor,
             &html_input_element_constructor,
             &html_select_element_constructor,
             &dom_parser_constructor,
@@ -440,6 +444,11 @@ impl Harness {
                 &mut window_entries,
                 "createImageBitmap".to_string(),
                 create_image_bitmap_callable.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Object".to_string(),
+                object_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -513,6 +522,11 @@ impl Harness {
             );
             Self::object_set_entry(
                 &mut window_entries,
+                "HTMLButtonElement".to_string(),
+                html_button_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
                 "HTMLSelectElement".to_string(),
                 html_select_element_constructor.clone(),
             );
@@ -545,6 +559,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Boolean".to_string(), boolean_constructor);
+        self.script_runtime
+            .env
+            .insert("Object".to_string(), object_constructor);
         self.script_runtime
             .env
             .insert("EventTarget".to_string(), event_target_constructor);
@@ -720,6 +737,10 @@ impl Harness {
         self.script_runtime
             .env
             .insert("HTMLElement".to_string(), html_element_constructor);
+        self.script_runtime.env.insert(
+            "HTMLButtonElement".to_string(),
+            html_button_element_constructor,
+        );
         self.script_runtime.env.insert(
             "HTMLInputElement".to_string(),
             html_input_element_constructor,

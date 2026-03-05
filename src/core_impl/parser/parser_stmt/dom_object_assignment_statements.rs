@@ -119,6 +119,10 @@ pub(crate) fn parse_dom_method_call_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        // Keep `target.close?.(...)` / `target.focus?.(...)` in the expression path.
+        return Ok(None);
+    }
     let args = cursor.read_balanced_block(b'(', b')')?;
     let arg = if accepts_optional_arg {
         let parsed_args = split_top_level_by_char(&args, b',');

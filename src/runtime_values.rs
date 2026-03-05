@@ -1319,6 +1319,7 @@ pub(crate) struct IntlPluralRulesOptions {
 pub(crate) struct IntlRelativeTimeOptions {
     pub(crate) style: String,
     pub(crate) numeric: String,
+    pub(crate) numbering_system: String,
     pub(crate) locale_matcher: String,
 }
 

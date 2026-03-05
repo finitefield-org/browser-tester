@@ -471,6 +471,13 @@ impl Harness {
             if self.is_named_constructor_value(right, "HTMLElement") {
                 return Ok(self.dom.element(*node).is_some());
             }
+            if self.is_named_constructor_value(right, "HTMLButtonElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("button"))
+                    .unwrap_or(false));
+            }
             if self.is_named_constructor_value(right, "HTMLInputElement") {
                 return Ok(self
                     .dom

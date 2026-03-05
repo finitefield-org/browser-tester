@@ -209,11 +209,19 @@ impl Harness {
                         DomProp::Slot => Ok(Value::String(
                             self.dom.attr(node, "slot").unwrap_or_default(),
                         )),
-                        DomProp::Role => Ok(self
-                            .dom
-                            .attr(node, "role")
-                            .map(Value::String)
-                            .unwrap_or(Value::Null)),
+                        DomProp::Role => {
+                            if let Some(role) = self.dom.attr(node, "role") {
+                                Ok(Value::String(role))
+                            } else if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                            {
+                                Ok(Value::String("button".to_string()))
+                            } else {
+                                Ok(Value::Null)
+                            }
+                        }
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
@@ -534,9 +542,23 @@ impl Harness {
                         DomProp::AnchorHreflang => Ok(Value::String(
                             self.dom.attr(node, "hreflang").unwrap_or_default(),
                         )),
-                        DomProp::AnchorInterestForElement => Ok(Value::String(
-                            self.dom.attr(node, "interestfor").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorInterestForElement => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                            {
+                                Ok(self
+                                    .dom
+                                    .attr(node, "interestfor")
+                                    .and_then(|raw| raw.split_whitespace().next().map(str::to_string))
+                                    .and_then(|id_ref| self.dom.by_id(&id_ref))
+                                    .map(Value::Node)
+                                    .unwrap_or(Value::Null))
+                            } else {
+                                Ok(Value::String(self.dom.attr(node, "interestfor").unwrap_or_default()))
+                            }
+                        }
                         DomProp::AnchorOrigin => {
                             Ok(Value::String(self.anchor_location_parts(node).origin()))
                         }

@@ -1219,6 +1219,40 @@ fn number_instance_methods_work() -> Result<()> {
 }
 
 #[test]
+fn number_to_fixed_matches_reference_examples() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          function financial(x) {
+            return Number.parseFloat(x).toFixed(2);
+          }
+          document.getElementById('btn').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              financial(123.456),
+              financial(0.004),
+              financial("1.23e+5"),
+              (1.23e20).toFixed(2),
+              (1e21).toFixed(2),
+              (6.02 * 10 ** 23).toFixed(50),
+              (Infinity).toFixed(2),
+              (-Infinity).toFixed(2),
+              (NaN).toFixed(2),
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "123.46|0.00|123000.00|123000000000000000000.00|1e+21|6.019999999999999e+23|Infinity|-Infinity|NaN",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn number_to_locale_string_honors_fraction_digit_options() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -1320,6 +1354,32 @@ fn number_instance_method_runtime_range_errors_are_reported() -> Result<()> {
             assert!(msg.contains("toString radix must be between 2 and 36"))
         }
         other => panic!("unexpected toString error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn number_to_fixed_rejects_non_number_receiver() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            (true).toFixed(2);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let err = h
+        .click("#btn")
+        .expect_err("toFixed should reject non-number receivers");
+    match err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("TypeError"));
+            assert!(msg.contains("toFixed"));
+        }
+        other => panic!("unexpected toFixed receiver error: {other:?}"),
     }
 
     Ok(())
@@ -2164,16 +2224,18 @@ fn intl_relative_time_format_try_it_examples_work() -> Result<()> {
             const rtf1 = new Intl.RelativeTimeFormat('en', { style: 'short' });
             const qtrs = rtf1.format(3, 'quarter');
             const ago = rtf1.format(-1, 'day');
+            const secs = rtf1.format(10, 'seconds');
             const rtf2 = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
             const auto = rtf2.format(2, 'day');
-            document.getElementById('result').textContent = qtrs + '|' + ago + '|' + auto;
+            document.getElementById('result').textContent =
+              qtrs + '|' + ago + '|' + secs + '|' + auto;
           });
         </script>
         "#;
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "in 3 qtrs.|1 day ago|pasado mañana")?;
+    h.assert_text("#result", "in 3 qtrs.|1 day ago|in 10 sec.|pasado mañana")?;
     Ok(())
 }
 
@@ -2206,7 +2268,7 @@ fn intl_relative_time_format_methods_and_options_work() -> Result<()> {
             const ctor = rtf.constructor === Intl.RelativeTimeFormat;
             document.getElementById('result').textContent =
               text + '|' + partsOk + '|' + supported + '|' +
-              ro.locale + ':' + ro.style + ':' + ro.numeric + ':' + ro.localeMatcher + '|' +
+              ro.locale + ':' + ro.style + ':' + ro.numeric + ':' + ro.numberingSystem + ':' + ro.localeMatcher + '|' +
               tag + '|' + ctor;
           });
         </script>
@@ -2216,7 +2278,108 @@ fn intl_relative_time_format_methods_and_options_work() -> Result<()> {
     h.click("#btn")?;
     h.assert_text(
         "#result",
-        "yesterday|true|es,en|en:long:auto:best fit|Intl.RelativeTimeFormat|true",
+        "yesterday|true|es,en|en:long:auto:latn:best fit|Intl.RelativeTimeFormat|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_relative_time_format_numeric_auto_day_literals_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+            const yesterday = rtf.format(-1, 'day');
+            const today = rtf.format(0, 'day');
+            const tomorrow = rtf.format(1, 'day');
+            document.getElementById('result').textContent =
+              yesterday + '|' + today + '|' + tomorrow;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "yesterday|today|tomorrow")?;
+    Ok(())
+}
+
+#[test]
+fn intl_relative_time_format_to_parts_try_it_example_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+            const parts = rtf.formatToParts(10, 'seconds');
+            const fromParts = parts.map((part) => part.value).join('');
+            const formatted = rtf.format(10, 'seconds');
+            const dayParts = rtf.formatToParts(-1, 'day');
+            const dayLiteralOnly =
+              dayParts.length === 1 &&
+              dayParts[0].type === 'literal' &&
+              dayParts[0].value === 'yesterday';
+            const shapeOk =
+              parts.length === 3 &&
+              parts[0].type === 'literal' &&
+              parts[0].value === 'in ' &&
+              parts[1].type === 'integer' &&
+              parts[1].value === '10' &&
+              parts[1].unit === 'second' &&
+              parts[2].type === 'literal' &&
+              parts[2].value === ' seconds';
+            document.getElementById('result').textContent = [
+              parts[0].value,
+              parts[1].value,
+              parts[2].value,
+              fromParts,
+              String(fromParts === formatted),
+              String(shapeOk),
+              String(dayLiteralOnly),
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "in |10| seconds|in 10 seconds|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn intl_relative_time_format_resolved_options_examples_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const rtf1 = new Intl.RelativeTimeFormat('en', { style: 'narrow' });
+            const options1 = rtf1.resolvedOptions();
+            const rtf2 = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
+            const options2 = rtf2.resolvedOptions();
+            const rtf3 = new Intl.RelativeTimeFormat('en-u-nu-arab');
+            const options3 = rtf3.resolvedOptions();
+            const rtf4 = new Intl.RelativeTimeFormat('en', { numberingSystem: 'arab' });
+            const options4 = rtf4.resolvedOptions();
+            document.getElementById('result').textContent = [
+              `${options1.locale}, ${options1.style}, ${options1.numeric}, ${options1.numberingSystem}`,
+              `${options2.locale}, ${options2.style}, ${options2.numeric}, ${options2.numberingSystem}`,
+              options3.numberingSystem,
+              options4.numberingSystem,
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "en, narrow, always, latn|es, long, auto, latn|arab|arab",
     )?;
     Ok(())
 }

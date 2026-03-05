@@ -119,6 +119,58 @@ fn nested_map_callback_with_const_binding_does_not_trigger_false_tdz() -> Result
 }
 
 #[test]
+fn recursive_const_arrow_closure_can_reference_itself() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        const choose = (arr, k) => {
+          const out = [];
+          const recur = (start, cur) => {
+            if (cur.length === k) {
+              out.push([...cur]);
+              return;
+            }
+            for (let i = start; i < arr.length; i += 1) {
+              cur.push(arr[i]);
+              recur(i + 1, cur);
+              cur.pop();
+            }
+          };
+          recur(0, []);
+          return out;
+        };
+
+        document.getElementById('run').addEventListener('click', () => {
+          const combos = choose([1, 2, 3], 2);
+          document.getElementById('out').textContent = String(combos.length);
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "3")?;
+    Ok(())
+}
+
+#[test]
+fn unicode_text_is_preserved_even_when_quote_escape_normalization_runs() -> Result<()> {
+    let html = r#"
+      <div id='out'></div>
+      <script>
+        const quotePair = "\"\"";
+        const label = `ABC-001 (${quotePair.length} 件)`;
+        document.getElementById('out').textContent = label;
+      </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "ABC-001 (2 件)")?;
+    Ok(())
+}
+
+#[test]
 fn array_reverse_on_object_keys_works_for_desc_sort_pattern() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

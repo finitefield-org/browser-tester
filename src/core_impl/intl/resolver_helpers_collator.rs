@@ -70,7 +70,7 @@ impl Harness {
                 _ => None,
             })
             .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
-        let options = Self::intl_relative_time_options_from_internal(&entries);
+        let options = Self::intl_relative_time_options_from_internal(&entries, &locale);
         Ok((locale, options))
     }
 

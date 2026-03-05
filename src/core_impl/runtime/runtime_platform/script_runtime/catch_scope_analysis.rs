@@ -439,10 +439,19 @@ impl Harness {
                 if Self::is_internal_env_key(name) {
                     continue;
                 }
-                let Some(next) = env.get(name) else {
-                    continue;
-                };
-                if self.strict_equal(previous, next) {
+                match env.get(name) {
+                    Some(next) => {
+                        if self.strict_equal(previous, next) {
+                            continue;
+                        }
+                        next_snapshot.insert(name.clone(), next.clone());
+                        changed = true;
+                    }
+                    None => continue,
+                }
+            }
+            for (name, next) in env {
+                if Self::is_internal_env_key(name) || snapshot.contains_key(name) {
                     continue;
                 }
                 next_snapshot.insert(name.clone(), next.clone());

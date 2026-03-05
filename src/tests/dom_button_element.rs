@@ -169,3 +169,181 @@ fn press_enter_activates_focused_button() -> Result<()> {
     h.assert_text("#result", "1")?;
     Ok(())
 }
+
+#[test]
+fn button_interface_properties_reflect_associated_targets_and_form_overrides() -> Result<()> {
+    let html = r#"
+        <form id='owner'>
+          <label id='button-label' for='primary'>Primary</label>
+        </form>
+        <div id='dialog'></div>
+        <div id='panel'></div>
+        <div id='tip'></div>
+        <button
+          id='primary'
+          type='submit'
+          form='owner'
+          name='save'
+          value='seed'
+          command='show-modal'
+          commandfor='dialog'
+          formaction='/submit/override'
+          formenctype='text/plain'
+          formmethod='get'
+          formnovalidate
+          formtarget='preview'
+          interestfor='panel'
+          popovertarget='tip'
+          popovertargetaction='toggle'
+        >Save</button>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const button = document.getElementById('primary');
+            const labels = button.labels;
+            const first = [
+              button.command,
+              button.commandForElement.id,
+              button.disabled,
+              button.form.id,
+              button.formAction.indexOf('/submit/override') >= 0,
+              button.formEnctype,
+              button.formMethod,
+              button.formNoValidate,
+              button.formTarget,
+              button.interestForElement.id,
+              labels.length,
+              labels.item(0).id,
+              button.name,
+              button.popoverTargetAction,
+              button.popoverTargetElement.id,
+              button.type,
+              button.value
+            ].join(',');
+
+            button.command = 'request-close';
+            button.commandForElement = document.getElementById('panel');
+            button.formAction = '/submit/final';
+            button.formEnctype = 'application/json';
+            button.formMethod = 'post';
+            button.formNoValidate = false;
+            button.formTarget = '_blank';
+            button.interestForElement = document.getElementById('dialog');
+            button.popoverTargetAction = 'show';
+            button.popoverTargetElement = document.getElementById('dialog');
+            button.type = 'invalid';
+            button.value = 'changed';
+            button.disabled = true;
+
+            const second = [
+              button.command,
+              button.getAttribute('commandfor'),
+              button.formAction.indexOf('/submit/final') >= 0,
+              button.getAttribute('formenctype'),
+              button.getAttribute('formmethod'),
+              button.formNoValidate,
+              button.getAttribute('formtarget'),
+              button.getAttribute('interestfor'),
+              button.getAttribute('popovertargetaction'),
+              button.getAttribute('popovertarget'),
+              button.type,
+              button.value,
+              button.disabled
+            ].join(',');
+
+            button.commandForElement = null;
+            button.interestForElement = null;
+            button.popoverTargetElement = null;
+            const third = [
+              button.commandForElement === null,
+              button.interestForElement === null,
+              button.popoverTargetElement === null,
+              button.getAttribute('commandfor') === null,
+              button.getAttribute('interestfor') === null,
+              button.getAttribute('popovertarget') === null
+            ].join(',');
+
+            document.getElementById('result').textContent = first + '|' + second + '|' + third;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "show-modal,dialog,false,owner,true,text/plain,get,true,preview,panel,1,button-label,save,toggle,tip,submit,seed|request-close,panel,true,application/json,post,false,_blank,dialog,show,dialog,submit,changed,true|true,true,true,true,true,true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn button_validity_and_custom_validity_follow_button_constraints() -> Result<()> {
+    let html = r#"
+        <button id='submitter' type='submit'>submit</button>
+        <button id='plain' type='button'>plain</button>
+        <button id='reset' type='reset'>reset</button>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const submitter = document.getElementById('submitter');
+            submitter.setCustomValidity('Need approval');
+            const first = [
+              submitter.willValidate,
+              submitter.checkValidity(),
+              submitter.reportValidity(),
+              submitter.validity.customError,
+              submitter.validationMessage
+            ].join(',');
+
+            submitter.type = 'button';
+            const second = [
+              submitter.willValidate,
+              submitter.checkValidity(),
+              submitter.validity.customError,
+              submitter.validationMessage === ''
+            ].join(',');
+
+            submitter.type = 'submit';
+            submitter.disabled = true;
+            const third = [
+              submitter.willValidate,
+              submitter.checkValidity(),
+              submitter.validity.valid,
+              submitter.validationMessage === ''
+            ].join(',');
+
+            const plain = document.getElementById('plain');
+            plain.setCustomValidity('x');
+            const fourth = [
+              plain.willValidate,
+              plain.checkValidity(),
+              plain.validity.customError,
+              plain.validationMessage === ''
+            ].join(',');
+
+            const reset = document.getElementById('reset');
+            reset.setCustomValidity('x');
+            const fifth = [
+              reset.willValidate,
+              reset.checkValidity(),
+              reset.validity.customError,
+              reset.validationMessage === ''
+            ].join(',');
+
+            document.getElementById('result').textContent =
+              first + '|' + second + '|' + third + '|' + fourth + '|' + fifth;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true,false,false,true,Need approval|false,true,false,true|false,true,true,true|false,true,false,true|false,true,false,true",
+    )?;
+    Ok(())
+}

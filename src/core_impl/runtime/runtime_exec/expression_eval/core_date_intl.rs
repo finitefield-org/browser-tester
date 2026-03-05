@@ -223,7 +223,7 @@ impl Harness {
                                 .map(|value| self.eval_expr(value, env, event_param, event))
                                 .transpose()?;
                             let options =
-                                self.intl_relative_time_options_from_value(options.as_ref())?;
+                                self.intl_relative_time_options_from_value(&locale, options.as_ref())?;
                             Ok(self.new_intl_relative_time_formatter_value(locale, options))
                         }
                         IntlFormatterKind::Segmenter => {
@@ -579,10 +579,30 @@ impl Harness {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let unit = self.eval_expr(unit, env, event_param, event)?;
-                    let (locale, options) = self.resolve_intl_relative_time_options(&formatter)?;
-                    Ok(Value::String(self.intl_format_relative_time(
-                        &locale, &options, &value, &unit,
-                    )?))
+                    match self.resolve_intl_relative_time_options(&formatter) {
+                        Ok((locale, options)) => Ok(Value::String(self.intl_format_relative_time(
+                            &locale, &options, &value, &unit,
+                        )?)),
+                        Err(Error::ScriptRuntime(message))
+                            if message
+                                == "Intl.RelativeTimeFormat method requires an Intl.RelativeTimeFormat instance" =>
+                        {
+                            // Parser may map generic `.format(a, b)` calls to Intl relative-time
+                            // formatting. Fall back to regular member-call semantics when receiver
+                            // is not an Intl.RelativeTimeFormat instance.
+                            let callee = self.object_property_from_value(&formatter, "format")?;
+                            let result = self.execute_callable_value_with_this_and_env(
+                                &callee,
+                                &[value, unit],
+                                event,
+                                Some(env),
+                                Some(formatter),
+                            )?;
+                            self.sync_listener_capture_env_if_shared(env);
+                            Ok(result)
+                        }
+                        Err(other) => Err(other),
+                    }
                 }
                 Expr::IntlRelativeTimeFormatToParts {
                     formatter,
@@ -592,10 +612,31 @@ impl Harness {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let unit = self.eval_expr(unit, env, event_param, event)?;
-                    let (locale, options) = self.resolve_intl_relative_time_options(&formatter)?;
-                    let parts =
-                        self.intl_format_relative_time_to_parts(&locale, &options, &value, &unit)?;
-                    Ok(self.intl_relative_time_parts_to_value(&parts))
+                    match self.resolve_intl_relative_time_options(&formatter) {
+                        Ok((locale, options)) => {
+                            let parts = self.intl_format_relative_time_to_parts(
+                                &locale, &options, &value, &unit,
+                            )?;
+                            Ok(self.intl_relative_time_parts_to_value(&parts))
+                        }
+                        Err(Error::ScriptRuntime(message))
+                            if message
+                                == "Intl.RelativeTimeFormat method requires an Intl.RelativeTimeFormat instance" =>
+                        {
+                            let callee =
+                                self.object_property_from_value(&formatter, "formatToParts")?;
+                            let result = self.execute_callable_value_with_this_and_env(
+                                &callee,
+                                &[value, unit],
+                                event,
+                                Some(env),
+                                Some(formatter),
+                            )?;
+                            self.sync_listener_capture_env_if_shared(env);
+                            Ok(result)
+                        }
+                        Err(other) => Err(other),
+                    }
                 }
                 Expr::IntlSegmenterSegment { segmenter, value } => {
                     let segmenter = self.eval_expr(segmenter, env, event_param, event)?;

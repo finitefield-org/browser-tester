@@ -1657,19 +1657,22 @@ fn dispatch_keyboard_populates_key_and_modifier_fields() -> browser_tester::Resu
 }
 
 #[test]
-fn dispatch_keyboard_targets_selected_element_without_bubbling() -> browser_tester::Result<()> {
+fn dispatch_keyboard_targets_selected_element_and_bubbles_by_default() -> browser_tester::Result<()>
+{
     let html = r#"
     <div id="root">
       <input id="field">
     </div>
     <div id="result"></div>
     <script>
+      const logs = [];
       document.getElementById("root").addEventListener("keydown", () => {
-        document.getElementById("result").textContent = "root";
+        logs.push("root");
+        document.getElementById("result").textContent = logs.join("|");
       });
       document.getElementById("field").addEventListener("keydown", (event) => {
-        document.getElementById("result").textContent =
-          event.target.id + ":" + event.currentTarget.id + ":" + event.key;
+        logs.push(event.target.id + ":" + event.currentTarget.id + ":" + event.key);
+        document.getElementById("result").textContent = logs.join("|");
       });
     </script>
     "#;
@@ -1683,7 +1686,7 @@ fn dispatch_keyboard_targets_selected_element_without_bubbling() -> browser_test
             ..Default::default()
         },
     )?;
-    harness.assert_text("#result", "field:field:Escape")?;
+    harness.assert_text("#result", "field:field:Escape|root")?;
     Ok(())
 }
 
