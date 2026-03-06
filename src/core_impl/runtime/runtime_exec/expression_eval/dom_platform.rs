@@ -561,12 +561,16 @@ impl Harness {
                                 Ok(self
                                     .dom
                                     .attr(node, "interestfor")
-                                    .and_then(|raw| raw.split_whitespace().next().map(str::to_string))
+                                    .and_then(|raw| {
+                                        raw.split_whitespace().next().map(str::to_string)
+                                    })
                                     .and_then(|id_ref| self.dom.by_id(&id_ref))
                                     .map(Value::Node)
                                     .unwrap_or(Value::Null))
                             } else {
-                                Ok(Value::String(self.dom.attr(node, "interestfor").unwrap_or_default()))
+                                Ok(Value::String(
+                                    self.dom.attr(node, "interestfor").unwrap_or_default(),
+                                ))
                             }
                         }
                         DomProp::AnchorOrigin => {
@@ -787,13 +791,13 @@ impl Harness {
                     let len = self.form_elements(form_node)?.len() as i64;
                     Ok(Value::Number(len))
                 }
-                Expr::FormDataNew { form, submitter } => Ok(Value::FormData(
-                    Rc::new(RefCell::new(self.eval_form_data_constructor_entries(
+                Expr::FormDataNew { form, submitter } => Ok(Value::FormData(Rc::new(
+                    RefCell::new(self.eval_form_data_constructor_entries(
                         form.as_ref(),
                         submitter.as_ref(),
                         env,
-                    )?)),
-                )),
+                    )?),
+                ))),
                 Expr::FormDataGet { source, name } => {
                     let entries = self.eval_form_data_source(source, env)?;
                     Ok(entries

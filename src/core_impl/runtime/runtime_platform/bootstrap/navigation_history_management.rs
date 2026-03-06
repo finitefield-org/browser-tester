@@ -447,17 +447,22 @@ impl Harness {
         }
 
         self.with_script_env_always(|this, env| {
-            let _ = this.dispatch_event_with_options(
-                this.dom.root,
-                "popstate",
-                env,
-                true,
-                false,
-                false,
-                Some(entry.state),
-                None,
-                None,
-            )?;
+            let target_object = this.dom_runtime.window_object.clone();
+            let target_node = this.event_target_listener_node_id(&target_object);
+            let target_value = Value::Object(target_object);
+            let mut event = EventState::new("popstate", target_node, this.scheduler.now_ms);
+            event.target_value = Some(target_value.clone());
+            event.current_target_value = Some(target_value);
+            event.bubbles = false;
+            event.cancelable = false;
+            event.state = Some(entry.state.clone());
+            event.event_phase = 2;
+            event.current_target = target_node;
+            this.invoke_listeners(target_node, &mut event, env, true)?;
+            if !event.propagation_stopped {
+                event.event_phase = 2;
+                this.invoke_listeners(target_node, &mut event, env, false)?;
+            }
             Ok(())
         })?;
         if hash_only_navigation {

@@ -1,7 +1,8 @@
 use browser_tester::{Harness, KeyboardEventInit};
 
 #[test]
-fn issue_138_generic_format_two_args_is_not_hijacked_as_intl_relative_time() -> browser_tester::Result<()> {
+fn issue_138_generic_format_two_args_is_not_hijacked_as_intl_relative_time()
+-> browser_tester::Result<()> {
     let html = r#"
       <p id='out'></p>
       <script>
@@ -48,7 +49,8 @@ fn issue_139_function_can_reference_later_declared_const() -> browser_tester::Re
 }
 
 #[test]
-fn issue_140_nested_state_paths_are_not_treated_as_dom_element_variables() -> browser_tester::Result<()> {
+fn issue_140_nested_state_paths_are_not_treated_as_dom_element_variables()
+-> browser_tester::Result<()> {
     let html = r#"
       <button id='btn'>run</button>
       <p id='out'></p>

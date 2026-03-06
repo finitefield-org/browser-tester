@@ -559,9 +559,7 @@ impl Harness {
         )
     }
 
-    pub(crate) fn is_dom_string_map_object(
-        entries: &(impl ObjectEntryLookup + ?Sized),
-    ) -> bool {
+    pub(crate) fn is_dom_string_map_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_DOM_STRING_MAP_OBJECT_KEY),
             Some(Value::Bool(true))
@@ -4099,12 +4097,13 @@ impl Harness {
                 self.dom.attr(*node, "slot").unwrap_or_default(),
             )),
             "role" => {
-                if let Some(role) = self.dom.attr(*node, "role") {
-                    Ok(Value::String(role))
+                let role = self.resolved_role_for_node(*node);
+                if role.is_empty() {
+                    Ok(Value::Null)
                 } else if is_button {
                     Ok(Value::String("button".to_string()))
                 } else {
-                    Ok(Value::Null)
+                    Ok(Value::String(role))
                 }
             }
             "baseURI" => Ok(Value::String(self.document_base_url())),
@@ -4180,7 +4179,10 @@ impl Harness {
                 }
                 Ok(Value::Number(select_options().len() as i64))
             }
-            "captureStream" | "getContext" | "toDataURL" | "toBlob"
+            "captureStream"
+            | "getContext"
+            | "toDataURL"
+            | "toBlob"
             | "transferControlToOffscreen" => {
                 if !is_canvas {
                     return Ok(Value::Undefined);
@@ -4204,8 +4206,10 @@ impl Harness {
                             Self::is_body_window_event_handler_alias(event_type.as_str())
                         });
                 if is_body_window_alias {
-                    Ok(Self::object_get_entry(&self.dom_runtime.window_object.borrow(), key)
-                        .unwrap_or(Value::Null))
+                    Ok(
+                        Self::object_get_entry(&self.dom_runtime.window_object.borrow(), key)
+                            .unwrap_or(Value::Null),
+                    )
                 } else {
                     Ok(self
                         .dom_runtime

@@ -422,7 +422,11 @@ impl Harness {
         if self.is_effectively_disabled(button_node) {
             return false;
         }
-        if self.dom.find_ancestor_by_tag(button_node, "datalist").is_some() {
+        if self
+            .dom
+            .find_ancestor_by_tag(button_node, "datalist")
+            .is_some()
+        {
             return false;
         }
         self.normalized_button_type(button_node) == "submit"

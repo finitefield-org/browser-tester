@@ -684,10 +684,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("PointerEvent".to_string(), pointer_event_constructor);
-        self.script_runtime.env.insert(
-            "HashChangeEvent".to_string(),
-            hash_change_event_constructor,
-        );
+        self.script_runtime
+            .env
+            .insert("HashChangeEvent".to_string(), hash_change_event_constructor);
         self.script_runtime
             .env
             .insert("ErrorEvent".to_string(), error_event_constructor);
@@ -856,22 +855,18 @@ impl Harness {
             "HTMLAnchorElement".to_string(),
             html_anchor_element_constructor,
         );
-        self.script_runtime.env.insert(
-            "HTMLAreaElement".to_string(),
-            html_area_element_constructor,
-        );
-        self.script_runtime.env.insert(
-            "HTMLBodyElement".to_string(),
-            html_body_element_constructor,
-        );
-        self.script_runtime.env.insert(
-            "HTMLBRElement".to_string(),
-            html_br_element_constructor,
-        );
-        self.script_runtime.env.insert(
-            "HTMLBaseElement".to_string(),
-            html_base_element_constructor,
-        );
+        self.script_runtime
+            .env
+            .insert("HTMLAreaElement".to_string(), html_area_element_constructor);
+        self.script_runtime
+            .env
+            .insert("HTMLBodyElement".to_string(), html_body_element_constructor);
+        self.script_runtime
+            .env
+            .insert("HTMLBRElement".to_string(), html_br_element_constructor);
+        self.script_runtime
+            .env
+            .insert("HTMLBaseElement".to_string(), html_base_element_constructor);
         self.script_runtime.env.insert(
             "HTMLAudioElement".to_string(),
             html_audio_element_constructor,
@@ -884,10 +879,9 @@ impl Harness {
             "HTMLCanvasElement".to_string(),
             html_canvas_element_constructor,
         );
-        self.script_runtime.env.insert(
-            "HTMLDataElement".to_string(),
-            html_data_element_constructor,
-        );
+        self.script_runtime
+            .env
+            .insert("HTMLDataElement".to_string(), html_data_element_constructor);
         self.script_runtime.env.insert(
             "HTMLDataListElement".to_string(),
             html_datalist_element_constructor,

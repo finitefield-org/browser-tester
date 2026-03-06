@@ -9,7 +9,9 @@ impl Harness {
             Value::Object(entries) => {
                 let owner = {
                     let entries_ref = entries.borrow();
-                    if !Self::is_symbol_storage_key(key) && Self::is_dom_string_map_object(&entries_ref) {
+                    if !Self::is_symbol_storage_key(key)
+                        && Self::is_dom_string_map_object(&entries_ref)
+                    {
                         Self::dom_string_map_owner_node(&entries_ref)
                     } else {
                         None

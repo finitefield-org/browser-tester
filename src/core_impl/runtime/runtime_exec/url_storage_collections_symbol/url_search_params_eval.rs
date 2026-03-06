@@ -442,12 +442,7 @@ impl Harness {
             UrlSearchParamsInstanceMethod::Delete | UrlSearchParamsInstanceMethod::Has
         ) && matches!(
             env.get(target),
-            Some(
-                Value::Map(_)
-                    | Value::Set(_)
-                    | Value::WeakMap(_)
-                    | Value::WeakSet(_)
-            )
+            Some(Value::Map(_) | Value::Set(_) | Value::WeakMap(_) | Value::WeakSet(_))
         ) {
             let map_method = match method {
                 UrlSearchParamsInstanceMethod::Delete => MapInstanceMethod::Delete,
@@ -535,9 +530,11 @@ impl Harness {
                             UrlSearchParamsInstanceMethod::Delete => "delete",
                             UrlSearchParamsInstanceMethod::Has => "has",
                         };
-                        if let Some(value) =
-                            self.eval_cookie_store_member_call(entries, method_name, &evaluated_args)?
-                        {
+                        if let Some(value) = self.eval_cookie_store_member_call(
+                            entries,
+                            method_name,
+                            &evaluated_args,
+                        )? {
                             return Ok(value);
                         }
                     }

@@ -8,6 +8,7 @@ impl Harness {
         event: &EventState,
         env: &HashMap<String, Value>,
     ) -> Result<Value> {
+        self.sync_listener_capture_env_if_shared(env);
         let result = self.execute_callable_value_with_env(callable, args, event, Some(env))?;
         self.sync_listener_capture_env_if_shared(env);
         Ok(result)
@@ -21,6 +22,7 @@ impl Harness {
         env: &HashMap<String, Value>,
         this_arg: Option<Value>,
     ) -> Result<Value> {
+        self.sync_listener_capture_env_if_shared(env);
         let result = self.execute_callable_value_with_this_and_env(
             callable,
             args,
@@ -216,7 +218,8 @@ impl Harness {
         )
         .map_err(|err| match err {
             Error::ScriptRuntime(msg)
-                if msg == "variable 'Object.assign target' is not an object (assignment target)" =>
+                if msg
+                    == "variable 'Object.assign target' is not an object (assignment target)" =>
             {
                 Error::ScriptRuntime("Object.assign target must be an object".into())
             }
@@ -224,7 +227,11 @@ impl Harness {
         })
     }
 
-    fn eval_object_assign_static_call(&mut self, args: &[Value], event: &EventState) -> Result<Value> {
+    fn eval_object_assign_static_call(
+        &mut self,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
         if args.is_empty() {
             return Err(Error::ScriptRuntime(
                 "Object.assign requires at least one argument".into(),
@@ -554,8 +561,9 @@ impl Harness {
                                 evaluated_args.get(2),
                             );
                             let mut entries_ref = entries.borrow_mut();
-                            if let Some(first_match) =
-                                entries_ref.iter().position(|(entry_name, _)| entry_name == &name)
+                            if let Some(first_match) = entries_ref
+                                .iter()
+                                .position(|(entry_name, _)| entry_name == &name)
                             {
                                 entries_ref[first_match].1 = value;
                                 let mut index = entries_ref.len();

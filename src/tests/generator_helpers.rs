@@ -54,7 +54,7 @@ fn generator_instances_support_protocol_tags_and_control_methods() -> Result<()>
     h.click("#run")?;
     h.assert_text(
         "#out",
-        "1:false|99:true:true|x:boom:true|GeneratorFunction:Generator|true:true:object:true",
+        "1:false|99:true:true|x:boom:true|GeneratorFunction:Generator|true:true:function:true",
     )?;
     Ok(())
 }

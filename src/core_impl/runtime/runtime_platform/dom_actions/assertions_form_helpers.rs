@@ -340,11 +340,9 @@ impl Harness {
         env: &HashMap<String, Value>,
     ) -> Result<Vec<(String, String)>> {
         match source {
-            FormDataSource::New { form, submitter } => self.eval_form_data_constructor_entries(
-                form.as_ref(),
-                submitter.as_ref(),
-                env,
-            ),
+            FormDataSource::New { form, submitter } => {
+                self.eval_form_data_constructor_entries(form.as_ref(), submitter.as_ref(), env)
+            }
             FormDataSource::Var(name) => match env.get(name) {
                 Some(Value::FormData(entries)) => Ok(entries.borrow().clone()),
                 Some(_) => Err(Error::ScriptRuntime(format!(

@@ -2033,7 +2033,7 @@ fn const_arrow_assignment_with_template_literal_body_parses() -> Result<()> {
         "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#result", "1234:¥1250:high")?;
+    h.assert_text("#result", "1234:¥1,250:high")?;
     Ok(())
 }
 
@@ -2048,7 +2048,7 @@ fn template_literal_with_math_call_and_member_call_parses() -> Result<()> {
         "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#result", "¥1250")?;
+    h.assert_text("#result", "¥1,250")?;
     Ok(())
 }
 

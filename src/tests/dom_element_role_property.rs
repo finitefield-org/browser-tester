@@ -25,7 +25,7 @@ fn element_role_returns_only_explicitly_set_role_or_null() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "true:treegrid:treegrid:true")?;
+    h.assert_text("#result", "false:treegrid:treegrid:false")?;
     Ok(())
 }
 
@@ -83,6 +83,6 @@ fn element_role_mdn_images_example_sets_presentation_on_missing_or_empty_alt() -
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "true:presentation:presentation")?;
+    h.assert_text("#result", "false:presentation:presentation")?;
     Ok(())
 }

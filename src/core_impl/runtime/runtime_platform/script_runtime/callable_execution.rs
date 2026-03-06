@@ -994,9 +994,7 @@ impl Harness {
         }
     }
 
-    fn image_data_settings_from_value(
-        options: Option<&Value>,
-    ) -> Result<(String, Option<String>)> {
+    fn image_data_settings_from_value(options: Option<&Value>) -> Result<(String, Option<String>)> {
         let Some(options) = options else {
             return Ok(("srgb".to_string(), None));
         };
@@ -1030,7 +1028,10 @@ impl Harness {
         }
     }
 
-    fn image_data_constructor_dimensions_require_positive(width: usize, height: usize) -> Result<()> {
+    fn image_data_constructor_dimensions_require_positive(
+        width: usize,
+        height: usize,
+    ) -> Result<()> {
         if width == 0 || height == 0 {
             return Err(Error::ScriptRuntime(
                 "ImageData width and height must be greater than 0".into(),
@@ -1063,8 +1064,14 @@ impl Harness {
             ("width".to_string(), Value::Number(width)),
             ("height".to_string(), Value::Number(height)),
             ("data".to_string(), data),
-            ("colorSpace".to_string(), Value::String(color_space.to_string())),
-            ("pixelFormat".to_string(), Value::String(pixel_format.to_string())),
+            (
+                "colorSpace".to_string(),
+                Value::String(color_space.to_string()),
+            ),
+            (
+                "pixelFormat".to_string(),
+                Value::String(pixel_format.to_string()),
+            ),
         ]))
     }
 
@@ -1078,7 +1085,10 @@ impl Harness {
         match &args[0] {
             Value::TypedArray(array) => {
                 let input_kind = array.borrow().kind;
-                if !matches!(input_kind, TypedArrayKind::Uint8Clamped | TypedArrayKind::Float16) {
+                if !matches!(
+                    input_kind,
+                    TypedArrayKind::Uint8Clamped | TypedArrayKind::Float16
+                ) {
                     return Err(Error::ScriptRuntime(
                         "ImageData data argument must be a Uint8ClampedArray or Float16Array"
                             .into(),
@@ -1095,9 +1105,7 @@ impl Harness {
                 let (raw_height, settings_value) = match args.len() {
                     2 => (None, None),
                     3 => match args[2] {
-                        Value::Object(_) | Value::Null | Value::Undefined => {
-                            (None, Some(&args[2]))
-                        }
+                        Value::Object(_) | Value::Null | Value::Undefined => (None, Some(&args[2])),
                         _ => (
                             Some(Self::to_non_negative_usize(&args[2], "ImageData height")?),
                             None,
@@ -1118,12 +1126,12 @@ impl Harness {
 
                 let (color_space, settings_pixel_format) =
                     Self::image_data_settings_from_value(settings_value)?;
-                let default_pixel_format = Self::image_data_default_pixel_format_for_kind(input_kind)
-                    .ok_or_else(|| {
-                        Error::ScriptRuntime("unsupported ImageData typed array kind".into())
-                    })?;
-                let pixel_format = settings_pixel_format
-                    .unwrap_or_else(|| default_pixel_format.to_string());
+                let default_pixel_format =
+                    Self::image_data_default_pixel_format_for_kind(input_kind).ok_or_else(
+                        || Error::ScriptRuntime("unsupported ImageData typed array kind".into()),
+                    )?;
+                let pixel_format =
+                    settings_pixel_format.unwrap_or_else(|| default_pixel_format.to_string());
                 let pixel_format_kind = Self::image_data_kind_for_pixel_format(&pixel_format)
                     .ok_or_else(|| {
                         Error::ScriptRuntime(
@@ -1191,11 +1199,13 @@ impl Harness {
                     Self::image_data_settings_from_value(args.get(2))?;
                 let pixel_format =
                     settings_pixel_format.unwrap_or_else(|| "rgba-unorm8".to_string());
-                let kind = Self::image_data_kind_for_pixel_format(&pixel_format).ok_or_else(|| {
-                    Error::ScriptRuntime(
-                        "ImageData pixelFormat must be \"rgba-unorm8\" or \"rgba-float16\"".into(),
-                    )
-                })?;
+                let kind =
+                    Self::image_data_kind_for_pixel_format(&pixel_format).ok_or_else(|| {
+                        Error::ScriptRuntime(
+                            "ImageData pixelFormat must be \"rgba-unorm8\" or \"rgba-float16\""
+                                .into(),
+                        )
+                    })?;
                 self.new_image_data_value(width, height, kind, None, &color_space, &pixel_format)
             }
         }
@@ -1421,12 +1431,10 @@ impl Harness {
                             .map(|value| value.as_string())
                             .unwrap_or_default();
                         error_lineno = Self::value_to_i64(
-                            &Self::object_get_entry(&entries, "lineno")
-                                .unwrap_or(Value::Number(0)),
+                            &Self::object_get_entry(&entries, "lineno").unwrap_or(Value::Number(0)),
                         );
                         error_colno = Self::value_to_i64(
-                            &Self::object_get_entry(&entries, "colno")
-                                .unwrap_or(Value::Number(0)),
+                            &Self::object_get_entry(&entries, "colno").unwrap_or(Value::Number(0)),
                         );
                         error_value =
                             Self::object_get_entry(&entries, "error").unwrap_or(Value::Null);
@@ -2279,20 +2287,18 @@ impl Harness {
                         false,
                         false,
                     ),
-                    "hash_change_event_constructor" => {
-                        self.new_event_object_from_constructor_args(
-                            "HashChangeEvent",
-                            args,
-                            false,
-                            false,
-                            false,
-                            false,
-                            false,
-                            true,
-                            false,
-                            false,
-                        )
-                    },
+                    "hash_change_event_constructor" => self.new_event_object_from_constructor_args(
+                        "HashChangeEvent",
+                        args,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                    ),
                     "error_event_constructor" => self.new_event_object_from_constructor_args(
                         "ErrorEvent",
                         args,
@@ -4182,13 +4188,25 @@ impl Harness {
                     }
                     let mut call_event = event.clone();
                     let event_param = None;
-                    this.bind_handler_params(
-                        &function.handler,
-                        args,
-                        &mut call_env,
-                        &event_param,
-                        &call_event,
-                    )?;
+                    this.script_runtime
+                        .listener_capture_env_stack
+                        .push(ListenerCaptureFrame {
+                            inherit_outer_pending: false,
+                            ..ListenerCaptureFrame::default()
+                        });
+                    let bind_result = (|| -> Result<()> {
+                        this.bind_handler_params(
+                            &function.handler,
+                            args,
+                            &mut call_env,
+                            &event_param,
+                            &call_event,
+                        )?;
+                        this.apply_pending_listener_capture_env_updates(&mut call_env);
+                        Ok(())
+                    })();
+                    this.script_runtime.listener_capture_env_stack.pop();
+                    bind_result?;
                     if function.is_class_constructor && function.class_super_constructor.is_none() {
                         this.apply_constructor_instance_initializers_by_id(
                             function.function_id,
@@ -4240,11 +4258,12 @@ impl Harness {
                             pending: HashSet::new(),
                         });
                     }
-                    let flow = this.execute_stmts(
+                    let flow = this.execute_stmts_with_pending_scope(
                         &function.handler.stmts,
                         &event_param,
                         &mut call_event,
                         &mut body_env,
+                        false,
                     );
                     if pushed_non_tdz_scope {
                         this.script_runtime.tdz_scope_stack.pop();
@@ -4327,10 +4346,18 @@ impl Harness {
                             }
                             if let Some(next) = after.cloned() {
                                 captured_env.insert(name.clone(), next.clone());
-                                this.queue_listener_capture_env_update(name.clone(), Some(next));
+                                this.queue_listener_capture_env_update_for_shared_env(
+                                    &function.captured_env,
+                                    name.clone(),
+                                    Some(next),
+                                );
                             } else {
                                 captured_env.remove(name);
-                                this.queue_listener_capture_env_update(name.clone(), None);
+                                this.queue_listener_capture_env_update_for_shared_env(
+                                    &function.captured_env,
+                                    name.clone(),
+                                    None,
+                                );
                             }
                         }
                     }

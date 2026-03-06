@@ -23,8 +23,8 @@ fn issue_134_object_assign_global_is_available() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn issue_134_object_assign_returns_target_and_ignores_nullish_sources()
--> browser_tester::Result<()> {
+fn issue_134_object_assign_returns_target_and_ignores_nullish_sources() -> browser_tester::Result<()>
+{
     let html = r#"
       <p id='out'></p>
       <script>
@@ -147,8 +147,7 @@ fn issue_135_optional_chaining_listener_on_member_path_parses_and_runs()
 }
 
 #[test]
-fn issue_136_html_button_element_global_supports_instanceof_checks() -> browser_tester::Result<()>
-{
+fn issue_136_html_button_element_global_supports_instanceof_checks() -> browser_tester::Result<()> {
     let html = r#"
       <button id='btn'>run</button>
       <p id='out'></p>
@@ -172,8 +171,8 @@ fn issue_136_html_button_element_global_supports_instanceof_checks() -> browser_
 }
 
 #[test]
-fn issue_137_tofixed_chain_parses_after_escape_normalization_with_unicode() -> browser_tester::Result<()>
-{
+fn issue_137_tofixed_chain_parses_after_escape_normalization_with_unicode()
+-> browser_tester::Result<()> {
     let html = r#"
       <p id='out'></p>
       <script>

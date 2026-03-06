@@ -26,8 +26,7 @@ fn issue_151_map_delete_with_extra_argument_is_not_dispatched_as_form_data()
 }
 
 #[test]
-fn issue_151_map_has_with_extra_argument_uses_map_semantics()
--> browser_tester::Result<()> {
+fn issue_151_map_has_with_extra_argument_uses_map_semantics() -> browser_tester::Result<()> {
     let html = r#"
       <p id='out'></p>
       <script>
@@ -48,7 +47,8 @@ fn issue_151_map_has_with_extra_argument_uses_map_semantics()
 }
 
 #[test]
-fn issue_151_pickmap_get_or_fallback_does_not_overwrite_map_binding() -> browser_tester::Result<()> {
+fn issue_151_pickmap_get_or_fallback_does_not_overwrite_map_binding() -> browser_tester::Result<()>
+{
     let html = r#"
       <p id='out'></p>
       <script>
@@ -96,7 +96,8 @@ fn issue_151_pickmap_get_or_object_literal_fallback_keeps_map() -> browser_teste
 }
 
 #[test]
-fn issue_151_nested_const_shadow_named_pick_does_not_overwrite_outer_pick() -> browser_tester::Result<()> {
+fn issue_151_nested_const_shadow_named_pick_does_not_overwrite_outer_pick()
+-> browser_tester::Result<()> {
     let html = r#"
       <p id='out'></p>
       <script>

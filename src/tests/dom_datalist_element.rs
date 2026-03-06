@@ -29,7 +29,10 @@ fn html_datalist_element_global_and_options_collection_work() -> Result<()> {
         "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#result", "function:true:true:true:false:3:choco:Coconut:Mint")?;
+    h.assert_text(
+        "#result",
+        "function:true:true:true:false:3:choco:Coconut:Mint",
+    )?;
     Ok(())
 }
 

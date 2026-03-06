@@ -156,11 +156,11 @@ impl Harness {
                             .get(2)
                             .map(|expr| self.eval_expr(expr, env, event_param, event))
                             .transpose()?;
-                        let value =
-                            Self::form_data_append_string_value(&value, filename.as_ref());
+                        let value = Self::form_data_append_string_value(&value, filename.as_ref());
                         let mut entries_ref = entries.borrow_mut();
-                        if let Some(first_match) =
-                            entries_ref.iter().position(|(entry_name, _)| entry_name == &name)
+                        if let Some(first_match) = entries_ref
+                            .iter()
+                            .position(|(entry_name, _)| entry_name == &name)
                         {
                             entries_ref[first_match].1 = value;
                             let mut index = entries_ref.len();

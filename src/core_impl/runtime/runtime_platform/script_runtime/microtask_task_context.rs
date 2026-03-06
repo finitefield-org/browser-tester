@@ -662,9 +662,28 @@ impl Harness {
         }
     }
 
-    pub(crate) fn queue_listener_capture_env_update(&mut self, name: String, value: Option<Value>) {
+    pub(crate) fn queue_listener_capture_env_update_for_shared_env(
+        &mut self,
+        shared_env: &Rc<RefCell<ScriptEnv>>,
+        name: String,
+        value: Option<Value>,
+    ) {
         if Self::is_internal_env_key(&name) {
             return;
+        }
+        for frame in self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter_mut()
+            .rev()
+        {
+            let Some(frame_shared_env) = frame.shared_env.as_ref() else {
+                continue;
+            };
+            if Rc::ptr_eq(frame_shared_env, shared_env) {
+                frame.pending_env_updates.insert(name, value);
+                return;
+            }
         }
         if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
             frame.pending_env_updates.insert(name, value);
@@ -675,13 +694,26 @@ impl Harness {
         &mut self,
         env: &mut HashMap<String, Value>,
     ) {
-        let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() else {
-            return;
-        };
-        if frame.pending_env_updates.is_empty() {
+        let len = self.script_runtime.listener_capture_env_stack.len();
+        if len == 0 {
             return;
         }
-        let updates = std::mem::take(&mut frame.pending_env_updates);
+        let start = (0..len)
+            .rev()
+            .find(|&index| {
+                !self.script_runtime.listener_capture_env_stack[index].inherit_outer_pending
+            })
+            .unwrap_or(0);
+        if self.script_runtime.listener_capture_env_stack[start..]
+            .iter()
+            .all(|frame| frame.pending_env_updates.is_empty())
+        {
+            return;
+        }
+        let mut updates = HashMap::new();
+        for frame in &mut self.script_runtime.listener_capture_env_stack[start..] {
+            updates.extend(std::mem::take(&mut frame.pending_env_updates));
+        }
         for (name, value) in updates {
             if Self::is_internal_env_key(&name) {
                 continue;

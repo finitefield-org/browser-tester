@@ -2112,10 +2112,7 @@ fn form_data_entries_returns_all_pairs_in_order() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text(
-        "#result",
-        "key1=value1;key2=value2;key1=value3;|3",
-    )?;
+    h.assert_text("#result", "key1=value1;key2=value2;key1=value3;|3")?;
     Ok(())
 }
 

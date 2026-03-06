@@ -30,7 +30,7 @@ fn blob_stream_exposes_async_iterator_and_promise_based_next() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#out", "object:true:65,66:false:true:undefined")?;
+    h.assert_text("#out", "function:true:65,66:false:true:undefined")?;
     Ok(())
 }
 
@@ -68,6 +68,6 @@ fn async_iterator_async_dispose_calls_return_when_present() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#out", "1:true:object")?;
+    h.assert_text("#out", "1:true:function")?;
     Ok(())
 }

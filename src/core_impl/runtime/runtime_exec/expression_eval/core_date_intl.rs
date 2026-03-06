@@ -222,8 +222,8 @@ impl Harness {
                                 .as_ref()
                                 .map(|value| self.eval_expr(value, env, event_param, event))
                                 .transpose()?;
-                            let options =
-                                self.intl_relative_time_options_from_value(&locale, options.as_ref())?;
+                            let options = self
+                                .intl_relative_time_options_from_value(&locale, options.as_ref())?;
                             Ok(self.new_intl_relative_time_formatter_value(locale, options))
                         }
                         IntlFormatterKind::Segmenter => {
@@ -580,9 +580,9 @@ impl Harness {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let unit = self.eval_expr(unit, env, event_param, event)?;
                     match self.resolve_intl_relative_time_options(&formatter) {
-                        Ok((locale, options)) => Ok(Value::String(self.intl_format_relative_time(
-                            &locale, &options, &value, &unit,
-                        )?)),
+                        Ok((locale, options)) => Ok(Value::String(
+                            self.intl_format_relative_time(&locale, &options, &value, &unit)?,
+                        )),
                         Err(Error::ScriptRuntime(message))
                             if message
                                 == "Intl.RelativeTimeFormat method requires an Intl.RelativeTimeFormat instance" =>

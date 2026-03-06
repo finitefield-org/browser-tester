@@ -1512,7 +1512,9 @@ impl Harness {
                     self.set_data_transfer_object_property(object, &key, value)?;
                     return Ok(());
                 }
-                if let Some(owner) = dom_string_map_owner.filter(|_| !Self::is_symbol_storage_key(&key)) {
+                if let Some(owner) =
+                    dom_string_map_owner.filter(|_| !Self::is_symbol_storage_key(&key))
+                {
                     let value = value.as_string();
                     self.dom.dataset_set(owner, &key, &value)?;
                     Self::object_set_entry(&mut object.borrow_mut(), key, Value::String(value));

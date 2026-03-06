@@ -313,10 +313,21 @@ impl Harness {
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
     ) -> Result<ExecFlow> {
+        self.execute_stmts_with_pending_scope(stmts, event_param, event, env, true)
+    }
+
+    pub(crate) fn execute_stmts_with_pending_scope(
+        &mut self,
+        stmts: &[Stmt],
+        event_param: &Option<String>,
+        event: &mut EventState,
+        env: &mut HashMap<String, Value>,
+        inherit_outer_pending: bool,
+    ) -> Result<ExecFlow> {
         stacker::maybe_grow(
             Self::EXEC_STMTS_STACK_RED_ZONE,
             Self::EXEC_STMTS_STACK_SIZE,
-            || self.execute_stmts_impl(stmts, event_param, event, env),
+            || self.execute_stmts_impl(stmts, event_param, event, env, inherit_outer_pending),
         )
     }
 
@@ -2120,12 +2131,16 @@ impl Harness {
         event_param: &Option<String>,
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
+        inherit_outer_pending: bool,
     ) -> Result<ExecFlow> {
         let pending = Self::collect_function_decls(stmts);
         let pending_scope_start = self.push_pending_function_decl_scope(pending);
         self.script_runtime
             .listener_capture_env_stack
-            .push(ListenerCaptureFrame::default());
+            .push(ListenerCaptureFrame {
+                inherit_outer_pending,
+                ..ListenerCaptureFrame::default()
+            });
 
         let result = (|| -> Result<ExecFlow> {
             Self::validate_const_redeclarations(stmts)?;

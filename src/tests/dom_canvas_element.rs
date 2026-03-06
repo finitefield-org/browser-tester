@@ -325,7 +325,10 @@ fn canvas_non_standard_properties_moz_opaque_and_moz_print_callback_work() -> Re
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "false:true:true|true:true|false:true|function|true")?;
+    h.assert_text(
+        "#result",
+        "false:true:true|true:true|false:true|function|true",
+    )?;
     Ok(())
 }
 

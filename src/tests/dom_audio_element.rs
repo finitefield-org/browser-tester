@@ -60,10 +60,7 @@ fn audio_constructor_accepts_zero_or_one_argument() -> Result<()> {
 
     let mut h = Harness::from_html_with_url("https://media.local/home", html)?;
     h.click("#run")?;
-    h.assert_text(
-        "#result",
-        "AUDIO|true|https://media.local/ok.mp3",
-    )?;
+    h.assert_text("#result", "AUDIO|true|https://media.local/ok.mp3")?;
     Ok(())
 }
 
