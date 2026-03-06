@@ -106,3 +106,40 @@ fn tr_deprecated_attributes_and_role_override_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn tr_inner_html_html_13_2_6_4_14_reprocesses_tr_start_tag_into_cells() -> Result<()> {
+    let html = r#"
+        <table id='scores'>
+          <tbody>
+            <tr id='row'></tr>
+          </tbody>
+        </table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const row = document.getElementById('row');
+            row.innerHTML =
+              '<tr id="nested"><td>Alpha</td></tr><td>Beta</td><th>Gamma</th>';
+            const labels = [
+              ...Array.from(document.querySelectorAll('#row > td')).map((cell) => cell.textContent.trim()),
+              ...Array.from(document.querySelectorAll('#row > th')).map((cell) => cell.textContent.trim())
+            ].join(',');
+            document.getElementById('result').textContent = [
+              document.getElementById('nested') === null,
+              document.querySelectorAll('#row > td').length,
+              document.querySelectorAll('#row > th').length,
+              document.querySelectorAll('#row > tr').length,
+              document.querySelectorAll('#scores tr').length,
+              labels
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:2:1:0:1:Alpha,Beta,Gamma")?;
+    Ok(())
+}

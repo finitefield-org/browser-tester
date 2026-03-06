@@ -130,3 +130,36 @@ fn td_role_resolves_gridcell_with_grid_ancestor_and_roundtrips_deprecated_attrib
     )?;
     Ok(())
 }
+
+#[test]
+fn td_inner_html_html_13_2_6_4_15_reprocesses_cell_start_tags_without_nested_cells() -> Result<()> {
+    let html = r#"
+        <table>
+          <tbody>
+            <tr><td id='cell'></td></tr>
+          </tbody>
+        </table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const cell = document.getElementById('cell');
+            cell.innerHTML =
+              '<td id="nested">N</td><tr id="row2"><td>R</td></tr><b id="kept">B</b>';
+            document.getElementById('result').textContent = [
+              document.getElementById('nested') === null,
+              document.getElementById('row2') === null,
+              document.querySelectorAll('#cell > td').length,
+              document.querySelectorAll('#cell > tr').length,
+              document.querySelectorAll('#cell > b#kept').length,
+              cell.textContent.replace(/\s+/g, '')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:0:0:1:NRB")?;
+    Ok(())
+}

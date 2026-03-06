@@ -152,6 +152,34 @@ fn element_set_html_unsafe_second_declarative_template_becomes_template_in_shado
 }
 
 #[test]
+fn set_html_unsafe_table_html_8_5_2_13_2_6_4_9_wraps_direct_rows_in_implied_tbody() -> Result<()> {
+    let html = r#"
+        <table id='scores'><caption>before</caption></table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const table = document.getElementById('scores');
+            table.setHTMLUnsafe('<tr id="a"><td>Alpha</td></tr><tr id="b"><td>Beta</td></tr>');
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody').length,
+              document.querySelectorAll('#scores > tr').length,
+              document.querySelectorAll('#scores > tbody > tr').length,
+              Array.from(document.querySelectorAll('#scores > tbody > tr > td'))
+                .map((cell) => cell.textContent)
+                .join(',')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:0:2:Alpha,Beta")?;
+    Ok(())
+}
+
+#[test]
 fn element_set_html_unsafe_rejects_invalid_sanitizer_string_and_invalid_config() -> Result<()> {
     let html = r#"
         <div id='target'></div>

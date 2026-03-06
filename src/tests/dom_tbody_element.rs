@@ -112,3 +112,35 @@ fn tbody_deprecated_attributes_and_role_override_roundtrip_work() -> Result<()> 
     )?;
     Ok(())
 }
+
+#[test]
+fn tbody_inner_html_html_13_2_6_4_13_wraps_direct_cells_in_implied_row() -> Result<()> {
+    let html = r#"
+        <table id='scores'>
+          <tbody id='body'></tbody>
+        </table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const body = document.getElementById('body');
+            body.innerHTML = '<td id="a">Alpha</td><th id="b">Beta</th><tr id="c"><td>Gamma</td></tr>';
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody > tr').length,
+              document.querySelectorAll('#scores > tbody > td').length,
+              document.querySelectorAll('#scores > tbody > th').length,
+              document.querySelectorAll('#scores > tbody > tr:first-child > td').length +
+                document.querySelectorAll('#scores > tbody > tr:first-child > th').length,
+              Array.from(document.querySelectorAll('#scores > tbody > tr'))
+                .map((row) => row.textContent.trim())
+                .join('|')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:0:0:2:AlphaBeta|Gamma")?;
+    Ok(())
+}

@@ -116,7 +116,8 @@ impl Dom {
             ));
         }
 
-        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+        let context_tag = self.tag_name(node_id).map(|tag| tag.to_string());
+        let fragment = self.parse_html_fragment_for_context(html, context_tag.as_deref())?;
 
         let old_children = std::mem::take(&mut self.nodes[node_id.0].children);
         for child in old_children {
@@ -163,7 +164,8 @@ impl Dom {
             .position(|id| *id == node_id)
             .ok_or_else(|| Error::ScriptRuntime("outerHTML target is detached".into()))?;
 
-        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+        let context_tag = self.tag_name(parent).map(|tag| tag.to_string());
+        let fragment = self.parse_html_fragment_for_context(html, context_tag.as_deref())?;
 
         self.nodes[parent.0].children.remove(index);
         self.nodes[node_id.0].parent = None;
@@ -190,7 +192,15 @@ impl Dom {
         position: InsertAdjacentPosition,
         html: &str,
     ) -> Result<()> {
-        let ParseOutput { dom: fragment, .. } = parse_html(html)?;
+        let context_tag = match position {
+            InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd => self
+                .parent(target)
+                .and_then(|parent| self.tag_name(parent).map(|tag| tag.to_string())),
+            InsertAdjacentPosition::AfterBegin | InsertAdjacentPosition::BeforeEnd => {
+                self.tag_name(target).map(|tag| tag.to_string())
+            }
+        };
+        let fragment = self.parse_html_fragment_for_context(html, context_tag.as_deref())?;
 
         let mut children = fragment.nodes[fragment.root.0].children.clone();
         if matches!(position, InsertAdjacentPosition::AfterBegin) {
@@ -212,6 +222,20 @@ impl Dom {
         self.normalize_implied_table_bodies()?;
         self.sync_select_values_including_subtree(sync_root)?;
         Ok(())
+    }
+
+    fn parse_html_fragment_for_context(
+        &self,
+        html: &str,
+        context_tag: Option<&str>,
+    ) -> Result<Dom> {
+        let ParseOutput {
+            dom: mut fragment, ..
+        } = parse_html(html)?;
+        if let Some(tag) = context_tag {
+            normalize_table_fragment_for_context(&mut fragment, tag)?;
+        }
+        Ok(fragment)
     }
 
     pub(crate) fn clone_subtree_from_dom(
@@ -246,4 +270,88 @@ impl Dom {
         }
         Ok(Some(node))
     }
+}
+
+fn normalize_table_fragment_for_context(fragment: &mut Dom, context_tag: &str) -> Result<()> {
+    match context_tag.to_ascii_lowercase().as_str() {
+        "tbody" | "thead" | "tfoot" => {
+            flatten_top_level_wrappers(
+                fragment,
+                &[
+                    "table", "tbody", "thead", "tfoot", "caption", "colgroup", "col",
+                ],
+            )?;
+            wrap_top_level_cells_in_implied_rows(fragment)?;
+        }
+        "tr" => {
+            flatten_top_level_wrappers(
+                fragment,
+                &[
+                    "table", "tbody", "thead", "tfoot", "tr", "caption", "colgroup", "col",
+                ],
+            )?;
+        }
+        "td" | "th" => {
+            flatten_top_level_wrappers(
+                fragment,
+                &[
+                    "tbody", "thead", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
+                ],
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn flatten_top_level_wrappers(fragment: &mut Dom, wrappers: &[&str]) -> Result<()> {
+    let root = fragment.root;
+    let mut index = 0usize;
+    while index < fragment.nodes[root.0].children.len() {
+        let node = fragment.nodes[root.0].children[index];
+        if !node_tag_matches_any(fragment, node, wrappers) {
+            index += 1;
+            continue;
+        }
+
+        let children = fragment.nodes[node.0].children.clone();
+        for child in children {
+            fragment.remove_child(node, child)?;
+            fragment.insert_before(root, child, node)?;
+        }
+        fragment.remove_child(root, node)?;
+    }
+    Ok(())
+}
+
+fn wrap_top_level_cells_in_implied_rows(fragment: &mut Dom) -> Result<()> {
+    let root = fragment.root;
+    let mut index = 0usize;
+    while index < fragment.nodes[root.0].children.len() {
+        let node = fragment.nodes[root.0].children[index];
+        if !node_tag_matches_any(fragment, node, &["td", "th"]) {
+            index += 1;
+            continue;
+        }
+
+        let row = fragment.create_detached_element("tr".to_string());
+        fragment.insert_before(root, row, node)?;
+        let cell_index = index + 1;
+        while cell_index < fragment.nodes[root.0].children.len() {
+            let current = fragment.nodes[root.0].children[cell_index];
+            if !node_tag_matches_any(fragment, current, &["td", "th"]) {
+                break;
+            }
+            fragment.append_child(row, current)?;
+        }
+        index = cell_index;
+    }
+    Ok(())
+}
+
+fn node_tag_matches_any(dom: &Dom, node: NodeId, tags: &[&str]) -> bool {
+    dom.tag_name(node).is_some_and(|tag| {
+        tags.iter()
+            .any(|candidate| tag.eq_ignore_ascii_case(candidate))
+    })
 }
