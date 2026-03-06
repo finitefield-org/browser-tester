@@ -335,20 +335,12 @@ impl Harness {
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value < 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value < 0 { None } else { Some(value) }
     }
 
     pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value <= 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value <= 0 { None } else { Some(value) }
     }
 
     pub(crate) fn col_span_value(&self, node: NodeId) -> i64 {
@@ -393,6 +385,27 @@ impl Harness {
     pub(crate) fn is_event_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_hash_change_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_HASH_CHANGE_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_error_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_ERROR_EVENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_before_unload_event_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_BEFORE_UNLOAD_EVENT_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -520,10 +533,7 @@ impl Harness {
         )
     }
 
-    pub(crate) fn form_data_append_string_value(
-        value: &Value,
-        filename: Option<&Value>,
-    ) -> String {
+    pub(crate) fn form_data_append_string_value(value: &Value, filename: Option<&Value>) -> String {
         match value {
             Value::Blob(_) => filename
                 .map(Value::as_string)
@@ -547,6 +557,24 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_CLASS_LIST_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn is_dom_string_map_object(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_DOM_STRING_MAP_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn dom_string_map_owner_node(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_DOM_STRING_MAP_OWNER_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
     }
 
     pub(crate) fn keyboard_key_code_for_key(key: &str) -> i64 {
@@ -601,11 +629,7 @@ impl Harness {
         if let Some(ch) = key.chars().next().filter(|_| key.chars().count() == 1) {
             return ch as i64;
         }
-        if key == "Enter" {
-            13
-        } else {
-            0
-        }
+        if key == "Enter" { 13 } else { 0 }
     }
 
     pub(crate) fn event_modifier_state_from_entries(
@@ -1545,6 +1569,25 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_dom_string_map_value(&self, node: NodeId) -> Value {
+        let mut entries = self.dataset_entries_for_node(node);
+        entries.insert(
+            0,
+            (
+                INTERNAL_DOM_STRING_MAP_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+        );
+        entries.insert(
+            1,
+            (
+                INTERNAL_DOM_STRING_MAP_OWNER_NODE_KEY.to_string(),
+                Value::Node(node),
+            ),
+        );
+        Self::new_object_value(entries)
+    }
+
     pub(crate) fn new_class_list_value(node: NodeId) -> Value {
         Self::new_object_value(vec![
             (
@@ -1616,7 +1659,10 @@ impl Harness {
                 Value::String("object_constructor".to_string()),
             ),
             ("prototype".to_string(), prototype),
-            ("assign".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "assign".to_string(),
+                Self::new_builtin_placeholder_function(),
+            ),
         ])
     }
 
@@ -1766,6 +1812,82 @@ impl Harness {
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
                 Value::String("pointer_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_error_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("error_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_hash_change_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("hash_change_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_before_unload_event_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("before_unload_event_constructor".to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+        }
+        constructor
+    }
+
+    pub(crate) fn new_image_data_constructor_value() -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("image_data_constructor".to_string()),
             ),
             ("prototype".to_string(), prototype.clone()),
         ]);
@@ -2029,6 +2151,13 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("option_constructor".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_audio_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("audio_constructor".to_string()),
         )])
     }
 
@@ -3075,6 +3204,10 @@ impl Harness {
                 "wheel_event_constructor" => "wheel_event_constructor",
                 "navigate_event_constructor" => "navigate_event_constructor",
                 "pointer_event_constructor" => "pointer_event_constructor",
+                "error_event_constructor" => "error_event_constructor",
+                "hash_change_event_constructor" => "hash_change_event_constructor",
+                "before_unload_event_constructor" => "before_unload_event_constructor",
+                "image_data_constructor" => "image_data_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
                 "document_constructor" => "document_constructor",
                 "document_parse_html" => "document_parse_html",
@@ -3105,6 +3238,7 @@ impl Harness {
                 "worker_constructor" => "worker_constructor",
                 "data_transfer_constructor" => "data_transfer_constructor",
                 "option_constructor" => "option_constructor",
+                "audio_constructor" => "audio_constructor",
                 "text_encoder_constructor" => "text_encoder_constructor",
                 "text_decoder_constructor" => "text_decoder_constructor",
                 "text_encoder_stream_constructor" => "text_encoder_stream_constructor",
@@ -3171,25 +3305,27 @@ impl Harness {
         if raw.is_empty() {
             return None;
         }
-        let mut out = String::new();
-        let mut uppercase_next = false;
-        for ch in raw.chars() {
+        let normalized = raw.to_ascii_lowercase();
+        let chars = normalized.chars().collect::<Vec<_>>();
+        let mut out = String::with_capacity(chars.len());
+        let mut index = 0usize;
+        while index < chars.len() {
+            let ch = chars[index];
             if ch == '-' {
-                uppercase_next = true;
-                continue;
-            }
-            if uppercase_next {
-                out.push(ch.to_ascii_uppercase());
-                uppercase_next = false;
+                if let Some(next) = chars.get(index + 1).copied() {
+                    if next.is_ascii_lowercase() {
+                        out.push(next.to_ascii_uppercase());
+                        index += 2;
+                        continue;
+                    }
+                }
+                out.push(ch);
             } else {
                 out.push(ch);
             }
+            index += 1;
         }
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     pub(crate) fn dataset_entries_for_node(&self, node: NodeId) -> Vec<(String, Value)> {
@@ -3467,6 +3603,11 @@ impl Harness {
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("select"))
             .unwrap_or(false);
+        let is_datalist = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("datalist"))
+            .unwrap_or(false);
         let is_input = self
             .dom
             .tag_name(*node)
@@ -3485,6 +3626,11 @@ impl Harness {
             .map(|tag| tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup"))
             .unwrap_or(false);
         let select_options = || self.select_option_nodes(*node);
+        let datalist_options = || {
+            let mut options = Vec::new();
+            self.dom.collect_select_options(*node, &mut options);
+            options
+        };
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
@@ -3610,7 +3756,9 @@ impl Harness {
             }
             "command" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(*node, "command").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(*node, "command").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -3642,28 +3790,36 @@ impl Harness {
             }
             "formEnctype" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(*node, "formenctype").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(*node, "formenctype").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "formMethod" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(*node, "formmethod").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(*node, "formmethod").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "formNoValidate" => {
                 if is_button {
-                    Ok(Value::Bool(self.dom.attr(*node, "formnovalidate").is_some()))
+                    Ok(Value::Bool(
+                        self.dom.attr(*node, "formnovalidate").is_some(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "formTarget" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(*node, "formtarget").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(*node, "formtarget").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -3699,7 +3855,9 @@ impl Harness {
             "popoverTargetAction" => {
                 if is_button {
                     Ok(Value::String(
-                        self.dom.attr(*node, "popovertargetaction").unwrap_or_default(),
+                        self.dom
+                            .attr(*node, "popovertargetaction")
+                            .unwrap_or_default(),
                     ))
                 } else {
                     Ok(Value::Undefined)
@@ -3890,6 +4048,25 @@ impl Harness {
             )),
             "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
             "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
+            "mozOpaque" | "mozopaque" => {
+                if is_canvas {
+                    Ok(Value::Bool(self.dom.attr(*node, "moz-opaque").is_some()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "mozPrintCallback" | "mozprintcallback" => {
+                if is_canvas {
+                    Ok(self
+                        .dom_runtime
+                        .node_expando_props
+                        .get(&(*node, key.to_string()))
+                        .cloned()
+                        .unwrap_or(Value::Null))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "tagName" => Ok(Value::String(self.element_tag_name(*node))),
             "localName" => Ok(Value::String(
                 self.dom
@@ -3931,12 +4108,15 @@ impl Harness {
                 }
             }
             "baseURI" => Ok(Value::String(self.document_base_url())),
-            "dataset" => Ok(Self::new_object_value(self.dataset_entries_for_node(*node))),
+            "dataset" => Ok(self.new_dom_string_map_value(*node)),
             "options" => {
-                if !is_select {
-                    return Ok(Value::Undefined);
+                if is_select {
+                    return Ok(Self::new_static_node_list_value(select_options()));
                 }
-                Ok(Self::new_static_node_list_value(select_options()))
+                if is_datalist {
+                    return Ok(Self::new_static_node_list_value(datalist_options()));
+                }
+                Ok(Value::Undefined)
             }
             "selectedIndex" => {
                 if !is_select {
@@ -4000,7 +4180,8 @@ impl Harness {
                 }
                 Ok(Value::Number(select_options().len() as i64))
             }
-            "getContext" | "toDataURL" | "toBlob" | "transferControlToOffscreen" => {
+            "captureStream" | "getContext" | "toDataURL" | "toBlob"
+            | "transferControlToOffscreen" => {
                 if !is_canvas {
                     return Ok(Value::Undefined);
                 }
@@ -4011,12 +4192,29 @@ impl Harness {
                     .cloned()
                     .unwrap_or_else(Self::new_builtin_placeholder_function))
             }
-            _ if key.starts_with("on") => Ok(self
-                .dom_runtime
-                .node_expando_props
-                .get(&(*node, key.to_string()))
-                .cloned()
-                .unwrap_or(Value::Null)),
+            _ if key.starts_with("on") => {
+                let is_body_window_alias = self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+                    && key
+                        .strip_prefix("on")
+                        .map(|event_type| event_type.to_ascii_lowercase())
+                        .is_some_and(|event_type| {
+                            Self::is_body_window_event_handler_alias(event_type.as_str())
+                        });
+                if is_body_window_alias {
+                    Ok(Self::object_get_entry(&self.dom_runtime.window_object.borrow(), key)
+                        .unwrap_or(Value::Null))
+                } else {
+                    Ok(self
+                        .dom_runtime
+                        .node_expando_props
+                        .get(&(*node, key.to_string()))
+                        .cloned()
+                        .unwrap_or(Value::Null))
+                }
+            }
             _ => Ok(self
                 .dom_runtime
                 .node_expando_props
@@ -4051,6 +4249,31 @@ impl Harness {
             if !matches!(value, Value::Undefined) {
                 return Some(value);
             }
+        }
+
+        if Self::is_dom_string_map_object(entries) {
+            let Some(node) = Self::dom_string_map_owner_node(entries) else {
+                return Some(Value::Undefined);
+            };
+            if self.dom.element(node).is_none() {
+                return Some(Value::Undefined);
+            }
+            if Self::is_symbol_storage_key(key) {
+                return Some(Self::object_get_entry(entries, key).unwrap_or(Value::Undefined));
+            }
+            if key == "constructor" {
+                return Some(Value::Undefined);
+            }
+            if self.is_to_string_tag_property_key(key) {
+                return Some(Value::String("DOMStringMap".to_string()));
+            }
+            let attr_name = dataset_key_to_attr_name(key);
+            return Some(
+                self.dom
+                    .attr(node, &attr_name)
+                    .map(Value::String)
+                    .unwrap_or(Value::Undefined),
+            );
         }
 
         if Self::is_class_list_object(entries) {
@@ -4175,8 +4398,8 @@ impl Harness {
         if !Self::is_named_node_map_object(entries) {
             return None;
         }
-        let owner =
-            Self::named_node_map_owner_node(entries).filter(|node| self.dom.element(*node).is_some());
+        let owner = Self::named_node_map_owner_node(entries)
+            .filter(|node| self.dom.element(*node).is_some());
         let attrs = owner
             .map(|owner_node| self.named_node_map_entries(owner_node))
             .unwrap_or_default();
@@ -4187,7 +4410,9 @@ impl Harness {
             let value = attrs
                 .get(index)
                 .and_then(|(name, value)| {
-                    owner.map(|owner_node| Self::new_attr_object_value(name, value, Some(owner_node)))
+                    owner.map(|owner_node| {
+                        Self::new_attr_object_value(name, value, Some(owner_node))
+                    })
                 })
                 .unwrap_or(Value::Undefined);
             return Some(value);
@@ -4200,7 +4425,10 @@ impl Harness {
         None
     }
 
-    fn object_property_from_string_wrapper_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+    fn object_property_from_string_wrapper_entries(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
         let text = Self::string_wrapper_value_from_object(entries)?;
         if key == "length" {
             return Some(Value::Number(text.chars().count() as i64));
@@ -4340,7 +4568,10 @@ impl Harness {
         self.object_property_from_generator_to_string_tag_entries(entries, key)
     }
 
-    fn object_property_from_url_search_params_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+    fn object_property_from_url_search_params_entries(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
         if Self::is_url_search_params_object(entries) && key == "size" {
             let size = Self::url_search_params_pairs_from_object_entries(entries).len();
             return Some(Value::Number(size as i64));
@@ -4443,7 +4674,9 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Result<Value> {
-        if let Some(value) = self.object_property_from_entries_with_getter(receiver, entries, key)? {
+        if let Some(value) =
+            self.object_property_from_entries_with_getter(receiver, entries, key)?
+        {
             return Ok(value);
         }
         let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
@@ -4581,11 +4814,9 @@ impl Harness {
         if !matches!(own_value, Value::Undefined) {
             return Ok(own_value);
         }
-        if let Some(inherited) = self.inherited_property_from_function_super_constructor(
-            function,
-            key,
-            Some(receiver),
-        )? {
+        if let Some(inherited) =
+            self.inherited_property_from_function_super_constructor(function, key, Some(receiver))?
+        {
             return Ok(inherited);
         }
         Ok(Value::Undefined)

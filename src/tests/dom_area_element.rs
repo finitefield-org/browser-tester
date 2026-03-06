@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn html_area_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <map name='zones'>
+          <area id='hot' href='/go' alt='hot'>
+        </map>
+        <a id='link' href='/other'>other</a>
+        <p id='result'></p>
+        <script>
+          const hot = document.getElementById('hot');
+          const link = document.getElementById('link');
+          document.getElementById('result').textContent = [
+            typeof HTMLAreaElement,
+            window.HTMLAreaElement === HTMLAreaElement,
+            hot instanceof HTMLAreaElement,
+            hot instanceof HTMLElement,
+            link instanceof HTMLAreaElement
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn area_properties_and_document_links_include_href_areas() -> Result<()> {
     let html = r#"
         <map name='primary'>
@@ -46,6 +72,7 @@ fn area_click_follows_href_and_skips_blank_target_or_missing_href() -> Result<()
         <map name='routes'>
           <area id='go' href='/go' alt='go'>
           <area id='mail' href='mailto:m.bluth@example.com' alt='mail'>
+          <area id='inactive' href='/inactive' nohref alt='inactive'>
           <area id='blank' href='/blank' target='_blank' alt='blank'>
           <area id='nohref' alt='no href'>
         </map>
@@ -54,6 +81,7 @@ fn area_click_follows_href_and_skips_blank_target_or_missing_href() -> Result<()
     let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
     h.click("#go")?;
     h.click("#mail")?;
+    h.click("#inactive")?;
     h.click("#blank")?;
     h.click("#nohref")?;
 
@@ -72,6 +100,53 @@ fn area_click_follows_href_and_skips_blank_target_or_missing_href() -> Result<()
             },
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn area_alt_nohref_interest_and_rel_list_properties_reflect_work() -> Result<()> {
+    let html = r#"
+        <map name='meta'>
+          <area id='spot' href='/x' alt='old alt' rel='noopener noreferrer'>
+        </map>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const spot = document.getElementById('spot');
+            const before = [
+              spot.alt,
+              spot.noHref,
+              spot.relList.length
+            ].join(':');
+            spot.alt = 'new alt';
+            spot.interestForElement = 'panel';
+            spot.noHref = true;
+            const withNoHref = [
+              spot.noHref,
+              spot.getAttribute('nohref') !== null
+            ].join(':');
+            spot.noHref = false;
+            document.getElementById('result').textContent = [
+              before,
+              spot.alt,
+              spot.getAttribute('alt'),
+              spot.interestForElement,
+              withNoHref,
+              spot.noHref,
+              spot.getAttribute('nohref') === null,
+              spot.relList.length
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "old alt:false:2|new alt|new alt|panel|true:true|false|true|2",
+    )?;
     Ok(())
 }
 

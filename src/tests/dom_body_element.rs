@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn html_body_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <body id='main'>
+          <a id='link' href='/docs'>docs</a>
+          <p id='result'></p>
+          <script>
+            const body = document.body;
+            const link = document.getElementById('link');
+            document.getElementById('result').textContent = [
+              typeof HTMLBodyElement,
+              window.HTMLBodyElement === HTMLBodyElement,
+              body instanceof HTMLBodyElement,
+              body instanceof HTMLElement,
+              link instanceof HTMLBodyElement
+            ].join(':');
+          </script>
+        </body>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn body_implicit_generic_role_and_event_handler_attributes_work() -> Result<()> {
     let html = r#"
         <html>
@@ -39,13 +64,58 @@ fn body_implicit_generic_role_and_event_handler_attributes_work() -> Result<()> 
         "#;
 
     let mut h = Harness::from_html(html)?;
-    h.dispatch("body", "load")?;
-    h.dispatch("body", "resize")?;
+    h.dispatch("window", "load")?;
+    h.dispatch("window", "resize")?;
     h.click("#run")?;
     h.assert_text(
         "#result",
         "generic|none:none|generic:true|onload-set|onresize-set|yes|yes",
     )?;
+    Ok(())
+}
+
+#[test]
+fn body_window_event_handler_aliases_forward_to_window_handlers() -> Result<()> {
+    let html = r#"
+        <body id='main'>
+          <button id='run'>run</button>
+          <p id='result'></p>
+          <script>
+            const body = document.body;
+            let score = 0;
+            body.onhashchange = () => { score += 1; };
+            const initialMirror = window.onhashchange === body.onhashchange;
+            window.onhashchange = () => { score += 10; };
+            const overwrittenMirror = window.onhashchange === body.onhashchange;
+            body.onbeforeunload = (event) => {
+              score += 100;
+              event.returnValue = 'leave?';
+            };
+            const beforeUnloadMirror = window.onbeforeunload === body.onbeforeunload;
+            body.setAttribute(
+              'data-flags',
+              [initialMirror, overwrittenMirror, beforeUnloadMirror].join(':')
+            );
+            document.getElementById('result').textContent =
+              body.getAttribute('data-flags') + '|' + score;
+            document.getElementById('run').addEventListener('click', () => {
+              document.getElementById('result').textContent =
+                body.getAttribute('data-flags') + '|' +
+                String(window.onhashchange === body.onhashchange) + ':' +
+                String(window.onbeforeunload === body.onbeforeunload) + '|' +
+                String(window.onbeforeunload !== null) + '|' +
+                String(score);
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.assert_text("#result", "true:true:true|0")?;
+    h.dispatch("window", "hashchange")?;
+    h.dispatch("window", "beforeunload")?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true|true:true|true|110")?;
     Ok(())
 }
 

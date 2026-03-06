@@ -3840,6 +3840,33 @@ impl Harness {
                 }
                 Ok(Some(Value::Undefined))
             }
+            "captureStream" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "captureStream supports at most one argument".into(),
+                    ));
+                }
+                let is_canvas = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas"));
+                if !is_canvas {
+                    return Ok(None);
+                }
+                let frame_rate = evaluated_args
+                    .first()
+                    .map(|value| Self::number_value(Self::value_to_i64(value) as f64))
+                    .unwrap_or(Value::Undefined);
+                Ok(Some(Self::new_object_value(vec![
+                    (
+                        INTERNAL_CANVAS_KEY_PREFIX.to_string(),
+                        Value::String("canvas_capture_stream".to_string()),
+                    ),
+                    ("active".to_string(), Value::Bool(true)),
+                    ("canvas".to_string(), Value::Node(node)),
+                    ("frameRate".to_string(), frame_rate),
+                ])))
+            }
             "getContext" => {
                 if !(evaluated_args.len() == 1 || evaluated_args.len() == 2) {
                     return Err(Error::ScriptRuntime(
@@ -4468,7 +4495,7 @@ impl Harness {
                         Self::coerce_number_for_number_constructor(&evaluated_args[1]) as i64,
                     )
                 };
-                Ok(Some(Self::new_canvas_image_data_value(width, height)))
+                Ok(Some(self.new_canvas_image_data_value(width, height)?))
             }
             "getImageData" => {
                 if evaluated_args.len() != 4 {
@@ -4480,7 +4507,7 @@ impl Harness {
                     Self::coerce_number_for_number_constructor(&evaluated_args[2]).abs() as i64;
                 let height =
                     Self::coerce_number_for_number_constructor(&evaluated_args[3]).abs() as i64;
-                Ok(Some(Self::new_canvas_image_data_value(width, height)))
+                Ok(Some(self.new_canvas_image_data_value(width, height)?))
             }
             "putImageData" => {
                 if !(evaluated_args.len() == 3 || evaluated_args.len() == 7) {
@@ -4790,19 +4817,15 @@ impl Harness {
         )])
     }
 
-    fn new_canvas_image_data_value(width: i64, height: i64) -> Value {
-        let width = width.max(0);
-        let height = height.max(0);
-        let len = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4)
-            .min(1_000_000);
-        let data = Self::new_array_value(vec![Value::Number(0); len]);
-        Self::new_object_value(vec![
-            ("width".to_string(), Value::Number(width)),
-            ("height".to_string(), Value::Number(height)),
-            ("data".to_string(), data),
-        ])
+    fn new_canvas_image_data_value(&mut self, width: i64, height: i64) -> Result<Value> {
+        self.new_image_data_value(
+            width.max(0) as usize,
+            height.max(0) as usize,
+            TypedArrayKind::Uint8Clamped,
+            None,
+            "srgb",
+            "rgba-unorm8",
+        )
     }
 
     fn canvas_2d_reset_context_state(context: &mut ObjectValue) {

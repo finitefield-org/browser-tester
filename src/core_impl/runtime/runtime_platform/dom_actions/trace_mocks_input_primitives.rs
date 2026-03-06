@@ -331,6 +331,14 @@ impl Harness {
         if !self.is_hyperlink_element(target) {
             return Ok(());
         }
+        if self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("area"))
+            && self.dom.attr(target, "nohref").is_some()
+        {
+            return Ok(());
+        }
         if self.dom.attr(target, "href").is_none() {
             return Ok(());
         }

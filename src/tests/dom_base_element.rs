@@ -1,6 +1,85 @@
 use super::*;
 
 #[test]
+fn html_base_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <head>
+          <base id='base' href='/docs/' target='_self'>
+        </head>
+        <body>
+          <a id='link' href='/other'>other</a>
+          <p id='result'></p>
+          <script>
+            const base = document.getElementById('base');
+            const link = document.getElementById('link');
+            document.getElementById('result').textContent = [
+              typeof HTMLBaseElement,
+              window.HTMLBaseElement === HTMLBaseElement,
+              base instanceof HTMLBaseElement,
+              base instanceof HTMLElement,
+              link instanceof HTMLBaseElement
+            ].join(':');
+          </script>
+        </body>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn base_href_and_target_properties_reflect_and_change_default_targeting() -> Result<()> {
+    let html = r#"
+        <head>
+          <base id='base' href='/assets/' target='_self'>
+        </head>
+        <body>
+          <a id='rel' href='guide.html'>Guide</a>
+          <button id='run'>run</button>
+          <p id='result'></p>
+          <script>
+            document.getElementById('run').addEventListener('click', () => {
+              const rel = document.getElementById('rel');
+              const before = [
+                document.getElementById('base').href,
+                document.getElementById('base').target,
+                document.getElementById('base').getAttribute('href'),
+                document.getElementById('base').getAttribute('target'),
+                rel.href
+              ].join(':');
+
+              document.getElementById('base').href = '/docs/';
+              document.getElementById('base').target = 'frameA';
+
+              const after = [
+                document.getElementById('base').href,
+                document.getElementById('base').target,
+                document.getElementById('base').getAttribute('href'),
+                document.getElementById('base').getAttribute('target'),
+                document.baseURI,
+                rel.href
+              ].join(':');
+
+              document.getElementById('result').textContent = before + '|' + after;
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/assets/:_self:/assets/:_self:https://app.local/assets/guide.html|https://app.local/docs/:frameA:/docs/:frameA:https://app.local/docs/:https://app.local/docs/guide.html",
+    )?;
+
+    h.click("#rel")?;
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
 fn base_href_updates_base_uri_and_relative_url_resolution() -> Result<()> {
     let html = r#"
         <head>

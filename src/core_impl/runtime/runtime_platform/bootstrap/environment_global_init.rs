@@ -262,6 +262,10 @@ impl Harness {
         let wheel_event_constructor = Self::new_wheel_event_constructor_value();
         let navigate_event_constructor = Self::new_navigate_event_constructor_value();
         let pointer_event_constructor = Self::new_pointer_event_constructor_value();
+        let hash_change_event_constructor = Self::new_hash_change_event_constructor_value();
+        let error_event_constructor = Self::new_error_event_constructor_value();
+        let before_unload_event_constructor = Self::new_before_unload_event_constructor_value();
+        let image_data_constructor = Self::new_image_data_constructor_value();
         let iterator_constructor = self.new_iterator_constructor_value();
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
@@ -309,9 +313,19 @@ impl Harness {
         let clipboard_item_constructor = Self::new_clipboard_item_constructor_value();
         let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
+        let audio_constructor = Self::new_audio_constructor_value();
         let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
+        let html_anchor_element_constructor = Self::new_builtin_placeholder_function();
+        let html_area_element_constructor = Self::new_builtin_placeholder_function();
+        let html_body_element_constructor = Self::new_builtin_placeholder_function();
+        let html_br_element_constructor = Self::new_builtin_placeholder_function();
+        let html_base_element_constructor = Self::new_builtin_placeholder_function();
+        let html_audio_element_constructor = Self::new_builtin_placeholder_function();
         let html_button_element_constructor = Self::new_builtin_placeholder_function();
+        let html_canvas_element_constructor = Self::new_builtin_placeholder_function();
+        let html_data_element_constructor = Self::new_builtin_placeholder_function();
+        let html_datalist_element_constructor = Self::new_builtin_placeholder_function();
         let html_input_element_constructor = Self::new_builtin_placeholder_function();
         let html_option_element_constructor = Self::new_builtin_placeholder_function();
         let html_select_element_constructor = Self::new_builtin_placeholder_function();
@@ -378,6 +392,10 @@ impl Harness {
             &wheel_event_constructor,
             &navigate_event_constructor,
             &pointer_event_constructor,
+            &hash_change_event_constructor,
+            &error_event_constructor,
+            &before_unload_event_constructor,
+            &image_data_constructor,
             &iterator_constructor,
             &cookie_store,
             &caches,
@@ -385,6 +403,7 @@ impl Harness {
             &request_constructor,
             &headers_constructor,
             &url_constructor,
+            &audio_constructor,
             &data_transfer_constructor,
             &text_encoder_constructor,
             &text_decoder_constructor,
@@ -392,7 +411,16 @@ impl Harness {
             &text_decoder_stream_constructor,
             &element_constructor,
             &html_element_constructor,
+            &html_anchor_element_constructor,
+            &html_area_element_constructor,
+            &html_body_element_constructor,
+            &html_br_element_constructor,
+            &html_base_element_constructor,
+            &html_audio_element_constructor,
             &html_button_element_constructor,
+            &html_canvas_element_constructor,
+            &html_data_element_constructor,
+            &html_datalist_element_constructor,
             &html_input_element_constructor,
             &html_select_element_constructor,
             &dom_parser_constructor,
@@ -522,8 +550,78 @@ impl Harness {
             );
             Self::object_set_entry(
                 &mut window_entries,
+                "HashChangeEvent".to_string(),
+                hash_change_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "ErrorEvent".to_string(),
+                error_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "BeforeUnloadEvent".to_string(),
+                before_unload_event_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "ImageData".to_string(),
+                image_data_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Audio".to_string(),
+                audio_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLAnchorElement".to_string(),
+                html_anchor_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLAreaElement".to_string(),
+                html_area_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLBodyElement".to_string(),
+                html_body_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLBRElement".to_string(),
+                html_br_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLBaseElement".to_string(),
+                html_base_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLAudioElement".to_string(),
+                html_audio_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
                 "HTMLButtonElement".to_string(),
                 html_button_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLCanvasElement".to_string(),
+                html_canvas_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLDataElement".to_string(),
+                html_data_element_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLDataListElement".to_string(),
+                html_datalist_element_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -586,6 +684,20 @@ impl Harness {
         self.script_runtime
             .env
             .insert("PointerEvent".to_string(), pointer_event_constructor);
+        self.script_runtime.env.insert(
+            "HashChangeEvent".to_string(),
+            hash_change_event_constructor,
+        );
+        self.script_runtime
+            .env
+            .insert("ErrorEvent".to_string(), error_event_constructor);
+        self.script_runtime.env.insert(
+            "BeforeUnloadEvent".to_string(),
+            before_unload_event_constructor,
+        );
+        self.script_runtime
+            .env
+            .insert("ImageData".to_string(), image_data_constructor);
         self.script_runtime
             .env
             .insert("Iterator".to_string(), iterator_constructor);
@@ -733,13 +845,52 @@ impl Harness {
             .insert("URL".to_string(), url_constructor);
         self.script_runtime
             .env
+            .insert("Audio".to_string(), audio_constructor);
+        self.script_runtime
+            .env
             .insert("Element".to_string(), element_constructor);
         self.script_runtime
             .env
             .insert("HTMLElement".to_string(), html_element_constructor);
         self.script_runtime.env.insert(
+            "HTMLAnchorElement".to_string(),
+            html_anchor_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLAreaElement".to_string(),
+            html_area_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLBodyElement".to_string(),
+            html_body_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLBRElement".to_string(),
+            html_br_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLBaseElement".to_string(),
+            html_base_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLAudioElement".to_string(),
+            html_audio_element_constructor,
+        );
+        self.script_runtime.env.insert(
             "HTMLButtonElement".to_string(),
             html_button_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLCanvasElement".to_string(),
+            html_canvas_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLDataElement".to_string(),
+            html_data_element_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLDataListElement".to_string(),
+            html_datalist_element_constructor,
         );
         self.script_runtime.env.insert(
             "HTMLInputElement".to_string(),

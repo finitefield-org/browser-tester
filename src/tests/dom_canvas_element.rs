@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn html_canvas_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <a id='link' href='/docs'>docs</a>
+        <p id='result'></p>
+        <script>
+          const canvas = document.getElementById('canvas');
+          const link = document.getElementById('link');
+          document.getElementById('result').textContent = [
+            typeof HTMLCanvasElement,
+            window.HTMLCanvasElement === HTMLCanvasElement,
+            canvas instanceof HTMLCanvasElement,
+            canvas instanceof HTMLElement,
+            link instanceof HTMLCanvasElement
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn canvas_width_height_defaults_and_attribute_reflection_work() -> Result<()> {
     let html = r#"
         <canvas id='canvas'>Fallback text</canvas>
@@ -261,6 +285,105 @@ fn canvas_to_blob_requires_callable_callback() -> Result<()> {
 }
 
 #[test]
+fn canvas_non_standard_properties_moz_opaque_and_moz_print_callback_work() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const initial = [
+              canvas.mozOpaque,
+              canvas.getAttribute('moz-opaque') === null,
+              canvas.mozPrintCallback === null
+            ].join(':');
+
+            canvas.mozOpaque = true;
+            const opaqueOn = [canvas.mozOpaque, canvas.getAttribute('moz-opaque')].join(':');
+            canvas.mozOpaque = false;
+            const opaqueOff = [
+              canvas.mozOpaque,
+              canvas.getAttribute('moz-opaque') === null
+            ].join(':');
+
+            canvas.mozPrintCallback = () => 'print';
+            const callbackType = typeof canvas.mozPrintCallback;
+            canvas.mozPrintCallback = 'invalid';
+            const callbackReset = canvas.mozPrintCallback === null;
+
+            document.getElementById('result').textContent = [
+              initial,
+              opaqueOn,
+              opaqueOff,
+              callbackType,
+              callbackReset
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:true:true|true:true|false:true|function|true")?;
+    Ok(())
+}
+
+#[test]
+fn canvas_capture_stream_returns_stream_like_object() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            const streamA = canvas.captureStream();
+            const streamB = canvas.captureStream(30);
+            document.getElementById('result').textContent = [
+              typeof canvas.captureStream,
+              streamA !== null,
+              typeof streamA,
+              streamA.active === true,
+              streamA.canvas === canvas,
+              streamB.frameRate === 30
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "function|true|object|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn canvas_context_events_dispatch_to_event_listeners() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const canvas = document.getElementById('canvas');
+          let score = 0;
+          canvas.oncontextlost = () => { score += 1; };
+          canvas.addEventListener('webglcontextlost', () => { score += 10; });
+          document.getElementById('run').addEventListener('click', () => {
+            canvas.dispatchEvent(new Event('contextlost'));
+            canvas.dispatchEvent(new Event('webglcontextlost'));
+            document.getElementById('result').textContent = String(score);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "11")?;
+    Ok(())
+}
+
+#[test]
 fn canvas_method_properties_are_exposed_as_functions() -> Result<()> {
     let html = r#"
         <canvas id='canvas'></canvas>
@@ -268,6 +391,7 @@ fn canvas_method_properties_are_exposed_as_functions() -> Result<()> {
         <script>
           const canvas = document.getElementById('canvas');
           document.getElementById('result').textContent = [
+            typeof canvas.captureStream,
             typeof canvas.getContext,
             typeof canvas.toDataURL,
             typeof canvas.toBlob,
@@ -277,6 +401,6 @@ fn canvas_method_properties_are_exposed_as_functions() -> Result<()> {
         "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#result", "function|function|function|function")?;
+    h.assert_text("#result", "function|function|function|function|function")?;
     Ok(())
 }

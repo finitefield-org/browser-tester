@@ -471,11 +471,76 @@ impl Harness {
             if self.is_named_constructor_value(right, "HTMLElement") {
                 return Ok(self.dom.element(*node).is_some());
             }
+            if self.is_named_constructor_value(right, "HTMLAnchorElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("a"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLAreaElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("area"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLBodyElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("body"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLBRElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("br"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLBaseElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("base"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLAudioElement")
+                || self.is_named_constructor_value(right, "Audio")
+            {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("audio"))
+                    .unwrap_or(false));
+            }
             if self.is_named_constructor_value(right, "HTMLButtonElement") {
                 return Ok(self
                     .dom
                     .tag_name(*node)
                     .map(|tag| tag.eq_ignore_ascii_case("button"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLCanvasElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("canvas"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLDataElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("data"))
+                    .unwrap_or(false));
+            }
+            if self.is_named_constructor_value(right, "HTMLDataListElement") {
+                return Ok(self
+                    .dom
+                    .tag_name(*node)
+                    .map(|tag| tag.eq_ignore_ascii_case("datalist"))
                     .unwrap_or(false));
             }
             if self.is_named_constructor_value(right, "HTMLInputElement") {

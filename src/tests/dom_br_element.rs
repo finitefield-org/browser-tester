@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn html_br_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <p>
+          before<br id='line'>after
+        </p>
+        <a id='link' href='/docs'>docs</a>
+        <p id='result'></p>
+        <script>
+          const line = document.getElementById('line');
+          const link = document.getElementById('link');
+          document.getElementById('result').textContent = [
+            typeof HTMLBRElement,
+            window.HTMLBRElement === HTMLBRElement,
+            line instanceof HTMLBRElement,
+            line instanceof HTMLElement,
+            link instanceof HTMLBRElement
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn br_inserts_line_breaks_into_text_content_and_inner_text() -> Result<()> {
     let html = r#"
         <p id='poem'>One<br>Two<br />Three</p>

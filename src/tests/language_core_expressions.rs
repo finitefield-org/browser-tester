@@ -6474,6 +6474,84 @@ fn dataset_camel_case_mapping_works() -> Result<()> {
 }
 
 #[test]
+fn dataset_dom_string_map_alias_set_and_delete_reflect_attributes() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const ds = box.dataset;
+            ds.userId = 42;
+            const afterSet = box.getAttribute('data-user-id');
+            const deleted = delete ds.userId;
+            document.getElementById('result').textContent =
+              afterSet + ':' + deleted + ':' + box.getAttribute('data-user-id') + ':' + String(ds.userId);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "42:true:null:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn dataset_dom_string_map_reflects_attribute_mutations_and_missing_reads_undefined() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const ds = box.dataset;
+            const before = String(box.dataset.missingKey);
+            box.setAttribute('data-plan-id', 'starter');
+            const first = ds.planId;
+            box.setAttribute('data-plan-id', 'pro');
+            const second = ds.planId;
+            box.removeAttribute('data-plan-id');
+            const third = String(ds.planId);
+            document.getElementById('result').textContent =
+              before + ':' + first + ':' + second + ':' + third;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "undefined:starter:pro:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn dataset_dash_conversion_preserves_non_lowercase_followers() -> Result<()> {
+    let html = r#"
+        <div id='box' data-a-1='x' data-a--b='y'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            document.getElementById('result').textContent =
+              box.dataset['a-1'] + ':' +
+              String(box.dataset.a1) + ':' +
+              box.dataset['a-B'] + ':' +
+              String(box.dataset.aB);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "x:undefined:y:undefined")?;
+    Ok(())
+}
+
+#[test]
 fn element_core_properties_and_aria_reflection_work() -> Result<()> {
     let html = r#"
         <div id='box' class='x y'>

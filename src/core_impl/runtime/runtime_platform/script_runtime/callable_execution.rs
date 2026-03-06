@@ -1,5 +1,7 @@
 use super::*;
 
+const IMAGE_DATA_MAX_DEFAULT_ELEMENTS: usize = 1_000_000;
+
 impl Harness {
     fn has_simple_parameter_list(handler: &ScriptHandler) -> bool {
         handler.params.iter().all(|param| {
@@ -969,6 +971,236 @@ impl Harness {
         Ok(Self::new_object_value(entries))
     }
 
+    fn image_data_expected_length(width: usize, height: usize) -> Result<usize> {
+        width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| Error::ScriptRuntime("ImageData dimensions are too large".into()))
+    }
+
+    fn image_data_kind_for_pixel_format(pixel_format: &str) -> Option<TypedArrayKind> {
+        match pixel_format {
+            "rgba-unorm8" => Some(TypedArrayKind::Uint8Clamped),
+            "rgba-float16" => Some(TypedArrayKind::Float16),
+            _ => None,
+        }
+    }
+
+    fn image_data_default_pixel_format_for_kind(kind: TypedArrayKind) -> Option<&'static str> {
+        match kind {
+            TypedArrayKind::Uint8Clamped => Some("rgba-unorm8"),
+            TypedArrayKind::Float16 => Some("rgba-float16"),
+            _ => None,
+        }
+    }
+
+    fn image_data_settings_from_value(
+        options: Option<&Value>,
+    ) -> Result<(String, Option<String>)> {
+        let Some(options) = options else {
+            return Ok(("srgb".to_string(), None));
+        };
+        match options {
+            Value::Null | Value::Undefined => Ok(("srgb".to_string(), None)),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                let color_space = Self::object_get_entry(&entries, "colorSpace")
+                    .map(|value| value.as_string())
+                    .unwrap_or_else(|| "srgb".to_string());
+                if color_space != "srgb" && color_space != "display-p3" {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData colorSpace must be \"srgb\" or \"display-p3\"".into(),
+                    ));
+                }
+                let pixel_format =
+                    Self::object_get_entry(&entries, "pixelFormat").map(|value| value.as_string());
+                if let Some(pixel_format) = &pixel_format {
+                    if Self::image_data_kind_for_pixel_format(pixel_format).is_none() {
+                        return Err(Error::ScriptRuntime(
+                            "ImageData pixelFormat must be \"rgba-unorm8\" or \"rgba-float16\""
+                                .into(),
+                        ));
+                    }
+                }
+                Ok((color_space, pixel_format))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "ImageData constructor settings argument must be an object".into(),
+            )),
+        }
+    }
+
+    fn image_data_constructor_dimensions_require_positive(width: usize, height: usize) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(Error::ScriptRuntime(
+                "ImageData width and height must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn new_image_data_value(
+        &mut self,
+        width: usize,
+        height: usize,
+        kind: TypedArrayKind,
+        data_override: Option<Value>,
+        color_space: &str,
+        pixel_format: &str,
+    ) -> Result<Value> {
+        let width = i64::try_from(width)
+            .map_err(|_| Error::ScriptRuntime("ImageData width is too large".into()))?;
+        let height = i64::try_from(height)
+            .map_err(|_| Error::ScriptRuntime("ImageData height is too large".into()))?;
+        let data = if let Some(data) = data_override {
+            data
+        } else {
+            let requested_len = Self::image_data_expected_length(width as usize, height as usize)?;
+            let default_len = requested_len.min(IMAGE_DATA_MAX_DEFAULT_ELEMENTS);
+            self.new_typed_array_with_length(kind, default_len)?
+        };
+        Ok(Self::new_object_value(vec![
+            ("width".to_string(), Value::Number(width)),
+            ("height".to_string(), Value::Number(height)),
+            ("data".to_string(), data),
+            ("colorSpace".to_string(), Value::String(color_space.to_string())),
+            ("pixelFormat".to_string(), Value::String(pixel_format.to_string())),
+        ]))
+    }
+
+    fn new_image_data_from_constructor_args(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() < 2 || args.len() > 4 {
+            return Err(Error::ScriptRuntime(
+                "ImageData constructor supports two to four arguments".into(),
+            ));
+        }
+
+        match &args[0] {
+            Value::TypedArray(array) => {
+                let input_kind = array.borrow().kind;
+                if !matches!(input_kind, TypedArrayKind::Uint8Clamped | TypedArrayKind::Float16) {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData data argument must be a Uint8ClampedArray or Float16Array"
+                            .into(),
+                    ));
+                }
+
+                let width = Self::to_non_negative_usize(&args[1], "ImageData width")?;
+                if width == 0 {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData width and height must be greater than 0".into(),
+                    ));
+                }
+
+                let (raw_height, settings_value) = match args.len() {
+                    2 => (None, None),
+                    3 => match args[2] {
+                        Value::Object(_) | Value::Null | Value::Undefined => {
+                            (None, Some(&args[2]))
+                        }
+                        _ => (
+                            Some(Self::to_non_negative_usize(&args[2], "ImageData height")?),
+                            None,
+                        ),
+                    },
+                    4 => (
+                        Some(Self::to_non_negative_usize(&args[2], "ImageData height")?),
+                        Some(&args[3]),
+                    ),
+                    _ => unreachable!(),
+                };
+
+                if raw_height == Some(0) {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData width and height must be greater than 0".into(),
+                    ));
+                }
+
+                let (color_space, settings_pixel_format) =
+                    Self::image_data_settings_from_value(settings_value)?;
+                let default_pixel_format = Self::image_data_default_pixel_format_for_kind(input_kind)
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime("unsupported ImageData typed array kind".into())
+                    })?;
+                let pixel_format = settings_pixel_format
+                    .unwrap_or_else(|| default_pixel_format.to_string());
+                let pixel_format_kind = Self::image_data_kind_for_pixel_format(&pixel_format)
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(
+                            "ImageData pixelFormat must be \"rgba-unorm8\" or \"rgba-float16\""
+                                .into(),
+                        )
+                    })?;
+                if pixel_format_kind != input_kind {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData pixelFormat does not match data typed array kind".into(),
+                    ));
+                }
+
+                let data_len = array.borrow().observed_length();
+                let height = if let Some(height) = raw_height {
+                    let expected = Self::image_data_expected_length(width, height)?;
+                    if expected != data_len {
+                        return Err(Error::ScriptRuntime(
+                            "ImageData data length does not match width and height".into(),
+                        ));
+                    }
+                    height
+                } else {
+                    let row_stride = width.checked_mul(4).ok_or_else(|| {
+                        Error::ScriptRuntime("ImageData dimensions are too large".into())
+                    })?;
+                    if row_stride == 0 || data_len % row_stride != 0 {
+                        return Err(Error::ScriptRuntime(
+                            "ImageData data length is not compatible with the given width".into(),
+                        ));
+                    }
+                    let resolved_height = data_len / row_stride;
+                    if resolved_height == 0 {
+                        return Err(Error::ScriptRuntime(
+                            "ImageData width and height must be greater than 0".into(),
+                        ));
+                    }
+                    resolved_height
+                };
+
+                Self::image_data_constructor_dimensions_require_positive(width, height)?;
+
+                let data_values = self.typed_array_snapshot(array)?;
+                let data_copy = self.new_typed_array_from_values(input_kind, &data_values)?;
+                self.new_image_data_value(
+                    width,
+                    height,
+                    input_kind,
+                    Some(data_copy),
+                    &color_space,
+                    &pixel_format,
+                )
+            }
+            _ => {
+                if args.len() > 3 {
+                    return Err(Error::ScriptRuntime(
+                        "ImageData(width, height) constructor supports up to three arguments"
+                            .into(),
+                    ));
+                }
+                let width = Self::to_non_negative_usize(&args[0], "ImageData width")?;
+                let height = Self::to_non_negative_usize(&args[1], "ImageData height")?;
+                Self::image_data_constructor_dimensions_require_positive(width, height)?;
+                let (color_space, settings_pixel_format) =
+                    Self::image_data_settings_from_value(args.get(2))?;
+                let pixel_format =
+                    settings_pixel_format.unwrap_or_else(|| "rgba-unorm8".to_string());
+                let kind = Self::image_data_kind_for_pixel_format(&pixel_format).ok_or_else(|| {
+                    Error::ScriptRuntime(
+                        "ImageData pixelFormat must be \"rgba-unorm8\" or \"rgba-float16\"".into(),
+                    )
+                })?;
+                self.new_image_data_value(width, height, kind, None, &color_space, &pixel_format)
+            }
+        }
+    }
+
     fn new_event_object_from_constructor_args(
         &mut self,
         constructor_name: &str,
@@ -978,6 +1210,9 @@ impl Harness {
         include_wheel_fields: bool,
         include_navigate_fields: bool,
         include_pointer_fields: bool,
+        include_hash_change_fields: bool,
+        include_error_fields: bool,
+        include_before_unload_fields: bool,
     ) -> Result<Value> {
         if args.is_empty() || args.len() > 2 {
             return Err(Error::ScriptRuntime(format!(
@@ -1035,6 +1270,14 @@ impl Harness {
         let mut signal = Self::new_navigate_event_default_signal_value();
         let mut source_element = Value::Null;
         let mut user_initiated = false;
+        let mut hash_change_old_url = String::new();
+        let mut hash_change_new_url = String::new();
+        let mut error_message = String::new();
+        let mut error_filename = String::new();
+        let mut error_lineno = 0i64;
+        let mut error_colno = 0i64;
+        let mut error_value = Value::Null;
+        let mut before_unload_return_value = String::new();
         if let Some(options) = args.get(1) {
             match options {
                 Value::Null | Value::Undefined => {}
@@ -1156,6 +1399,38 @@ impl Harness {
                         user_initiated = Self::object_get_entry(&entries, "userInitiated")
                             .is_some_and(|value| value.truthy());
                     }
+                    if include_before_unload_fields {
+                        before_unload_return_value =
+                            Self::object_get_entry(&entries, "returnValue")
+                                .map(|value| value.as_string())
+                                .unwrap_or_default();
+                    }
+                    if include_hash_change_fields {
+                        hash_change_old_url = Self::object_get_entry(&entries, "oldURL")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        hash_change_new_url = Self::object_get_entry(&entries, "newURL")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                    }
+                    if include_error_fields {
+                        error_message = Self::object_get_entry(&entries, "message")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        error_filename = Self::object_get_entry(&entries, "filename")
+                            .map(|value| value.as_string())
+                            .unwrap_or_default();
+                        error_lineno = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "lineno")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                        error_colno = Self::value_to_i64(
+                            &Self::object_get_entry(&entries, "colno")
+                                .unwrap_or(Value::Number(0)),
+                        );
+                        error_value =
+                            Self::object_get_entry(&entries, "error").unwrap_or(Value::Null);
+                    }
                 }
                 _ => {
                     return Err(Error::ScriptRuntime(format!(
@@ -1165,13 +1440,18 @@ impl Harness {
             }
         }
 
+        let default_prevented =
+            cancelable && include_before_unload_fields && !before_unload_return_value.is_empty();
         let event_type_value = event_type.clone();
         let mut entries = vec![
             (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("type".to_string(), Value::String(event_type)),
             ("bubbles".to_string(), Value::Bool(bubbles)),
             ("cancelable".to_string(), Value::Bool(cancelable)),
-            ("defaultPrevented".to_string(), Value::Bool(false)),
+            (
+                "defaultPrevented".to_string(),
+                Value::Bool(default_prevented),
+            ),
             ("isTrusted".to_string(), Value::Bool(false)),
             ("eventPhase".to_string(), Value::Number(0)),
             (
@@ -1303,6 +1583,35 @@ impl Harness {
                 "scroll".to_string(),
                 Self::new_builtin_placeholder_function(),
             ));
+        }
+        if include_before_unload_fields {
+            entries.push((
+                INTERNAL_BEFORE_UNLOAD_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push((
+                "returnValue".to_string(),
+                Value::String(before_unload_return_value),
+            ));
+        }
+        if include_hash_change_fields {
+            entries.push((
+                INTERNAL_HASH_CHANGE_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("oldURL".to_string(), Value::String(hash_change_old_url)));
+            entries.push(("newURL".to_string(), Value::String(hash_change_new_url)));
+        }
+        if include_error_fields {
+            entries.push((
+                INTERNAL_ERROR_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push(("message".to_string(), Value::String(error_message)));
+            entries.push(("filename".to_string(), Value::String(error_filename)));
+            entries.push(("lineno".to_string(), Value::Number(error_lineno)));
+            entries.push(("colno".to_string(), Value::Number(error_colno)));
+            entries.push(("error".to_string(), error_value));
         }
         Ok(Self::new_object_value(entries))
     }
@@ -1896,7 +2205,7 @@ impl Harness {
                         self.new_event_target_instance_from_constructor(callable, this_arg)
                     }
                     "event_constructor" => self.new_event_object_from_constructor_args(
-                        "Event", args, false, false, false, false, false,
+                        "Event", args, false, false, false, false, false, false, false, false,
                     ),
                     "custom_event_constructor" => self.new_event_object_from_constructor_args(
                         "CustomEvent",
@@ -1906,10 +2215,16 @@ impl Harness {
                         false,
                         false,
                         false,
+                        false,
+                        false,
+                        false,
                     ),
                     "mouse_event_constructor" => self.new_event_object_from_constructor_args(
                         "MouseEvent",
                         args,
+                        false,
+                        false,
+                        false,
                         false,
                         false,
                         false,
@@ -1924,6 +2239,9 @@ impl Harness {
                         false,
                         false,
                         false,
+                        false,
+                        false,
+                        false,
                     ),
                     "wheel_event_constructor" => self.new_event_object_from_constructor_args(
                         "WheelEvent",
@@ -1931,6 +2249,9 @@ impl Harness {
                         false,
                         false,
                         true,
+                        false,
+                        false,
+                        false,
                         false,
                         false,
                     ),
@@ -1942,6 +2263,9 @@ impl Harness {
                         false,
                         true,
                         false,
+                        false,
+                        false,
+                        false,
                     ),
                     "pointer_event_constructor" => self.new_event_object_from_constructor_args(
                         "PointerEvent",
@@ -1951,7 +2275,50 @@ impl Harness {
                         false,
                         false,
                         true,
+                        false,
+                        false,
+                        false,
                     ),
+                    "hash_change_event_constructor" => {
+                        self.new_event_object_from_constructor_args(
+                            "HashChangeEvent",
+                            args,
+                            false,
+                            false,
+                            false,
+                            false,
+                            false,
+                            true,
+                            false,
+                            false,
+                        )
+                    },
+                    "error_event_constructor" => self.new_event_object_from_constructor_args(
+                        "ErrorEvent",
+                        args,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                    ),
+                    "before_unload_event_constructor" => self
+                        .new_event_object_from_constructor_args(
+                            "BeforeUnloadEvent",
+                            args,
+                            false,
+                            false,
+                            false,
+                            false,
+                            false,
+                            false,
+                            false,
+                            true,
+                        ),
+                    "image_data_constructor" => self.new_image_data_from_constructor_args(args),
                     "dom_parser_constructor" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime(
@@ -2724,6 +3091,18 @@ impl Harness {
                         }
 
                         Ok(Value::Node(option))
+                    }
+                    "audio_constructor" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "Audio constructor supports up to one argument".into(),
+                            ));
+                        }
+                        let audio = self.dom.create_detached_element("audio".to_string());
+                        if let Some(src) = args.first() {
+                            self.dom.set_attr(audio, "src", &src.as_string())?;
+                        }
+                        Ok(Value::Node(audio))
                     }
                     "worker_main_post_message" => {
                         if args.len() > 2 {

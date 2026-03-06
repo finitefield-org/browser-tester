@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn html_datalist_element_global_and_options_collection_work() -> Result<()> {
+    let html = r#"
+        <datalist id='choices'>
+          <option id='choco' value='Chocolate'></option>
+          <option id='coconut' value='Coconut'></option>
+          <option id='mint'>Mint</option>
+        </datalist>
+        <a id='link' href='/docs'>docs</a>
+        <p id='result'></p>
+        <script>
+          const choices = document.getElementById('choices');
+          const link = document.getElementById('link');
+          const options = choices.options;
+          document.getElementById('result').textContent = [
+            typeof HTMLDataListElement,
+            window.HTMLDataListElement === HTMLDataListElement,
+            choices instanceof HTMLDataListElement,
+            choices instanceof HTMLElement,
+            link instanceof HTMLDataListElement,
+            options.length,
+            options.item(0).id,
+            options[1].value,
+            options.item(2).value
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false:3:choco:Coconut:Mint")?;
+    Ok(())
+}
+
+#[test]
 fn datalist_input_binding_keeps_suggestions_and_allows_arbitrary_input_value() -> Result<()> {
     let html = r#"
         <label for='ice-cream-choice'>Choose a flavor:</label>

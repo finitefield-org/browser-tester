@@ -242,6 +242,33 @@ impl Harness {
         key
     }
 
+    fn dispatch_hash_change_event_with_urls(&mut self, old_url: &str, new_url: &str) -> Result<()> {
+        let old_url = old_url.to_string();
+        let new_url = new_url.to_string();
+        self.with_script_env_always(|this, env| {
+            let target_object = this.dom_runtime.window_object.clone();
+            let target_node = this.event_target_listener_node_id(&target_object);
+            let target_value = Value::Object(target_object);
+            let mut event = EventState::new("hashchange", target_node, this.scheduler.now_ms);
+            event.target_value = Some(target_value.clone());
+            event.current_target_value = Some(target_value);
+            event.bubbles = false;
+            event.cancelable = false;
+            event.hash_change_interface = true;
+            event.hash_change_old_url = old_url.clone();
+            event.hash_change_new_url = new_url.clone();
+            event.event_phase = 2;
+            event.current_target = target_node;
+            this.invoke_listeners(target_node, &mut event, env, true)?;
+            if !event.propagation_stopped {
+                event.event_phase = 2;
+                this.invoke_listeners(target_node, &mut event, env, false)?;
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn navigate_location(
         &mut self,
         next_url: &str,
@@ -268,20 +295,15 @@ impl Harness {
             .location_navigations
             .push(LocationNavigation {
                 kind,
-                from,
+                from: from.clone(),
                 to: to.clone(),
             });
 
-        if !Self::is_hash_only_navigation(
-            &self
-                .location_history
-                .location_navigations
-                .last()
-                .map(|nav| nav.from.clone())
-                .unwrap_or_default(),
-            &to,
-        ) {
+        let hash_only_navigation = Self::is_hash_only_navigation(&from, &to);
+        if !hash_only_navigation {
             let _ = self.load_location_mock_page_if_exists(&to)?;
+        } else {
+            self.dispatch_hash_change_event_with_urls(&from, &to)?;
         }
         Ok(())
     }
@@ -419,7 +441,8 @@ impl Harness {
         self.sync_document_object();
         self.sync_window_runtime_properties();
 
-        if !Self::is_hash_only_navigation(&from, &entry.url) {
+        let hash_only_navigation = Self::is_hash_only_navigation(&from, &entry.url);
+        if !hash_only_navigation {
             let _ = self.load_location_mock_page_if_exists(&entry.url)?;
         }
 
@@ -437,6 +460,9 @@ impl Harness {
             )?;
             Ok(())
         })?;
+        if hash_only_navigation {
+            self.dispatch_hash_change_event_with_urls(&from, &entry.url)?;
+        }
         Ok(())
     }
 }

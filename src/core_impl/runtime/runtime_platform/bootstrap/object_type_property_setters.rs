@@ -175,10 +175,20 @@ impl Harness {
             | "URL"
             | "Object"
             | "Element"
+            | "Audio"
             | "DataTransfer"
             | "Option"
             | "HTMLElement"
+            | "HTMLAnchorElement"
+            | "HTMLAreaElement"
+            | "HTMLBodyElement"
+            | "HTMLBRElement"
+            | "HTMLBaseElement"
+            | "HTMLAudioElement"
             | "HTMLButtonElement"
+            | "HTMLCanvasElement"
+            | "HTMLDataElement"
+            | "HTMLDataListElement"
             | "HTMLInputElement"
             | "HTMLOptionElement"
             | "HTMLSelectElement"
@@ -649,6 +659,38 @@ impl Harness {
         }
 
         let event_type = raw_event_type.to_ascii_lowercase();
+        let is_body_window_alias = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+            && Self::is_body_window_event_handler_alias(event_type.as_str());
+        if is_body_window_alias {
+            if let Some(previous_handler) = self
+                .dom_runtime
+                .node_event_handler_props
+                .remove(&(node, event_type.clone()))
+            {
+                let _ = self.listeners.remove_event_handler_property(
+                    node,
+                    &event_type,
+                    &previous_handler,
+                );
+            }
+            let _ = self.set_event_target_event_handler_property(
+                &self.dom_runtime.window_object.clone(),
+                key,
+                value.clone(),
+            )?;
+            self.dom_runtime.node_expando_props.insert(
+                (node, key.to_string()),
+                if matches!(value, Value::Function(_)) {
+                    value
+                } else {
+                    Value::Null
+                },
+            );
+            return Ok(true);
+        }
         let previous_handler = self
             .dom_runtime
             .node_event_handler_props
@@ -702,6 +744,36 @@ impl Harness {
                 .insert((node, key.to_string()), Value::Null);
         }
         Ok(true)
+    }
+
+    pub(crate) fn is_body_window_event_handler_alias(event_type: &str) -> bool {
+        matches!(
+            event_type,
+            "afterprint"
+                | "beforeprint"
+                | "beforeunload"
+                | "blur"
+                | "error"
+                | "focus"
+                | "gamepadconnected"
+                | "gamepaddisconnected"
+                | "hashchange"
+                | "languagechange"
+                | "load"
+                | "message"
+                | "messageerror"
+                | "offline"
+                | "online"
+                | "pagehide"
+                | "pageshow"
+                | "popstate"
+                | "rejectionhandled"
+                | "resize"
+                | "scroll"
+                | "storage"
+                | "unhandledrejection"
+                | "unload"
+        )
     }
 
     pub(crate) fn set_event_target_event_handler_property(
@@ -1069,6 +1141,7 @@ impl Harness {
             }
             "vLink" | "vlink" => self.dom.set_attr(node, "vlink", &value.as_string())?,
             "title" => self.dom.set_attr(node, "title", &value.as_string())?,
+            "alt" => self.dom.set_attr(node, "alt", &value.as_string())?,
             "span"
                 if self.dom.tag_name(node).is_some_and(|tag| {
                     tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
@@ -1185,7 +1258,9 @@ impl Harness {
                                 self.dom.set_attr(node, "popovertarget", &target_id)?;
                             }
                         }
-                        _ => self.dom.set_attr(node, "popovertarget", &value.as_string())?,
+                        _ => self
+                            .dom
+                            .set_attr(node, "popovertarget", &value.as_string())?,
                     }
                 }
             }
@@ -1206,6 +1281,33 @@ impl Harness {
             }
             "type" if is_select => {}
             "type" => self.dom.set_attr(node, "type", &value.as_string())?,
+            "mozOpaque" | "mozopaque"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas")) =>
+            {
+                if value.truthy() {
+                    self.dom.set_attr(node, "moz-opaque", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "moz-opaque")?;
+                }
+            }
+            "mozPrintCallback" | "mozprintcallback"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas")) =>
+            {
+                self.dom_runtime.node_expando_props.insert(
+                    (node, key.to_string()),
+                    if matches!(value, Value::Function(_)) {
+                        value
+                    } else {
+                        Value::Null
+                    },
+                );
+            }
             "kind"
                 if self
                     .dom
@@ -1213,6 +1315,13 @@ impl Harness {
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
             {
                 self.dom.set_attr(node, "kind", &value.as_string())?
+            }
+            "noHref" | "nohref" => {
+                if value.truthy() {
+                    self.dom.set_attr(node, "nohref", "true")?;
+                } else {
+                    self.dom.remove_attr(node, "nohref")?;
+                }
             }
             "srclang" | "srcLang"
                 if self
@@ -1310,6 +1419,7 @@ impl Harness {
                     return Ok(());
                 }
                 let (
+                    is_before_unload_event,
                     is_location,
                     is_history,
                     is_navigation,
@@ -1321,9 +1431,11 @@ impl Harness {
                     is_data_transfer,
                     is_computed_style,
                     is_canvas_2d_context,
+                    dom_string_map_owner,
                 ) = {
                     let entries = object.borrow();
                     (
+                        Self::is_before_unload_event_object(&entries),
                         Self::is_location_object(&entries),
                         Self::is_history_object(&entries),
                         Self::is_navigation_object(&entries),
@@ -1335,8 +1447,35 @@ impl Harness {
                         Self::is_data_transfer_object(&entries),
                         Self::is_computed_style_object(&entries),
                         Self::is_canvas_2d_context_object(&entries),
+                        if Self::is_dom_string_map_object(&entries) {
+                            Self::dom_string_map_owner_node(&entries)
+                        } else {
+                            None
+                        },
                     )
                 };
+                if is_before_unload_event && key == "returnValue" {
+                    let return_value = value.as_string();
+                    let cancelable = {
+                        let entries = object.borrow();
+                        Self::object_get_entry(&entries, "cancelable")
+                            .is_some_and(|value| value.truthy())
+                    };
+                    let mut entries = object.borrow_mut();
+                    Self::object_set_entry(
+                        &mut entries,
+                        "returnValue".to_string(),
+                        Value::String(return_value.clone()),
+                    );
+                    if cancelable && !return_value.is_empty() {
+                        Self::object_set_entry(
+                            &mut entries,
+                            "defaultPrevented".to_string(),
+                            Value::Bool(true),
+                        );
+                    }
+                    return Ok(());
+                }
                 if is_location {
                     self.set_location_property(&key, value)?;
                     return Ok(());
@@ -1371,6 +1510,12 @@ impl Harness {
                 }
                 if is_data_transfer {
                     self.set_data_transfer_object_property(object, &key, value)?;
+                    return Ok(());
+                }
+                if let Some(owner) = dom_string_map_owner.filter(|_| !Self::is_symbol_storage_key(&key)) {
+                    let value = value.as_string();
+                    self.dom.dataset_set(owner, &key, &value)?;
+                    Self::object_set_entry(&mut object.borrow_mut(), key, Value::String(value));
                     return Ok(());
                 }
                 if is_computed_style {
@@ -1738,7 +1883,7 @@ impl Harness {
         expr: &Expr,
         env: &mut HashMap<String, Value>,
         event_param: &Option<String>,
-        event: &EventState,
+        event: &mut EventState,
     ) -> Result<()> {
         if path.is_empty() {
             return Err(Error::ScriptRuntime(
@@ -1852,7 +1997,21 @@ impl Harness {
             }
         }
 
-        let value = self.eval_expr(expr, env, event_param, event)?;
+        let mut value = self.eval_expr(expr, env, event_param, event)?;
+
+        let assigning_before_unload_return_value = key == "returnValue"
+            && event_param.as_ref().is_some_and(|param| param == target)
+            && (event.before_unload_interface
+                || event.event_type.eq_ignore_ascii_case("beforeunload"));
+        if assigning_before_unload_return_value {
+            let return_value = value.as_string();
+            event.before_unload_interface = true;
+            event.before_unload_return_value = return_value.clone();
+            if event.cancelable && !return_value.is_empty() {
+                event.default_prevented = true;
+            }
+            value = Value::String(return_value);
+        }
 
         let assigns_window_local_storage = if let Value::Object(object) = &container {
             if key == "localStorage" {

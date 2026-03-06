@@ -848,7 +848,7 @@ impl Harness {
                 | Value::RegExpConstructor
         ) || matches!(
             Self::callable_kind_from_value(value),
-            Some("event_target_constructor")
+            Some("event_target_constructor" | "audio_constructor")
         )
     }
 
@@ -1082,6 +1082,76 @@ impl Harness {
             Self::object_get_entry(&entries, "userInitiated").is_some_and(|value| value.truthy());
     }
 
+    fn apply_before_unload_event_payload_fields(
+        event: &mut EventState,
+        event_payload_object: Option<&Rc<RefCell<ObjectValue>>>,
+    ) {
+        let Some(event_payload_object) = event_payload_object else {
+            return;
+        };
+        let entries = event_payload_object.borrow();
+        if !Self::is_before_unload_event_object(&entries) {
+            return;
+        }
+
+        event.before_unload_interface = true;
+        event.before_unload_return_value = Self::object_get_entry(&entries, "returnValue")
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        if event.cancelable && !event.before_unload_return_value.is_empty() {
+            event.default_prevented = true;
+        }
+    }
+
+    fn apply_hash_change_event_payload_fields(
+        event: &mut EventState,
+        event_payload_object: Option<&Rc<RefCell<ObjectValue>>>,
+    ) {
+        let Some(event_payload_object) = event_payload_object else {
+            return;
+        };
+        let entries = event_payload_object.borrow();
+        if !Self::is_hash_change_event_object(&entries) {
+            return;
+        }
+
+        event.hash_change_interface = true;
+        event.hash_change_old_url = Self::object_get_entry(&entries, "oldURL")
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        event.hash_change_new_url = Self::object_get_entry(&entries, "newURL")
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+    }
+
+    fn apply_error_event_payload_fields(
+        event: &mut EventState,
+        event_payload_object: Option<&Rc<RefCell<ObjectValue>>>,
+    ) {
+        let Some(event_payload_object) = event_payload_object else {
+            return;
+        };
+        let entries = event_payload_object.borrow();
+        if !Self::is_error_event_object(&entries) {
+            return;
+        }
+
+        event.error_event_interface = true;
+        event.error_event_message = Self::object_get_entry(&entries, "message")
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        event.error_event_filename = Self::object_get_entry(&entries, "filename")
+            .map(|value| value.as_string())
+            .unwrap_or_default();
+        event.error_event_lineno = Self::value_to_i64(
+            &Self::object_get_entry(&entries, "lineno").unwrap_or(Value::Number(0)),
+        );
+        event.error_event_colno = Self::value_to_i64(
+            &Self::object_get_entry(&entries, "colno").unwrap_or(Value::Number(0)),
+        );
+        event.error_event_error = Self::object_get_entry(&entries, "error").unwrap_or(Value::Null);
+    }
+
     fn apply_message_event_payload_fields(
         event: &mut EventState,
         event_payload_object: Option<&Rc<RefCell<ObjectValue>>>,
@@ -1130,6 +1200,9 @@ impl Harness {
         Self::apply_wheel_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_pointer_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_navigate_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_before_unload_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_hash_change_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_error_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_message_event_payload_fields(&mut event, event_payload_object.as_ref());
 
         event.event_phase = 2;
@@ -1176,6 +1249,9 @@ impl Harness {
         Self::apply_wheel_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_pointer_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_navigate_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_before_unload_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_hash_change_event_payload_fields(&mut event, event_payload_object.as_ref());
+        Self::apply_error_event_payload_fields(&mut event, event_payload_object.as_ref());
         Self::apply_message_event_payload_fields(&mut event, event_payload_object.as_ref());
         self.dispatch_prepared_event_with_env(event, env)
     }
@@ -3051,10 +3127,8 @@ impl Harness {
                             }
 
                             let name = name.as_string();
-                            let value = Self::form_data_append_string_value(
-                                &value,
-                                filename.as_ref(),
-                            );
+                            let value =
+                                Self::form_data_append_string_value(&value, filename.as_ref());
                             let target = env.get_mut(target_var).ok_or_else(|| {
                                 Error::ScriptRuntime(format!(
                                     "unknown FormData variable: {}",
@@ -3146,10 +3220,32 @@ impl Harness {
                                             DomQuery::Var(name) => name.clone(),
                                             _ => target.describe_call(),
                                         };
+                                        let mut assignment_value = value.clone();
+                                        let is_event_param_target = match target {
+                                            DomQuery::Var(name) => event_param
+                                                .as_ref()
+                                                .is_some_and(|param| param == name),
+                                            _ => false,
+                                        };
+                                        if key == "returnValue"
+                                            && is_event_param_target
+                                            && (event.before_unload_interface
+                                                || event
+                                                    .event_type
+                                                    .eq_ignore_ascii_case("beforeunload"))
+                                        {
+                                            let return_value = assignment_value.as_string();
+                                            event.before_unload_interface = true;
+                                            event.before_unload_return_value = return_value.clone();
+                                            if event.cancelable && !return_value.is_empty() {
+                                                event.default_prevented = true;
+                                            }
+                                            assignment_value = Value::String(return_value);
+                                        }
                                         self.set_object_assignment_property(
                                             &receiver,
                                             &Value::String(key.to_string()),
-                                            value.clone(),
+                                            assignment_value,
                                             &assignment_target,
                                             env,
                                             event,
@@ -3533,6 +3629,9 @@ impl Harness {
                                 DomProp::HistoryScrollRestoration => {
                                     self.set_history_property("scrollRestoration", value.clone())?
                                 }
+                                DomProp::AnchorAlt => {
+                                    self.dom.set_attr(node, "alt", &value.as_string())?
+                                }
                                 DomProp::AnchorAttributionSrc => {
                                     self.dom
                                         .set_attr(node, "attributionsrc", &value.as_string())?
@@ -3566,21 +3665,34 @@ impl Harness {
                                                 self.dom.remove_attr(node, "interestfor")?;
                                             }
                                             Value::Node(target) => {
-                                                let target_id =
-                                                    self.dom.attr(*target, "id").unwrap_or_default();
+                                                let target_id = self
+                                                    .dom
+                                                    .attr(*target, "id")
+                                                    .unwrap_or_default();
                                                 if target_id.is_empty() {
                                                     self.dom.remove_attr(node, "interestfor")?;
                                                 } else {
-                                                    self.dom.set_attr(node, "interestfor", &target_id)?;
+                                                    self.dom.set_attr(
+                                                        node,
+                                                        "interestfor",
+                                                        &target_id,
+                                                    )?;
                                                 }
                                             }
                                             _ => {
-                                                self.dom
-                                                    .set_attr(node, "interestfor", &value.as_string())?;
+                                                self.dom.set_attr(
+                                                    node,
+                                                    "interestfor",
+                                                    &value.as_string(),
+                                                )?;
                                             }
                                         }
                                     } else {
-                                        self.dom.set_attr(node, "interestfor", &value.as_string())?
+                                        self.dom.set_attr(
+                                            node,
+                                            "interestfor",
+                                            &value.as_string(),
+                                        )?
                                     }
                                 }
                                 DomProp::AnchorPassword => {
@@ -3625,6 +3737,13 @@ impl Harness {
                                 }
                                 DomProp::AnchorUsername => {
                                     self.set_anchor_url_property(node, "username", value.clone())?
+                                }
+                                DomProp::AnchorNoHref => {
+                                    if value.truthy() {
+                                        self.dom.set_attr(node, "nohref", "true")?;
+                                    } else {
+                                        self.dom.remove_attr(node, "nohref")?;
+                                    }
                                 }
                                 DomProp::AnchorCharset => {
                                     self.dom.set_attr(node, "charset", &value.as_string())?

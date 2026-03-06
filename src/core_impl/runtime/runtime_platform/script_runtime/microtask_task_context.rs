@@ -102,6 +102,11 @@ impl Harness {
             this.with_isolated_loop_control_scope(|this| {
                 this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
                 let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
+                Self::sync_event_argument_back_to_state(
+                    event,
+                    callback_env,
+                    event_param.as_deref(),
+                );
                 callback_env.remove(INTERNAL_RETURN_SLOT);
                 match flow {
                     ExecFlow::Continue => Ok(()),
@@ -141,8 +146,40 @@ impl Harness {
         } else {
             Value::Undefined
         };
-        let error_value = if event.event_type.eq_ignore_ascii_case("error") {
+        let error_value = if event.error_event_interface {
+            event.error_event_error.clone()
+        } else if event.event_type.eq_ignore_ascii_case("error") {
             event.detail.as_ref().cloned().unwrap_or(Value::Undefined)
+        } else {
+            Value::Undefined
+        };
+        let error_message = if event.error_event_interface {
+            Value::String(event.error_event_message.clone())
+        } else {
+            Value::Undefined
+        };
+        let error_filename = if event.error_event_interface {
+            Value::String(event.error_event_filename.clone())
+        } else {
+            Value::Undefined
+        };
+        let error_lineno = if event.error_event_interface {
+            Value::Number(event.error_event_lineno)
+        } else {
+            Value::Undefined
+        };
+        let error_colno = if event.error_event_interface {
+            Value::Number(event.error_event_colno)
+        } else {
+            Value::Undefined
+        };
+        let hash_change_old_url = if event.hash_change_interface {
+            Value::String(event.hash_change_old_url.clone())
+        } else {
+            Value::Undefined
+        };
+        let hash_change_new_url = if event.hash_change_interface {
+            Value::String(event.hash_change_new_url.clone())
         } else {
             Value::Undefined
         };
@@ -165,6 +202,12 @@ impl Harness {
                 event.detail.as_ref().cloned().unwrap_or(Value::Undefined),
             ),
             ("error".to_string(), error_value),
+            ("message".to_string(), error_message),
+            ("filename".to_string(), error_filename),
+            ("lineno".to_string(), error_lineno),
+            ("colno".to_string(), error_colno),
+            ("oldURL".to_string(), hash_change_old_url),
+            ("newURL".to_string(), hash_change_new_url),
             (
                 "eventPhase".to_string(),
                 Value::Number(event.event_phase as i64),
@@ -225,6 +268,31 @@ impl Harness {
                 Self::new_builtin_placeholder_function(),
             ),
         ];
+
+        if event.before_unload_interface || event.event_type.eq_ignore_ascii_case("beforeunload") {
+            entries.push((
+                INTERNAL_BEFORE_UNLOAD_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+            entries.push((
+                "returnValue".to_string(),
+                Value::String(event.before_unload_return_value.clone()),
+            ));
+        }
+
+        if event.error_event_interface {
+            entries.push((
+                INTERNAL_ERROR_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+        }
+
+        if event.hash_change_interface {
+            entries.push((
+                INTERNAL_HASH_CHANGE_EVENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ));
+        }
 
         if matches!(
             event.event_type.to_ascii_lowercase().as_str(),
@@ -397,6 +465,42 @@ impl Harness {
         }
 
         Self::new_object_value(entries)
+    }
+
+    fn sync_event_argument_back_to_state(
+        event: &mut EventState,
+        callback_env: &HashMap<String, Value>,
+        event_param: Option<&str>,
+    ) {
+        let Some(event_param) = event_param else {
+            return;
+        };
+        let Some(Value::Object(event_object)) = callback_env.get(event_param) else {
+            return;
+        };
+        let entries = event_object.borrow();
+        if !Self::is_event_object(&entries) {
+            return;
+        }
+
+        if event.cancelable
+            && Self::object_get_entry(&entries, "defaultPrevented").is_some_and(|v| v.truthy())
+        {
+            event.default_prevented = true;
+        }
+
+        if Self::is_before_unload_event_object(&entries)
+            || event.before_unload_interface
+            || event.event_type.eq_ignore_ascii_case("beforeunload")
+        {
+            event.before_unload_interface = true;
+            event.before_unload_return_value = Self::object_get_entry(&entries, "returnValue")
+                .map(|value| value.as_string())
+                .unwrap_or_default();
+            if event.cancelable && !event.before_unload_return_value.is_empty() {
+                event.default_prevented = true;
+            }
+        }
     }
 
     fn event_exposes_data_transfer(event_type: &str) -> bool {

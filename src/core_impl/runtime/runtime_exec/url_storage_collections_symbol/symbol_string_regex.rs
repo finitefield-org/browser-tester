@@ -48,6 +48,7 @@ impl Harness {
             || key.starts_with(INTERNAL_STORAGE_KEY_PREFIX)
             || key.starts_with(INTERNAL_CLIPBOARD_ITEM_KEY_PREFIX)
             || key.starts_with(INTERNAL_MOCK_FILE_KEY_PREFIX)
+            || key.starts_with(INTERNAL_DOM_STRING_MAP_KEY_PREFIX)
             || key.starts_with(INTERNAL_ITERATOR_KEY_PREFIX)
             || key.starts_with(INTERNAL_ASYNC_ITERATOR_KEY_PREFIX)
             || key.starts_with(INTERNAL_ASYNC_GENERATOR_KEY_PREFIX)

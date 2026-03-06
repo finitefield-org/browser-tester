@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn html_data_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <data id='price' value='42'>Forty Two</data>
+        <a id='link' href='/docs'>docs</a>
+        <p id='result'></p>
+        <script>
+          const price = document.getElementById('price');
+          const link = document.getElementById('link');
+          document.getElementById('result').textContent = [
+            typeof HTMLDataElement,
+            window.HTMLDataElement === HTMLDataElement,
+            price instanceof HTMLDataElement,
+            price instanceof HTMLElement,
+            link instanceof HTMLDataElement
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn data_value_property_reflects_value_attribute_and_preserves_label_text() -> Result<()> {
     let html = r#"
         <p>New products: <data id='mini' value='398'>Mini Ketchup</data></p>

@@ -517,6 +517,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             DomProp::VideoPlaysInline
         }
         ("poster", None) if is_media_target => DomProp::VideoPoster,
+        ("alt", None) if is_anchor_target => DomProp::AnchorAlt,
         ("attributionSrc", None) | ("attributionsrc", None) if is_anchor_target => {
             DomProp::AnchorAttributionSrc
         }
@@ -544,6 +545,7 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("text", None) if is_anchor_target => DomProp::AnchorText,
         ("type", None) if is_anchor_target => DomProp::AnchorType,
         ("username", None) if is_anchor_target => DomProp::AnchorUsername,
+        ("noHref", None) | ("nohref", None) if is_anchor_target => DomProp::AnchorNoHref,
         ("charset", None) if is_anchor_target => DomProp::AnchorCharset,
         ("coords", None) if is_anchor_target => DomProp::AnchorCoords,
         ("rev", None) if is_anchor_target => DomProp::AnchorRev,

@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn html_button_element_global_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <button id='target' type='button'>go</button>
+        <a id='link' href='/docs'>docs</a>
+        <p id='result'></p>
+        <script>
+          const target = document.getElementById('target');
+          const link = document.getElementById('link');
+          document.getElementById('result').textContent = [
+            typeof HTMLButtonElement,
+            window.HTMLButtonElement === HTMLButtonElement,
+            target instanceof HTMLButtonElement,
+            target instanceof HTMLElement,
+            link instanceof HTMLButtonElement
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "function:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
 fn button_implicit_role_and_role_assignment_roundtrip() -> Result<()> {
     let html = r#"
         <button id='target' type='button'>Add to <b>favorites</b></button>

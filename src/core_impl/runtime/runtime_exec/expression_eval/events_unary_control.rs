@@ -7,6 +7,17 @@ impl Harness {
                 Err(Error::ScriptRuntime("value is not an object".into()))
             }
             Value::Object(entries) => {
+                let owner = {
+                    let entries_ref = entries.borrow();
+                    if !Self::is_symbol_storage_key(key) && Self::is_dom_string_map_object(&entries_ref) {
+                        Self::dom_string_map_owner_node(&entries_ref)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(owner) = owner {
+                    self.dom.dataset_delete(owner, key)?;
+                }
                 Self::delete_object_property_entries(&mut entries.borrow_mut(), key);
                 Ok(true)
             }

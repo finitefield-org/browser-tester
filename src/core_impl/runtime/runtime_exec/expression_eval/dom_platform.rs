@@ -209,19 +209,7 @@ impl Harness {
                         DomProp::Slot => Ok(Value::String(
                             self.dom.attr(node, "slot").unwrap_or_default(),
                         )),
-                        DomProp::Role => {
-                            if let Some(role) = self.dom.attr(node, "role") {
-                                Ok(Value::String(role))
-                            } else if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
-                            {
-                                Ok(Value::String("button".to_string()))
-                            } else {
-                                Ok(Value::Null)
-                            }
-                        }
+                        DomProp::Role => Ok(Value::String(self.resolved_role_for_node(node))),
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
@@ -317,12 +305,29 @@ impl Harness {
                         DomProp::CanvasHeight => {
                             Ok(Value::Number(self.canvas_dimension_value(node, "height")))
                         }
-                        DomProp::NodeEventHandler(event_name) => Ok(self
-                            .dom_runtime
-                            .node_expando_props
-                            .get(&(node, event_name.clone()))
-                            .cloned()
-                            .unwrap_or(Value::Null)),
+                        DomProp::NodeEventHandler(event_name) => {
+                            let is_body_window_alias = self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("body"))
+                                && event_name
+                                    .strip_prefix("on")
+                                    .is_some_and(Self::is_body_window_event_handler_alias);
+                            if is_body_window_alias {
+                                Ok(Self::object_get_entry(
+                                    &self.dom_runtime.window_object.borrow(),
+                                    event_name,
+                                )
+                                .unwrap_or(Value::Null))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, event_name.clone()))
+                                    .cloned()
+                                    .unwrap_or(Value::Null))
+                            }
+                        }
                         DomProp::BodyDeprecatedAttr(attr_name) => Ok(Value::String(
                             self.dom.attr(node, attr_name).unwrap_or_default(),
                         )),
@@ -335,9 +340,11 @@ impl Harness {
                         DomProp::ClientLeft => Ok(Value::Number(self.dom.client_left(node)?)),
                         DomProp::ClientTop => Ok(Value::Number(self.dom.client_top(node)?)),
                         DomProp::CurrentCssZoom => Ok(Value::Number(1)),
-                        DomProp::Dataset(key) => {
-                            Ok(Value::String(self.dom.dataset_get(node, key)?))
-                        }
+                        DomProp::Dataset(key) => Ok(self
+                            .dom
+                            .dataset_get(node, key)?
+                            .map(Value::String)
+                            .unwrap_or(Value::Undefined)),
                         DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
                         DomProp::OffsetWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
                         DomProp::OffsetHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
@@ -523,6 +530,9 @@ impl Harness {
                                 self.resolve_aria_element_list_property(node, prop_name),
                             ))
                         }
+                        DomProp::AnchorAlt => Ok(Value::String(
+                            self.dom.attr(node, "alt").unwrap_or_default(),
+                        )),
                         DomProp::AnchorAttributionSrc => Ok(Value::String(
                             self.dom.attr(node, "attributionsrc").unwrap_or_default(),
                         )),
@@ -646,6 +656,9 @@ impl Harness {
                         }
                         DomProp::AnchorUsername => {
                             Ok(Value::String(self.anchor_location_parts(node).username))
+                        }
+                        DomProp::AnchorNoHref => {
+                            Ok(Value::Bool(self.dom.attr(node, "nohref").is_some()))
                         }
                         DomProp::AnchorCharset => Ok(Value::String(
                             self.dom.attr(node, "charset").unwrap_or_default(),

@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn html_audio_element_global_and_audio_constructor_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const viaCtor = new Audio('/car_horn.wav');
+            const viaCall = Audio('/bell.wav');
+            const created = document.createElement('audio');
+
+            document.getElementById('result').textContent = [
+              typeof Audio,
+              typeof HTMLAudioElement,
+              window.Audio === Audio,
+              window.HTMLAudioElement === HTMLAudioElement,
+              viaCtor instanceof Audio,
+              viaCtor instanceof HTMLAudioElement,
+              viaCall instanceof HTMLAudioElement,
+              created instanceof Audio,
+              created instanceof HTMLAudioElement,
+              viaCtor.tagName,
+              viaCtor.src,
+              viaCall.src,
+              created.src
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "function|function|true|true|true|true|true|true|true|AUDIO|https://app.local/car_horn.wav|https://app.local/bell.wav|",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn audio_constructor_accepts_zero_or_one_argument() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const empty = new Audio();
+            const withSrc = new Audio('/ok.mp3');
+
+            document.getElementById('result').textContent = [
+              empty.tagName,
+              empty.src === '',
+              withSrc.src
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://media.local/home", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "AUDIO|true|https://media.local/ok.mp3",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn audio_src_and_core_media_attributes_reflect_via_properties() -> Result<()> {
     let html = r#"
         <audio id='player'></audio>
