@@ -3,6 +3,7 @@
 A deterministic browser-like testing crate implemented entirely in Rust.
 
 - Japanese README: [translations/ja/README.md](translations/ja/README.md)
+- HTML spec conformance roadmap: [doc/html-spec-conformance-roadmap.md](doc/html-spec-conformance-roadmap.md)
 - Developed by [Finite Field, K.K.](https://finitefield.org)
 
 ## Purpose
