@@ -125,3 +125,66 @@ fn table_deprecated_attributes_and_role_override_roundtrip_work() -> Result<()> 
     )?;
     Ok(())
 }
+
+#[test]
+fn table_inner_html_html_8_5_13_2_6_4_9_wraps_direct_rows_in_implied_tbody() -> Result<()> {
+    let html = r#"
+        <table id='scores'><caption>before</caption></table>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const table = document.getElementById('scores');
+            table.innerHTML = '<tr id="a"><td>Alpha</td></tr><tr id="b"><td>Beta</td></tr>';
+
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody').length,
+              document.querySelectorAll('#scores > tr').length,
+              document.querySelectorAll('#scores > tbody > tr').length,
+              Array.from(document.querySelectorAll('#scores > tbody > tr > td'))
+                .map((cell) => cell.textContent)
+                .join(',')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:0:2:Alpha,Beta")?;
+    Ok(())
+}
+
+#[test]
+fn table_insert_adjacent_html_html_13_2_6_4_9_wraps_direct_rows_in_new_tbody() -> Result<()> {
+    let html = r#"
+        <table id='scores'>
+          <tbody>
+            <tr id='existing'><td>Existing</td></tr>
+          </tbody>
+        </table>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const table = document.getElementById('scores');
+            table.insertAdjacentHTML('beforeend', '<tr id="late"><td>Late</td></tr>');
+            const late = document.getElementById('late');
+
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody').length,
+              document.querySelectorAll('#scores > tr').length,
+              late.parentElement.tagName,
+              Array.from(document.querySelectorAll('#scores > tbody'))
+                .map((body) => body.textContent.trim())
+                .join('|')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:0:TBODY:Existing|Late")?;
+    Ok(())
+}

@@ -128,6 +128,7 @@ impl Dom {
             let _ = self.clone_subtree_from_dom(&fragment, child, Some(node_id), sanitize)?;
         }
 
+        self.normalize_implied_table_bodies()?;
         self.rebuild_id_index();
         self.sync_select_values_including_subtree(node_id)?;
         Ok(())
@@ -177,6 +178,7 @@ impl Dom {
             }
         }
 
+        self.normalize_implied_table_bodies()?;
         self.rebuild_id_index();
         self.sync_select_values_including_subtree(parent)?;
         Ok(())
@@ -207,6 +209,7 @@ impl Dom {
             }
             InsertAdjacentPosition::AfterBegin | InsertAdjacentPosition::BeforeEnd => target,
         };
+        self.normalize_implied_table_bodies()?;
         self.sync_select_values_including_subtree(sync_root)?;
         Ok(())
     }

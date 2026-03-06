@@ -293,31 +293,29 @@ impl Dom {
                 continue;
             }
 
-            let has_explicit_tbody = children.iter().any(|child| {
-                self.tag_name(*child)
-                    .is_some_and(|tag| tag.eq_ignore_ascii_case("tbody"))
-            });
-            if has_explicit_tbody {
-                continue;
-            }
+            let mut index = 0usize;
+            while index < children.len() {
+                let child = children[index];
+                if !self
+                    .tag_name(child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("tr"))
+                {
+                    index += 1;
+                    continue;
+                }
 
-            let direct_rows = children
-                .into_iter()
-                .filter(|child| {
-                    self.tag_name(*child)
+                let tbody = self.create_detached_element("tbody".to_string());
+                self.insert_before(table, tbody, child)?;
+
+                while index < children.len()
+                    && self
+                        .tag_name(children[index])
                         .is_some_and(|tag| tag.eq_ignore_ascii_case("tr"))
-                })
-                .collect::<Vec<_>>();
-            if direct_rows.is_empty() {
-                continue;
-            }
-
-            let first_row = direct_rows[0];
-            let tbody = self.create_element(table, "tbody".to_string(), HashMap::new());
-            self.insert_before(table, tbody, first_row)?;
-
-            for row in direct_rows {
-                self.append_child(tbody, row)?;
+                {
+                    let row = children[index];
+                    self.append_child(tbody, row)?;
+                    index += 1;
+                }
             }
         }
 
