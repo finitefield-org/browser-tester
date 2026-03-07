@@ -229,6 +229,21 @@ impl Harness {
             "Intl",
             "String",
             "Boolean",
+            "Number",
+            "BigInt",
+            "Symbol",
+            "Int8Array",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "Int16Array",
+            "Uint16Array",
+            "Int32Array",
+            "Uint32Array",
+            "Float16Array",
+            "Float32Array",
+            "Float64Array",
+            "BigInt64Array",
+            "BigUint64Array",
             "Object",
             "EventTarget",
             "Event",
@@ -284,6 +299,9 @@ impl Harness {
         intl: &Value,
         string_constructor: &Value,
         boolean_constructor: &Value,
+        number_constructor: &Value,
+        bigint_constructor: &Value,
+        symbol_constructor: &Value,
         object_constructor: &Value,
         event_target_constructor: &Value,
         event_constructor: &Value,
@@ -485,6 +503,9 @@ impl Harness {
             ("Intl".to_string(), intl.clone()),
             ("String".to_string(), string_constructor.clone()),
             ("Boolean".to_string(), boolean_constructor.clone()),
+            ("Number".to_string(), number_constructor.clone()),
+            ("BigInt".to_string(), bigint_constructor.clone()),
+            ("Symbol".to_string(), symbol_constructor.clone()),
             ("Object".to_string(), object_constructor.clone()),
             ("EventTarget".to_string(), event_target_constructor.clone()),
             ("Event".to_string(), event_constructor.clone()),
@@ -595,6 +616,12 @@ impl Harness {
                 Self::new_builtin_placeholder_function(),
             ),
         ];
+        for kind in TypedArrayKind::concrete_kinds() {
+            entries.push((
+                kind.name().to_string(),
+                Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(*kind)),
+            ));
+        }
         entries.extend(extras);
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }
@@ -718,19 +745,19 @@ impl Harness {
             ),
             (
                 "assign".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("location", "assign"),
             ),
             (
                 "reload".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("location", "reload"),
             ),
             (
                 "replace".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("location", "replace"),
             ),
             (
                 "toString".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("location", "toString"),
             ),
         ];
         entries.extend(extras);

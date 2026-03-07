@@ -1947,11 +1947,119 @@ impl Harness {
         ))
     }
 
+    fn new_receiver_builtin_constructor_object(
+        callable_kind: Option<&str>,
+        family: &str,
+        methods: &[&str],
+    ) -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let mut constructor_entries = Vec::new();
+        if let Some(kind) = callable_kind {
+            constructor_entries.push((
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String(kind.to_string()),
+            ));
+        }
+        constructor_entries.push(("prototype".to_string(), prototype.clone()));
+        let constructor = Self::new_object_value(constructor_entries);
+        if let Value::Object(prototype_entries) = &prototype {
+            let mut prototype_entries = prototype_entries.borrow_mut();
+            Self::object_set_entry(
+                &mut prototype_entries,
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+            for method in methods {
+                Self::object_set_entry(
+                    &mut prototype_entries,
+                    (*method).to_string(),
+                    Self::new_receiver_builtin_callable(family, method),
+                );
+            }
+        }
+        constructor
+    }
+
     pub(crate) fn new_boolean_constructor_callable() -> Value {
-        Self::new_object_value(vec![(
-            INTERNAL_CALLABLE_KIND_KEY.to_string(),
-            Value::String("boolean_constructor".to_string()),
-        )])
+        Self::new_receiver_builtin_constructor_object(
+            Some("boolean_constructor"),
+            "boolean",
+            &["toString", "valueOf"],
+        )
+    }
+
+    pub(crate) fn new_number_constructor_callable() -> Value {
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("number_constructor"),
+            "number",
+            &["toLocaleString", "toString", "valueOf"],
+        );
+        let Value::Object(entries) = &constructor else {
+            return constructor;
+        };
+        let mut entries = entries.borrow_mut();
+        for (key, value) in [
+            (
+                "isFinite",
+                Self::new_number_static_method_callable("isFinite"),
+            ),
+            (
+                "isInteger",
+                Self::new_number_static_method_callable("isInteger"),
+            ),
+            ("isNaN", Self::new_number_static_method_callable("isNaN")),
+            (
+                "isSafeInteger",
+                Self::new_number_static_method_callable("isSafeInteger"),
+            ),
+            (
+                "parseFloat",
+                Self::new_number_static_method_callable("parseFloat"),
+            ),
+            (
+                "parseInt",
+                Self::new_number_static_method_callable("parseInt"),
+            ),
+        ] {
+            Self::object_set_entry(&mut entries, key.to_string(), value);
+        }
+        for (key, value) in [
+            ("EPSILON", Value::Float(f64::EPSILON)),
+            ("MAX_SAFE_INTEGER", Value::Number(9_007_199_254_740_991)),
+            ("MAX_VALUE", Value::Float(f64::MAX)),
+            ("MIN_SAFE_INTEGER", Value::Number(-9_007_199_254_740_991)),
+            ("MIN_VALUE", Value::Float(f64::from_bits(1))),
+            ("NaN", Value::Float(f64::NAN)),
+            ("NEGATIVE_INFINITY", Value::Float(f64::NEG_INFINITY)),
+            ("POSITIVE_INFINITY", Value::Float(f64::INFINITY)),
+        ] {
+            Self::object_set_entry(&mut entries, key.to_string(), value);
+        }
+        drop(entries);
+        constructor
+    }
+
+    pub(crate) fn new_bigint_constructor_callable() -> Value {
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("bigint_constructor"),
+            "bigint",
+            &["toLocaleString", "toString", "valueOf"],
+        );
+        let Value::Object(entries) = &constructor else {
+            return constructor;
+        };
+        let mut entries = entries.borrow_mut();
+        for (key, value) in [
+            ("asIntN", Self::new_bigint_static_method_callable("asIntN")),
+            (
+                "asUintN",
+                Self::new_bigint_static_method_callable("asUintN"),
+            ),
+        ] {
+            Self::object_set_entry(&mut entries, key.to_string(), value);
+        }
+        drop(entries);
+        constructor
     }
 
     pub(crate) fn new_object_constructor_value() -> Value {
@@ -3381,6 +3489,65 @@ impl Harness {
         )])
     }
 
+    fn new_number_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("number_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_bigint_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("bigint_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_symbol_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("symbol_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_typed_array_static_method_callable(
+        kind: TypedArrayConstructorKind,
+        method: &str,
+    ) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("typed_array_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_TYPED_ARRAY_KIND_KEY.to_string(),
+                Value::TypedArrayConstructor(kind),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
     pub(crate) fn new_bound_function_callable(
         target: Value,
         bound_this: Value,
@@ -3401,6 +3568,148 @@ impl Harness {
             ("apply".to_string(), Self::new_function_apply_callable()),
             ("bind".to_string(), Self::new_function_bind_callable()),
         ])
+    }
+
+    pub(crate) fn new_receiver_builtin_callable(family: &str, member: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("receiver_builtin_method".to_string()),
+            ),
+            (
+                "__bt_receiver_builtin_family".to_string(),
+                Value::String(family.to_string()),
+            ),
+            (
+                "__bt_receiver_builtin_member".to_string(),
+                Value::String(member.to_string()),
+            ),
+        ])
+    }
+
+    fn new_receiver_builtin_prototype_value(
+        constructor: Value,
+        family: &str,
+        methods: &[&str],
+    ) -> Value {
+        let mut entries = vec![("constructor".to_string(), constructor)];
+        for method in methods {
+            entries.push((
+                (*method).to_string(),
+                Self::new_receiver_builtin_callable(family, method),
+            ));
+        }
+        Self::new_object_value(entries)
+    }
+
+    fn new_receiver_builtin_prototype_with_iterator_value(
+        &mut self,
+        constructor: Value,
+        family: &str,
+        methods: &[&str],
+        iterator_member: Option<&str>,
+    ) -> Value {
+        let prototype = Self::new_receiver_builtin_prototype_value(constructor, family, methods);
+        let Some(iterator_member) = iterator_member else {
+            return prototype;
+        };
+        let Value::Object(entries) = &prototype else {
+            return prototype;
+        };
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            iterator_key,
+            Self::new_receiver_builtin_callable(family, iterator_member),
+        );
+        prototype
+    }
+
+    fn typed_array_constructor_cache_key(kind: &TypedArrayConstructorKind) -> String {
+        match kind {
+            TypedArrayConstructorKind::Concrete(kind) => kind.name().to_string(),
+            TypedArrayConstructorKind::Abstract => "TypedArray".to_string(),
+        }
+    }
+
+    fn cached_string_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self.script_runtime.string_constructor_prototype.clone() {
+            return Value::Object(prototype);
+        }
+        let Value::Object(prototype) = self.new_receiver_builtin_prototype_with_iterator_value(
+            Value::StringConstructor,
+            "string",
+            &[
+                "concat",
+                "endsWith",
+                "includes",
+                "normalize",
+                "slice",
+                "split",
+                "startsWith",
+                "substring",
+                "toString",
+                "valueOf",
+            ],
+            Some("iterator"),
+        ) else {
+            unreachable!("string constructor prototype must be an object");
+        };
+        self.script_runtime.string_constructor_prototype = Some(prototype.clone());
+        Value::Object(prototype)
+    }
+
+    fn cached_symbol_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self.script_runtime.symbol_constructor_prototype.clone() {
+            return Value::Object(prototype);
+        }
+        let Value::Object(prototype) = Self::new_receiver_builtin_prototype_value(
+            Value::SymbolConstructor,
+            "symbol",
+            &["toString", "valueOf"],
+        ) else {
+            unreachable!("symbol constructor prototype must be an object");
+        };
+        self.script_runtime.symbol_constructor_prototype = Some(prototype.clone());
+        Value::Object(prototype)
+    }
+
+    fn cached_typed_array_constructor_prototype_value(
+        &mut self,
+        kind: TypedArrayConstructorKind,
+    ) -> Value {
+        let cache_key = Self::typed_array_constructor_cache_key(&kind);
+        if let Some(prototype) = self
+            .script_runtime
+            .typed_array_constructor_prototypes
+            .get(&cache_key)
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let Value::Object(prototype) = self.new_receiver_builtin_prototype_with_iterator_value(
+            Value::TypedArrayConstructor(kind.clone()),
+            "typed_array",
+            &[
+                "at",
+                "copyWithin",
+                "entries",
+                "join",
+                "keys",
+                "slice",
+                "subarray",
+                "values",
+                "with",
+            ],
+            Some("values"),
+        ) else {
+            unreachable!("typed array constructor prototype must be an object");
+        };
+        self.script_runtime
+            .typed_array_constructor_prototypes
+            .insert(cache_key, prototype.clone());
+        Value::Object(prototype)
     }
 
     pub(crate) fn new_string_wrapper_value(value: String) -> Value {
@@ -3498,6 +3807,8 @@ impl Harness {
                 "async_generator_function_constructor" => "async_generator_function_constructor",
                 "generator_function_constructor" => "generator_function_constructor",
                 "boolean_constructor" => "boolean_constructor",
+                "number_constructor" => "number_constructor",
+                "bigint_constructor" => "bigint_constructor",
                 "object_constructor" => "object_constructor",
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
@@ -3592,11 +3903,16 @@ impl Harness {
                 "string_static_from_char_code" => "string_static_from_char_code",
                 "string_static_from_code_point" => "string_static_from_code_point",
                 "string_static_raw" => "string_static_raw",
+                "number_static_method" => "number_static_method",
+                "bigint_static_method" => "bigint_static_method",
+                "symbol_static_method" => "symbol_static_method",
+                "typed_array_static_method" => "typed_array_static_method",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
                 "function_to_string" => "function_to_string",
                 "bound_function" => "bound_function",
+                "receiver_builtin_method" => "receiver_builtin_method",
                 _ => return None,
             }),
             _ => None,
@@ -3655,6 +3971,78 @@ impl Harness {
             || key == "Symbol.toStringTag"
     }
 
+    fn is_iterator_property_key(&self, key: &str) -> bool {
+        Self::symbol_id_from_storage_key(key)
+            .and_then(|symbol_id| self.symbol_runtime.symbols_by_id.get(&symbol_id))
+            .and_then(|symbol| symbol.description.as_deref())
+            .is_some_and(|description| description == "Symbol.iterator")
+            || key == "Symbol.iterator"
+    }
+
+    fn is_string_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "concat"
+                | "endsWith"
+                | "includes"
+                | "normalize"
+                | "slice"
+                | "split"
+                | "startsWith"
+                | "substring"
+        )
+    }
+
+    fn is_array_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "forEach"
+                | "map"
+                | "filter"
+                | "reduce"
+                | "find"
+                | "findIndex"
+                | "some"
+                | "every"
+                | "values"
+                | "keys"
+                | "entries"
+                | "fill"
+                | "includes"
+                | "slice"
+                | "join"
+                | "concat"
+                | "add"
+                | "remove"
+                | "clear"
+                | "push"
+                | "pop"
+                | "shift"
+                | "unshift"
+                | "splice"
+                | "sort"
+                | "reverse"
+        )
+    }
+
+    fn is_node_list_method_name(name: &str) -> bool {
+        matches!(name, "item" | "forEach" | "entries" | "keys" | "values")
+    }
+
+    fn is_typed_array_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "at" | "copyWithin"
+                | "entries"
+                | "join"
+                | "keys"
+                | "slice"
+                | "subarray"
+                | "values"
+                | "with"
+        )
+    }
+
     fn function_own_property_value(
         &mut self,
         function: &Rc<FunctionValue>,
@@ -3698,11 +4086,15 @@ impl Harness {
         }
     }
 
-    fn object_property_from_string_value(text: &str, key: &str) -> Value {
+    fn object_property_from_string_value(&self, text: &str, key: &str) -> Value {
         if key == "length" {
             Value::Number(text.chars().count() as i64)
         } else if key == "constructor" {
             Value::StringConstructor
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("string", "iterator")
+        } else if matches!(key, "toString" | "valueOf") || Self::is_string_method_name(key) {
+            Self::new_receiver_builtin_callable("string", key)
         } else if let Ok(index) = key.parse::<usize>() {
             text.chars()
                 .nth(index)
@@ -3713,7 +4105,53 @@ impl Harness {
         }
     }
 
-    fn object_property_from_array_value(values: &Rc<RefCell<ArrayValue>>, key: &str) -> Value {
+    fn object_property_from_bool_value(&self, key: &str) -> Value {
+        if key == "constructor" {
+            self.script_runtime
+                .env
+                .get("Boolean")
+                .cloned()
+                .unwrap_or_else(Self::new_boolean_constructor_callable)
+        } else if matches!(key, "toString" | "valueOf") {
+            Self::new_receiver_builtin_callable("boolean", key)
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_number_value(&self, key: &str) -> Value {
+        if key == "constructor" {
+            self.script_runtime
+                .env
+                .get("Number")
+                .cloned()
+                .unwrap_or_else(Self::new_number_constructor_callable)
+        } else if matches!(key, "toLocaleString" | "toString" | "valueOf") {
+            Self::new_receiver_builtin_callable("number", key)
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_bigint_value(&self, key: &str) -> Value {
+        if key == "constructor" {
+            self.script_runtime
+                .env
+                .get("BigInt")
+                .cloned()
+                .unwrap_or_else(Self::new_bigint_constructor_callable)
+        } else if matches!(key, "toLocaleString" | "toString" | "valueOf") {
+            Self::new_receiver_builtin_callable("bigint", key)
+        } else {
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_array_value(
+        &self,
+        values: &Rc<RefCell<ArrayValue>>,
+        key: &str,
+    ) -> Value {
         let values = values.borrow();
         if key == "length" {
             Value::Number(values.len() as i64)
@@ -3721,6 +4159,10 @@ impl Harness {
             values.get(index).cloned().unwrap_or(Value::Undefined)
         } else if let Some(value) = Self::object_get_entry(&values.properties, key) {
             value
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("array", "values")
+        } else if Self::is_array_method_name(key) {
+            Self::new_receiver_builtin_callable("array", key)
         } else {
             Value::Undefined
         }
@@ -3737,6 +4179,10 @@ impl Harness {
             self.node_list_get(nodes, index)
                 .map(Value::Node)
                 .unwrap_or(Value::Undefined)
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("node_list", "values")
+        } else if Self::is_node_list_method_name(key) {
+            Self::new_receiver_builtin_callable("node_list", key)
         } else {
             Value::Undefined
         }
@@ -3747,11 +4193,21 @@ impl Harness {
         values: &Rc<RefCell<TypedArrayValue>>,
         key: &str,
     ) -> Result<Value> {
+        if key == "constructor" {
+            return Ok(Value::TypedArrayConstructor(
+                TypedArrayConstructorKind::Concrete(values.borrow().kind),
+            ));
+        }
+        if self.is_iterator_property_key(key) {
+            return Ok(Self::new_receiver_builtin_callable("typed_array", "values"));
+        }
         let snapshot = self.typed_array_snapshot(values)?;
         if key == "length" {
             Ok(Value::Number(snapshot.len() as i64))
         } else if let Ok(index) = key.parse::<usize>() {
             Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
+        } else if Self::is_typed_array_method_name(key) {
+            Ok(Self::new_receiver_builtin_callable("typed_array", key))
         } else {
             Ok(Value::Undefined)
         }
@@ -3785,8 +4241,10 @@ impl Harness {
             Value::MapConstructor
         } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
             value
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("map", "entries")
         } else if Self::is_map_method_name(key) {
-            Self::new_builtin_placeholder_function()
+            Self::new_receiver_builtin_callable("map", key)
         } else {
             Value::Undefined
         }
@@ -3806,7 +4264,7 @@ impl Harness {
         } else if let Some(value) = Self::object_get_entry(&weak_map.properties, key) {
             value
         } else if Self::is_weak_map_method_name(key) {
-            Self::new_builtin_placeholder_function()
+            Self::new_receiver_builtin_callable("weak_map", key)
         } else {
             Value::Undefined
         }
@@ -3826,7 +4284,7 @@ impl Harness {
         } else if let Some(value) = Self::object_get_entry(&weak_set.properties, key) {
             value
         } else if Self::is_weak_set_method_name(key) {
-            Self::new_builtin_placeholder_function()
+            Self::new_receiver_builtin_callable("weak_set", key)
         } else {
             Value::Undefined
         }
@@ -3841,8 +4299,34 @@ impl Harness {
             Value::String("Set".to_string())
         } else if key == "constructor" {
             Value::SetConstructor
+        } else if let Some(value) = Self::object_get_entry(&set.properties, key) {
+            value
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("set", "values")
+        } else if Self::is_set_method_name(key) {
+            Self::new_receiver_builtin_callable("set", key)
         } else {
-            Self::object_get_entry(&set.properties, key).unwrap_or(Value::Undefined)
+            Value::Undefined
+        }
+    }
+
+    fn object_property_from_form_data_value(
+        &self,
+        _entries: &Rc<RefCell<Vec<(String, String)>>>,
+        key: &str,
+    ) -> Value {
+        let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
+        if key_is_to_string_tag {
+            Value::String("FormData".to_string())
+        } else if self.is_iterator_property_key(key) {
+            Self::new_receiver_builtin_callable("form_data", "entries")
+        } else if matches!(
+            key,
+            "append" | "set" | "delete" | "entries" | "keys" | "values" | "get" | "getAll" | "has"
+        ) {
+            Self::new_receiver_builtin_callable("form_data", key)
+        } else {
+            Value::Undefined
         }
     }
 
@@ -3872,6 +4356,7 @@ impl Harness {
                 .map(|value| Value::String(value.clone()))
                 .unwrap_or(Value::Undefined),
             "constructor" => Value::SymbolConstructor,
+            "toString" | "valueOf" => Self::new_receiver_builtin_callable("symbol", key),
             _ => Value::Undefined,
         }
     }
@@ -4784,6 +5269,7 @@ impl Harness {
     }
 
     fn object_property_from_string_wrapper_entries(
+        &mut self,
         entries: &ObjectValue,
         key: &str,
     ) -> Option<Value> {
@@ -4791,8 +5277,17 @@ impl Harness {
         if key == "length" {
             return Some(Value::Number(text.chars().count() as i64));
         }
-        if key == "constructor" {
+        let is_url_like = Self::is_url_object(entries) || Self::is_location_object(entries);
+        if key == "constructor" && !is_url_like {
             return Some(Value::StringConstructor);
+        }
+        if !is_url_like {
+            if self.is_iterator_property_key(key) {
+                return Some(Self::new_receiver_builtin_callable("string", "iterator"));
+            }
+            if matches!(key, "toString" | "valueOf") || Self::is_string_method_name(key) {
+                return Some(Self::new_receiver_builtin_callable("string", key));
+            }
         }
         if let Ok(index) = key.parse::<usize>() {
             return Some(
@@ -4819,7 +5314,7 @@ impl Harness {
         if let Some(value) = self.object_property_from_named_node_map_entries(entries, key) {
             return Some(value);
         }
-        Self::object_property_from_string_wrapper_entries(entries, key)
+        self.object_property_from_string_wrapper_entries(entries, key)
     }
 
     fn callable_method_value_for_key(key: &str) -> Option<Value> {
@@ -4927,12 +5422,42 @@ impl Harness {
     }
 
     fn object_property_from_url_search_params_entries(
+        &mut self,
         entries: &ObjectValue,
         key: &str,
     ) -> Option<Value> {
-        if Self::is_url_search_params_object(entries) && key == "size" {
+        if !Self::is_url_search_params_object(entries) {
+            return None;
+        }
+        if key == "size" {
             let size = Self::url_search_params_pairs_from_object_entries(entries).len();
             return Some(Value::Number(size as i64));
+        }
+        if self.is_iterator_property_key(key) {
+            return Some(Self::new_receiver_builtin_callable(
+                "url_search_params",
+                "entries",
+            ));
+        }
+        if matches!(
+            key,
+            "append"
+                | "delete"
+                | "get"
+                | "getAll"
+                | "has"
+                | "set"
+                | "sort"
+                | "forEach"
+                | "entries"
+                | "keys"
+                | "values"
+                | "toString"
+        ) {
+            return Some(Self::new_receiver_builtin_callable(
+                "url_search_params",
+                key,
+            ));
         }
         None
     }
@@ -4949,7 +5474,7 @@ impl Harness {
             return Some(value);
         }
         if Self::is_storage_method_name(key) {
-            return Some(Self::new_builtin_placeholder_function());
+            return Some(Self::new_receiver_builtin_callable("storage", key));
         }
         if let Some((_, value)) = Self::storage_pairs_from_object_entries(entries)
             .into_iter()
@@ -5003,8 +5528,14 @@ impl Harness {
     }
 
     fn object_property_from_url_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
-        if Self::is_url_object(entries) && key == "constructor" {
+        if !Self::is_url_object(entries) {
+            return None;
+        }
+        if key == "constructor" {
             return Some(Value::UrlConstructor);
+        }
+        if matches!(key, "toString" | "toJSON") {
+            return Some(Self::new_receiver_builtin_callable("url", key));
         }
         None
     }
@@ -5014,7 +5545,7 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Option<Value> {
-        if let Some(value) = Self::object_property_from_url_search_params_entries(entries, key) {
+        if let Some(value) = self.object_property_from_url_search_params_entries(entries, key) {
             return Some(value);
         }
         if let Some(value) = Self::object_property_from_storage_entries(entries, key) {
@@ -5183,8 +5714,11 @@ impl Harness {
     pub(crate) fn object_property_from_value(&mut self, value: &Value, key: &str) -> Result<Value> {
         match value {
             Value::Node(node) => self.object_property_from_node_value(node, key),
-            Value::String(text) => Ok(Self::object_property_from_string_value(text, key)),
-            Value::Array(values) => Ok(Self::object_property_from_array_value(values, key)),
+            Value::String(text) => Ok(self.object_property_from_string_value(text, key)),
+            Value::Bool(_) => Ok(self.object_property_from_bool_value(key)),
+            Value::Number(_) | Value::Float(_) => Ok(self.object_property_from_number_value(key)),
+            Value::BigInt(_) => Ok(self.object_property_from_bigint_value(key)),
+            Value::Array(values) => Ok(self.object_property_from_array_value(values, key)),
             Value::NodeList(nodes) => Ok(self.object_property_from_node_list_value(nodes, key)),
             Value::TypedArray(values) => self.object_property_from_typed_array_value(values, key),
             Value::Object(entries) => self.object_property_from_object_value(value, entries, key),
@@ -5193,6 +5727,7 @@ impl Harness {
             Value::WeakMap(weak_map) => Ok(self.object_property_from_weak_map_value(weak_map, key)),
             Value::WeakSet(weak_set) => Ok(self.object_property_from_weak_set_value(weak_set, key)),
             Value::Set(set) => Ok(self.object_property_from_set_value(set, key)),
+            Value::FormData(entries) => Ok(self.object_property_from_form_data_value(entries, key)),
             Value::Blob(blob) => Ok(Self::object_property_from_blob_value(blob, key)),
             Value::ArrayBuffer(_) => Ok(Self::object_property_from_array_buffer_value(key)),
             Value::Symbol(symbol) => Ok(Self::object_property_from_symbol_value(symbol, key)),
@@ -5200,7 +5735,99 @@ impl Harness {
             Value::Function(function) => {
                 self.object_property_from_function_value(value, function, key)
             }
+            Value::MapConstructor => Ok(match key {
+                "prototype" => self.new_receiver_builtin_prototype_with_iterator_value(
+                    Value::MapConstructor,
+                    "map",
+                    &[
+                        "set",
+                        "get",
+                        "has",
+                        "delete",
+                        "clear",
+                        "forEach",
+                        "entries",
+                        "keys",
+                        "values",
+                        "getOrInsert",
+                        "getOrInsertComputed",
+                    ],
+                    Some("entries"),
+                ),
+                _ => Value::Undefined,
+            }),
+            Value::WeakMapConstructor => Ok(match key {
+                "prototype" => Self::new_receiver_builtin_prototype_value(
+                    Value::WeakMapConstructor,
+                    "weak_map",
+                    &[
+                        "set",
+                        "get",
+                        "has",
+                        "delete",
+                        "getOrInsert",
+                        "getOrInsertComputed",
+                    ],
+                ),
+                _ => Value::Undefined,
+            }),
+            Value::SetConstructor => Ok(match key {
+                "prototype" => self.new_receiver_builtin_prototype_with_iterator_value(
+                    Value::SetConstructor,
+                    "set",
+                    &[
+                        "add",
+                        "has",
+                        "delete",
+                        "clear",
+                        "forEach",
+                        "entries",
+                        "keys",
+                        "values",
+                        "union",
+                        "intersection",
+                        "difference",
+                        "symmetricDifference",
+                        "isDisjointFrom",
+                        "isSubsetOf",
+                        "isSupersetOf",
+                    ],
+                    Some("values"),
+                ),
+                _ => Value::Undefined,
+            }),
+            Value::WeakSetConstructor => Ok(match key {
+                "prototype" => Self::new_receiver_builtin_prototype_value(
+                    Value::WeakSetConstructor,
+                    "weak_set",
+                    &["add", "has", "delete"],
+                ),
+                _ => Value::Undefined,
+            }),
+            Value::TypedArrayConstructor(kind) => Ok(match key {
+                "prototype" => self.cached_typed_array_constructor_prototype_value(kind.clone()),
+                "from" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
+                    Self::new_typed_array_static_method_callable(kind.clone(), "from")
+                }
+                "of" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
+                    Self::new_typed_array_static_method_callable(kind.clone(), "of")
+                }
+                "BYTES_PER_ELEMENT" => match kind {
+                    TypedArrayConstructorKind::Concrete(kind) => {
+                        Value::Number(kind.bytes_per_element() as i64)
+                    }
+                    TypedArrayConstructorKind::Abstract => Value::Undefined,
+                },
+                _ => Value::Undefined,
+            }),
             Value::UrlConstructor => {
+                if key == "prototype" {
+                    return Ok(Self::new_receiver_builtin_prototype_value(
+                        Value::UrlConstructor,
+                        "url",
+                        &["toString", "toJSON"],
+                    ));
+                }
                 if let Some(value) = Self::object_get_entry(
                     &self.browser_apis.url_constructor_properties.borrow(),
                     key,
@@ -5214,6 +5841,7 @@ impl Harness {
             }
             Value::StringConstructor => {
                 let value = match key {
+                    "prototype" => self.cached_string_constructor_prototype_value(),
                     "fromCharCode" => Self::new_string_static_from_char_code_callable(),
                     "fromCodePoint" => Self::new_string_static_from_code_point_callable(),
                     "raw" => Self::new_string_static_raw_callable(),
@@ -5225,6 +5853,41 @@ impl Harness {
                 };
                 Ok(value)
             }
+            Value::SymbolConstructor => Ok(match key {
+                "prototype" => self.cached_symbol_constructor_prototype_value(),
+                "for" => Self::new_symbol_static_method_callable("for"),
+                "keyFor" => Self::new_symbol_static_method_callable("keyFor"),
+                "asyncDispose" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::AsyncDispose)
+                }
+                "asyncIterator" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator)
+                }
+                "dispose" => self.eval_symbol_static_property(SymbolStaticProperty::Dispose),
+                "hasInstance" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::HasInstance)
+                }
+                "isConcatSpreadable" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::IsConcatSpreadable)
+                }
+                "iterator" => self.eval_symbol_static_property(SymbolStaticProperty::Iterator),
+                "match" => self.eval_symbol_static_property(SymbolStaticProperty::Match),
+                "matchAll" => self.eval_symbol_static_property(SymbolStaticProperty::MatchAll),
+                "replace" => self.eval_symbol_static_property(SymbolStaticProperty::Replace),
+                "search" => self.eval_symbol_static_property(SymbolStaticProperty::Search),
+                "species" => self.eval_symbol_static_property(SymbolStaticProperty::Species),
+                "split" => self.eval_symbol_static_property(SymbolStaticProperty::Split),
+                "toPrimitive" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::ToPrimitive)
+                }
+                "toStringTag" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag)
+                }
+                "unscopables" => {
+                    self.eval_symbol_static_property(SymbolStaticProperty::Unscopables)
+                }
+                _ => Value::Undefined,
+            }),
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
         }
     }

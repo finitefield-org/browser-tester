@@ -254,6 +254,9 @@ impl Harness {
         }
         let string_constructor = Value::StringConstructor;
         let boolean_constructor = Self::new_boolean_constructor_callable();
+        let number_constructor = Self::new_number_constructor_callable();
+        let bigint_constructor = Self::new_bigint_constructor_callable();
+        let symbol_constructor = Value::SymbolConstructor;
         let object_constructor = Self::new_object_constructor_value();
         let event_target_constructor = Self::new_event_target_constructor_value();
         let event_constructor = Self::new_event_constructor_value();
@@ -384,6 +387,9 @@ impl Harness {
             &intl,
             &string_constructor,
             &boolean_constructor,
+            &number_constructor,
+            &bigint_constructor,
+            &symbol_constructor,
             &object_constructor,
             &event_target_constructor,
             &event_constructor,
@@ -658,6 +664,21 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Boolean".to_string(), boolean_constructor);
+        self.script_runtime
+            .env
+            .insert("Number".to_string(), number_constructor);
+        self.script_runtime
+            .env
+            .insert("BigInt".to_string(), bigint_constructor);
+        self.script_runtime
+            .env
+            .insert("Symbol".to_string(), symbol_constructor);
+        for kind in TypedArrayKind::concrete_kinds() {
+            self.script_runtime.env.insert(
+                kind.name().to_string(),
+                Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(*kind)),
+            );
+        }
         self.script_runtime
             .env
             .insert("Object".to_string(), object_constructor);

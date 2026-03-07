@@ -60,7 +60,7 @@ impl Harness {
     ) -> Result<Option<Value>> {
         match member {
             "getItem" => {
-                if args.len() != 1 {
+                if args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Storage.getItem requires exactly one argument".into(),
                     ));
@@ -74,7 +74,7 @@ impl Harness {
                 Ok(Some(value))
             }
             "setItem" => {
-                if args.len() != 2 {
+                if args.len() < 2 {
                     return Err(Error::ScriptRuntime(
                         "Storage.setItem requires exactly two arguments".into(),
                     ));
@@ -94,7 +94,7 @@ impl Harness {
                 Ok(Some(Value::Undefined))
             }
             "removeItem" => {
-                if args.len() != 1 {
+                if args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Storage.removeItem requires exactly one argument".into(),
                     ));
@@ -109,16 +109,11 @@ impl Harness {
                 Ok(Some(Value::Undefined))
             }
             "clear" => {
-                if !args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Storage.clear does not take arguments".into(),
-                    ));
-                }
                 Self::set_storage_pairs(&mut object.borrow_mut(), &[]);
                 Ok(Some(Value::Undefined))
             }
             "key" => {
-                if args.len() != 1 {
+                if args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Storage.key requires exactly one argument".into(),
                     ));

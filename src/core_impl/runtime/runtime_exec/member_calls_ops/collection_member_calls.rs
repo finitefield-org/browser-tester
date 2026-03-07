@@ -182,6 +182,80 @@ impl Harness {
                 }
                 Value::String(out)
             }
+            "endsWith" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "endsWith requires one or two arguments".into(),
+                    ));
+                }
+                let Some(search) = evaluated_args.first() else {
+                    return Err(Error::ScriptRuntime(
+                        "endsWith requires one or two arguments".into(),
+                    ));
+                };
+                if matches!(search, Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.endsWith must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = search.as_string();
+                let len = text.chars().count();
+                let end = evaluated_args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| {
+                        if value < 0 {
+                            0
+                        } else {
+                            (value as usize).min(len)
+                        }
+                    })
+                    .unwrap_or(len);
+                Value::Bool(Self::substring_chars(text, 0, end).ends_with(&search))
+            }
+            "includes" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "includes requires one or two arguments".into(),
+                    ));
+                }
+                if matches!(evaluated_args[0], Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.includes must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = evaluated_args[0].as_string();
+                let len = text.chars().count() as i64;
+                let mut position = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                if position < 0 {
+                    position = 0;
+                }
+                let position = position.min(len) as usize;
+                let position_byte = Self::char_index_to_byte(text, position);
+                Value::Bool(text[position_byte..].contains(&search))
+            }
+            "slice" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "String.slice supports up to two arguments".into(),
+                    ));
+                }
+                let len = text.chars().count();
+                let start = evaluated_args
+                    .first()
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(0);
+                let end = evaluated_args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(len)
+                    .max(start);
+                Value::String(Self::substring_chars(text, start, end))
+            }
             "normalize" => {
                 if evaluated_args.len() > 1 {
                     return Err(Error::ScriptRuntime(
@@ -209,6 +283,82 @@ impl Harness {
                     }
                 };
                 Value::String(normalized)
+            }
+            "split" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "split supports up to two arguments".into(),
+                    ));
+                }
+                let separator = evaluated_args.first().cloned();
+                let limit = evaluated_args.get(1).map(Self::value_to_i64);
+                let parts = match separator {
+                    None => Self::split_string(text, None, limit),
+                    Some(Value::RegExp(regex)) => {
+                        Self::split_string_with_regex(text, &regex, limit)?
+                    }
+                    Some(Value::Undefined) => Self::split_string(text, None, limit),
+                    Some(value) => Self::split_string(text, Some(value.as_string()), limit),
+                };
+                Self::new_array_value(parts)
+            }
+            "startsWith" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "startsWith requires one or two arguments".into(),
+                    ));
+                }
+                if matches!(evaluated_args[0], Value::RegExp(_)) {
+                    return Err(Error::ScriptRuntime(
+                        "First argument to String.prototype.startsWith must not be a regular expression"
+                            .into(),
+                    ));
+                }
+                let search = evaluated_args[0].as_string();
+                let len = text.chars().count() as i64;
+                let mut position = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                if position < 0 {
+                    position = 0;
+                }
+                let position = position.min(len) as usize;
+                let position_byte = Self::char_index_to_byte(text, position);
+                Value::Bool(text[position_byte..].starts_with(&search))
+            }
+            "substring" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "substring supports up to two arguments".into(),
+                    ));
+                }
+                let len = text.chars().count();
+                let start = evaluated_args
+                    .first()
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_substring_index(len, value))
+                    .unwrap_or(0);
+                let end = evaluated_args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_substring_index(len, value))
+                    .unwrap_or(len);
+                let (start, end) = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                Value::String(Self::substring_chars(text, start, end))
+            }
+            "iterator" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "String[Symbol.iterator] does not take arguments".into(),
+                    ));
+                }
+                self.new_iterator_value(
+                    text.chars()
+                        .map(|ch| Value::String(ch.to_string()))
+                        .collect::<Vec<_>>(),
+                )
             }
             _ => return Ok(None),
         };
@@ -920,7 +1070,7 @@ impl Harness {
     ) -> Result<Option<Value>> {
         let value = match member {
             "set" => {
-                if evaluated_args.len() != 2 {
+                if evaluated_args.len() < 2 {
                     return Err(Error::ScriptRuntime(
                         "Map.set requires exactly two arguments".into(),
                     ));
@@ -933,7 +1083,7 @@ impl Harness {
                 Value::Map(map.clone())
             }
             "get" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.get requires exactly one argument".into(),
                     ));
@@ -946,7 +1096,7 @@ impl Harness {
                 }
             }
             "has" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.has requires exactly one argument".into(),
                     ));
@@ -957,7 +1107,7 @@ impl Harness {
                 Value::Bool(has)
             }
             "delete" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.delete requires exactly one argument".into(),
                     ));
@@ -971,11 +1121,6 @@ impl Harness {
                 }
             }
             "clear" => {
-                if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Map.clear does not take arguments".into(),
-                    ));
-                }
                 map.borrow_mut().entries.clear();
                 Value::Undefined
             }
@@ -996,42 +1141,21 @@ impl Harness {
                 }
                 Value::Undefined
             }
-            "entries" => {
-                if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Map.entries does not take arguments".into(),
-                    ));
-                }
-                Self::new_array_value(self.map_entries_array(map))
-            }
-            "keys" => {
-                if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Map.keys does not take arguments".into(),
-                    ));
-                }
-                Self::new_array_value(
-                    map.borrow()
-                        .entries
-                        .iter()
-                        .map(|(key, _)| key.clone())
-                        .collect::<Vec<_>>(),
-                )
-            }
-            "values" => {
-                if !evaluated_args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Map.values does not take arguments".into(),
-                    ));
-                }
-                Self::new_array_value(
-                    map.borrow()
-                        .entries
-                        .iter()
-                        .map(|(_, value)| value.clone())
-                        .collect::<Vec<_>>(),
-                )
-            }
+            "entries" => Self::new_array_value(self.map_entries_array(map)),
+            "keys" => Self::new_array_value(
+                map.borrow()
+                    .entries
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            "values" => Self::new_array_value(
+                map.borrow()
+                    .entries
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
+            ),
             "getOrInsert" => {
                 if evaluated_args.len() != 2 {
                     return Err(Error::ScriptRuntime(
@@ -1072,6 +1196,187 @@ impl Harness {
         Ok(Some(value))
     }
 
+    pub(crate) fn eval_set_member_call_from_values(
+        &mut self,
+        set: &Rc<RefCell<SetValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "add" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.add requires exactly one argument".into(),
+                    ));
+                }
+                self.set_add_value(&mut set.borrow_mut(), evaluated_args[0].clone());
+                Value::Set(set.clone())
+            }
+            "has" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.has requires exactly one argument".into(),
+                    ));
+                }
+                Value::Bool(
+                    self.set_value_index(&set.borrow(), &evaluated_args[0])
+                        .is_some(),
+                )
+            }
+            "delete" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.delete requires exactly one argument".into(),
+                    ));
+                }
+                let mut set_ref = set.borrow_mut();
+                if let Some(index) = self.set_value_index(&set_ref, &evaluated_args[0]) {
+                    set_ref.values.remove(index);
+                    Value::Bool(true)
+                } else {
+                    Value::Bool(false)
+                }
+            }
+            "clear" => {
+                set.borrow_mut().values.clear();
+                Value::Undefined
+            }
+            "forEach" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Set.forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                let callback = evaluated_args[0].clone();
+                let snapshot = set.borrow().values.clone();
+                for value in snapshot {
+                    let _ = self.execute_callback_value(
+                        &callback,
+                        &[value.clone(), value, Value::Set(set.clone())],
+                        event,
+                    )?;
+                }
+                Value::Undefined
+            }
+            "entries" => Self::new_array_value(self.set_entries_array(set)),
+            "keys" | "values" => Self::new_array_value(self.set_values_array(set)),
+            "union" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.union requires exactly one argument".into(),
+                    ));
+                }
+                let other_keys = self.set_like_keys_snapshot(&evaluated_args[0])?;
+                let mut out = SetValue {
+                    values: set.borrow().values.clone(),
+                    properties: ObjectValue::default(),
+                };
+                for key in other_keys {
+                    self.set_add_value(&mut out, key);
+                }
+                Value::Set(Rc::new(RefCell::new(out)))
+            }
+            "intersection" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.intersection requires exactly one argument".into(),
+                    ));
+                }
+                let snapshot = set.borrow().values.clone();
+                let mut out = SetValue {
+                    values: Vec::new(),
+                    properties: ObjectValue::default(),
+                };
+                for value in snapshot {
+                    if self.set_like_has_value(&evaluated_args[0], &value)? {
+                        self.set_add_value(&mut out, value);
+                    }
+                }
+                Value::Set(Rc::new(RefCell::new(out)))
+            }
+            "difference" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.difference requires exactly one argument".into(),
+                    ));
+                }
+                let snapshot = set.borrow().values.clone();
+                let mut out = SetValue {
+                    values: Vec::new(),
+                    properties: ObjectValue::default(),
+                };
+                for value in snapshot {
+                    if !self.set_like_has_value(&evaluated_args[0], &value)? {
+                        self.set_add_value(&mut out, value);
+                    }
+                }
+                Value::Set(Rc::new(RefCell::new(out)))
+            }
+            "symmetricDifference" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.symmetricDifference requires exactly one argument".into(),
+                    ));
+                }
+                let other_keys = self.set_like_keys_snapshot(&evaluated_args[0])?;
+                let mut out = SetValue {
+                    values: set.borrow().values.clone(),
+                    properties: ObjectValue::default(),
+                };
+                for key in other_keys {
+                    if let Some(index) = self.set_value_index(&out, &key) {
+                        out.values.remove(index);
+                    } else {
+                        out.values.push(key);
+                    }
+                }
+                Value::Set(Rc::new(RefCell::new(out)))
+            }
+            "isDisjointFrom" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isDisjointFrom requires exactly one argument".into(),
+                    ));
+                }
+                for value in &set.borrow().values {
+                    if self.set_like_has_value(&evaluated_args[0], value)? {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+                }
+                Value::Bool(true)
+            }
+            "isSubsetOf" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isSubsetOf requires exactly one argument".into(),
+                    ));
+                }
+                for value in &set.borrow().values {
+                    if !self.set_like_has_value(&evaluated_args[0], value)? {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+                }
+                Value::Bool(true)
+            }
+            "isSupersetOf" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "Set.isSupersetOf requires exactly one argument".into(),
+                    ));
+                }
+                for value in self.set_like_keys_snapshot(&evaluated_args[0])? {
+                    if self.set_value_index(&set.borrow(), &value).is_none() {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+                }
+                Value::Bool(true)
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
     pub(crate) fn eval_weak_map_member_call_from_values(
         &mut self,
         weak_map: &Rc<RefCell<WeakMapValue>>,
@@ -1081,7 +1386,7 @@ impl Harness {
     ) -> Result<Option<Value>> {
         let value = match member {
             "set" => {
-                if evaluated_args.len() != 2 {
+                if evaluated_args.len() < 2 {
                     return Err(Error::ScriptRuntime(
                         "WeakMap.set requires exactly two arguments".into(),
                     ));
@@ -1095,7 +1400,7 @@ impl Harness {
                 Value::WeakMap(weak_map.clone())
             }
             "get" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakMap.get requires exactly one argument".into(),
                     ));
@@ -1111,7 +1416,7 @@ impl Harness {
                 }
             }
             "has" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakMap.has requires exactly one argument".into(),
                     ));
@@ -1125,7 +1430,7 @@ impl Harness {
                 Value::Bool(has)
             }
             "delete" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakMap.delete requires exactly one argument".into(),
                     ));
@@ -1191,7 +1496,7 @@ impl Harness {
     ) -> Result<Option<Value>> {
         let value = match member {
             "add" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakSet.add requires exactly one argument".into(),
                     ));
@@ -1201,7 +1506,7 @@ impl Harness {
                 Value::WeakSet(weak_set.clone())
             }
             "has" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakSet.has requires exactly one argument".into(),
                     ));
@@ -1215,7 +1520,7 @@ impl Harness {
                 Value::Bool(has)
             }
             "delete" => {
-                if evaluated_args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "WeakSet.delete requires exactly one argument".into(),
                     ));
@@ -1280,6 +1585,53 @@ impl Harness {
                     )?;
                 }
                 Ok(Some(Value::Undefined))
+            }
+            "entries" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "entries does not take arguments".into(),
+                    ));
+                }
+                let snapshot = self.node_list_snapshot(nodes);
+                Ok(Some(
+                    self.new_iterator_value(
+                        snapshot
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .map(|(index, node)| {
+                                Self::new_array_value(vec![
+                                    Value::Number(index as i64),
+                                    Value::Node(node),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ))
+            }
+            "keys" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime("keys does not take arguments".into()));
+                }
+                let len = self.node_list_len(nodes);
+                Ok(Some(self.new_iterator_value(
+                    (0..len).map(|index| Value::Number(index as i64)).collect(),
+                )))
+            }
+            "values" => {
+                if !evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "values does not take arguments".into(),
+                    ));
+                }
+                Ok(Some(
+                    self.new_iterator_value(
+                        self.node_list_snapshot(nodes)
+                            .into_iter()
+                            .map(Value::Node)
+                            .collect(),
+                    ),
+                ))
             }
             _ => Ok(None),
         }

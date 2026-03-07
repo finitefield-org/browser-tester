@@ -2957,3 +2957,146 @@ fn query_selector_all_node_list_variable_works() -> Result<()> {
     h.assert_text("#result", "3:B")?;
     Ok(())
 }
+
+#[test]
+fn form_data_member_chain_extra_args_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input name='name' value='Hanako'>
+          <input name='tag' value='A'>
+          <input name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const holder = { nested: { fd: new FormData(document.getElementById('f')) } };
+            let side = 'start';
+            const get = [
+              holder.nested.fd.get('name', side = 'fd.get'),
+              side
+            ].join(',');
+            side = 'start';
+            const getAll = [
+              holder.nested.fd.getAll('tag', side = 'fd.getAll').join(':'),
+              side
+            ].join(',');
+            side = 'start';
+            const entries = [
+              Array.from(holder.nested.fd.entries(side = 'fd.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const values = [
+              Array.from(holder.nested.fd.values(side = 'fd.values')).join(';'),
+              side
+            ].join(',');
+            document.getElementById('result').textContent =
+              [get, getAll, entries, values].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "Hanako,fd.get|A:B,fd.getAll|name:Hanako;tag:A;tag:B,fd.entries|Hanako;A;B,fd.values",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn form_data_extracted_method_call_parity_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input name='name' value='Hanako'>
+          <input name='tag' value='A'>
+          <input name='tag' value='B'>
+        </form>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            let side = 'start';
+
+            const get = fd.get;
+            const extractedGet = [
+              get.call(fd, 'name', side = 'fd.get.call'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const getAll = fd.getAll;
+            const extractedGetAll = [
+              getAll.call(fd, 'tag', side = 'fd.getAll.call').join(':'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const entries = fd.entries;
+            const extractedEntries = [
+              Array.from(entries.call(fd, side = 'fd.entries.call'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const values = fd.values;
+            const extractedValues = [
+              Array.from(values.call(fd, side = 'fd.values.call')).join(';'),
+              side
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              extractedGet,
+              extractedGetAll,
+              extractedEntries,
+              extractedValues
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "Hanako,fd.get.call|A:B,fd.getAll.call|name:Hanako;tag:A;tag:B,fd.entries.call|Hanako;A;B,fd.values.call",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn form_data_symbol_iterator_property_path_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input name='name' value='Ada'>
+          <input name='lang' value='Rust'>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const fd = new FormData(document.getElementById('f'));
+            const iterator = fd[Symbol.iterator].call(fd);
+            const first = iterator[Symbol.iterator].call(iterator).next().value.join(':');
+            document.getElementById('result').textContent = [
+              Array.from(fd[Symbol.iterator].call(fd))
+                .map((pair) => pair.join(':'))
+                .join(','),
+              first
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "name:Ada,lang:Rust|name:Ada")?;
+    Ok(())
+}

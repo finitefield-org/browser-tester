@@ -30,6 +30,9 @@ pub(crate) const INTERNAL_CALLABLE_KIND_KEY: &str = "\u{0}\u{0}bt_callable:kind"
 pub(crate) const INTERNAL_BOUND_CALLABLE_TARGET_KEY: &str = "\u{0}\u{0}bt_callable:bound_target";
 pub(crate) const INTERNAL_BOUND_CALLABLE_THIS_KEY: &str = "\u{0}\u{0}bt_callable:bound_this";
 pub(crate) const INTERNAL_BOUND_CALLABLE_ARGS_KEY: &str = "\u{0}\u{0}bt_callable:bound_args";
+pub(crate) const INTERNAL_STATIC_METHOD_NAME_KEY: &str = "\u{0}\u{0}bt_callable:static_method";
+pub(crate) const INTERNAL_STATIC_TYPED_ARRAY_KIND_KEY: &str =
+    "\u{0}\u{0}bt_callable:static_typed_array_kind";
 pub(crate) const INTERNAL_WORKER_KEY_PREFIX: &str = "\u{0}\u{0}bt_worker:";
 pub(crate) const INTERNAL_WORKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_worker:object";
 pub(crate) const INTERNAL_WORKER_GLOBAL_OBJECT_KEY: &str = "\u{0}\u{0}bt_worker:global";
@@ -1798,6 +1801,19 @@ pub(crate) fn js_unescape(src: &str) -> String {
         i += ch.len_utf8();
     }
 
+    String::from_utf16_lossy(&units)
+}
+
+pub(crate) fn render_js_string_for_display(src: &str) -> String {
+    let mut units = Vec::with_capacity(src.len());
+    for ch in src.chars() {
+        if let Some(unit) = crate::js_regex::deinternalize_surrogate_marker(ch) {
+            units.push(unit);
+            continue;
+        }
+        let mut buf = [0u16; 2];
+        units.extend_from_slice(ch.encode_utf16(&mut buf));
+    }
     String::from_utf16_lossy(&units)
 }
 

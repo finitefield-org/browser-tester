@@ -125,16 +125,23 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
+        let evaluated_args = self.eval_call_args_with_spread(args, env, event_param, event)?;
+        self.eval_symbol_static_method_from_values(method, &evaluated_args)
+    }
+
+    pub(crate) fn eval_symbol_static_method_from_values(
+        &mut self,
+        method: SymbolStaticMethod,
+        evaluated_args: &[Value],
+    ) -> Result<Value> {
         match method {
             SymbolStaticMethod::For => {
-                if args.len() != 1 {
+                if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
                         "Symbol.for requires exactly one argument".into(),
                     ));
                 }
-                let key = self
-                    .eval_expr(&args[0], env, event_param, event)?
-                    .as_string();
+                let key = evaluated_args[0].as_string();
                 if let Some(symbol) = self.symbol_runtime.symbol_registry.get(&key) {
                     return Ok(Value::Symbol(symbol.clone()));
                 }
@@ -148,13 +155,12 @@ impl Harness {
                 Ok(Value::Symbol(symbol))
             }
             SymbolStaticMethod::KeyFor => {
-                if args.len() != 1 {
+                if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
                         "Symbol.keyFor requires exactly one argument".into(),
                     ));
                 }
-                let symbol = self.eval_expr(&args[0], env, event_param, event)?;
-                let Value::Symbol(symbol) = symbol else {
+                let Value::Symbol(symbol) = &evaluated_args[0] else {
                     return Err(Error::ScriptRuntime(
                         "Symbol.keyFor argument must be a Symbol".into(),
                     ));

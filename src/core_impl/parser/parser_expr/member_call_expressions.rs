@@ -379,6 +379,68 @@ pub(crate) fn parse_function_call_expr(src: &str) -> Result<Option<Expr>> {
         }
     }
 
+    if parse_member_call_expr(src)?.is_some() {
+        return Ok(None);
+    }
+
+    let opens = collect_top_level_char_positions(src, b'(');
+    for open in opens.into_iter().rev() {
+        let Some(mut target_src) = src.get(..open) else {
+            continue;
+        };
+        target_src = target_src.trim_end();
+        if target_src.is_empty() {
+            continue;
+        }
+        let mut optional = false;
+        if let Some(stripped) = target_src.strip_suffix("?.") {
+            optional = true;
+            target_src = stripped.trim_end();
+        }
+        if target_src.is_empty() {
+            continue;
+        }
+        if !target_src.ends_with(']') {
+            continue;
+        }
+
+        let Some(rest) = src.get(open..) else {
+            continue;
+        };
+        let mut cursor = Cursor::new(rest);
+        let args_src = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            continue;
+        }
+
+        let args = parse_args(&args_src)?;
+        let parsed_target = parse_expr(target_src)?;
+        return Ok(Some(match parsed_target {
+            Expr::MemberGet {
+                target,
+                member,
+                optional: member_optional,
+            } => Expr::MemberCall {
+                target,
+                member,
+                args,
+                optional: member_optional,
+                optional_call: optional,
+            },
+            Expr::PrivateMemberGet { target, member } => Expr::PrivateMemberCall {
+                target,
+                member,
+                args,
+            },
+            target => Expr::Call {
+                target: Box::new(target),
+                args,
+                optional,
+            },
+        }));
+    }
+
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     if cursor.peek() != Some(b'(') {

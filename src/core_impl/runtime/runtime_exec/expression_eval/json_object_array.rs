@@ -514,10 +514,17 @@ impl Harness {
                 },
                 Expr::ArrayIndex { target, index } => {
                     let index = self.eval_expr(index, env, event_param, event)?;
+                    let key = match &index {
+                        Value::Number(value) => value.to_string(),
+                        Value::BigInt(value) => value.to_string(),
+                        Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                            format!("{value:.0}")
+                        }
+                        other => self.property_key_to_storage_key(other),
+                    };
                     if target == "super" {
                         let super_prototype = Self::super_prototype_from_env(env)?;
                         let this_value = Self::super_this_from_env(env)?;
-                        let key = self.property_key_to_storage_key(&index);
                         return self.object_property_from_value_with_receiver(
                             &super_prototype,
                             &key,
@@ -525,71 +532,7 @@ impl Harness {
                         );
                     }
                     match self.resolve_target_value_with_pending(env, target) {
-                        Some(Value::Object(entries)) => {
-                            let entries_ref = entries.borrow();
-                            if let Some(value) =
-                                Self::string_wrapper_value_from_object(&entries_ref)
-                            {
-                                let Some(index) = self.value_as_index(&index) else {
-                                    return Ok(Value::Undefined);
-                                };
-                                return Ok(value
-                                    .chars()
-                                    .nth(index)
-                                    .map(|ch| Value::String(ch.to_string()))
-                                    .unwrap_or(Value::Undefined));
-                            }
-                            let key = self.property_key_to_storage_key(&index);
-                            if Self::is_storage_object(&entries_ref) {
-                                return Ok(Self::storage_pairs_from_object_entries(&entries_ref)
-                                    .into_iter()
-                                    .find_map(|(name, value)| {
-                                        (name == key).then(|| Value::String(value))
-                                    })
-                                    .unwrap_or(Value::Undefined));
-                            }
-                            Ok(Self::object_get_entry(&entries_ref, &key)
-                                .unwrap_or(Value::Undefined))
-                        }
-                        Some(Value::Array(values)) => {
-                            let Some(index) = self.value_as_index(&index) else {
-                                return Ok(Value::Undefined);
-                            };
-                            Ok(values
-                                .borrow()
-                                .get(index)
-                                .cloned()
-                                .unwrap_or(Value::Undefined))
-                        }
-                        Some(Value::TypedArray(values)) => {
-                            let Some(index) = self.value_as_index(&index) else {
-                                return Ok(Value::Undefined);
-                            };
-                            self.typed_array_get_index(&values, index)
-                        }
-                        Some(Value::NodeList(nodes)) => {
-                            let Some(index) = self.value_as_index(&index) else {
-                                return Ok(Value::Undefined);
-                            };
-                            Ok(self
-                                .node_list_get(&nodes, index)
-                                .map(Value::Node)
-                                .unwrap_or(Value::Undefined))
-                        }
-                        Some(Value::String(value)) => {
-                            let Some(index) = self.value_as_index(&index) else {
-                                return Ok(Value::Undefined);
-                            };
-                            Ok(value
-                                .chars()
-                                .nth(index)
-                                .map(|ch| Value::String(ch.to_string()))
-                                .unwrap_or(Value::Undefined))
-                        }
-                        Some(_) => Err(Error::ScriptRuntime(format!(
-                            "variable '{}' is not an array",
-                            target
-                        ))),
+                        Some(value) => self.object_property_from_value(&value, &key),
                         None => Err(Error::ScriptRuntime(format!(
                             "unknown variable: {}",
                             target

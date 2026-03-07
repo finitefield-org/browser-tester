@@ -67,6 +67,15 @@ impl Harness {
             INTERNAL_URL_SEARCH_PARAMS_OBJECT_KEY.to_string(),
             Value::Bool(true),
         )];
+        for method in [
+            "append", "delete", "get", "getAll", "has", "set", "sort", "forEach", "entries",
+            "keys", "values", "toString",
+        ] {
+            entries.push((
+                method.to_string(),
+                Self::new_receiver_builtin_callable("url_search_params", method),
+            ));
+        }
         if let Some(owner_id) = owner_id {
             entries.push((
                 INTERNAL_URL_SEARCH_PARAMS_OWNER_ID_KEY.to_string(),

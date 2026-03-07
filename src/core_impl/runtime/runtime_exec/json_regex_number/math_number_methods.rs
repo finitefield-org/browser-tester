@@ -167,35 +167,76 @@ impl Harness {
         for arg in args {
             values.push(self.eval_expr(arg, env, event_param, event)?);
         }
+        self.eval_number_method_from_values(method, &values)
+    }
 
+    pub(crate) fn eval_number_method_from_values(
+        &mut self,
+        method: NumberMethod,
+        values: &[Value],
+    ) -> Result<Value> {
         match method {
-            NumberMethod::IsFinite => Ok(Value::Bool(
-                Self::number_primitive_value(&values[0]).is_some_and(f64::is_finite),
-            )),
-            NumberMethod::IsInteger => Ok(Value::Bool(
-                Self::number_primitive_value(&values[0])
-                    .is_some_and(|value| value.is_finite() && value.fract() == 0.0),
-            )),
-            NumberMethod::IsNaN => Ok(Value::Bool(matches!(
-                values[0],
-                Value::Float(value) if value.is_nan()
-            ))),
-            NumberMethod::IsSafeInteger => Ok(Value::Bool(
-                Self::number_primitive_value(&values[0]).is_some_and(|value| {
-                    value.is_finite()
-                        && value.fract() == 0.0
-                        && value.abs() <= 9_007_199_254_740_991.0
-                }),
-            )),
+            NumberMethod::IsFinite => {
+                if values.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.isFinite requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Value::Bool(
+                    Self::number_primitive_value(&values[0]).is_some_and(f64::is_finite),
+                ))
+            }
+            NumberMethod::IsInteger => {
+                if values.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.isInteger requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Value::Bool(
+                    Self::number_primitive_value(&values[0])
+                        .is_some_and(|value| value.is_finite() && value.fract() == 0.0),
+                ))
+            }
+            NumberMethod::IsNaN => {
+                if values.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.isNaN requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Value::Bool(matches!(
+                    values[0],
+                    Value::Float(value) if value.is_nan()
+                )))
+            }
+            NumberMethod::IsSafeInteger => {
+                if values.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.isSafeInteger requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Value::Bool(
+                    Self::number_primitive_value(&values[0]).is_some_and(|value| {
+                        value.is_finite()
+                            && value.fract() == 0.0
+                            && value.abs() <= 9_007_199_254_740_991.0
+                    }),
+                ))
+            }
             NumberMethod::ParseFloat => {
+                if values.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.parseFloat requires exactly one argument".into(),
+                    ));
+                }
                 Ok(Value::Float(parse_js_parse_float(&values[0].as_string())))
             }
             NumberMethod::ParseInt => {
-                let radix = if values.len() == 2 {
-                    Some(Self::value_to_i64(&values[1]))
-                } else {
-                    None
-                };
+                if values.is_empty() || values.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Number.parseInt requires one or two arguments".into(),
+                    ));
+                }
+                let radix = values.get(1).map(Self::value_to_i64);
                 Ok(Value::Float(parse_js_parse_int(
                     &values[0].as_string(),
                     radix,
@@ -368,6 +409,19 @@ impl Harness {
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+        self.eval_bigint_method_from_values(method, &values)
+    }
+
+    pub(crate) fn eval_bigint_method_from_values(
+        &mut self,
+        method: BigIntMethod,
+        values: &[Value],
+    ) -> Result<Value> {
+        if values.len() != 2 {
+            return Err(Error::ScriptRuntime(
+                "BigInt static methods require exactly two arguments".into(),
+            ));
         }
         let bits_i64 = Self::value_to_i64(&values[0]);
         if bits_i64 < 0 {

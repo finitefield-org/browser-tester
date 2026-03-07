@@ -217,6 +217,17 @@ impl Harness {
             Value::String(parts.password.clone()),
         );
         Self::object_set_entry(entries, "origin".to_string(), Value::String(parts.origin()));
+        Self::object_set_entry(entries, "constructor".to_string(), Value::UrlConstructor);
+        Self::object_set_entry(
+            entries,
+            "toString".to_string(),
+            Self::new_receiver_builtin_callable("url", "toString"),
+        );
+        Self::object_set_entry(
+            entries,
+            "toJSON".to_string(),
+            Self::new_receiver_builtin_callable("url", "toJSON"),
+        );
 
         let owner_id = match Self::object_get_entry(entries, INTERNAL_URL_OBJECT_ID_KEY) {
             Some(Value::Number(id)) if id >= 0 => usize::try_from(id).ok(),

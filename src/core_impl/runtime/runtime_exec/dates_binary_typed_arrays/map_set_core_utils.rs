@@ -101,6 +101,27 @@ impl Harness {
         matches!(name, "add" | "has" | "delete")
     }
 
+    pub(crate) fn is_set_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "add"
+                | "has"
+                | "delete"
+                | "clear"
+                | "forEach"
+                | "entries"
+                | "keys"
+                | "values"
+                | "union"
+                | "intersection"
+                | "difference"
+                | "symmetricDifference"
+                | "isDisjointFrom"
+                | "isSubsetOf"
+                | "isSupersetOf"
+        )
+    }
+
     pub(crate) fn set_value_index(&self, set: &SetValue, value: &Value) -> Option<usize> {
         set.values
             .iter()

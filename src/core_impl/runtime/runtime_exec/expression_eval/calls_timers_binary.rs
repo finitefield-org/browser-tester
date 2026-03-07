@@ -34,6 +34,165 @@ impl Harness {
         Ok(result)
     }
 
+    pub(crate) fn eval_form_data_member_call_from_values(
+        &mut self,
+        entries: &Rc<RefCell<Vec<(String, String)>>>,
+        member: &str,
+        evaluated_args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let value = match member {
+            "append" => {
+                if evaluated_args.len() < 2 {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.append requires two or three arguments".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let value =
+                    Self::form_data_append_string_value(&evaluated_args[1], evaluated_args.get(2));
+                entries.borrow_mut().push((name, value));
+                Value::Undefined
+            }
+            "set" => {
+                if evaluated_args.len() < 2 {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.set requires two or three arguments".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let value =
+                    Self::form_data_append_string_value(&evaluated_args[1], evaluated_args.get(2));
+                let mut entries_ref = entries.borrow_mut();
+                if let Some(first_match) = entries_ref
+                    .iter()
+                    .position(|(entry_name, _)| entry_name == &name)
+                {
+                    entries_ref[first_match].1 = value;
+                    let mut index = entries_ref.len();
+                    while index > 0 {
+                        index -= 1;
+                        if index != first_match && entries_ref[index].0 == name {
+                            entries_ref.remove(index);
+                        }
+                    }
+                } else {
+                    entries_ref.push((name, value));
+                }
+                Value::Undefined
+            }
+            "delete" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.delete requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                entries
+                    .borrow_mut()
+                    .retain(|(entry_name, _)| entry_name != &name);
+                Value::Undefined
+            }
+            "entries" => {
+                let snapshot = entries.borrow().clone();
+                Self::new_array_value(
+                    snapshot
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Self::new_array_value(vec![Value::String(name), Value::String(value)])
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "keys" => {
+                let snapshot = entries.borrow().clone();
+                Self::new_array_value(
+                    snapshot
+                        .into_iter()
+                        .map(|(name, _)| Value::String(name))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "values" => {
+                let snapshot = entries.borrow().clone();
+                Self::new_array_value(
+                    snapshot
+                        .into_iter()
+                        .map(|(_, value)| Value::String(value))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "get" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.get requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let entries = entries.borrow();
+                entries
+                    .iter()
+                    .find_map(|(entry_name, value)| {
+                        (entry_name == &name).then(|| Value::String(value.clone()))
+                    })
+                    .unwrap_or(Value::Null)
+            }
+            "getAll" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.getAll requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let snapshot = entries.borrow().clone();
+                Self::new_array_value(
+                    snapshot
+                        .into_iter()
+                        .filter_map(|(entry_name, value)| {
+                            (entry_name == name).then(|| Value::String(value))
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "has" => {
+                if evaluated_args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.has requires exactly one argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let has = entries
+                    .borrow()
+                    .iter()
+                    .any(|(entry_name, _)| entry_name == &name);
+                Value::Bool(has)
+            }
+            "forEach" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "FormData.forEach requires a callback and optional thisArg".into(),
+                    ));
+                }
+                let callback = evaluated_args[0].clone();
+                let snapshot = entries.borrow().clone();
+                for (name, value) in snapshot {
+                    let _ = self.execute_callback_value(
+                        &callback,
+                        &[
+                            Value::String(value),
+                            Value::String(name),
+                            Value::FormData(entries.clone()),
+                        ],
+                        event,
+                    )?;
+                }
+                Value::Undefined
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
     pub(crate) fn resolve_listener_capture_pending_value(
         &self,
         name: &str,
@@ -531,162 +690,14 @@ impl Harness {
                     let evaluated_args =
                         self.eval_call_args_with_spread(args, env, event_param, event)?;
 
-                    if member == "append" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.len() < 2 {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.append requires two or three arguments".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            let value = Self::form_data_append_string_value(
-                                &evaluated_args[1],
-                                evaluated_args.get(2),
-                            );
-                            entries.borrow_mut().push((name, value));
-                            return Ok(Value::Undefined);
-                        }
-                    }
-
-                    if member == "set" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.len() < 2 {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.set requires two or three arguments".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            let value = Self::form_data_append_string_value(
-                                &evaluated_args[1],
-                                evaluated_args.get(2),
-                            );
-                            let mut entries_ref = entries.borrow_mut();
-                            if let Some(first_match) = entries_ref
-                                .iter()
-                                .position(|(entry_name, _)| entry_name == &name)
-                            {
-                                entries_ref[first_match].1 = value;
-                                let mut index = entries_ref.len();
-                                while index > 0 {
-                                    index -= 1;
-                                    if index != first_match && entries_ref[index].0 == name {
-                                        entries_ref.remove(index);
-                                    }
-                                }
-                            } else {
-                                entries_ref.push((name, value));
-                            }
-                            return Ok(Value::Undefined);
-                        }
-                    }
-
-                    if member == "delete" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.delete requires exactly one argument".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            entries
-                                .borrow_mut()
-                                .retain(|(entry_name, _)| entry_name != &name);
-                            return Ok(Value::Undefined);
-                        }
-                    }
-
-                    if member == "entries" {
-                        if let Value::FormData(entries) = &receiver {
-                            let snapshot = entries.borrow().clone();
-                            return Ok(Self::new_array_value(
-                                snapshot
-                                    .into_iter()
-                                    .map(|(name, value)| {
-                                        Self::new_array_value(vec![
-                                            Value::String(name),
-                                            Value::String(value),
-                                        ])
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ));
-                        }
-                    }
-
-                    if member == "keys" {
-                        if let Value::FormData(entries) = &receiver {
-                            let snapshot = entries.borrow().clone();
-                            return Ok(Self::new_array_value(
-                                snapshot
-                                    .into_iter()
-                                    .map(|(name, _)| Value::String(name))
-                                    .collect::<Vec<_>>(),
-                            ));
-                        }
-                    }
-
-                    if member == "values" {
-                        if let Value::FormData(entries) = &receiver {
-                            let snapshot = entries.borrow().clone();
-                            return Ok(Self::new_array_value(
-                                snapshot
-                                    .into_iter()
-                                    .map(|(_, value)| Value::String(value))
-                                    .collect::<Vec<_>>(),
-                            ));
-                        }
-                    }
-
-                    if member == "get" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.get requires exactly one argument".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            let entries = entries.borrow();
-                            return Ok(entries
-                                .iter()
-                                .find_map(|(entry_name, value)| {
-                                    (entry_name == &name).then(|| Value::String(value.clone()))
-                                })
-                                .unwrap_or(Value::Null));
-                        }
-                    }
-
-                    if member == "getAll" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.getAll requires exactly one argument".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            let snapshot = entries.borrow().clone();
-                            return Ok(Self::new_array_value(
-                                snapshot
-                                    .into_iter()
-                                    .filter_map(|(entry_name, value)| {
-                                        (entry_name == name).then(|| Value::String(value))
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ));
-                        }
-                    }
-
-                    if member == "has" {
-                        if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.has requires exactly one argument".into(),
-                                ));
-                            }
-                            let name = evaluated_args[0].as_string();
-                            let has = entries
-                                .borrow()
-                                .iter()
-                                .any(|(entry_name, _)| entry_name == &name);
-                            return Ok(Value::Bool(has));
+                    if let Value::FormData(entries) = &receiver {
+                        if let Some(value) = self.eval_form_data_member_call_from_values(
+                            entries,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
+                            return Ok(value);
                         }
                     }
 
@@ -824,6 +835,41 @@ impl Harness {
                         }
                         if let Some(value) = self.eval_map_member_call_from_values(
                             map,
+                            member,
+                            &evaluated_args,
+                            event,
+                        )? {
+                            return Ok(value);
+                        }
+                    }
+
+                    if let Value::Set(set) = &receiver {
+                        let set_member_override = {
+                            let set_ref = set.borrow();
+                            Self::object_get_entry(&set_ref.properties, member)
+                        };
+                        if let Some(callee) = set_member_override {
+                            return self
+                                .execute_callable_value_with_env_and_sync(
+                                    &callee,
+                                    &evaluated_args,
+                                    event,
+                                    env,
+                                )
+                                .map_err(|err| match err {
+                                    Error::ScriptRuntime(msg)
+                                        if msg == "callback is not a function" =>
+                                    {
+                                        Error::ScriptRuntime(format!(
+                                            "'{}' is not a function",
+                                            member
+                                        ))
+                                    }
+                                    other => other,
+                                });
+                        }
+                        if let Some(value) = self.eval_set_member_call_from_values(
+                            set,
                             member,
                             &evaluated_args,
                             event,

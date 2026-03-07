@@ -424,13 +424,13 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
 
     let method = match member.as_str() {
         "add" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Ok(None);
             }
             SetInstanceMethod::Add
         }
         "union" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.union requires exactly one argument".into(),
                 ));
@@ -438,7 +438,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Union
         }
         "intersection" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.intersection requires exactly one argument".into(),
                 ));
@@ -446,7 +446,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Intersection
         }
         "difference" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.difference requires exactly one argument".into(),
                 ));
@@ -454,7 +454,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Difference
         }
         "symmetricDifference" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.symmetricDifference requires exactly one argument".into(),
                 ));
@@ -462,7 +462,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::SymmetricDifference
         }
         "isDisjointFrom" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isDisjointFrom requires exactly one argument".into(),
                 ));
@@ -470,7 +470,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::IsDisjointFrom
         }
         "isSubsetOf" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isSubsetOf requires exactly one argument".into(),
                 ));
@@ -478,7 +478,7 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::IsSubsetOf
         }
         "isSupersetOf" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isSupersetOf requires exactly one argument".into(),
                 ));

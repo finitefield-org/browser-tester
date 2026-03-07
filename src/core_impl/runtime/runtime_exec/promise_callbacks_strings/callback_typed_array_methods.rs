@@ -39,54 +39,41 @@ impl Harness {
             }
 
             if let Value::Map(map) = target_value {
+                let evaluated_args = args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
                 return match method {
                     TypedArrayInstanceMethod::Set => {
-                        if args.len() != 2 {
+                        if evaluated_args.len() < 2 {
                             return Err(Error::ScriptRuntime(
                                 "Map.set requires exactly two arguments".into(),
                             ));
                         }
-                        let key = self.eval_expr(&args[0], env, event_param, event)?;
-                        let value = self.eval_expr(&args[1], env, event_param, event)?;
-                        self.map_set_entry(&mut map.borrow_mut(), key, value);
+                        self.map_set_entry(
+                            &mut map.borrow_mut(),
+                            evaluated_args[0].clone(),
+                            evaluated_args[1].clone(),
+                        );
                         Ok(Value::Map(map.clone()))
                     }
                     TypedArrayInstanceMethod::Entries => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Map.entries does not take arguments".into(),
-                            ));
-                        }
                         Ok(Self::new_array_value(self.map_entries_array(map)))
                     }
-                    TypedArrayInstanceMethod::Keys => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Map.keys does not take arguments".into(),
-                            ));
-                        }
-                        Ok(Self::new_array_value(
-                            map.borrow()
-                                .entries
-                                .iter()
-                                .map(|(key, _)| key.clone())
-                                .collect(),
-                        ))
-                    }
-                    TypedArrayInstanceMethod::Values => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Map.values does not take arguments".into(),
-                            ));
-                        }
-                        Ok(Self::new_array_value(
-                            map.borrow()
-                                .entries
-                                .iter()
-                                .map(|(_, value)| value.clone())
-                                .collect(),
-                        ))
-                    }
+                    TypedArrayInstanceMethod::Keys => Ok(Self::new_array_value(
+                        map.borrow()
+                            .entries
+                            .iter()
+                            .map(|(key, _)| key.clone())
+                            .collect(),
+                    )),
+                    TypedArrayInstanceMethod::Values => Ok(Self::new_array_value(
+                        map.borrow()
+                            .entries
+                            .iter()
+                            .map(|(_, value)| value.clone())
+                            .collect(),
+                    )),
                     _ => Err(Error::ScriptRuntime(format!(
                         "variable '{}' is not a TypedArray",
                         target
@@ -95,17 +82,23 @@ impl Harness {
             }
 
             if let Value::WeakMap(weak_map) = target_value {
+                let evaluated_args = args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
                 return match method {
                     TypedArrayInstanceMethod::Set => {
-                        if args.len() != 2 {
+                        if evaluated_args.len() < 2 {
                             return Err(Error::ScriptRuntime(
                                 "WeakMap.set requires exactly two arguments".into(),
                             ));
                         }
-                        let key = self.eval_expr(&args[0], env, event_param, event)?;
-                        let value = self.eval_expr(&args[1], env, event_param, event)?;
-                        Self::ensure_weak_map_key(&key)?;
-                        self.weak_map_set_entry(&mut weak_map.borrow_mut(), key, value);
+                        Self::ensure_weak_map_key(&evaluated_args[0])?;
+                        self.weak_map_set_entry(
+                            &mut weak_map.borrow_mut(),
+                            evaluated_args[0].clone(),
+                            evaluated_args[1].clone(),
+                        );
                         Ok(Value::WeakMap(weak_map.clone()))
                     }
                     _ => Err(Error::ScriptRuntime(format!(
@@ -116,21 +109,17 @@ impl Harness {
             }
 
             if let Value::Set(set) = target_value {
+                let evaluated_args = args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
                 return match method {
                     TypedArrayInstanceMethod::Entries => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Set.entries does not take arguments".into(),
-                            ));
-                        }
+                        let _ = evaluated_args;
                         Ok(Self::new_array_value(self.set_entries_array(set)))
                     }
                     TypedArrayInstanceMethod::Keys | TypedArrayInstanceMethod::Values => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Set.keys/values does not take arguments".into(),
-                            ));
-                        }
+                        let _ = evaluated_args;
                         Ok(Self::new_array_value(self.set_values_array(set)))
                     }
                     _ => Err(Error::ScriptRuntime(format!(
@@ -601,15 +590,15 @@ impl Harness {
                         "TypedArray.entries does not take arguments".into(),
                     ));
                 }
-                let snapshot = self.typed_array_snapshot(&array)?;
-                let out = snapshot
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        Self::new_array_value(vec![Value::Number(index as i64), value])
-                    })
-                    .collect::<Vec<_>>();
-                Ok(Self::new_array_value(out))
+                Ok(self.new_iterator_value(
+                    self.typed_array_snapshot(&array)?
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            Self::new_array_value(vec![Value::Number(index as i64), value])
+                        })
+                        .collect(),
+                ))
             }
             TypedArrayInstanceMethod::Fill => {
                 if args.is_empty() || args.len() > 3 {
@@ -739,7 +728,7 @@ impl Harness {
                         "TypedArray.keys does not take arguments".into(),
                     ));
                 }
-                Ok(Self::new_array_value(
+                Ok(self.new_iterator_value(
                     (0..len).map(|index| Value::Number(index as i64)).collect(),
                 ))
             }
@@ -939,7 +928,7 @@ impl Harness {
                         "TypedArray.values does not take arguments".into(),
                     ));
                 }
-                Ok(Self::new_array_value(self.typed_array_snapshot(&array)?))
+                Ok(self.new_iterator_value(self.typed_array_snapshot(&array)?))
             }
             TypedArrayInstanceMethod::With => {
                 if args.len() != 2 {

@@ -1983,6 +1983,317 @@ fn url_idna_invalid_labels_and_overlap_dispatch_extra_args_work() -> Result<()> 
 }
 
 #[test]
+fn collection_member_chain_and_extra_arg_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const probe = (label, fn) => {
+              try {
+                return fn();
+              } catch (error) {
+                return `ERR:${label}:${error.message}`;
+              }
+            };
+            let side = 'start';
+
+            const directMap = new Map([['a', 1]]);
+            const directMapEntries = [
+              Array.from(directMap.entries(side = 'direct.map.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const directMapSet = [
+              directMap.set('b', 2, side = 'direct.map.set') === directMap,
+              side,
+              directMap.get('b')
+            ].join(',');
+            side = 'start';
+            const directMapClearTarget = new Map([['c', 3]]);
+            const directMapClear = [
+              String(directMapClearTarget.clear(side = 'direct.map.clear')),
+              side,
+              directMapClearTarget.size
+            ].join(',');
+
+            side = 'start';
+            const directSet = new Set(['x']);
+            const directSetEntries = [
+              Array.from(directSet.entries(side = 'direct.set.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const directSetAdd = [
+              directSet.add('y', side = 'direct.set.add') === directSet,
+              side,
+              Array.from(directSet.values()).join(';')
+            ].join(',');
+
+            const weakKey = {};
+            side = 'start';
+            const directWeakMap = new WeakMap([[weakKey, 'v']]);
+            const directWeakMapSet = [
+              directWeakMap.set(weakKey, 'w', side = 'direct.weakMap.set') === directWeakMap,
+              side,
+              directWeakMap.get(weakKey)
+            ].join(',');
+            side = 'start';
+            const directWeakSet = new WeakSet();
+            const directWeakSetAdd = [
+              directWeakSet.add(weakKey, side = 'direct.weakSet.add') === directWeakSet,
+              side,
+              directWeakSet.has(weakKey)
+            ].join(',');
+
+            const holder = {
+              nested: { map: new Map([['m', 4]]) },
+              setHolder: { nested: { set: new Set(['n']) } },
+              params: new URL('https://example.com/?q=1&q=2&r=3').searchParams
+            };
+
+            side = 'start';
+            const chainMapEntries = [
+              Array.from(holder.nested.map.entries(side = 'chain.map.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const chainMapClear = [
+              String(holder.nested.map.clear(side = 'chain.map.clear')),
+              side,
+              holder.nested.map.size
+            ].join(',');
+
+            side = 'start';
+            const chainSetEntries = [
+              Array.from(holder.setHolder.nested.set.entries(side = 'chain.set.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const chainSetClear = [
+              String(holder.setHolder.nested.set.clear(side = 'chain.set.clear')),
+              side,
+              holder.setHolder.nested.set.size
+            ].join(',');
+
+            side = 'start';
+            const chainParamsEntries = [
+              Array.from(holder.params.entries(side = 'chain.params.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const chainParamsKeys = [
+              Array.from(holder.params.keys(side = 'chain.params.keys')).join(';'),
+              side
+            ].join(',');
+            side = 'start';
+            const chainParamsValues = [
+              Array.from(holder.params.values(side = 'chain.params.values')).join(';'),
+              side
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              directMapEntries,
+              directMapSet,
+              directMapClear,
+              directSetEntries,
+              directSetAdd,
+              directWeakMapSet,
+              directWeakSetAdd,
+              chainMapEntries,
+              chainMapClear,
+              chainSetEntries,
+              chainSetClear,
+              chainParamsEntries,
+              chainParamsKeys,
+              chainParamsValues
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "a:1,direct.map.entries|true,direct.map.set,2|undefined,direct.map.clear,0|x:x,direct.set.entries|true,direct.set.add,x;y|true,direct.weakMap.set,w|true,direct.weakSet.add,true|m:4,chain.map.entries|undefined,chain.map.clear,0|n:n,chain.set.entries|undefined,chain.set.clear,0|q:1;q:2;r:3,chain.params.entries|q;q;r,chain.params.keys|1;2;3,chain.params.values",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn collection_extracted_method_call_and_prototype_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let side = 'start';
+
+            const map = new Map([['a', 1]]);
+            const mapGet = [
+              map.get.call(map, 'a', side = 'map.get.call'),
+              side
+            ].join(',');
+            side = 'start';
+            const mapProtoEntries = [
+              Array.from(map.constructor.prototype.entries.call(map, side = 'map.proto.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const set = new Set(['x']);
+            const setProtoAdd = [
+              set.constructor.prototype.add.call(set, 'y', side = 'set.proto.add') === set,
+              side,
+              Array.from(set.values()).join(';')
+            ].join(',');
+
+            const weakKey = {};
+            side = 'start';
+            const weakMap = new WeakMap([[weakKey, 'v']]);
+            const weakMapProtoGet = [
+              weakMap.constructor.prototype.get.call(weakMap, weakKey, side = 'weakMap.proto.get'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const weakSet = new WeakSet([weakKey]);
+            const weakSetProtoHas = [
+              weakSet.constructor.prototype.has.call(weakSet, weakKey, side = 'weakSet.proto.has'),
+              side
+            ].join(',');
+
+            const url = new URL('https://example.com/path?b=2&a=1&a=3#hash');
+            side = 'start';
+            const urlToStringFn = url.constructor.prototype.toString;
+            const urlToString = [
+              urlToStringFn.call(url, side = 'url.toString.call'),
+              side
+            ].join(',');
+            side = 'start';
+            const urlProtoToJson = [
+              url.constructor.prototype.toJSON.call(url, side = 'url.proto.toJSON'),
+              side
+            ].join(',');
+
+            const params = url.searchParams;
+            side = 'start';
+            const paramsToStringFn = params['toString'];
+            const paramsToString = [
+              paramsToStringFn.call(params, side = 'params.toString.call'),
+              side
+            ].join(',');
+            side = 'start';
+            const paramsEntries = [
+              Array.from(params.entries.call(params, side = 'params.entries.call'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              mapGet,
+              mapProtoEntries,
+              setProtoAdd,
+              weakMapProtoGet,
+              weakSetProtoHas,
+              urlToString,
+              urlProtoToJson,
+              paramsToString,
+              paramsEntries
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1,map.get.call|a:1,map.proto.entries|true,set.proto.add,x;y|v,weakMap.proto.get|true,weakSet.proto.has|https://example.com/path?b=2&a=1&a=3#hash,url.toString.call|https://example.com/path?b=2&a=1&a=3#hash,url.proto.toJSON|b=2&a=1&a=3,params.toString.call|b:2;a:1;a:3,params.entries.call",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn raw_url_location_getter_and_collection_bracket_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let side = 'start';
+
+            const url = new URL('https://example.com/path?x=1#h');
+            const urlToString = url['toString'];
+            const urlToJson = url['toJSON'];
+            const urlBracket = [
+              urlToString.call(url, side = 'url.bracket.toString'),
+              side,
+              String(url['length'] === url.href.length),
+              String(url[8] === url.href[8]),
+              urlToJson.call(url)
+            ].join(',');
+
+            side = 'start';
+            const locationToString = location['toString'];
+            const locationBracket = [
+              String(locationToString.call(location, side = 'location.bracket.toString') === location.href),
+              side,
+              String(location['length'] === location.href.length),
+              String(location[0] === location.href[0])
+            ].join(',');
+
+            const map = new Map([['a', 1]]);
+            side = 'start';
+            const mapEntries = map['entries'];
+            const mapBracket = [
+              Array.from(mapEntries.call(map, side = 'map.bracket.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+
+            let bad = 'none';
+            try {
+              locationToString.call(url);
+            } catch (e) {
+              bad = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              urlBracket,
+              locationBracket,
+              mapBracket,
+              bad
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com/path?x=1#h,url.bracket.toString,true,true,https://example.com/path?x=1#h|true,location.bracket.toString,true,true|a:1,map.bracket.entries|Location method called on incompatible receiver",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn url_file_invalid_authority_and_serialization_matrix_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -3063,5 +3374,130 @@ fn array_for_each_concise_callback_with_member_call_body_parses() -> Result<()> 
 
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn array_typed_array_and_collection_iterator_property_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const arr = [1, 2, 3];
+            const arrResult = [
+              arr['map'].call(arr, (value) => value * 3).join(','),
+              arr['slice'].call(arr, 1).join(','),
+              Array.from(arr[Symbol.iterator].call(arr)).join(',')
+            ].join(';');
+
+            const typed = new Uint8Array([4, 5, 6]);
+            const typedResult = [
+              typed['slice'].call(typed, 1).join(','),
+              Array.from(typed[Symbol.iterator].call(typed)).join(','),
+              Array.from(typed['entries'].call(typed))
+                .map((pair) => pair.join(':'))
+                .join(',')
+            ].join(';');
+
+            const map = new Map([['a', 1], ['b', 2]]);
+            const set = new Set(['x', 'y']);
+            const params = new URLSearchParams('q=1&q=2&r=3');
+            const mapIterator = map[Symbol.iterator].call(map);
+            const setIterator = set[Symbol.iterator].call(set);
+            const paramsIterator = params[Symbol.iterator].call(params);
+            const mapSelf = mapIterator[Symbol.iterator].call(mapIterator).next().value.join(':');
+            const setSelf = setIterator[Symbol.iterator].call(setIterator).next().value;
+            const paramsSelf =
+              paramsIterator[Symbol.iterator].call(paramsIterator).next().value.join(':');
+            const collectionResult = [
+              Array.from(mapIterator).map((pair) => pair.join(':')).join(','),
+              String(mapSelf),
+              Array.from(setIterator).join(','),
+              String(setSelf),
+              Array.from(paramsIterator).map((pair) => pair.join(':')).join(','),
+              String(paramsSelf)
+            ].join(';');
+
+            document.getElementById('result').textContent = [
+              arrResult,
+              typedResult,
+              collectionResult
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "3,6,9;2,3;1,2,3|5,6;4,5,6;0:4,1:5,2:6|a:1,b:2;a:1;x,y;x;q:1,q:2,r:3;q:1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn typed_array_raw_getter_breadth_and_constructor_prototype_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const base = new Uint8Array([10, 20, 30, 40]);
+            const copied = new Uint8Array([1, 2, 3, 4]);
+            const typedResult = [
+              String(base['at'].call(base, -1)),
+              Array.from(copied['copyWithin'].call(copied, 1, 2)).join(','),
+              Array.from(base['subarray'].call(base, 1, 3)).join(','),
+              Array.from(base['with'].call(base, -1, 99)).join(','),
+              String(base.constructor.prototype.at.call(base, 0)),
+              Array.from(base.constructor.prototype.subarray.call(base, 2)).join(','),
+              Array.from(base.constructor.prototype.with.call(base, 1, 77)).join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = typedResult;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "40;1,3,4,4;20,30;10,20,30,99;10;30,40;10,77,30,40",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn constructor_static_bracket_and_property_path_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const holder = { Number, BigInt, String, Symbol, Int8Array };
+            const result = [
+              String(holder.Number['parseInt']('101', 2)),
+              String(holder.Number['isInteger'](7)),
+              String(holder.Number['MAX_SAFE_INTEGER'] === Number.MAX_SAFE_INTEGER),
+              String(holder.BigInt['asIntN'](8, 257n)),
+              holder.String['fromCharCode'](65, 66),
+              holder.String['fromCodePoint'](0x1F63A),
+              String(holder.Symbol['iterator'] === Symbol.iterator),
+              Array.from(holder.Int8Array['of'](1, 2, 3)).join(','),
+              Array.from(holder.Int8Array['from']([4, 5])).join(','),
+              String(holder.Int8Array['BYTES_PER_ELEMENT'])
+            ].join(';');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "5;true;true;1;AB;😺;true;1,2,3;4,5;1")?;
     Ok(())
 }

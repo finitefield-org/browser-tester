@@ -3,7 +3,7 @@ use super::*;
 impl Harness {
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()> {
         let target = self.select_one(selector)?;
-        let actual = self.dom.text_content(target);
+        let actual = render_js_string_for_display(&self.dom.text_content(target));
         if actual != expected {
             return Err(Error::AssertionFailed {
                 selector: selector.to_string(),
@@ -50,7 +50,7 @@ impl Harness {
 
     pub fn dump_dom(&self, selector: &str) -> Result<String> {
         let target = self.select_one(selector)?;
-        Ok(self.dom.dump_node(target))
+        Ok(render_js_string_for_display(&self.dom.dump_node(target)))
     }
 
     pub(crate) fn select_one(&self, selector: &str) -> Result<NodeId> {
@@ -60,7 +60,10 @@ impl Harness {
     }
 
     pub(crate) fn node_snippet(&self, node_id: NodeId) -> String {
-        truncate_chars(&self.dom.dump_node(node_id), 200)
+        truncate_chars(
+            &render_js_string_for_display(&self.dom.dump_node(node_id)),
+            200,
+        )
     }
 
     pub(crate) fn resolve_form_for_submit(&self, target: NodeId) -> Option<NodeId> {

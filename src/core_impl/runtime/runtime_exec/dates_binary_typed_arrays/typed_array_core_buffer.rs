@@ -579,15 +579,25 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
+        let values = self.eval_call_args_with_spread(args, env, event_param, event)?;
+        self.eval_typed_array_static_method_from_values(kind, method, &values)
+    }
+
+    pub(crate) fn eval_typed_array_static_method_from_values(
+        &mut self,
+        kind: TypedArrayKind,
+        method: TypedArrayStaticMethod,
+        values: &[Value],
+    ) -> Result<Value> {
         match method {
             TypedArrayStaticMethod::From => {
-                if args.len() != 1 {
+                if values.len() != 1 {
                     return Err(Error::ScriptRuntime(format!(
                         "{}.from requires exactly one argument",
                         kind.name()
                     )));
                 }
-                let source = self.eval_expr(&args[0], env, event_param, event)?;
+                let source = values[0].clone();
                 if let Value::TypedArray(source_array) = &source {
                     if kind.is_bigint() != source_array.borrow().kind.is_bigint() {
                         return Err(Error::ScriptRuntime(
@@ -598,13 +608,7 @@ impl Harness {
                 let values = self.array_like_values_from_value(&source)?;
                 self.new_typed_array_from_values(kind, &values)
             }
-            TypedArrayStaticMethod::Of => {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval_expr(arg, env, event_param, event)?);
-                }
-                self.new_typed_array_from_values(kind, &values)
-            }
+            TypedArrayStaticMethod::Of => self.new_typed_array_from_values(kind, &values),
         }
     }
 }

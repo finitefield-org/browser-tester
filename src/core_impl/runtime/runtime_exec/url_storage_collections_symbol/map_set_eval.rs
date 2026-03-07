@@ -786,18 +786,22 @@ impl Harness {
             return Ok(value);
         }
 
+        let evaluated_args = args
+            .iter()
+            .map(|arg| self.eval_expr(arg, env, event_param, event))
+            .collect::<Result<Vec<_>>>()?;
+
         if let Value::WeakSet(weak_set) = target_value {
             let weak_set = weak_set.clone();
             return match method {
                 SetInstanceMethod::Add => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakSet.add requires exactly one argument".into(),
                         ));
                     }
-                    let value = self.eval_expr(&args[0], env, event_param, event)?;
-                    Self::ensure_weak_set_value(&value)?;
-                    self.weak_set_add_value(&mut weak_set.borrow_mut(), value);
+                    Self::ensure_weak_set_value(&evaluated_args[0])?;
+                    self.weak_set_add_value(&mut weak_set.borrow_mut(), evaluated_args[0].clone());
                     Ok(Value::WeakSet(weak_set))
                 }
                 SetInstanceMethod::Union => Err(Error::ScriptRuntime(
@@ -848,23 +852,21 @@ impl Harness {
 
         match method {
             SetInstanceMethod::Add => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.add requires exactly one argument".into(),
                     ));
                 }
-                let value = self.eval_expr(&args[0], env, event_param, event)?;
-                self.set_add_value(&mut set.borrow_mut(), value);
+                self.set_add_value(&mut set.borrow_mut(), evaluated_args[0].clone());
                 Ok(Value::Set(set))
             }
             SetInstanceMethod::Union => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.union requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
-                let other_keys = self.set_like_keys_snapshot(&other)?;
+                let other_keys = self.set_like_keys_snapshot(&evaluated_args[0])?;
                 let mut out = SetValue {
                     values: set.borrow().values.clone(),
                     properties: ObjectValue::default(),
@@ -875,51 +877,48 @@ impl Harness {
                 Ok(Value::Set(Rc::new(RefCell::new(out))))
             }
             SetInstanceMethod::Intersection => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.intersection requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
                 let snapshot = set.borrow().values.clone();
                 let mut out = SetValue {
                     values: Vec::new(),
                     properties: ObjectValue::default(),
                 };
                 for value in snapshot {
-                    if self.set_like_has_value(&other, &value)? {
+                    if self.set_like_has_value(&evaluated_args[0], &value)? {
                         self.set_add_value(&mut out, value);
                     }
                 }
                 Ok(Value::Set(Rc::new(RefCell::new(out))))
             }
             SetInstanceMethod::Difference => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.difference requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
                 let snapshot = set.borrow().values.clone();
                 let mut out = SetValue {
                     values: Vec::new(),
                     properties: ObjectValue::default(),
                 };
                 for value in snapshot {
-                    if !self.set_like_has_value(&other, &value)? {
+                    if !self.set_like_has_value(&evaluated_args[0], &value)? {
                         self.set_add_value(&mut out, value);
                     }
                 }
                 Ok(Value::Set(Rc::new(RefCell::new(out))))
             }
             SetInstanceMethod::SymmetricDifference => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.symmetricDifference requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
-                let other_keys = self.set_like_keys_snapshot(&other)?;
+                let other_keys = self.set_like_keys_snapshot(&evaluated_args[0])?;
                 let mut out = SetValue {
                     values: set.borrow().values.clone(),
                     properties: ObjectValue::default(),
@@ -934,41 +933,38 @@ impl Harness {
                 Ok(Value::Set(Rc::new(RefCell::new(out))))
             }
             SetInstanceMethod::IsDisjointFrom => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.isDisjointFrom requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
                 for value in &set.borrow().values {
-                    if self.set_like_has_value(&other, value)? {
+                    if self.set_like_has_value(&evaluated_args[0], value)? {
                         return Ok(Value::Bool(false));
                     }
                 }
                 Ok(Value::Bool(true))
             }
             SetInstanceMethod::IsSubsetOf => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.isSubsetOf requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
                 for value in &set.borrow().values {
-                    if !self.set_like_has_value(&other, value)? {
+                    if !self.set_like_has_value(&evaluated_args[0], value)? {
                         return Ok(Value::Bool(false));
                     }
                 }
                 Ok(Value::Bool(true))
             }
             SetInstanceMethod::IsSupersetOf => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Set.isSupersetOf requires exactly one argument".into(),
                     ));
                 }
-                let other = self.eval_expr(&args[0], env, event_param, event)?;
-                for value in self.set_like_keys_snapshot(&other)? {
+                for value in self.set_like_keys_snapshot(&evaluated_args[0])? {
                     if self.set_value_index(&set.borrow(), &value).is_none() {
                         return Ok(Value::Bool(false));
                     }

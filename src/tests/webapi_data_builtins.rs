@@ -2448,6 +2448,79 @@ fn cookie_store_set_get_get_all_and_delete_work() -> Result<()> {
 }
 
 #[test]
+fn primitive_raw_getter_and_incompatible_receiver_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const text = 'Hi';
+            const textToString = text['toString'];
+            const textValueOf = text['valueOf'];
+            const stringResult = [
+              textToString.call(text),
+              textValueOf.call(text),
+              text['length'],
+              text[1]
+            ].join(',');
+
+            const number = 255;
+            const numberToString = number['toString'];
+            const numberValueOf = number['valueOf'];
+            const numberResult = [
+              numberToString.call(number, 16),
+              String(numberValueOf.call(number))
+            ].join(',');
+
+            const bigint = 255n;
+            const bigintToString = bigint['toString'];
+            const bigintValueOf = bigint['valueOf'];
+            const bigintResult = [
+              bigintToString.call(bigint, 16),
+              String(bigintValueOf.call(bigint))
+            ].join(',');
+
+            const flag = false;
+            const boolResult = [
+              flag['toString'].call(flag),
+              String(flag['valueOf'].call(flag))
+            ].join(',');
+
+            const sym = Symbol('id');
+            const symbolResult = [
+              sym['toString'].call(sym),
+              sym['valueOf'].call(sym).description
+            ].join(',');
+
+            let bad = 'none';
+            try {
+              numberToString.call(text);
+            } catch (e) {
+              bad = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              stringResult,
+              numberResult,
+              bigintResult,
+              boolResult,
+              symbolResult,
+              bad
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "Hi,Hi,2,i|ff,255|ff,255|false,false|Symbol(id),id|Number method called on incompatible receiver",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn cookie_store_alias_variable_calls_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -4701,5 +4774,292 @@ fn reduce_empty_array_without_initial_value_returns_runtime_error() -> Result<()
         }
         other => panic!("unexpected reduce error: {other:?}"),
     }
+    Ok(())
+}
+
+#[test]
+fn storage_member_chain_and_extra_arg_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            localStorage.clear();
+
+            let side = 'start';
+            const localSet = [
+              String(({ store: localStorage }).store.setItem('a', '1', side = 'local.setItem')),
+              side,
+              localStorage.getItem('a')
+            ].join(',');
+
+            side = 'start';
+            const localGet = [
+              ({ nested: { store: localStorage } }).nested.store.getItem('a', side = 'local.getItem'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const localKey = [
+              ({ nested: { store: localStorage } }).nested.store.key(0, side = 'local.key'),
+              side
+            ].join(',');
+
+            side = 'start';
+            ({ store: localStorage }).store.removeItem('a', side = 'local.removeItem');
+            const localRemove = [
+              String(localStorage.getItem('a')),
+              side,
+              localStorage.length
+            ].join(',');
+
+            localStorage.setItem('x', '1');
+            localStorage.setItem('y', '2');
+            side = 'start';
+            const localClear = [
+              String(({ nested: { store: localStorage } }).nested.store.clear(side = 'local.clear')),
+              side,
+              localStorage.length
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              localSet,
+              localGet,
+              localKey,
+              localRemove,
+              localClear
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "undefined,local.setItem,1|1,local.getItem|a,local.key|null,local.removeItem,0|undefined,local.clear,0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn storage_extracted_method_call_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            localStorage.clear();
+
+            let side = 'start';
+            const setItem = localStorage.setItem;
+            const localSet = [
+              String(setItem.call(localStorage, 'a', '1', side = 'storage.set.call')),
+              side,
+              localStorage.getItem('a')
+            ].join(',');
+
+            side = 'start';
+            const getItem = localStorage.getItem;
+            const localGet = [
+              getItem.call(localStorage, 'a', side = 'storage.get.call'),
+              side
+            ].join(',');
+
+            side = 'start';
+            const key = localStorage.key;
+            const localKey = [
+              key.call(localStorage, 0, side = 'storage.key.call'),
+              side
+            ].join(',');
+
+            localStorage.setItem('b', '2');
+            side = 'start';
+            const clear = localStorage.clear;
+            const localClear = [
+              String(clear.call(localStorage, side = 'storage.clear.call')),
+              side,
+              localStorage.length
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              localSet,
+              localGet,
+              localKey,
+              localClear
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "undefined,storage.set.call,1|1,storage.get.call|a,storage.key.call|undefined,storage.clear.call,0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_nodelist_and_boxed_prototype_property_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <ul>
+          <li>alpha</li>
+          <li>beta</li>
+        </ul>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const text = 'Hello';
+            const textResult = [
+              text['slice'].call(text, 1, 4),
+              Array.from(text[Symbol.iterator].call(text)).join(','),
+              text.constructor.prototype.slice.call(text, 2),
+              Array.from(text.constructor.prototype[Symbol.iterator].call(text)).join(',')
+            ].join(';');
+
+            const items = document.querySelectorAll('li');
+            const seen = [];
+            items['forEach'].call(items, (node) => seen.push(node.textContent));
+            const listResult = [
+              items['item'].call(items, 1).textContent,
+              seen.join(','),
+              Array.from(items['keys'].call(items)).join(','),
+              Array.from(items['entries'].call(items))
+                .map((pair) => pair[0] + ':' + pair[1].textContent)
+                .join(','),
+              Array.from(items[Symbol.iterator].call(items))
+                .map((node) => node.textContent)
+                .join(',')
+            ].join(';');
+
+            const flag = false;
+            const number = 255;
+            const big = 255n;
+            const sym = Symbol('id');
+            const primitiveResult = [
+              flag.constructor.prototype.toString.call(flag),
+              String(flag.constructor.prototype.valueOf.call(flag)),
+              number.constructor.prototype.toString.call(number, 16),
+              String(number.constructor.prototype.valueOf.call(number)),
+              big.constructor.prototype.toString.call(big, 16),
+              String(big.constructor.prototype.valueOf.call(big)),
+              sym.constructor.prototype.toString.call(sym),
+              sym.constructor.prototype.valueOf.call(sym).description
+            ].join(';');
+
+            document.getElementById('result').textContent = [
+              textResult,
+              listResult,
+              primitiveResult
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "ell;H,e,l,l,o;llo;H,e,l,l,o|beta;alpha,beta;0,1;0:alpha,1:beta;alpha,beta|false;false;ff;255;ff;255;Symbol(id);id",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn constructor_identity_and_string_raw_getter_breadth_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const number = 255;
+            const big = 255n;
+            const sym = Symbol('id');
+            const ctorResult = [
+              typeof Number,
+              typeof BigInt,
+              typeof Symbol,
+              String(window.Number === Number),
+              String(globalThis.BigInt === BigInt),
+              String(self.Symbol === Symbol),
+              String(number.constructor === Number),
+              String(big.constructor === BigInt),
+              String(sym.constructor === Symbol),
+              String(number.constructor.prototype === Number.prototype),
+              String(big.constructor.prototype === BigInt.prototype),
+              String(Number.call(undefined, '12.5')),
+              String(BigInt.call(undefined, '12'))
+            ].join(';');
+
+            const text = 'bananas';
+            const stringResult = [
+              String(text['includes'].call(text, 'ana')),
+              String(text['startsWith'].call(text, 'na', 2)),
+              String(text['endsWith'].call(text, 'nas')),
+              text['substring'].call(text, 1, 4),
+              text['split'].call(text, 'n').join(','),
+              String(text.constructor.prototype.includes.call(text, 'ana')),
+              text.constructor.prototype.substring.call(text, 2, 5),
+              text.constructor.prototype.split.call(text, 'a', 3).join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = [
+              ctorResult,
+              stringResult
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "function;function;function;true;true;true;true;true;true;true;true;12.5;12|true;true;true;ana;ba,a,as;true;nan;b,n,n",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn stable_constructor_prototype_identity_and_symbol_bracket_access_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const holder = { String, Symbol, Int8Array };
+            const text = 'ok';
+            const sym = Symbol('id');
+            const typed = new Int8Array([1, 2]);
+            const result = [
+              String(String['prototype'] === String['prototype']),
+              String(text.constructor.prototype === String['prototype']),
+              String(holder.String['prototype'] === String['prototype']),
+              String(Symbol['prototype'] === Symbol['prototype']),
+              String(sym.constructor.prototype === Symbol['prototype']),
+              String(holder.Symbol['prototype'] === Symbol['prototype']),
+              String(Int8Array['prototype'] === Int8Array['prototype']),
+              String(typed.constructor.prototype === Int8Array['prototype']),
+              String(holder.Int8Array['prototype'] === Int8Array['prototype']),
+              typeof holder.Symbol['iterator'],
+              String(holder.Symbol['iterator'] === Symbol.iterator),
+              String(holder.Symbol['for']('token') === Symbol.for('token')),
+              holder.Symbol['keyFor'](Symbol.for('token'))
+            ].join(';');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true;true;true;true;true;true;true;true;true;symbol;true;true;token",
+    )?;
     Ok(())
 }

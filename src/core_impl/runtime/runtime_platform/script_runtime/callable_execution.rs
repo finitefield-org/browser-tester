@@ -185,6 +185,379 @@ impl Harness {
         Ok(target)
     }
 
+    fn receiver_builtin_callable_components(callable: &Value) -> Result<(String, String)> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime(
+                "builtin method has invalid internal state".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let family = match Self::object_get_entry(&entries, "__bt_receiver_builtin_family") {
+            Some(Value::String(family)) => family,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "builtin method has invalid internal state".into(),
+                ));
+            }
+        };
+        let member = match Self::object_get_entry(&entries, "__bt_receiver_builtin_member") {
+            Some(Value::String(member)) => member,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "builtin method has invalid internal state".into(),
+                ));
+            }
+        };
+        Ok((family, member))
+    }
+
+    fn static_method_name(callable: &Value) -> Result<String> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime(
+                "builtin method has invalid internal state".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        match Self::object_get_entry(&entries, INTERNAL_STATIC_METHOD_NAME_KEY) {
+            Some(Value::String(method)) => Ok(method),
+            _ => Err(Error::ScriptRuntime(
+                "builtin method has invalid internal state".into(),
+            )),
+        }
+    }
+
+    fn typed_array_static_method_components(
+        callable: &Value,
+    ) -> Result<(TypedArrayConstructorKind, String)> {
+        let Value::Object(entries) = callable else {
+            return Err(Error::ScriptRuntime(
+                "builtin method has invalid internal state".into(),
+            ));
+        };
+        let entries = entries.borrow();
+        let kind = match Self::object_get_entry(&entries, INTERNAL_STATIC_TYPED_ARRAY_KIND_KEY) {
+            Some(Value::TypedArrayConstructor(kind)) => kind,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "builtin method has invalid internal state".into(),
+                ));
+            }
+        };
+        let method = match Self::object_get_entry(&entries, INTERNAL_STATIC_METHOD_NAME_KEY) {
+            Some(Value::String(method)) => method,
+            _ => {
+                return Err(Error::ScriptRuntime(
+                    "builtin method has invalid internal state".into(),
+                ));
+            }
+        };
+        Ok((kind, method))
+    }
+
+    fn incompatible_receiver_error(family: &str) -> Error {
+        let label = match family {
+            "array" => "Array",
+            "map" => "Map",
+            "node_list" => "NodeList",
+            "weak_map" => "WeakMap",
+            "set" => "Set",
+            "weak_set" => "WeakSet",
+            "location" => "Location",
+            "string" => "String",
+            "typed_array" => "TypedArray",
+            "boolean" => "Boolean",
+            "number" => "Number",
+            "bigint" => "BigInt",
+            "symbol" => "Symbol",
+            "url" => "URL",
+            "url_search_params" => "URLSearchParams",
+            "storage" => "Storage",
+            "form_data" => "FormData",
+            _ => "builtin method",
+        };
+        Error::ScriptRuntime(format!("{label} method called on incompatible receiver"))
+    }
+
+    fn execute_receiver_builtin_callable(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+        event: &EventState,
+        this_arg: Option<Value>,
+    ) -> Result<Value> {
+        let (family, member) = Self::receiver_builtin_callable_components(callable)?;
+        let receiver = this_arg.ok_or_else(|| Self::incompatible_receiver_error(&family))?;
+        match family.as_str() {
+            "array" => {
+                let Value::Array(values) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_array_member_call(&values, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Array method: {member}"))
+                    })
+            }
+            "map" => {
+                let Value::Map(map) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_map_member_call_from_values(&map, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Map method: {member}"))
+                    })
+            }
+            "weak_map" => {
+                let Value::WeakMap(weak_map) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_weak_map_member_call_from_values(&weak_map, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported WeakMap method: {member}"))
+                    })
+            }
+            "set" => {
+                let Value::Set(set) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_set_member_call_from_values(&set, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Set method: {member}"))
+                    })
+            }
+            "weak_set" => {
+                let Value::WeakSet(weak_set) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_weak_set_member_call_from_values(&weak_set, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported WeakSet method: {member}"))
+                    })
+            }
+            "location" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_location_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                match member.as_str() {
+                    "assign" => {
+                        let Some(url) = args.first() else {
+                            return Err(Error::ScriptRuntime(
+                                "location.assign requires exactly one argument".into(),
+                            ));
+                        };
+                        self.navigate_location(&url.as_string(), LocationNavigationKind::Assign)?;
+                        Ok(Value::Undefined)
+                    }
+                    "reload" => {
+                        self.reload_location()?;
+                        Ok(Value::Undefined)
+                    }
+                    "replace" => {
+                        let Some(url) = args.first() else {
+                            return Err(Error::ScriptRuntime(
+                                "location.replace requires exactly one argument".into(),
+                            ));
+                        };
+                        self.navigate_location(&url.as_string(), LocationNavigationKind::Replace)?;
+                        Ok(Value::Undefined)
+                    }
+                    "toString" => Ok(Value::String(self.document_url.clone())),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Location method: {member}"
+                    ))),
+                }
+            }
+            "string" => {
+                let text = match receiver {
+                    Value::String(text) => text,
+                    Value::Object(object) => {
+                        let entries = object.borrow();
+                        if Self::is_url_object(&entries) || Self::is_location_object(&entries) {
+                            return Err(Self::incompatible_receiver_error(&family));
+                        }
+                        Self::string_wrapper_value_from_object(&entries)
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?
+                    }
+                    _ => return Err(Self::incompatible_receiver_error(&family)),
+                };
+                match member.as_str() {
+                    "toString" | "valueOf" => Ok(Value::String(text)),
+                    _ => self
+                        .eval_string_member_call(&text, &member, args)?
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unsupported String method: {member}"))
+                        }),
+                }
+            }
+            "node_list" => {
+                let Value::NodeList(nodes) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_nodelist_member_call(&nodes, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported NodeList method: {member}"))
+                    })
+            }
+            "typed_array" => {
+                let Value::TypedArray(array) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_typed_array_member_call(&array, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported TypedArray method: {member}"))
+                    })
+            }
+            "boolean" => {
+                let Value::Bool(value) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                match member.as_str() {
+                    "toString" => Ok(Value::String(if value {
+                        "true".to_string()
+                    } else {
+                        "false".to_string()
+                    })),
+                    "valueOf" => Ok(Value::Bool(value)),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Boolean method: {member}"
+                    ))),
+                }
+            }
+            "number" => {
+                if !matches!(receiver, Value::Number(_) | Value::Float(_)) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                match member.as_str() {
+                    "toLocaleString" => {
+                        let numeric = Self::coerce_number_for_number_constructor(&receiver);
+                        let locale = self.resolve_number_to_locale_string_locale(args.first())?;
+                        let options =
+                            self.intl_number_format_options_from_value(&locale, args.get(1))?;
+                        Ok(Value::String(self.intl_format_number_with_options(
+                            numeric, &locale, &options,
+                        )))
+                    }
+                    "toString" => {
+                        let radix = if let Some(arg) = args.first() {
+                            let radix = Self::value_to_i64(arg);
+                            if !(2..=36).contains(&radix) {
+                                return Err(Error::ScriptRuntime(
+                                    "toString radix must be between 2 and 36".into(),
+                                ));
+                            }
+                            radix as u32
+                        } else {
+                            10
+                        };
+                        let numeric = Self::coerce_number_for_number_constructor(&receiver);
+                        Ok(Value::String(Self::number_to_string_radix(numeric, radix)))
+                    }
+                    "valueOf" => Ok(receiver),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Number method: {member}"
+                    ))),
+                }
+            }
+            "bigint" => {
+                let Value::BigInt(value) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                match member.as_str() {
+                    "toLocaleString" => Ok(Value::String(value.to_string())),
+                    "toString" => {
+                        let radix = if let Some(arg) = args.first() {
+                            let radix = Self::value_to_i64(arg);
+                            if !(2..=36).contains(&radix) {
+                                return Err(Error::ScriptRuntime(
+                                    "toString radix must be between 2 and 36".into(),
+                                ));
+                            }
+                            radix as u32
+                        } else {
+                            10
+                        };
+                        Ok(Value::String(value.to_str_radix(radix)))
+                    }
+                    "valueOf" => Ok(Value::BigInt(value)),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported BigInt method: {member}"
+                    ))),
+                }
+            }
+            "symbol" => {
+                let Value::Symbol(symbol) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                match member.as_str() {
+                    "toString" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "Symbol.toString does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Value::String(Value::Symbol(symbol.clone()).as_string()))
+                    }
+                    "valueOf" => Ok(Value::Symbol(symbol)),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Symbol method: {member}"
+                    ))),
+                }
+            }
+            "url" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_url_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_url_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported URL method: {member}"))
+                    })
+            }
+            "url_search_params" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_url_search_params_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_url_search_params_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!(
+                            "unsupported URLSearchParams method: {member}"
+                        ))
+                    })
+            }
+            "storage" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_storage_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_storage_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Storage method: {member}"))
+                    })
+            }
+            "form_data" => {
+                let Value::FormData(entries) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_form_data_member_call_from_values(&entries, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported FormData method: {member}"))
+                    })
+            }
+            _ => Err(Error::ScriptRuntime(
+                "builtin method has invalid internal state".into(),
+            )),
+        }
+    }
+
     fn worker_target_from_callable(callable: &Value) -> Result<Rc<RefCell<ObjectValue>>> {
         let Value::Object(entries) = callable else {
             return Err(Error::ScriptRuntime(
@@ -1926,6 +2299,9 @@ impl Harness {
                             Some(bound_this),
                         )
                     }
+                    "receiver_builtin_method" => {
+                        self.execute_receiver_builtin_callable(callable, args, event, this_arg)
+                    }
                     "intl_collator_compare" => {
                         let (locale, case_first, sensitivity) =
                             self.resolve_intl_collator_options(callable)?;
@@ -2196,6 +2572,16 @@ impl Harness {
                     "boolean_constructor" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))
+                    }
+                    "number_constructor" => {
+                        let value = args.first().cloned().unwrap_or(Value::Number(0));
+                        Ok(Self::number_value(
+                            Self::coerce_number_for_number_constructor(&value),
+                        ))
+                    }
+                    "bigint_constructor" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::BigInt(Self::coerce_bigint_for_constructor(&value)?))
                     }
                     "object_constructor" => {
                         if args.is_empty() || matches!(args[0], Value::Null | Value::Undefined) {
@@ -3372,6 +3758,63 @@ impl Harness {
                     ),
                     "string_static_raw" => {
                         self.eval_string_static_method_from_values(StringStaticMethod::Raw, args)
+                    }
+                    "number_static_method" => {
+                        let method = match Self::static_method_name(callable)?.as_str() {
+                            "isFinite" => NumberMethod::IsFinite,
+                            "isInteger" => NumberMethod::IsInteger,
+                            "isNaN" => NumberMethod::IsNaN,
+                            "isSafeInteger" => NumberMethod::IsSafeInteger,
+                            "parseFloat" => NumberMethod::ParseFloat,
+                            "parseInt" => NumberMethod::ParseInt,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_number_method_from_values(method, args)
+                    }
+                    "bigint_static_method" => {
+                        let method = match Self::static_method_name(callable)?.as_str() {
+                            "asIntN" => BigIntMethod::AsIntN,
+                            "asUintN" => BigIntMethod::AsUintN,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_bigint_method_from_values(method, args)
+                    }
+                    "symbol_static_method" => {
+                        let method = match Self::static_method_name(callable)?.as_str() {
+                            "for" => SymbolStaticMethod::For,
+                            "keyFor" => SymbolStaticMethod::KeyFor,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_symbol_static_method_from_values(method, args)
+                    }
+                    "typed_array_static_method" => {
+                        let (kind, method_name) =
+                            Self::typed_array_static_method_components(callable)?;
+                        let TypedArrayConstructorKind::Concrete(kind) = kind else {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        };
+                        let method = match method_name.as_str() {
+                            "from" => TypedArrayStaticMethod::From,
+                            "of" => TypedArrayStaticMethod::Of,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_typed_array_static_method_from_values(kind, method, args)
                     }
                     "create_image_bitmap" => self.eval_create_image_bitmap_call(args),
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),

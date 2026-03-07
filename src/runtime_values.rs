@@ -48,6 +48,24 @@ pub(crate) enum TypedArrayKind {
 }
 
 impl TypedArrayKind {
+    pub(crate) fn concrete_kinds() -> &'static [Self] {
+        const KINDS: [TypedArrayKind; 12] = [
+            TypedArrayKind::Int8,
+            TypedArrayKind::Uint8,
+            TypedArrayKind::Uint8Clamped,
+            TypedArrayKind::Int16,
+            TypedArrayKind::Uint16,
+            TypedArrayKind::Int32,
+            TypedArrayKind::Uint32,
+            TypedArrayKind::Float16,
+            TypedArrayKind::Float32,
+            TypedArrayKind::Float64,
+            TypedArrayKind::BigInt64,
+            TypedArrayKind::BigUint64,
+        ];
+        &KINDS
+    }
+
     pub(crate) fn bytes_per_element(&self) -> usize {
         match self {
             Self::Int8 | Self::Uint8 | Self::Uint8Clamped => 1,
