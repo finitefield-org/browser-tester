@@ -313,6 +313,18 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+        self.eval_regexp_static_method_from_values(method, &values)
+    }
+
+    pub(crate) fn eval_regexp_static_method_from_values(
+        &mut self,
+        method: RegExpStaticMethod,
+        args: &[Value],
+    ) -> Result<Value> {
         match method {
             RegExpStaticMethod::Escape => {
                 if args.len() != 1 {
@@ -320,9 +332,60 @@ impl Harness {
                         "RegExp.escape requires exactly one argument".into(),
                     ));
                 }
-                let value = self.eval_expr(&args[0], env, event_param, event)?;
-                Ok(Value::String(regex_escape(&value.as_string()).into_owned()))
+                Ok(Value::String(
+                    regex_escape(&args[0].as_string()).into_owned(),
+                ))
             }
+        }
+    }
+
+    pub(crate) fn eval_regexp_member_call_from_values(
+        &mut self,
+        regex: &Rc<RefCell<RegexValue>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "test" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp.test requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(Value::Bool(Self::regex_test(
+                    regex,
+                    &args[0].as_string(),
+                )?)))
+            }
+            "exec" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp.exec requires zero or one argument".into(),
+                    ));
+                }
+                let input = args
+                    .first()
+                    .cloned()
+                    .unwrap_or(Value::Undefined)
+                    .as_string();
+                let Some(result) = Self::regex_exec(regex, &input)? else {
+                    return Ok(Some(Value::Null));
+                };
+                Ok(Some(Self::regex_exec_result_to_value(result)))
+            }
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp.toString does not take arguments".into(),
+                    ));
+                }
+                let regex = regex.borrow();
+                Ok(Some(Value::String(format!(
+                    "/{}/{}",
+                    regex.source, regex.flags
+                ))))
+            }
+            _ => Ok(None),
         }
     }
 

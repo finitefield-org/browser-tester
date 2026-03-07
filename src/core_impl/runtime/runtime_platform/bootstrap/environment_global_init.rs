@@ -317,6 +317,14 @@ impl Harness {
         let clipboard_item_constructor = Self::new_clipboard_item_constructor_value();
         let headers_constructor = Self::new_headers_constructor_value();
         let url_constructor = Value::UrlConstructor;
+        let core_constructor_bindings = Self::shared_core_constructor_bindings(
+            &string_constructor,
+            &boolean_constructor,
+            &number_constructor,
+            &bigint_constructor,
+            &symbol_constructor,
+            &object_constructor,
+        );
         let audio_constructor = Self::new_audio_constructor_value();
         let element_constructor = Self::new_builtin_placeholder_function();
         let html_element_constructor = Self::new_builtin_placeholder_function();
@@ -658,30 +666,9 @@ impl Harness {
             .env
             .insert("clientInformation".to_string(), navigator.clone());
         self.script_runtime.env.insert("Intl".to_string(), intl);
-        self.script_runtime
-            .env
-            .insert("String".to_string(), string_constructor);
-        self.script_runtime
-            .env
-            .insert("Boolean".to_string(), boolean_constructor);
-        self.script_runtime
-            .env
-            .insert("Number".to_string(), number_constructor);
-        self.script_runtime
-            .env
-            .insert("BigInt".to_string(), bigint_constructor);
-        self.script_runtime
-            .env
-            .insert("Symbol".to_string(), symbol_constructor);
-        for kind in TypedArrayKind::concrete_kinds() {
-            self.script_runtime.env.insert(
-                kind.name().to_string(),
-                Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(*kind)),
-            );
+        for (name, value) in core_constructor_bindings {
+            self.script_runtime.env.insert(name, value);
         }
-        self.script_runtime
-            .env
-            .insert("Object".to_string(), object_constructor);
         self.script_runtime
             .env
             .insert("EventTarget".to_string(), event_target_constructor);
@@ -861,9 +848,6 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Headers".to_string(), headers_constructor);
-        self.script_runtime
-            .env
-            .insert("URL".to_string(), url_constructor);
         self.script_runtime
             .env
             .insert("Audio".to_string(), audio_constructor);

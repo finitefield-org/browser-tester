@@ -230,6 +230,19 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+        self.eval_promise_static_method_from_values(method, &values, event)
+    }
+
+    pub(crate) fn eval_promise_static_method_from_values(
+        &mut self,
+        method: PromiseStaticMethod,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
         match method {
             PromiseStaticMethod::Resolve => {
                 if args.len() > 1 {
@@ -237,11 +250,7 @@ impl Harness {
                         "Promise.resolve supports zero or one argument".into(),
                     ));
                 }
-                let value = if let Some(value) = args.first() {
-                    self.eval_expr(value, env, event_param, event)?
-                } else {
-                    Value::Undefined
-                };
+                let value = args.first().cloned().unwrap_or(Value::Undefined);
                 if let Value::Promise(promise) = value {
                     return Ok(Value::Promise(promise));
                 }
@@ -255,11 +264,7 @@ impl Harness {
                         "Promise.reject supports zero or one argument".into(),
                     ));
                 }
-                let reason = if let Some(reason) = args.first() {
-                    self.eval_expr(reason, env, event_param, event)?
-                } else {
-                    Value::Undefined
-                };
+                let reason = args.first().cloned().unwrap_or(Value::Undefined);
                 let promise = self.new_pending_promise();
                 self.promise_reject(&promise, reason);
                 Ok(Value::Promise(promise))
@@ -270,7 +275,7 @@ impl Harness {
                         "Promise.all requires exactly one argument".into(),
                     ));
                 }
-                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                let iterable = args[0].clone();
                 self.eval_promise_all(iterable)
             }
             PromiseStaticMethod::AllSettled => {
@@ -279,7 +284,7 @@ impl Harness {
                         "Promise.allSettled requires exactly one argument".into(),
                     ));
                 }
-                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                let iterable = args[0].clone();
                 self.eval_promise_all_settled(iterable)
             }
             PromiseStaticMethod::Any => {
@@ -288,7 +293,7 @@ impl Harness {
                         "Promise.any requires exactly one argument".into(),
                     ));
                 }
-                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                let iterable = args[0].clone();
                 self.eval_promise_any(iterable)
             }
             PromiseStaticMethod::Race => {
@@ -297,7 +302,7 @@ impl Harness {
                         "Promise.race requires exactly one argument".into(),
                     ));
                 }
-                let iterable = self.eval_expr(&args[0], env, event_param, event)?;
+                let iterable = args[0].clone();
                 self.eval_promise_race(iterable)
             }
             PromiseStaticMethod::Try => {
@@ -306,11 +311,8 @@ impl Harness {
                         "Promise.try requires at least one argument".into(),
                     ));
                 }
-                let callback = self.eval_expr(&args[0], env, event_param, event)?;
-                let mut callback_args = Vec::with_capacity(args.len().saturating_sub(1));
-                for arg in args.iter().skip(1) {
-                    callback_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
+                let callback = args[0].clone();
+                let callback_args = args.get(1..).unwrap_or(&[]).to_vec();
                 let promise = self.new_pending_promise();
                 match self.execute_callable_value(&callback, &callback_args, event) {
                     Ok(value) => {
@@ -354,7 +356,19 @@ impl Harness {
                 "Promise instance method target must be a Promise".into(),
             ));
         };
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(arg, env, event_param, event)?);
+        }
+        self.eval_promise_instance_method_from_values(&promise, method, &values)
+    }
 
+    pub(crate) fn eval_promise_instance_method_from_values(
+        &mut self,
+        promise: &Rc<RefCell<PromiseValue>>,
+        method: PromiseInstanceMethod,
+        args: &[Value],
+    ) -> Result<Value> {
         match method {
             PromiseInstanceMethod::Then => {
                 if args.len() > 2 {
@@ -362,10 +376,9 @@ impl Harness {
                         "Promise.then supports up to two arguments".into(),
                     ));
                 }
-                let on_fulfilled = if let Some(arg) = args.first() {
-                    let value = self.eval_expr(arg, env, event_param, event)?;
-                    if self.is_callable_value(&value) {
-                        Some(value)
+                let on_fulfilled = if let Some(value) = args.first() {
+                    if self.is_callable_value(value) {
+                        Some(value.clone())
                     } else {
                         None
                     }
@@ -373,9 +386,8 @@ impl Harness {
                     None
                 };
                 let on_rejected = if args.len() >= 2 {
-                    let value = self.eval_expr(&args[1], env, event_param, event)?;
-                    if self.is_callable_value(&value) {
-                        Some(value)
+                    if self.is_callable_value(&args[1]) {
+                        Some(args[1].clone())
                     } else {
                         None
                     }
@@ -384,7 +396,7 @@ impl Harness {
                 };
 
                 Ok(Value::Promise(self.promise_then_internal(
-                    &promise,
+                    promise,
                     on_fulfilled,
                     on_rejected,
                 )))
@@ -395,10 +407,9 @@ impl Harness {
                         "Promise.catch supports at most one argument".into(),
                     ));
                 }
-                let on_rejected = if let Some(arg) = args.first() {
-                    let value = self.eval_expr(arg, env, event_param, event)?;
-                    if self.is_callable_value(&value) {
-                        Some(value)
+                let on_rejected = if let Some(value) = args.first() {
+                    if self.is_callable_value(value) {
+                        Some(value.clone())
                     } else {
                         None
                     }
@@ -407,7 +418,7 @@ impl Harness {
                 };
 
                 Ok(Value::Promise(self.promise_then_internal(
-                    &promise,
+                    promise,
                     None,
                     on_rejected,
                 )))
@@ -418,10 +429,9 @@ impl Harness {
                         "Promise.finally supports at most one argument".into(),
                     ));
                 }
-                let callback = if let Some(arg) = args.first() {
-                    let value = self.eval_expr(arg, env, event_param, event)?;
-                    if self.is_callable_value(&value) {
-                        Some(value)
+                let callback = if let Some(value) = args.first() {
+                    if self.is_callable_value(value) {
+                        Some(value.clone())
                     } else {
                         None
                     }
@@ -430,7 +440,7 @@ impl Harness {
                 };
                 let result = self.new_pending_promise();
                 self.promise_add_reaction(
-                    &promise,
+                    promise,
                     PromiseReactionKind::Finally {
                         callback,
                         result: result.clone(),
@@ -439,6 +449,22 @@ impl Harness {
                 Ok(Value::Promise(result))
             }
         }
+    }
+
+    pub(crate) fn eval_promise_member_call_from_values(
+        &mut self,
+        promise: &Rc<RefCell<PromiseValue>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        let method = match member {
+            "then" => PromiseInstanceMethod::Then,
+            "catch" => PromiseInstanceMethod::Catch,
+            "finally" => PromiseInstanceMethod::Finally,
+            _ => return Ok(None),
+        };
+        self.eval_promise_instance_method_from_values(promise, method, args)
+            .map(Some)
     }
 
     pub(crate) fn eval_promise_all(&mut self, iterable: Value) -> Result<Value> {

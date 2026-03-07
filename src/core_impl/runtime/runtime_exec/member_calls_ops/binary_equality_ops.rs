@@ -326,6 +326,7 @@ impl Harness {
                 | Value::WeakMapConstructor
                 | Value::SetConstructor
                 | Value::WeakSetConstructor
+                | Value::UrlSearchParamsConstructor
                 | Value::SymbolConstructor
                 | Value::RegExpConstructor
                 | Value::PromiseCapability(_)
@@ -581,6 +582,13 @@ impl Harness {
                 matches!(left, Value::Object(left_obj) if Self::string_wrapper_value_from_object(&left_obj.borrow()).is_some()),
             );
         }
+        if matches!(
+            Self::callable_kind_from_value(right),
+            Some("bound_function")
+        ) {
+            let (target, _bound_this, _bound_args) = Self::bound_callable_components(right)?;
+            return self.value_instance_of(left, &target);
+        }
 
         if !Self::is_instanceof_rhs_object_like(right) {
             return Err(Error::ScriptRuntime(
@@ -622,10 +630,7 @@ impl Harness {
             ));
         };
 
-        Ok(Self::value_prototype_chain_contains(
-            left,
-            &expected_prototype,
-        ))
+        Ok(self.value_prototype_chain_contains(left, &expected_prototype))
     }
 
     fn is_instanceof_rhs_object_like(value: &Value) -> bool {
@@ -652,6 +657,7 @@ impl Harness {
                 | Value::WeakMapConstructor
                 | Value::SetConstructor
                 | Value::WeakSetConstructor
+                | Value::UrlSearchParamsConstructor
                 | Value::SymbolConstructor
                 | Value::RegExpConstructor
                 | Value::PromiseCapability(_)
@@ -663,8 +669,12 @@ impl Harness {
         )
     }
 
-    fn value_prototype_chain_contains(left: &Value, expected: &Rc<RefCell<ObjectValue>>) -> bool {
-        let mut prototype = Self::value_internal_prototype(left);
+    fn value_prototype_chain_contains(
+        &mut self,
+        left: &Value,
+        expected: &Rc<RefCell<ObjectValue>>,
+    ) -> bool {
+        let mut prototype = self.value_internal_prototype_value(left);
         while let Some(Value::Object(current)) = prototype {
             if Rc::ptr_eq(&current, expected) {
                 return true;
@@ -673,34 +683,6 @@ impl Harness {
             prototype = Self::object_get_entry(&current_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
         }
         false
-    }
-
-    fn value_internal_prototype(value: &Value) -> Option<Value> {
-        match value {
-            Value::Object(entries) => {
-                Self::object_get_entry(&entries.borrow(), INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::Array(values) => {
-                Self::object_get_entry(&values.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::Map(map) => {
-                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::WeakMap(map) => {
-                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::Set(set) => {
-                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::WeakSet(set) => {
-                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::RegExp(regex) => {
-                Self::object_get_entry(&regex.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
-            Value::Node(_) | Value::NodeList(_) | Value::Date(_) | Value::Function(_) => None,
-            _ => None,
-        }
     }
 
     pub(crate) fn is_named_constructor_value(&self, value: &Value, name: &str) -> bool {
@@ -769,6 +751,7 @@ impl Harness {
             (Value::WeakMapConstructor, Value::WeakMapConstructor) => true,
             (Value::SetConstructor, Value::SetConstructor) => true,
             (Value::WeakSetConstructor, Value::WeakSetConstructor) => true,
+            (Value::UrlSearchParamsConstructor, Value::UrlSearchParamsConstructor) => true,
             (Value::SymbolConstructor, Value::SymbolConstructor) => true,
             (Value::RegExpConstructor, Value::RegExpConstructor) => true,
             (Value::PromiseCapability(l), Value::PromiseCapability(r)) => Rc::ptr_eq(l, r),

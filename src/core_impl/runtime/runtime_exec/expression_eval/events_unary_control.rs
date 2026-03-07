@@ -369,6 +369,7 @@ impl Harness {
                             | Value::WeakMapConstructor
                             | Value::SetConstructor
                             | Value::WeakSetConstructor
+                            | Value::UrlSearchParamsConstructor
                             | Value::SymbolConstructor
                             | Value::RegExpConstructor
                             | Value::PromiseCapability(_) => "function",
@@ -416,6 +417,7 @@ impl Harness {
                             | Value::WeakMapConstructor
                             | Value::SetConstructor
                             | Value::WeakSetConstructor
+                            | Value::UrlSearchParamsConstructor
                             | Value::SymbolConstructor
                             | Value::RegExpConstructor
                             | Value::PromiseCapability(_) => "function",

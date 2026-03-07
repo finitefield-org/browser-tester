@@ -6788,6 +6788,36 @@ fn new_operator_supports_omitted_argument_list_and_property_access_callee() -> R
 }
 
 #[test]
+fn new_operator_supports_grouped_computed_and_optional_chain_callee() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function Item(label) {
+            this.label = label;
+          }
+
+          const registry = {
+            direct: Item,
+            grouped: { Item },
+            maybe: { inner: { Item } },
+          };
+          const key = 'Item';
+
+          const a = new (registry.direct)('A');
+          const b = new (registry.grouped)[key]('B');
+          const c = new ((registry.maybe?.inner)[key])('C');
+
+          document.getElementById('result').textContent =
+            a.label + ':' + b.label + ':' + c.label;
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "A:B:C")?;
+    Ok(())
+}
+
+#[test]
 fn new_operator_uses_non_primitive_constructor_return_and_ignores_primitive_return() -> Result<()> {
     let html = r#"
         <p id='result'></p>
@@ -6864,6 +6894,31 @@ fn new_target_in_function_is_constructor_or_undefined() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "undefined:Foo")?;
+    Ok(())
+}
+
+#[test]
+fn bound_constructor_new_target_and_instanceof_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function Foo(a, b) {
+            this.sum = a + b;
+            this.seen = new.target === Foo ? 'Foo' : String(new.target);
+          }
+
+          const Bound = Foo.bind({ ignored: true }, 2);
+          const instance = new Bound(3);
+          document.getElementById('result').textContent =
+            instance.sum + ':' +
+            instance.seen + ':' +
+            (instance instanceof Foo) + ':' +
+            (instance instanceof Bound);
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "5:Foo:true:true")?;
     Ok(())
 }
 
@@ -8446,5 +8501,145 @@ fn class_static_block_can_share_private_member_access() -> Result<()> {
 
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "private")?;
+    Ok(())
+}
+
+#[test]
+fn computed_calls_preserve_receiver_across_dynamic_keys_and_super() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          class Base {
+            run(value) {
+              return this.prefix + ':' + value;
+            }
+          }
+
+          class Derived extends Base {
+            constructor() {
+              super();
+              this.prefix = 'super';
+            }
+
+            callByKey(key, value) {
+              return super[key](value);
+            }
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const key = 'run';
+            let keyReads = 0;
+            let argReads = 0;
+            const holder = {
+              prefix: 'obj',
+              run(value) {
+                return this.prefix + ':' + value;
+              },
+              factory() {
+                return {
+                  prefix: 'factory',
+                  run(value) {
+                    return this.prefix + ':' + value;
+                  }
+                };
+              }
+            };
+            const maybe = { run: null };
+            const optionalResult = maybe[key]?.(argReads++);
+            const skipped = null?.[(() => {
+              keyReads += 1;
+              return key;
+            })()]('ignored');
+
+            document.getElementById('result').textContent = [
+              holder[key]('A'),
+              holder.factory()[key]('B'),
+              new Derived().callByKey(key, 'C'),
+              String(optionalResult === undefined),
+              String(argReads),
+              String(skipped === undefined),
+              String(keyReads)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "obj:A|factory:B|super:C|true|0|true|0")?;
+    Ok(())
+}
+
+#[test]
+fn bound_callable_name_length_and_static_surface_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const named = function base(a, b, c) {
+            return a + b + c;
+          };
+          const boundNamed = named.bind(null, 1);
+          const BoundRegExp = RegExp.bind(null, 'a');
+          const re = new BoundRegExp('g');
+
+          document.getElementById('result').textContent = [
+            boundNamed.name,
+            String(boundNamed.length),
+            String(boundNamed.prototype === undefined),
+            BoundRegExp.name,
+            String(BoundRegExp.length),
+            String(BoundRegExp.prototype === undefined),
+            String(BoundRegExp.escape === undefined),
+            String(re instanceof BoundRegExp),
+            String(re instanceof RegExp)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "bound base|2|true|bound RegExp|1|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn function_and_object_prototype_chain_and_constructor_metadata_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function plain(a, b) {
+            return a + b;
+          }
+          const bound = plain.bind(null, 1);
+          class Box {
+            constructor(x, y = 1) {}
+          }
+          const fnProto = Object.getPrototypeOf(plain);
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf({}) === Object.prototype),
+            String(({}).constructor === Object),
+            String(({}) instanceof Object),
+            String(fnProto === Object.getPrototypeOf(bound)),
+            String(fnProto === Object.getPrototypeOf(Object)),
+            String(plain instanceof Object),
+            String(bound instanceof Object),
+            plain.name,
+            String(plain.length),
+            Box.name,
+            String(Box.length),
+            bound.constructor.name,
+            String(Object.getPrototypeOf(fnProto) === Object.prototype)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|plain|2|Box|1|Function|true",
+    )?;
     Ok(())
 }

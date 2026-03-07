@@ -232,6 +232,15 @@ impl Harness {
             "Number",
             "BigInt",
             "Symbol",
+            "RegExp",
+            "Blob",
+            "URLSearchParams",
+            "ArrayBuffer",
+            "Promise",
+            "Map",
+            "WeakMap",
+            "Set",
+            "WeakSet",
             "Int8Array",
             "Uint8Array",
             "Uint8ClampedArray",
@@ -321,7 +330,7 @@ impl Harness {
         fetch_callable: &Value,
         request_constructor: &Value,
         headers_constructor: &Value,
-        url_constructor: &Value,
+        _url_constructor: &Value,
         audio_constructor: &Value,
         data_transfer_constructor: &Value,
         text_encoder_constructor: &Value,
@@ -375,6 +384,14 @@ impl Harness {
         clear_timeout_callable: &Value,
         queue_microtask_callable: &Value,
     ) {
+        let core_constructor_bindings = Self::shared_core_constructor_bindings(
+            string_constructor,
+            boolean_constructor,
+            number_constructor,
+            bigint_constructor,
+            symbol_constructor,
+            object_constructor,
+        );
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
         {
@@ -501,12 +518,6 @@ impl Harness {
                 Value::Bool(self.window_is_secure_context()),
             ),
             ("Intl".to_string(), intl.clone()),
-            ("String".to_string(), string_constructor.clone()),
-            ("Boolean".to_string(), boolean_constructor.clone()),
-            ("Number".to_string(), number_constructor.clone()),
-            ("BigInt".to_string(), bigint_constructor.clone()),
-            ("Symbol".to_string(), symbol_constructor.clone()),
-            ("Object".to_string(), object_constructor.clone()),
             ("EventTarget".to_string(), event_target_constructor.clone()),
             ("Event".to_string(), event_constructor.clone()),
             ("CustomEvent".to_string(), custom_event_constructor.clone()),
@@ -540,7 +551,6 @@ impl Harness {
             ("fetch".to_string(), fetch_callable.clone()),
             ("Request".to_string(), request_constructor.clone()),
             ("Headers".to_string(), headers_constructor.clone()),
-            ("URL".to_string(), url_constructor.clone()),
             ("Audio".to_string(), audio_constructor.clone()),
             (
                 "DataTransfer".to_string(),
@@ -616,12 +626,7 @@ impl Harness {
                 Self::new_builtin_placeholder_function(),
             ),
         ];
-        for kind in TypedArrayKind::concrete_kinds() {
-            entries.push((
-                kind.name().to_string(),
-                Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(*kind)),
-            ));
-        }
+        entries.extend(core_constructor_bindings);
         entries.extend(extras);
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }

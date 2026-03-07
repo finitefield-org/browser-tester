@@ -1980,6 +1980,44 @@ impl Harness {
         constructor
     }
 
+    pub(crate) fn shared_core_constructor_bindings(
+        string_constructor: &Value,
+        boolean_constructor: &Value,
+        number_constructor: &Value,
+        bigint_constructor: &Value,
+        symbol_constructor: &Value,
+        object_constructor: &Value,
+    ) -> Vec<(String, Value)> {
+        let mut bindings = vec![
+            ("String".to_string(), string_constructor.clone()),
+            ("Boolean".to_string(), boolean_constructor.clone()),
+            ("Number".to_string(), number_constructor.clone()),
+            ("BigInt".to_string(), bigint_constructor.clone()),
+            ("Symbol".to_string(), symbol_constructor.clone()),
+            ("RegExp".to_string(), Value::RegExpConstructor),
+            ("Object".to_string(), object_constructor.clone()),
+            ("Blob".to_string(), Value::BlobConstructor),
+            ("URL".to_string(), Value::UrlConstructor),
+            (
+                "URLSearchParams".to_string(),
+                Value::UrlSearchParamsConstructor,
+            ),
+            ("ArrayBuffer".to_string(), Value::ArrayBufferConstructor),
+            ("Promise".to_string(), Value::PromiseConstructor),
+            ("Map".to_string(), Value::MapConstructor),
+            ("WeakMap".to_string(), Value::WeakMapConstructor),
+            ("Set".to_string(), Value::SetConstructor),
+            ("WeakSet".to_string(), Value::WeakSetConstructor),
+        ];
+        for kind in TypedArrayKind::concrete_kinds() {
+            bindings.push((
+                kind.name().to_string(),
+                Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(*kind)),
+            ));
+        }
+        bindings
+    }
+
     pub(crate) fn new_boolean_constructor_callable() -> Value {
         Self::new_receiver_builtin_constructor_object(
             Some("boolean_constructor"),
@@ -2064,17 +2102,31 @@ impl Harness {
 
     pub(crate) fn new_object_constructor_value() -> Value {
         let prototype = Self::new_object_value(Vec::new());
-        Self::new_object_value(vec![
+        let constructor = Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
                 Value::String("object_constructor".to_string()),
             ),
-            ("prototype".to_string(), prototype),
+            ("prototype".to_string(), prototype.clone()),
             (
                 "assign".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-        ])
+        ]);
+        if let Value::Object(prototype_entries) = &prototype {
+            let mut prototype_entries = prototype_entries.borrow_mut();
+            Self::object_set_entry(
+                &mut prototype_entries,
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut prototype_entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Null,
+            );
+        }
+        constructor
     }
 
     pub(crate) fn new_event_target_constructor_value() -> Value {
@@ -3515,6 +3567,45 @@ impl Harness {
         ])
     }
 
+    fn new_regexp_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("regexp_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_promise_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("promise_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_array_buffer_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("array_buffer_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
     fn new_symbol_static_method_callable(method: &str) -> Value {
         Self::new_object_value(vec![
             (
@@ -3626,11 +3717,201 @@ impl Harness {
         prototype
     }
 
+    fn set_internal_prototype(entries: &Rc<RefCell<ObjectValue>>, prototype: Value) {
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+            prototype,
+        );
+    }
+
+    fn constructor_prototype_from_value(&mut self, constructor: &Value) -> Option<Value> {
+        match self.object_property_from_value(constructor, "prototype") {
+            Ok(Value::Object(prototype)) => Some(Value::Object(prototype)),
+            _ => None,
+        }
+    }
+
+    fn constructor_prototype_from_env(&mut self, name: &str) -> Option<Value> {
+        let constructor = self.script_runtime.env.get(name).cloned()?;
+        self.constructor_prototype_from_value(&constructor)
+    }
+
+    fn object_constructor_prototype_value(&mut self) -> Value {
+        self.constructor_prototype_from_env("Object")
+            .unwrap_or_else(|| Self::new_object_value(Vec::new()))
+    }
+
+    fn cached_function_constructor_value(&mut self) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get("Function")
+            .cloned()
+        {
+            return constructor;
+        }
+
+        let prototype = Rc::new(RefCell::new(ObjectValue::default()));
+        let constructor = Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("function_constructor".to_string()),
+            ),
+            ("prototype".to_string(), Value::Object(prototype.clone())),
+        ]);
+        if let Value::Object(constructor_entries) = &constructor {
+            Self::set_internal_prototype(constructor_entries, Value::Object(prototype.clone()));
+        }
+
+        {
+            let mut prototype_entries = prototype.borrow_mut();
+            Self::object_set_entry(
+                &mut prototype_entries,
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+            for method in ["call", "apply", "bind", "toString"] {
+                Self::object_set_entry(
+                    &mut prototype_entries,
+                    method.to_string(),
+                    self.cached_function_surface_method_value(method),
+                );
+            }
+        }
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("Function".to_string(), prototype);
+        self.script_runtime
+            .constructor_static_methods
+            .insert("Function".to_string(), constructor.clone());
+        constructor
+    }
+
+    fn cached_function_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("Function")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let _ = self.cached_function_constructor_value();
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .get("Function")
+            .cloned()
+            .map(Value::Object)
+            .unwrap_or_else(|| Self::new_object_value(Vec::new()))
+    }
+
     fn typed_array_constructor_cache_key(kind: &TypedArrayConstructorKind) -> String {
         match kind {
             TypedArrayConstructorKind::Concrete(kind) => kind.name().to_string(),
             TypedArrayConstructorKind::Abstract => "TypedArray".to_string(),
         }
+    }
+
+    fn cached_constructor_static_method_value(
+        &mut self,
+        cache_key: &str,
+        make_value: impl FnOnce() -> Value,
+    ) -> Value {
+        if let Some(value) = self
+            .script_runtime
+            .constructor_static_methods
+            .get(cache_key)
+            .cloned()
+        {
+            return value;
+        }
+        let value = make_value();
+        self.script_runtime
+            .constructor_static_methods
+            .insert(cache_key.to_string(), value.clone());
+        value
+    }
+
+    fn cached_function_surface_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("Function.prototype.{method}"), || {
+            match method {
+                "call" => Self::new_function_call_callable(),
+                "apply" => Self::new_function_apply_callable(),
+                "bind" => Self::new_function_bind_callable(),
+                "toString" => Self::new_function_to_string_callable(),
+                _ => Value::Undefined,
+            }
+        })
+    }
+
+    fn cached_string_static_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("String.{method}"), || match method {
+            "fromCharCode" => Self::new_string_static_from_char_code_callable(),
+            "fromCodePoint" => Self::new_string_static_from_code_point_callable(),
+            "raw" => Self::new_string_static_raw_callable(),
+            _ => Value::Undefined,
+        })
+    }
+
+    fn cached_symbol_static_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("Symbol.{method}"), || {
+            Self::new_symbol_static_method_callable(method)
+        })
+    }
+
+    fn cached_regexp_static_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("RegExp.{method}"), || {
+            Self::new_regexp_static_method_callable(method)
+        })
+    }
+
+    fn cached_promise_static_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("Promise.{method}"), || {
+            Self::new_promise_static_method_callable(method)
+        })
+    }
+
+    fn cached_array_buffer_static_method_value(&mut self, method: &str) -> Value {
+        self.cached_constructor_static_method_value(&format!("ArrayBuffer.{method}"), || {
+            Self::new_array_buffer_static_method_callable(method)
+        })
+    }
+
+    fn cached_typed_array_static_method_value(
+        &mut self,
+        kind: TypedArrayConstructorKind,
+        method: &str,
+    ) -> Value {
+        let constructor_name = Self::typed_array_constructor_cache_key(&kind);
+        self.cached_constructor_static_method_value(&format!("{constructor_name}.{method}"), || {
+            Self::new_typed_array_static_method_callable(kind.clone(), method)
+        })
+    }
+
+    fn cached_builtin_constructor_prototype_value(
+        &mut self,
+        cache_key: &str,
+        make_value: impl FnOnce(&mut Self) -> Value,
+    ) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get(cache_key)
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let value = make_value(self);
+        let Value::Object(prototype) = &value else {
+            return value;
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert(cache_key.to_string(), prototype.clone());
+        value
     }
 
     fn cached_string_constructor_prototype_value(&mut self) -> Value {
@@ -3656,6 +3937,7 @@ impl Harness {
         ) else {
             unreachable!("string constructor prototype must be an object");
         };
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
         self.script_runtime.string_constructor_prototype = Some(prototype.clone());
         Value::Object(prototype)
     }
@@ -3671,6 +3953,7 @@ impl Harness {
         ) else {
             unreachable!("symbol constructor prototype must be an object");
         };
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
         self.script_runtime.symbol_constructor_prototype = Some(prototype.clone());
         Value::Object(prototype)
     }
@@ -3706,10 +3989,306 @@ impl Harness {
         ) else {
             unreachable!("typed array constructor prototype must be an object");
         };
+        let parent_prototype = match kind {
+            TypedArrayConstructorKind::Concrete(_) => self
+                .cached_typed_array_constructor_prototype_value(
+                    TypedArrayConstructorKind::Abstract,
+                ),
+            TypedArrayConstructorKind::Abstract => self.object_constructor_prototype_value(),
+        };
+        Self::set_internal_prototype(&prototype, parent_prototype);
         self.script_runtime
             .typed_array_constructor_prototypes
             .insert(cache_key, prototype.clone());
         Value::Object(prototype)
+    }
+
+    fn cached_blob_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("Blob", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::BlobConstructor,
+                "blob",
+                &["arrayBuffer", "bytes", "slice", "stream", "text"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_array_buffer_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("ArrayBuffer", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::ArrayBufferConstructor,
+                "array_buffer",
+                &["resize", "slice", "transfer", "transferToFixedLength"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_promise_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("Promise", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::PromiseConstructor,
+                "promise",
+                &["then", "catch", "finally"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_regexp_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("RegExp", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::RegExpConstructor,
+                "regexp",
+                &["exec", "test", "toString"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_map_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("Map", |this| {
+            let prototype = this.new_receiver_builtin_prototype_with_iterator_value(
+                Value::MapConstructor,
+                "map",
+                &[
+                    "set",
+                    "get",
+                    "has",
+                    "delete",
+                    "clear",
+                    "forEach",
+                    "entries",
+                    "keys",
+                    "values",
+                    "getOrInsert",
+                    "getOrInsertComputed",
+                ],
+                Some("entries"),
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_weak_map_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("WeakMap", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::WeakMapConstructor,
+                "weak_map",
+                &[
+                    "set",
+                    "get",
+                    "has",
+                    "delete",
+                    "getOrInsert",
+                    "getOrInsertComputed",
+                ],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_set_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("Set", |this| {
+            let prototype = this.new_receiver_builtin_prototype_with_iterator_value(
+                Value::SetConstructor,
+                "set",
+                &[
+                    "add",
+                    "has",
+                    "delete",
+                    "clear",
+                    "forEach",
+                    "entries",
+                    "keys",
+                    "values",
+                    "union",
+                    "intersection",
+                    "difference",
+                    "symmetricDifference",
+                    "isDisjointFrom",
+                    "isSubsetOf",
+                    "isSupersetOf",
+                ],
+                Some("values"),
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_weak_set_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("WeakSet", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::WeakSetConstructor,
+                "weak_set",
+                &["add", "has", "delete"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_url_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("URL", |this| {
+            let prototype = Self::new_receiver_builtin_prototype_value(
+                Value::UrlConstructor,
+                "url",
+                &["toString", "toJSON"],
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn cached_url_search_params_constructor_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("URLSearchParams", |this| {
+            let prototype = this.new_receiver_builtin_prototype_with_iterator_value(
+                Value::UrlSearchParamsConstructor,
+                "url_search_params",
+                &[
+                    "append", "delete", "get", "getAll", "has", "set", "sort", "forEach",
+                    "entries", "keys", "values", "toString",
+                ],
+                Some("entries"),
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
+    fn function_length(function: &Rc<FunctionValue>) -> i64 {
+        let mut length = 0_i64;
+        for param in &function.handler.params {
+            if param.is_rest || param.default.is_some() {
+                break;
+            }
+            length += 1;
+        }
+        length
+    }
+
+    fn function_display_name(&self, function: &Rc<FunctionValue>) -> String {
+        self.script_runtime
+            .function_public_properties
+            .get(&function.function_id)
+            .and_then(|entries| Self::object_get_entry(entries, "name"))
+            .map(|value| value.as_string())
+            .unwrap_or_else(|| function.expression_name.clone().unwrap_or_default())
+    }
+
+    pub(crate) fn set_function_public_name(&mut self, function: &Rc<FunctionValue>, name: &str) {
+        let entries = self
+            .script_runtime
+            .function_public_properties
+            .entry(function.function_id)
+            .or_default();
+        Self::object_set_entry(entries, "name".to_string(), Value::String(name.to_string()));
+    }
+
+    fn callable_name_and_length(&mut self, value: &Value) -> Option<(String, i64)> {
+        match value {
+            Value::Function(function) => Some((
+                self.function_display_name(function),
+                Self::function_length(function),
+            )),
+            Value::StringConstructor => Some(("String".to_string(), 1)),
+            Value::RegExpConstructor => Some(("RegExp".to_string(), 2)),
+            Value::BlobConstructor => Some(("Blob".to_string(), 0)),
+            Value::UrlConstructor => Some(("URL".to_string(), 1)),
+            Value::ArrayBufferConstructor => Some(("ArrayBuffer".to_string(), 1)),
+            Value::PromiseConstructor => Some(("Promise".to_string(), 1)),
+            Value::MapConstructor => Some(("Map".to_string(), 0)),
+            Value::WeakMapConstructor => Some(("WeakMap".to_string(), 0)),
+            Value::SetConstructor => Some(("Set".to_string(), 0)),
+            Value::WeakSetConstructor => Some(("WeakSet".to_string(), 0)),
+            Value::UrlSearchParamsConstructor => Some(("URLSearchParams".to_string(), 0)),
+            Value::SymbolConstructor => Some(("Symbol".to_string(), 0)),
+            Value::TypedArrayConstructor(kind) => Some((
+                match kind {
+                    TypedArrayConstructorKind::Concrete(kind) => kind.name(),
+                    TypedArrayConstructorKind::Abstract => "TypedArray",
+                }
+                .to_string(),
+                3,
+            )),
+            Value::Object(_) => match Self::callable_kind_from_value(value) {
+                Some("boolean_constructor") => Some(("Boolean".to_string(), 1)),
+                Some("number_constructor") => Some(("Number".to_string(), 1)),
+                Some("bigint_constructor") => Some(("BigInt".to_string(), 1)),
+                Some("object_constructor") => Some(("Object".to_string(), 1)),
+                Some("function_constructor") => Some(("Function".to_string(), 1)),
+                Some("function_call") => Some(("call".to_string(), 1)),
+                Some("function_apply") => Some(("apply".to_string(), 2)),
+                Some("function_bind") => Some(("bind".to_string(), 1)),
+                Some("function_to_string") => Some(("toString".to_string(), 0)),
+                Some("bound_function") => {
+                    let (target, _bound_this, bound_args) =
+                        Self::bound_callable_components(value).ok()?;
+                    let (target_name, target_length) = self.callable_name_and_length(&target)?;
+                    let bound_name = format!("bound {target_name}");
+                    let bound_length = target_length.saturating_sub(bound_args.len() as i64).max(0);
+                    Some((bound_name, bound_length))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn callable_function_surface_value(&mut self, value: &Value, key: &str) -> Option<Value> {
+        match key {
+            "call" | "apply" | "bind" | "toString" => {
+                return Some(self.cached_function_surface_method_value(key));
+            }
+            "name" => {
+                let (name, _) = self.callable_name_and_length(value)?;
+                return Some(Value::String(name));
+            }
+            "length" => {
+                let (_, length) = self.callable_name_and_length(value)?;
+                return Some(Value::Number(length));
+            }
+            _ => {}
+        }
+        None
     }
 
     pub(crate) fn new_string_wrapper_value(value: String) -> Value {
@@ -3810,6 +4389,7 @@ impl Harness {
                 "number_constructor" => "number_constructor",
                 "bigint_constructor" => "bigint_constructor",
                 "object_constructor" => "object_constructor",
+                "function_constructor" => "function_constructor",
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
@@ -3905,6 +4485,9 @@ impl Harness {
                 "string_static_raw" => "string_static_raw",
                 "number_static_method" => "number_static_method",
                 "bigint_static_method" => "bigint_static_method",
+                "regexp_static_method" => "regexp_static_method",
+                "promise_static_method" => "promise_static_method",
+                "array_buffer_static_method" => "array_buffer_static_method",
                 "symbol_static_method" => "symbol_static_method",
                 "typed_array_static_method" => "typed_array_static_method",
                 "function_call" => "function_call",
@@ -4078,10 +4661,9 @@ impl Harness {
                 }
                 Value::Number(length)
             }
-            "call" => Self::new_function_call_callable(),
-            "apply" => Self::new_function_apply_callable(),
-            "bind" => Self::new_function_bind_callable(),
-            "toString" if include_to_string => Self::new_function_to_string_callable(),
+            "name" => Value::String(self.function_display_name(function)),
+            "call" | "apply" | "bind" => self.cached_function_surface_method_value(key),
+            "toString" if include_to_string => self.cached_function_surface_method_value(key),
             _ => Value::Undefined,
         }
     }
@@ -4217,6 +4799,9 @@ impl Harness {
         if key == "constructor" {
             return Value::PromiseConstructor;
         }
+        if matches!(key, "then" | "catch" | "finally") {
+            return Self::new_receiver_builtin_callable("promise", key);
+        }
         let promise = promise.borrow();
         if key == "status" {
             let status = match &promise.state {
@@ -4336,15 +4921,28 @@ impl Harness {
             "size" => Value::Number(blob.bytes.len() as i64),
             "type" => Value::String(blob.mime_type.clone()),
             "constructor" => Value::BlobConstructor,
+            "arrayBuffer" | "bytes" | "slice" | "stream" | "text" => {
+                Self::new_receiver_builtin_callable("blob", key)
+            }
             _ => Value::Undefined,
         }
     }
 
-    fn object_property_from_array_buffer_value(key: &str) -> Value {
-        if key == "constructor" {
-            Value::ArrayBufferConstructor
-        } else {
-            Value::Undefined
+    fn object_property_from_array_buffer_value(
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        key: &str,
+    ) -> Value {
+        let buffer = buffer.borrow();
+        match key {
+            "byteLength" => Value::Number(buffer.byte_length() as i64),
+            "detached" => Value::Bool(buffer.detached),
+            "maxByteLength" => Value::Number(buffer.max_byte_length() as i64),
+            "resizable" => Value::Bool(buffer.resizable()),
+            "constructor" => Value::ArrayBufferConstructor,
+            "resize" | "slice" | "transfer" | "transferToFixedLength" => {
+                Self::new_receiver_builtin_callable("array_buffer", key)
+            }
+            _ => Value::Undefined,
         }
     }
 
@@ -4376,6 +4974,7 @@ impl Harness {
             "unicodeSets" => Value::Bool(regex.unicode_sets),
             "lastIndex" => Value::Number(regex.last_index as i64),
             "constructor" => Value::RegExpConstructor,
+            "exec" | "test" | "toString" => Self::new_receiver_builtin_callable("regexp", key),
             _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
         }
     }
@@ -5317,16 +5916,6 @@ impl Harness {
         self.object_property_from_string_wrapper_entries(entries, key)
     }
 
-    fn callable_method_value_for_key(key: &str) -> Option<Value> {
-        let method = match key {
-            "call" => Self::new_function_call_callable(),
-            "apply" => Self::new_function_apply_callable(),
-            "bind" => Self::new_function_bind_callable(),
-            _ => return None,
-        };
-        Some(method)
-    }
-
     fn generator_constructor_prototype_value(&mut self, is_async: bool) -> Option<Value> {
         let constructor = if is_async {
             self.new_async_generator_function_constructor_value()
@@ -5411,8 +6000,8 @@ impl Harness {
         key: &str,
     ) -> Option<Value> {
         if Self::callable_kind_from_value(value).is_some() {
-            if let Some(function_method) = Self::callable_method_value_for_key(key) {
-                return Some(Self::object_get_entry(entries, key).unwrap_or(function_method));
+            if let Some(surface_value) = self.callable_function_surface_value(value, key) {
+                return Some(Self::object_get_entry(entries, key).unwrap_or(surface_value));
             }
         }
         if let Some(value) = self.object_property_from_generator_constructor_entries(entries, key) {
@@ -5568,7 +6157,8 @@ impl Harness {
         {
             return Ok(value);
         }
-        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            .or_else(|| self.value_internal_prototype_value(receiver));
         while let Some(Value::Object(object)) = prototype {
             let object_ref = object.borrow();
             if let Some(value) =
@@ -5579,6 +6169,71 @@ impl Harness {
             prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
         }
         Ok(Value::Undefined)
+    }
+
+    pub(crate) fn value_internal_prototype_value(&mut self, value: &Value) -> Option<Value> {
+        match value {
+            Value::Object(entries) => {
+                let entries_ref = entries.borrow();
+                if let Some(value) =
+                    Self::object_get_entry(&entries_ref, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                {
+                    return Some(value);
+                }
+                if Self::is_url_object(&entries_ref) {
+                    return Some(self.cached_url_constructor_prototype_value());
+                }
+                if Self::is_url_search_params_object(&entries_ref) {
+                    return Some(self.cached_url_search_params_constructor_prototype_value());
+                }
+                if Self::string_wrapper_value_from_object(&entries_ref).is_some() {
+                    return Some(self.cached_string_constructor_prototype_value());
+                }
+                if Self::callable_kind_from_value(value).is_some() {
+                    return Some(self.cached_function_constructor_prototype_value());
+                }
+                Some(self.object_constructor_prototype_value())
+            }
+            Value::Array(values) => {
+                Self::object_get_entry(&values.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
+            Value::Map(map) => Some(
+                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .unwrap_or_else(|| self.cached_map_constructor_prototype_value()),
+            ),
+            Value::WeakMap(map) => Some(
+                Self::object_get_entry(&map.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .unwrap_or_else(|| self.cached_weak_map_constructor_prototype_value()),
+            ),
+            Value::Set(set) => Some(
+                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .unwrap_or_else(|| self.cached_set_constructor_prototype_value()),
+            ),
+            Value::WeakSet(set) => Some(
+                Self::object_get_entry(&set.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .unwrap_or_else(|| self.cached_weak_set_constructor_prototype_value()),
+            ),
+            Value::RegExp(regex) => Some(
+                Self::object_get_entry(&regex.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .unwrap_or_else(|| self.cached_regexp_constructor_prototype_value()),
+            ),
+            Value::Promise(_) => Some(self.cached_promise_constructor_prototype_value()),
+            Value::TypedArray(values) => Some(self.cached_typed_array_constructor_prototype_value(
+                TypedArrayConstructorKind::Concrete(values.borrow().kind),
+            )),
+            Value::Blob(_) => Some(self.cached_blob_constructor_prototype_value()),
+            Value::ArrayBuffer(_) => Some(self.cached_array_buffer_constructor_prototype_value()),
+            Value::String(_) => Some(self.cached_string_constructor_prototype_value()),
+            Value::Bool(_) => self.constructor_prototype_from_env("Boolean"),
+            Value::Number(_) | Value::Float(_) => self.constructor_prototype_from_env("Number"),
+            Value::BigInt(_) => self.constructor_prototype_from_env("BigInt"),
+            Value::Symbol(_) => Some(self.cached_symbol_constructor_prototype_value()),
+            Value::Function(_) => Some(self.cached_function_constructor_prototype_value()),
+            _ if self.is_callable_value(value) => {
+                Some(self.cached_function_constructor_prototype_value())
+            }
+            _ => None,
+        }
     }
 
     fn function_public_property_from_entries_with_receiver(
@@ -5620,6 +6275,38 @@ impl Harness {
         } else {
             Ok(Some(inherited))
         }
+    }
+
+    fn inherited_property_from_value_prototype_chain(
+        &mut self,
+        receiver: &Value,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let mut prototype = self.value_internal_prototype_value(receiver);
+        while let Some(Value::Object(object)) = prototype {
+            let object_ref = object.borrow();
+            if let Some(value) =
+                self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
+            {
+                return Ok(Some(value));
+            }
+            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+        }
+        Ok(None)
+    }
+
+    fn callable_value_property_or_inherited(
+        &mut self,
+        receiver: &Value,
+        key: &str,
+        own_value: Value,
+    ) -> Result<Value> {
+        if !matches!(own_value, Value::Undefined) {
+            return Ok(own_value);
+        }
+        Ok(self
+            .inherited_property_from_value_prototype_chain(receiver, key)?
+            .unwrap_or(Value::Undefined))
     }
 
     fn object_property_from_object_value(
@@ -5675,7 +6362,9 @@ impl Harness {
         {
             return Ok(inherited);
         }
-        Ok(Value::Undefined)
+        Ok(self
+            .inherited_property_from_value_prototype_chain(value, key)?
+            .unwrap_or(Value::Undefined))
     }
 
     fn object_property_from_object_value_with_receiver(
@@ -5708,7 +6397,9 @@ impl Harness {
         {
             return Ok(inherited);
         }
-        Ok(Value::Undefined)
+        Ok(self
+            .inherited_property_from_value_prototype_chain(receiver, key)?
+            .unwrap_or(Value::Undefined))
     }
 
     pub(crate) fn object_property_from_value(&mut self, value: &Value, key: &str) -> Result<Value> {
@@ -5729,165 +6420,210 @@ impl Harness {
             Value::Set(set) => Ok(self.object_property_from_set_value(set, key)),
             Value::FormData(entries) => Ok(self.object_property_from_form_data_value(entries, key)),
             Value::Blob(blob) => Ok(Self::object_property_from_blob_value(blob, key)),
-            Value::ArrayBuffer(_) => Ok(Self::object_property_from_array_buffer_value(key)),
+            Value::ArrayBuffer(buffer) => {
+                Ok(Self::object_property_from_array_buffer_value(buffer, key))
+            }
             Value::Symbol(symbol) => Ok(Self::object_property_from_symbol_value(symbol, key)),
             Value::RegExp(regex) => Ok(Self::object_property_from_regexp_value(regex, key)),
             Value::Function(function) => {
                 self.object_property_from_function_value(value, function, key)
             }
-            Value::MapConstructor => Ok(match key {
-                "prototype" => self.new_receiver_builtin_prototype_with_iterator_value(
-                    Value::MapConstructor,
-                    "map",
-                    &[
-                        "set",
-                        "get",
-                        "has",
-                        "delete",
-                        "clear",
-                        "forEach",
-                        "entries",
-                        "keys",
-                        "values",
-                        "getOrInsert",
-                        "getOrInsertComputed",
-                    ],
-                    Some("entries"),
-                ),
-                _ => Value::Undefined,
-            }),
-            Value::WeakMapConstructor => Ok(match key {
-                "prototype" => Self::new_receiver_builtin_prototype_value(
-                    Value::WeakMapConstructor,
-                    "weak_map",
-                    &[
-                        "set",
-                        "get",
-                        "has",
-                        "delete",
-                        "getOrInsert",
-                        "getOrInsertComputed",
-                    ],
-                ),
-                _ => Value::Undefined,
-            }),
-            Value::SetConstructor => Ok(match key {
-                "prototype" => self.new_receiver_builtin_prototype_with_iterator_value(
-                    Value::SetConstructor,
-                    "set",
-                    &[
-                        "add",
-                        "has",
-                        "delete",
-                        "clear",
-                        "forEach",
-                        "entries",
-                        "keys",
-                        "values",
-                        "union",
-                        "intersection",
-                        "difference",
-                        "symmetricDifference",
-                        "isDisjointFrom",
-                        "isSubsetOf",
-                        "isSupersetOf",
-                    ],
-                    Some("values"),
-                ),
-                _ => Value::Undefined,
-            }),
-            Value::WeakSetConstructor => Ok(match key {
-                "prototype" => Self::new_receiver_builtin_prototype_value(
-                    Value::WeakSetConstructor,
-                    "weak_set",
-                    &["add", "has", "delete"],
-                ),
-                _ => Value::Undefined,
-            }),
-            Value::TypedArrayConstructor(kind) => Ok(match key {
-                "prototype" => self.cached_typed_array_constructor_prototype_value(kind.clone()),
-                "from" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
-                    Self::new_typed_array_static_method_callable(kind.clone(), "from")
+            Value::MapConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "of" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
-                    Self::new_typed_array_static_method_callable(kind.clone(), "of")
+                let own_value = match key {
+                    "prototype" => self.cached_map_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::WeakMapConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "BYTES_PER_ELEMENT" => match kind {
-                    TypedArrayConstructorKind::Concrete(kind) => {
-                        Value::Number(kind.bytes_per_element() as i64)
+                let own_value = match key {
+                    "prototype" => self.cached_weak_map_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::SetConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
+                }
+                let own_value = match key {
+                    "prototype" => self.cached_set_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::WeakSetConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
+                }
+                let own_value = match key {
+                    "prototype" => self.cached_weak_set_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::TypedArrayConstructor(kind) => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
+                }
+                let own_value = match key {
+                    "prototype" => {
+                        self.cached_typed_array_constructor_prototype_value(kind.clone())
                     }
-                    TypedArrayConstructorKind::Abstract => Value::Undefined,
-                },
-                _ => Value::Undefined,
-            }),
-            Value::UrlConstructor => {
-                if key == "prototype" {
-                    return Ok(Self::new_receiver_builtin_prototype_value(
-                        Value::UrlConstructor,
-                        "url",
-                        &["toString", "toJSON"],
-                    ));
+                    "from" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
+                        self.cached_typed_array_static_method_value(kind.clone(), "from")
+                    }
+                    "of" if matches!(kind, TypedArrayConstructorKind::Concrete(_)) => {
+                        self.cached_typed_array_static_method_value(kind.clone(), "of")
+                    }
+                    "BYTES_PER_ELEMENT" => match kind {
+                        TypedArrayConstructorKind::Concrete(kind) => {
+                            Value::Number(kind.bytes_per_element() as i64)
+                        }
+                        TypedArrayConstructorKind::Abstract => Value::Undefined,
+                    },
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::BlobConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                if let Some(value) = Self::object_get_entry(
+                let own_value = match key {
+                    "prototype" => self.cached_blob_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::RegExpConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
+                }
+                let own_value = match key {
+                    "prototype" => self.cached_regexp_constructor_prototype_value(),
+                    "escape" => self.cached_regexp_static_method_value("escape"),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::UrlConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
+                }
+                let own_value = if key == "prototype" {
+                    self.cached_url_constructor_prototype_value()
+                } else if let Some(value) = Self::object_get_entry(
                     &self.browser_apis.url_constructor_properties.borrow(),
                     key,
                 ) {
+                    value
+                } else if Self::is_url_static_method_name(key) {
+                    Self::new_builtin_placeholder_function()
+                } else {
+                    Value::Undefined
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::ArrayBufferConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
                     return Ok(value);
                 }
-                if Self::is_url_static_method_name(key) {
-                    return Ok(Self::new_builtin_placeholder_function());
-                }
-                Ok(Value::Undefined)
-            }
-            Value::StringConstructor => {
-                let value = match key {
-                    "prototype" => self.cached_string_constructor_prototype_value(),
-                    "fromCharCode" => Self::new_string_static_from_char_code_callable(),
-                    "fromCodePoint" => Self::new_string_static_from_code_point_callable(),
-                    "raw" => Self::new_string_static_raw_callable(),
-                    "call" => Self::new_function_call_callable(),
-                    "apply" => Self::new_function_apply_callable(),
-                    "bind" => Self::new_function_bind_callable(),
-                    "toString" => Self::new_function_to_string_callable(),
+                let own_value = match key {
+                    "prototype" => self.cached_array_buffer_constructor_prototype_value(),
+                    "isView" => self.cached_array_buffer_static_method_value("isView"),
                     _ => Value::Undefined,
                 };
-                Ok(value)
+                self.callable_value_property_or_inherited(value, key, own_value)
             }
-            Value::SymbolConstructor => Ok(match key {
-                "prototype" => self.cached_symbol_constructor_prototype_value(),
-                "for" => Self::new_symbol_static_method_callable("for"),
-                "keyFor" => Self::new_symbol_static_method_callable("keyFor"),
-                "asyncDispose" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::AsyncDispose)
+            Value::PromiseConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "asyncIterator" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator)
+                let own_value = match key {
+                    "prototype" => self.cached_promise_constructor_prototype_value(),
+                    "resolve" => self.cached_promise_static_method_value("resolve"),
+                    "reject" => self.cached_promise_static_method_value("reject"),
+                    "all" => self.cached_promise_static_method_value("all"),
+                    "allSettled" => self.cached_promise_static_method_value("allSettled"),
+                    "any" => self.cached_promise_static_method_value("any"),
+                    "race" => self.cached_promise_static_method_value("race"),
+                    "try" => self.cached_promise_static_method_value("try"),
+                    "withResolvers" => self.cached_promise_static_method_value("withResolvers"),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::UrlSearchParamsConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "dispose" => self.eval_symbol_static_property(SymbolStaticProperty::Dispose),
-                "hasInstance" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::HasInstance)
+                let own_value = match key {
+                    "prototype" => self.cached_url_search_params_constructor_prototype_value(),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::StringConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "isConcatSpreadable" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::IsConcatSpreadable)
+                let own_value = match key {
+                    "prototype" => self.cached_string_constructor_prototype_value(),
+                    "fromCharCode" => self.cached_string_static_method_value("fromCharCode"),
+                    "fromCodePoint" => self.cached_string_static_method_value("fromCodePoint"),
+                    "raw" => self.cached_string_static_method_value("raw"),
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
+            Value::SymbolConstructor => {
+                if let Some(value) = self.callable_function_surface_value(value, key) {
+                    return Ok(value);
                 }
-                "iterator" => self.eval_symbol_static_property(SymbolStaticProperty::Iterator),
-                "match" => self.eval_symbol_static_property(SymbolStaticProperty::Match),
-                "matchAll" => self.eval_symbol_static_property(SymbolStaticProperty::MatchAll),
-                "replace" => self.eval_symbol_static_property(SymbolStaticProperty::Replace),
-                "search" => self.eval_symbol_static_property(SymbolStaticProperty::Search),
-                "species" => self.eval_symbol_static_property(SymbolStaticProperty::Species),
-                "split" => self.eval_symbol_static_property(SymbolStaticProperty::Split),
-                "toPrimitive" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::ToPrimitive)
-                }
-                "toStringTag" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag)
-                }
-                "unscopables" => {
-                    self.eval_symbol_static_property(SymbolStaticProperty::Unscopables)
-                }
-                _ => Value::Undefined,
-            }),
+                let own_value = match key {
+                    "prototype" => self.cached_symbol_constructor_prototype_value(),
+                    "for" => self.cached_symbol_static_method_value("for"),
+                    "keyFor" => self.cached_symbol_static_method_value("keyFor"),
+                    "asyncDispose" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::AsyncDispose)
+                    }
+                    "asyncIterator" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::AsyncIterator)
+                    }
+                    "dispose" => self.eval_symbol_static_property(SymbolStaticProperty::Dispose),
+                    "hasInstance" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::HasInstance)
+                    }
+                    "isConcatSpreadable" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::IsConcatSpreadable)
+                    }
+                    "iterator" => self.eval_symbol_static_property(SymbolStaticProperty::Iterator),
+                    "match" => self.eval_symbol_static_property(SymbolStaticProperty::Match),
+                    "matchAll" => self.eval_symbol_static_property(SymbolStaticProperty::MatchAll),
+                    "replace" => self.eval_symbol_static_property(SymbolStaticProperty::Replace),
+                    "search" => self.eval_symbol_static_property(SymbolStaticProperty::Search),
+                    "species" => self.eval_symbol_static_property(SymbolStaticProperty::Species),
+                    "split" => self.eval_symbol_static_property(SymbolStaticProperty::Split),
+                    "toPrimitive" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::ToPrimitive)
+                    }
+                    "toStringTag" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag)
+                    }
+                    "unscopables" => {
+                        self.eval_symbol_static_property(SymbolStaticProperty::Unscopables)
+                    }
+                    _ => Value::Undefined,
+                };
+                self.callable_value_property_or_inherited(value, key, own_value)
+            }
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
         }
     }

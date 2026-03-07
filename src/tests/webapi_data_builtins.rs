@@ -5063,3 +5063,34 @@ fn stable_constructor_prototype_identity_and_symbol_bracket_access_work() -> Res
     )?;
     Ok(())
 }
+
+#[test]
+fn function_constructor_name_and_callable_prototype_chain_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const dynamic = new Function('a', 'b', 'return a + b;');
+          const sample = function named() {};
+          const fnProto = Object.getPrototypeOf(sample);
+          document.getElementById('result').textContent = [
+            dynamic.name,
+            String(dynamic.length),
+            String(Object.getPrototypeOf(dynamic) === fnProto),
+            dynamic.constructor.name,
+            String(dynamic.constructor.prototype === fnProto),
+            String(dynamic instanceof Object),
+            String(Object.getPrototypeOf(Map) === fnProto),
+            Map.constructor.name,
+            String(Map instanceof Object),
+            String(String.constructor.name)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "anonymous|2|true|Function|true|true|true|Function|true|Function",
+    )?;
+    Ok(())
+}

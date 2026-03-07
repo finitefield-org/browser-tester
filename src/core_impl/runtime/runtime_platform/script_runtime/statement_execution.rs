@@ -856,6 +856,7 @@ impl Harness {
                 | Value::WeakMapConstructor
                 | Value::SetConstructor
                 | Value::WeakSetConstructor
+                | Value::UrlSearchParamsConstructor
                 | Value::RegExpConstructor
         ) || matches!(
             Self::callable_kind_from_value(value),
@@ -2206,6 +2207,9 @@ impl Harness {
                                 false,
                                 false,
                             );
+                            if let Value::Function(function_value) = &function {
+                                self.set_function_public_name(function_value, name);
+                            }
                             env.insert(name.clone(), function);
                             self.set_const_binding(env, name, false);
                         }
@@ -2273,6 +2277,7 @@ impl Harness {
                                     "class constructor is not callable".into(),
                                 ));
                             };
+                            self.set_function_public_name(class_function, name);
                             let class_constructor_id = class_function.function_id;
 
                             let mut private_bindings = HashMap::new();

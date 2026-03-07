@@ -1273,9 +1273,11 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) private_static_slots: HashMap<usize, HashMap<usize, Value>>,
     pub(crate) event_target_listener_nodes: HashMap<usize, NodeId>,
     pub(crate) next_event_target_listener_slot: usize,
+    pub(crate) builtin_constructor_prototypes: HashMap<String, Rc<RefCell<ObjectValue>>>,
     pub(crate) string_constructor_prototype: Option<Rc<RefCell<ObjectValue>>>,
     pub(crate) symbol_constructor_prototype: Option<Rc<RefCell<ObjectValue>>>,
     pub(crate) typed_array_constructor_prototypes: HashMap<String, Rc<RefCell<ObjectValue>>>,
+    pub(crate) constructor_static_methods: HashMap<String, Value>,
 }
 
 impl ScriptRuntimeState {

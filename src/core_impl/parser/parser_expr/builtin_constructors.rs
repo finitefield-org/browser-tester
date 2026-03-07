@@ -1535,7 +1535,12 @@ pub(crate) fn parse_url_search_params_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
 
-    Ok(None)
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    Ok(Some(Expr::UrlSearchParamsConstructor))
 }
 
 pub(crate) fn parse_set_expr(src: &str) -> Result<Option<Expr>> {

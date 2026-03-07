@@ -120,6 +120,7 @@ impl Harness {
             Value::WeakMapConstructor => 0,
             Value::SetConstructor => 0,
             Value::WeakSetConstructor => 0,
+            Value::UrlSearchParamsConstructor => 0,
             Value::SymbolConstructor => 0,
             Value::RegExpConstructor => 0,
             Value::PromiseCapability(_) => 0,

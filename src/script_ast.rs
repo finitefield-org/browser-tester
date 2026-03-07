@@ -277,6 +277,7 @@ pub(crate) enum Expr {
         init: Option<Box<Expr>>,
         called_with_new: bool,
     },
+    UrlSearchParamsConstructor,
     UrlSearchParamsMethod {
         target: String,
         method: UrlSearchParamsInstanceMethod,

@@ -163,7 +163,21 @@ impl Harness {
     pub(crate) fn is_callable_value(&self, value: &Value) -> bool {
         matches!(
             value,
-            Value::Function(_) | Value::PromiseCapability(_) | Value::StringConstructor
+            Value::Function(_)
+                | Value::PromiseCapability(_)
+                | Value::StringConstructor
+                | Value::RegExpConstructor
+                | Value::TypedArrayConstructor(_)
+                | Value::BlobConstructor
+                | Value::UrlConstructor
+                | Value::ArrayBufferConstructor
+                | Value::PromiseConstructor
+                | Value::MapConstructor
+                | Value::WeakMapConstructor
+                | Value::SetConstructor
+                | Value::WeakSetConstructor
+                | Value::UrlSearchParamsConstructor
+                | Value::SymbolConstructor
         ) || Self::callable_kind_from_value(value).is_some()
     }
 
@@ -269,10 +283,14 @@ impl Harness {
             "number" => "Number",
             "bigint" => "BigInt",
             "symbol" => "Symbol",
+            "regexp" => "RegExp",
             "url" => "URL",
             "url_search_params" => "URLSearchParams",
             "storage" => "Storage",
             "form_data" => "FormData",
+            "blob" => "Blob",
+            "array_buffer" => "ArrayBuffer",
+            "promise" => "Promise",
             _ => "builtin method",
         };
         Error::ScriptRuntime(format!("{label} method called on incompatible receiver"))
@@ -505,6 +523,42 @@ impl Harness {
                     ))),
                 }
             }
+            "regexp" => {
+                let Value::RegExp(regex) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_regexp_member_call_from_values(&regex, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported RegExp method: {member}"))
+                    })
+            }
+            "blob" => {
+                let Value::Blob(blob) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_blob_member_call(&blob, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Blob method: {member}"))
+                    })
+            }
+            "array_buffer" => {
+                let Value::ArrayBuffer(buffer) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_array_buffer_member_call_from_values(&buffer, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported ArrayBuffer method: {member}"))
+                    })
+            }
+            "promise" => {
+                let Value::Promise(promise) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_promise_member_call_from_values(&promise, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Promise method: {member}"))
+                    })
+            }
             "url" => {
                 let Value::Object(object) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
@@ -583,6 +637,396 @@ impl Harness {
                 "Worker instance has invalid internal state".into(),
             )),
         }
+    }
+
+    fn worker_constructor_bindings(&mut self) -> Vec<(String, Value)> {
+        let boolean_constructor = self
+            .script_runtime
+            .env
+            .get("Boolean")
+            .cloned()
+            .unwrap_or_else(Self::new_boolean_constructor_callable);
+        let number_constructor = self
+            .script_runtime
+            .env
+            .get("Number")
+            .cloned()
+            .unwrap_or_else(Self::new_number_constructor_callable);
+        let bigint_constructor = self
+            .script_runtime
+            .env
+            .get("BigInt")
+            .cloned()
+            .unwrap_or_else(Self::new_bigint_constructor_callable);
+        let object_constructor = self
+            .script_runtime
+            .env
+            .get("Object")
+            .cloned()
+            .unwrap_or_else(Self::new_object_constructor_value);
+        Self::shared_core_constructor_bindings(
+            &Value::StringConstructor,
+            &boolean_constructor,
+            &number_constructor,
+            &bigint_constructor,
+            &Value::SymbolConstructor,
+            &object_constructor,
+        )
+    }
+
+    pub(crate) fn build_function_from_constructor_values(
+        &mut self,
+        args: &[Value],
+    ) -> Result<Value> {
+        if args.is_empty() {
+            return Err(Error::ScriptRuntime(
+                "new Function requires at least one argument".into(),
+            ));
+        }
+
+        let mut parts = Vec::with_capacity(args.len());
+        for arg in args {
+            parts.push(arg.as_string());
+        }
+
+        let body_src = parts
+            .last()
+            .cloned()
+            .ok_or_else(|| Error::ScriptRuntime("new Function requires body argument".into()))?;
+        let mut params = Vec::new();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            let names = Self::parse_function_constructor_param_names(part)?;
+            params.extend(names.into_iter().map(|name| FunctionParam {
+                name,
+                default: None,
+                is_rest: false,
+            }));
+        }
+
+        let stmts = parse_block_statements(&body_src).map_err(|err| {
+            Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
+        })?;
+        let empty_env = HashMap::new();
+        let value = self.make_function_value(
+            ScriptHandler { params, stmts },
+            &empty_env,
+            true,
+            false,
+            false,
+            false,
+            false,
+        );
+        if let Value::Function(function) = &value {
+            self.set_function_public_name(function, "anonymous");
+        }
+        Ok(value)
+    }
+
+    fn construct_map_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 1 {
+            return Err(Error::ScriptRuntime(
+                "Map supports zero or one argument".into(),
+            ));
+        }
+
+        let map = Rc::new(RefCell::new(MapValue {
+            entries: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+        let Some(iterable) = args.first() else {
+            return Ok(Value::Map(map));
+        };
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::Map(map));
+        }
+        match iterable {
+            Value::Map(source) => {
+                let source = source.borrow();
+                map.borrow_mut().entries = source.entries.clone();
+            }
+            other => {
+                let entries = self.array_like_values_from_value(other)?;
+                for entry in entries {
+                    let pair = self.array_like_values_from_value(&entry).map_err(|_| {
+                        Error::ScriptRuntime(
+                            "Map constructor iterable values must be [key, value] pairs".into(),
+                        )
+                    })?;
+                    if pair.len() < 2 {
+                        return Err(Error::ScriptRuntime(
+                            "Map constructor iterable values must be [key, value] pairs".into(),
+                        ));
+                    }
+                    self.map_set_entry(&mut map.borrow_mut(), pair[0].clone(), pair[1].clone());
+                }
+            }
+        }
+        Ok(Value::Map(map))
+    }
+
+    fn construct_weak_map_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 1 {
+            return Err(Error::ScriptRuntime(
+                "WeakMap supports zero or one argument".into(),
+            ));
+        }
+
+        let weak_map = Rc::new(RefCell::new(WeakMapValue {
+            entries: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+        let Some(iterable) = args.first() else {
+            return Ok(Value::WeakMap(weak_map));
+        };
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::WeakMap(weak_map));
+        }
+        match iterable {
+            Value::WeakMap(source) => {
+                let source = source.borrow();
+                weak_map.borrow_mut().entries = source.entries.clone();
+            }
+            other => {
+                let entries = self.array_like_values_from_value(other)?;
+                for entry in entries {
+                    let pair = self.array_like_values_from_value(&entry).map_err(|_| {
+                        Error::ScriptRuntime(
+                            "WeakMap constructor iterable values must be [key, value] pairs".into(),
+                        )
+                    })?;
+                    if pair.len() < 2 {
+                        return Err(Error::ScriptRuntime(
+                            "WeakMap constructor iterable values must be [key, value] pairs".into(),
+                        ));
+                    }
+                    Self::ensure_weak_map_key(&pair[0])?;
+                    self.weak_map_set_entry(
+                        &mut weak_map.borrow_mut(),
+                        pair[0].clone(),
+                        pair[1].clone(),
+                    );
+                }
+            }
+        }
+        Ok(Value::WeakMap(weak_map))
+    }
+
+    fn construct_set_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 1 {
+            return Err(Error::ScriptRuntime(
+                "Set supports zero or one argument".into(),
+            ));
+        }
+
+        let set = Rc::new(RefCell::new(SetValue {
+            values: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+        let Some(iterable) = args.first() else {
+            return Ok(Value::Set(set));
+        };
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::Set(set));
+        }
+        match iterable {
+            Value::Set(source) => {
+                let source = source.borrow();
+                set.borrow_mut().values = source.values.clone();
+            }
+            other => {
+                for value in self.array_like_values_from_value(other)? {
+                    self.set_add_value(&mut set.borrow_mut(), value);
+                }
+            }
+        }
+        Ok(Value::Set(set))
+    }
+
+    fn construct_weak_set_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 1 {
+            return Err(Error::ScriptRuntime(
+                "WeakSet supports zero or one argument".into(),
+            ));
+        }
+
+        let weak_set = Rc::new(RefCell::new(WeakSetValue {
+            values: Vec::new(),
+            properties: ObjectValue::default(),
+        }));
+        let Some(iterable) = args.first() else {
+            return Ok(Value::WeakSet(weak_set));
+        };
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(Value::WeakSet(weak_set));
+        }
+        match iterable {
+            Value::WeakSet(source) => {
+                let source = source.borrow();
+                weak_set.borrow_mut().values = source.values.clone();
+            }
+            other => {
+                for value in self.array_like_values_from_value(other)? {
+                    Self::ensure_weak_map_key(&value)?;
+                    self.weak_set_add_value(&mut weak_set.borrow_mut(), value);
+                }
+            }
+        }
+        Ok(Value::WeakSet(weak_set))
+    }
+
+    fn construct_blob_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 2 {
+            return Err(Error::ScriptRuntime(
+                "Blob supports zero, one, or two arguments".into(),
+            ));
+        }
+
+        let mut bytes = Vec::new();
+        if let Some(parts_value) = args.first() {
+            if !matches!(parts_value, Value::Undefined | Value::Null) {
+                let items = self
+                    .array_like_values_from_value(parts_value)
+                    .map_err(|_| {
+                        Error::ScriptRuntime(
+                            "Blob constructor first argument must be an array-like or iterable"
+                                .into(),
+                        )
+                    })?;
+                for item in items {
+                    bytes.extend(self.blob_part_bytes(&item));
+                }
+            }
+        }
+
+        let mut mime_type = String::new();
+        if let Some(options) = args.get(1) {
+            match options {
+                Value::Undefined | Value::Null => {}
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::object_get_entry(&entries, "type") {
+                        mime_type = Self::normalize_blob_type(&value.as_string());
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "Blob options must be an object".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self::new_blob_value(bytes, mime_type))
+    }
+
+    fn construct_url_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 2 {
+            return Err(Error::ScriptRuntime(
+                "URL supports one or two constructor arguments".into(),
+            ));
+        }
+        let Some(input) = args.first() else {
+            return Err(Error::ScriptRuntime(
+                "URL constructor requires a URL argument".into(),
+            ));
+        };
+        let input = input.as_string();
+        let base = args.get(1).map(Value::as_string);
+        let href = Self::resolve_url_string(&input, base.as_deref())
+            .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))?;
+        self.new_url_value_from_href(&href)
+    }
+
+    fn construct_url_search_params_from_values(&self, args: &[Value]) -> Result<Value> {
+        if args.len() > 1 {
+            return Err(Error::ScriptRuntime(
+                "URLSearchParams supports zero or one argument".into(),
+            ));
+        }
+        let init = args.first().cloned().unwrap_or(Value::Undefined);
+        let pairs = self.url_search_params_pairs_from_init_value(&init)?;
+        Ok(self.new_url_search_params_value(pairs, None))
+    }
+
+    fn construct_regexp_from_values(&self, args: &[Value]) -> Result<Value> {
+        if args.len() > 2 {
+            return Err(Error::ScriptRuntime(
+                "RegExp supports up to two arguments".into(),
+            ));
+        }
+        let pattern = args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new()));
+        let flags = args.get(1);
+        Self::new_regex_from_values(&pattern, flags)
+    }
+
+    fn construct_array_buffer_from_values(&mut self, args: &[Value]) -> Result<Value> {
+        if args.len() > 2 {
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer supports up to two arguments".into(),
+            ));
+        }
+        let byte_length = if let Some(byte_length) = args.first() {
+            Self::to_non_negative_usize(byte_length, "ArrayBuffer byteLength")?
+        } else {
+            0
+        };
+        let max_byte_length = if let Some(options) = args.get(1) {
+            match options {
+                Value::Undefined | Value::Null => None,
+                Value::Object(entries) => {
+                    let entries = entries.borrow();
+                    if let Some(value) = Self::object_get_entry(&entries, "maxByteLength") {
+                        Some(Self::to_non_negative_usize(
+                            &value,
+                            "ArrayBuffer maxByteLength",
+                        )?)
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer options must be an object".into(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        if max_byte_length.is_some_and(|max| byte_length > max) {
+            return Err(Error::ScriptRuntime(
+                "ArrayBuffer byteLength exceeds maxByteLength".into(),
+            ));
+        }
+        Ok(Self::new_array_buffer_value(byte_length, max_byte_length))
+    }
+
+    fn construct_promise_from_values(
+        &mut self,
+        args: &[Value],
+        event: &EventState,
+    ) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(Error::ScriptRuntime(
+                "Promise constructor requires exactly one executor".into(),
+            ));
+        }
+        let executor = args[0].clone();
+        if !self.is_callable_value(&executor) {
+            return Err(Error::ScriptRuntime(
+                "Promise constructor executor must be a function".into(),
+            ));
+        }
+
+        let promise = self.new_pending_promise();
+        let (resolve, reject) = self.new_promise_capability_functions(promise.clone());
+        if let Err(err) = self.execute_callable_value(&executor, &[resolve, reject], event) {
+            self.promise_reject(&promise, Self::promise_error_reason(err));
+        }
+        Ok(Value::Promise(promise))
     }
 
     fn worker_is_terminated_object(worker: &Rc<RefCell<ObjectValue>>) -> bool {
@@ -1171,6 +1615,20 @@ impl Harness {
         worker_env.insert("globalThis".to_string(), worker_global.clone());
         worker_env.insert("postMessage".to_string(), worker_post_message.clone());
         worker_env.insert("onmessage".to_string(), Value::Null);
+        if let Value::Object(worker_global_entries) = worker_global {
+            let entries = worker_global_entries.borrow();
+            for (name, value) in &entries.entries {
+                if name == INTERNAL_WORKER_OBJECT_KEY
+                    || name == "self"
+                    || name == "globalThis"
+                    || name == "postMessage"
+                    || name == "onmessage"
+                {
+                    continue;
+                }
+                worker_env.insert(name.clone(), value.clone());
+            }
+        }
         worker_env.insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(1));
 
         let mut worker_event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
@@ -1256,6 +1714,9 @@ impl Harness {
                 worker_context_post_message,
             );
             Self::object_set_entry(&mut entries, "onmessage".to_string(), Value::Null);
+            for (name, value) in self.worker_constructor_bindings() {
+                Self::object_set_entry(&mut entries, name, value);
+            }
         }
 
         let worker_post_message = Self::new_worker_main_post_message_callable(worker.clone());
@@ -2090,7 +2551,9 @@ impl Harness {
         }
     }
 
-    fn bound_callable_components(callable: &Value) -> Result<(Value, Value, Vec<Value>)> {
+    pub(crate) fn bound_callable_components(
+        callable: &Value,
+    ) -> Result<(Value, Value, Vec<Value>)> {
         let Value::Object(entries) = callable else {
             return Err(Error::ScriptRuntime(
                 "bound function has invalid internal state".into(),
@@ -2141,6 +2604,29 @@ impl Harness {
         this_arg: Option<Value>,
     ) -> Result<Value> {
         match constructor {
+            Value::RegExpConstructor => self.construct_regexp_from_values(args),
+            Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(kind)) => {
+                self.construct_typed_array_from_values(*kind, args)
+            }
+            Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract) => Err(
+                Error::ScriptRuntime("Abstract class TypedArray not directly constructable".into()),
+            ),
+            Value::StringConstructor => {
+                let value = args.first().cloned().unwrap_or(Value::Undefined);
+                Ok(Self::new_string_wrapper_value(value.as_string()))
+            }
+            Value::BlobConstructor => self.construct_blob_from_values(args),
+            Value::UrlConstructor => self.construct_url_from_values(args),
+            Value::ArrayBufferConstructor => self.construct_array_buffer_from_values(args),
+            Value::PromiseConstructor => self.construct_promise_from_values(args, event),
+            Value::MapConstructor => self.construct_map_from_values(args),
+            Value::WeakMapConstructor => self.construct_weak_map_from_values(args),
+            Value::SetConstructor => self.construct_set_from_values(args),
+            Value::WeakSetConstructor => self.construct_weak_set_from_values(args),
+            Value::UrlSearchParamsConstructor => self.construct_url_search_params_from_values(args),
+            Value::SymbolConstructor => {
+                Err(Error::ScriptRuntime("Symbol is not a constructor".into()))
+            }
             Value::Function(function) => {
                 if function.is_generator || function.is_arrow || function.is_method {
                     return Err(Error::ScriptRuntime("value is not a constructor".into()));
@@ -2257,6 +2743,57 @@ impl Harness {
             Value::StringConstructor => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
                 Ok(Value::String(value.as_string()))
+            }
+            Value::RegExpConstructor => self.construct_regexp_from_values(args),
+            Value::TypedArrayConstructor(kind) => match kind {
+                TypedArrayConstructorKind::Concrete(kind) => Err(Error::ScriptRuntime(format!(
+                    "{} constructor must be called with new",
+                    kind.name()
+                ))),
+                TypedArrayConstructorKind::Abstract => Err(Error::ScriptRuntime(
+                    "Abstract class TypedArray not directly constructable".into(),
+                )),
+            },
+            Value::BlobConstructor => Err(Error::ScriptRuntime(
+                "Blob constructor must be called with new".into(),
+            )),
+            Value::UrlConstructor => Err(Error::ScriptRuntime(
+                "URL constructor must be called with new".into(),
+            )),
+            Value::ArrayBufferConstructor => Err(Error::ScriptRuntime(
+                "ArrayBuffer constructor must be called with new".into(),
+            )),
+            Value::PromiseConstructor => Err(Error::ScriptRuntime(
+                "Promise constructor must be called with new".into(),
+            )),
+            Value::MapConstructor => Err(Error::ScriptRuntime(
+                "Map constructor must be called with new".into(),
+            )),
+            Value::WeakMapConstructor => Err(Error::ScriptRuntime(
+                "WeakMap constructor must be called with new".into(),
+            )),
+            Value::SetConstructor => Err(Error::ScriptRuntime(
+                "Set constructor must be called with new".into(),
+            )),
+            Value::WeakSetConstructor => Err(Error::ScriptRuntime(
+                "WeakSet constructor must be called with new".into(),
+            )),
+            Value::UrlSearchParamsConstructor => Err(Error::ScriptRuntime(
+                "URLSearchParams constructor must be called with new".into(),
+            )),
+            Value::SymbolConstructor => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "Symbol supports zero or one argument".into(),
+                    ));
+                }
+                let description = args.first().cloned().unwrap_or(Value::Undefined);
+                let description = if matches!(description, Value::Undefined) {
+                    None
+                } else {
+                    Some(description.as_string())
+                };
+                Ok(self.new_symbol_value(description, None))
             }
             Value::Object(_) => {
                 let Some(kind) = Self::callable_kind_from_value(callable) else {
@@ -2569,6 +3106,7 @@ impl Harness {
                     "generator_function_constructor" => {
                         self.build_generator_function_from_constructor_values(args)
                     }
+                    "function_constructor" => self.build_function_from_constructor_values(args),
                     "boolean_constructor" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         Ok(Value::Bool(value.truthy()))
@@ -3786,6 +4324,51 @@ impl Harness {
                             }
                         };
                         self.eval_bigint_method_from_values(method, args)
+                    }
+                    "regexp_static_method" => {
+                        let method = match Self::static_method_name(callable)?.as_str() {
+                            "escape" => RegExpStaticMethod::Escape,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_regexp_static_method_from_values(method, args)
+                    }
+                    "promise_static_method" => {
+                        let method = match Self::static_method_name(callable)?.as_str() {
+                            "resolve" => PromiseStaticMethod::Resolve,
+                            "reject" => PromiseStaticMethod::Reject,
+                            "all" => PromiseStaticMethod::All,
+                            "allSettled" => PromiseStaticMethod::AllSettled,
+                            "any" => PromiseStaticMethod::Any,
+                            "race" => PromiseStaticMethod::Race,
+                            "try" => PromiseStaticMethod::Try,
+                            "withResolvers" => PromiseStaticMethod::WithResolvers,
+                            _ => {
+                                return Err(Error::ScriptRuntime(
+                                    "callback is not a function".into(),
+                                ));
+                            }
+                        };
+                        self.eval_promise_static_method_from_values(method, args, event)
+                    }
+                    "array_buffer_static_method" => {
+                        match Self::static_method_name(callable)?.as_str() {
+                            "isView" => {
+                                if args.len() != 1 {
+                                    return Err(Error::ScriptRuntime(
+                                        "ArrayBuffer.isView requires exactly one argument".into(),
+                                    ));
+                                }
+                                Ok(Value::Bool(matches!(
+                                    args.first(),
+                                    Some(Value::TypedArray(_))
+                                )))
+                            }
+                            _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+                        }
                     }
                     "symbol_static_method" => {
                         let method = match Self::static_method_name(callable)?.as_str() {

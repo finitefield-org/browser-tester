@@ -654,7 +654,7 @@ fn regex_match_before_async_functions_does_not_break_following_await_flow() -> R
     file.mime_type = "image/jpeg".to_string();
     harness.set_input_files("#file", &[file])?;
     harness.flush()?;
-    harness.assert_text("#out", "ok:false:1x1:false")?;
+    harness.assert_text("#out", "ok:true:1x1:false")?;
     Ok(())
 }
 
@@ -871,5 +871,188 @@ fn promise_rejection_catch_updates_outer_let_before_timeout_guard() -> Result<()
     let mut harness = Harness::from_html(html)?;
     harness.flush()?;
     harness.assert_text("#out", "handled")?;
+    Ok(())
+}
+
+#[test]
+fn worker_global_exposes_constructor_aliases_and_static_method_identity() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const result = [
+              String(globalThis.String === String),
+              String(String['fromCharCode'] === globalThis.String.fromCharCode),
+              String(globalThis.Symbol === Symbol),
+              String(Symbol['for'] === globalThis.Symbol.for),
+              String(globalThis.Int8Array === Int8Array),
+              String(Int8Array['of'] === globalThis.Int8Array.of),
+              Array.from(new globalThis['Int8Array']([7, 8])).join(','),
+              String(globalThis.Number === Number),
+              String(globalThis.BigInt === BigInt),
+              String(Number['parseInt']('11', 2)),
+              String(BigInt['asIntN'](8, 257n))
+            ].join('|');
+            postMessage(result);
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text("#out", "true|true|true|true|true|true|7,8|true|true|3|1")?;
+    Ok(())
+}
+
+#[test]
+fn worker_global_exposes_constructor_surface_breadth() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const url = new globalThis['URL']('/worker?x=1', 'https://example.com/base/');
+            const map = new globalThis['Map']([['k', 1]]);
+            const set = new globalThis['Set'](['v']);
+            const params = new globalThis['URLSearchParams']('a=1&b=2');
+            const buffer = new globalThis['ArrayBuffer'](4);
+            const result = [
+              String(globalThis.URL === URL),
+              String(globalThis.Map === Map),
+              String(globalThis.Set === Set),
+              String(globalThis.URLSearchParams === URLSearchParams),
+              String(globalThis.ArrayBuffer === ArrayBuffer),
+              String(Map.call === Number.call),
+              URL.name,
+              String(Map.length),
+              URLSearchParams.name,
+              String(ArrayBuffer.length),
+              url.href,
+              String(map.get('k')),
+              String(set.has('v')),
+              params.toString(),
+              String(buffer.byteLength)
+            ].join('|');
+            postMessage(result);
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|true|true|URL|0|URLSearchParams|1|https://example.com/worker?x=1|1|true|a=1&b=2|4",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_bound_builtin_constructor_surface_and_instanceof_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const BoundMap = Map.bind(null, [['k', 1]]);
+            const map = new BoundMap();
+            const result = [
+              BoundMap.name,
+              String(BoundMap.length),
+              String(BoundMap.prototype === undefined),
+              String(map instanceof BoundMap),
+              String(map instanceof Map),
+              String(Object.getPrototypeOf(map) === Map.prototype),
+              String(map.get('k'))
+            ].join('|');
+            postMessage(result);
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text("#out", "bound Map|0|true|true|true|true|1")?;
+    Ok(())
+}
+
+#[test]
+fn worker_function_object_prototype_chain_and_metadata_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            function named(a, b) {
+              return a + b;
+            }
+            const bound = named.bind(null, 1);
+            class WorkerBox {
+              constructor(x, y = 1) {}
+            }
+            const fnProto = Object.getPrototypeOf(named);
+            postMessage([
+              String(Object.getPrototypeOf({}) === Object.prototype),
+              String(Object.getPrototypeOf(Object) === fnProto),
+              String(Object.getPrototypeOf(Map) === fnProto),
+              named.name,
+              String(named.length),
+              WorkerBox.name,
+              String(WorkerBox.length),
+              String(Object.getPrototypeOf(bound) === fnProto),
+              String(bound instanceof Object),
+              bound.constructor.name
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|named|2|WorkerBox|1|true|true|Function",
+    )?;
     Ok(())
 }

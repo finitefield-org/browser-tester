@@ -3501,3 +3501,254 @@ fn constructor_static_bracket_and_property_path_work() -> Result<()> {
     h.assert_text("#result", "5;true;true;1;AB;😺;true;1,2,3;4,5;1")?;
     Ok(())
 }
+
+#[test]
+fn constructor_static_identity_and_new_callee_alias_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const holder = { String, Symbol, Int8Array };
+            const key = 'Int8Array';
+            const viaNew = new holder[key]([9, 10]);
+            const result = [
+              String(holder.String['fromCharCode'] === holder.String.fromCharCode),
+              String(holder.String['fromCodePoint'] === holder.String.fromCodePoint),
+              String(holder.String['raw'] === holder.String.raw),
+              String(holder.Symbol['for'] === holder.Symbol.for),
+              String(holder.Symbol['keyFor'] === holder.Symbol.keyFor),
+              String(holder.Int8Array['of'] === holder.Int8Array.of),
+              String(holder.Int8Array['from'] === holder.Int8Array.from),
+              Array.from(viaNew).join(','),
+              Array.from(globalThis[key]['of'](3, 4)).join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true;true;true;true;true;true;true;9,10;3,4")?;
+    Ok(())
+}
+
+#[test]
+fn constructor_function_surface_and_global_bindings_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const params = new globalThis['URLSearchParams']('a=1&b=2');
+            const map = new globalThis['Map']([['k', 'v']]);
+            const url = new globalThis['URL']('/path?x=1', 'https://example.com/base/');
+            const blob = new globalThis['Blob'](['ab'], { type: 'text/plain' });
+            const buffer = new globalThis['ArrayBuffer'](3);
+            let callError = '';
+            try {
+              Map.call(null);
+            } catch (err) {
+              callError = String(err && err.message ? err.message : err);
+            }
+            const result = [
+              String(globalThis.Map === Map),
+              String(globalThis.URLSearchParams === URLSearchParams),
+              String(globalThis.ArrayBuffer === ArrayBuffer),
+              String(globalThis.Blob === Blob),
+              String(Map.call === Map.call),
+              String(Map.call === Number.call),
+              String(Map.apply === Number.apply),
+              String(Map.bind === Number.bind),
+              String(Map['toString'] === Number['toString']),
+              Map.name,
+              String(Map.length),
+              URL.name,
+              String(URL.length),
+              URLSearchParams.name,
+              String(URLSearchParams.length),
+              ArrayBuffer.name,
+              String(ArrayBuffer.length),
+              String(Map.prototype.constructor === Map),
+              String(URL.prototype.constructor === URL),
+              String(URLSearchParams.prototype.constructor === URLSearchParams),
+              String(ArrayBuffer.prototype.constructor === ArrayBuffer),
+              String(Blob.prototype.constructor === Blob),
+              params.toString(),
+              String(map.get('k')),
+              url.href,
+              String(blob.size) + ':' + blob.type,
+              String(buffer.byteLength),
+              callError
+            ].join(';');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true;true;true;true;true;true;true;true;true;Map;0;URL;1;URLSearchParams;0;ArrayBuffer;1;true;true;true;true;true;a=1&b=2;v;https://example.com/path?x=1;2:text/plain;3;Map constructor must be called with new",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn constructor_raw_static_and_prototype_property_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const BlobCtor = globalThis['Blob'];
+            const ArrayBufferCtor = globalThis['ArrayBuffer'];
+            const PromiseCtor = globalThis['Promise'];
+            const RegExpCtor = globalThis['RegExp'];
+            const blob = new BlobCtor(['abcd'], { type: 'text/plain' });
+            const buffer = new ArrayBufferCtor(4);
+            const view = new Uint8Array(buffer);
+            view.set([1, 2, 3, 4]);
+            const re = RegExpCtor('a.', 'g');
+            const protoInfo = [
+              String(BlobCtor.prototype === BlobCtor.prototype),
+              String(ArrayBufferCtor.prototype === ArrayBufferCtor.prototype),
+              String(PromiseCtor.prototype === PromiseCtor.prototype),
+              String(RegExpCtor.prototype === RegExpCtor.prototype),
+              String(PromiseCtor['resolve'] === PromiseCtor.resolve),
+              String(ArrayBufferCtor['isView'] === ArrayBufferCtor.isView),
+              String(RegExpCtor['escape'] === RegExpCtor.escape)
+            ].join(':');
+            const bag = PromiseCtor['withResolvers']();
+
+            PromiseCtor.prototype['then'].call(
+              BlobCtor.prototype['text'].call(
+                BlobCtor.prototype['slice'].call(blob, 1, 3)
+              ),
+              (text) => {
+                PromiseCtor.prototype['then'].call(
+                  PromiseCtor['resolve']('ok'),
+                  (ok) => {
+                    const match = RegExpCtor.prototype['exec'].call(re, 'baac')[0];
+                    const sliced = ArrayBufferCtor.prototype['slice'].call(buffer, 1, 3);
+                    const slicedView = new Uint8Array(sliced);
+                    bag.resolve([
+                      protoInfo,
+                      text,
+                      ok,
+                      String(ArrayBufferCtor['isView'](view)),
+                      slicedView.join(','),
+                      match,
+                      RegExpCtor['escape']('a+b')
+                    ].join(';'));
+                  }
+                );
+              }
+            );
+
+            PromiseCtor.prototype['then'].call(bag.promise, (value) => {
+              document.getElementById('result').textContent = value;
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true;bc;ok;true;2,3;aa;\\x61\\+b",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn builtin_instanceof_and_object_get_prototype_of_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const map = new Map([['k', 1]]);
+            const set = new Set(['v']);
+            const params = new URLSearchParams('a=1');
+            const url = new URL('/next', 'https://example.com/base/');
+            const buffer = new ArrayBuffer(2);
+            const blob = new Blob(['ok']);
+            const promise = Promise.resolve('done');
+            const re = /a/g;
+            const view = Int8Array.of(1, 2);
+            const typedArrayCtor = Object.getPrototypeOf(Int8Array);
+            const check = (label, fn) => {
+              try {
+                return label + ':' + fn();
+              } catch (err) {
+                return label + ':ERR:' + String(err && err.message ? err.message : err);
+              }
+            };
+            const result = [
+              check('map', () => [
+                String(Object.getPrototypeOf(map) === Map.prototype),
+                String(map instanceof Map),
+                String(map instanceof Object)
+              ].join(':')),
+              check('set', () => [
+                String(Object.getPrototypeOf(set) === Set.prototype),
+                String(set instanceof Set),
+                String(set instanceof Object)
+              ].join(':')),
+              check('params', () => [
+                String(params.constructor === URLSearchParams),
+                String(Object.getPrototypeOf(params) === URLSearchParams.prototype),
+                String(params instanceof URLSearchParams)
+              ].join(':')),
+              check('url', () => [
+                String(url.constructor === URL),
+                String(Object.getPrototypeOf(url) === URL.prototype),
+                String(url instanceof URL)
+              ].join(':')),
+              check('buffer', () => [
+                String(Object.getPrototypeOf(buffer) === ArrayBuffer.prototype),
+                String(buffer instanceof ArrayBuffer),
+                String(buffer instanceof Object)
+              ].join(':')),
+              check('blob', () => [
+                String(Object.getPrototypeOf(blob) === Blob.prototype),
+                String(blob instanceof Blob),
+                String(blob instanceof Object)
+              ].join(':')),
+              check('promise', () => [
+                String(Object.getPrototypeOf(promise) === Promise.prototype),
+                String(promise instanceof Promise),
+                String(promise instanceof Object)
+              ].join(':')),
+              check('regexp', () => [
+                String(Object.getPrototypeOf(re) === RegExp.prototype),
+                String(re instanceof RegExp),
+                String(re instanceof Object)
+              ].join(':')),
+              check('typed', () => [
+                String(Object.getPrototypeOf(view) === Int8Array.prototype),
+                String(Object.getPrototypeOf(Object.getPrototypeOf(view)).constructor === typedArrayCtor),
+                String(view instanceof Int8Array),
+                String(view instanceof Object)
+              ].join(':'))
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "map:true:true:true|set:true:true:true|params:true:true:true|url:true:true:true|buffer:true:true:true|blob:true:true:true|promise:true:true:true|regexp:true:true:true|typed:true:true:true:true",
+    )?;
+    Ok(())
+}

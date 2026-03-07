@@ -1,7 +1,7 @@
 use super::*;
 
 impl Harness {
-    fn resolve_target_value_with_pending(
+    pub(crate) fn resolve_target_value_with_pending(
         &self,
         env: &HashMap<String, Value>,
         target: &str,
@@ -375,10 +375,11 @@ impl Harness {
                         Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) => Ok(
                             Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract),
                         ),
-                        Value::TypedArray(_) => Ok(Value::TypedArrayConstructor(
-                            TypedArrayConstructorKind::Abstract,
-                        )),
-                        _ => Ok(Value::Object(Rc::new(RefCell::new(ObjectValue::default())))),
+                        _ => Ok(self
+                            .value_internal_prototype_value(&value)
+                            .unwrap_or_else(|| {
+                                Value::Object(Rc::new(RefCell::new(ObjectValue::default())))
+                            })),
                     }
                 }
                 Expr::ObjectFreeze(value) => {
@@ -485,6 +486,7 @@ impl Harness {
                         Ok(Value::Number(length))
                     }
                     Some(Value::Object(entries)) => {
+                        let object = Value::Object(entries.clone());
                         let entries = entries.borrow();
                         if Self::is_history_object(&entries) {
                             return Ok(Self::object_get_entry(&entries, "length").unwrap_or(
@@ -500,11 +502,10 @@ impl Harness {
                             return Ok(Value::Number(len as i64));
                         }
                         if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
-                            Ok(Value::Number(value.chars().count() as i64))
-                        } else {
-                            Ok(Self::object_get_entry(&entries, "length")
-                                .unwrap_or(Value::Undefined))
+                            return Ok(Value::Number(value.chars().count() as i64));
                         }
+                        drop(entries);
+                        self.object_property_from_value(&object, "length")
                     }
                     Some(other) => self.object_property_from_value(&other, "length"),
                     None => Err(Error::ScriptRuntime(format!(

@@ -34,6 +34,91 @@ impl Harness {
         Ok(result)
     }
 
+    fn eval_index_get_call_target_and_this(
+        &mut self,
+        target: &Expr,
+        index: &Expr,
+        optional: bool,
+        optional_call: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Option<(Value, Value)>> {
+        let is_super = Self::is_super_target_expr(target);
+        let receiver = if is_super {
+            Self::super_prototype_from_env(env)?
+        } else {
+            self.eval_expr(target, env, event_param, event)?
+        };
+        if optional && matches!(receiver, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+
+        let index_value = self.eval_expr(index, env, event_param, event)?;
+        let key = match index_value {
+            Value::Number(value) => value.to_string(),
+            Value::BigInt(value) => value.to_string(),
+            Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                format!("{value:.0}")
+            }
+            other => self.property_key_to_storage_key(&other),
+        };
+
+        let this_arg = if is_super {
+            Self::super_this_from_env(env)?
+        } else {
+            receiver.clone()
+        };
+        let callee = if is_super {
+            self.object_property_from_value_with_receiver(&receiver, &key, &this_arg)?
+        } else {
+            self.object_property_from_value(&receiver, &key)?
+        };
+        if optional_call && matches!(callee, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+        Ok(Some((callee, this_arg)))
+    }
+
+    fn eval_array_index_call_target_and_this(
+        &mut self,
+        target: &str,
+        index: &Expr,
+        optional_call: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Option<(Value, Value)>> {
+        let index_value = self.eval_expr(index, env, event_param, event)?;
+        let key = match &index_value {
+            Value::Number(value) => value.to_string(),
+            Value::BigInt(value) => value.to_string(),
+            Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                format!("{value:.0}")
+            }
+            other => self.property_key_to_storage_key(other),
+        };
+
+        let (receiver, this_arg) = if target == "super" {
+            let this_value = Self::super_this_from_env(env)?;
+            (Self::super_prototype_from_env(env)?, this_value)
+        } else {
+            let receiver = self
+                .resolve_target_value_with_pending(env, target)
+                .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {target}")))?;
+            (receiver.clone(), receiver)
+        };
+        let callee = if target == "super" {
+            self.object_property_from_value_with_receiver(&receiver, &key, &this_arg)?
+        } else {
+            self.object_property_from_value(&receiver, &key)?
+        };
+        if optional_call && matches!(callee, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+        Ok(Some((callee, this_arg)))
+    }
+
     pub(crate) fn eval_form_data_member_call_from_values(
         &mut self,
         entries: &Rc<RefCell<Vec<(String, String)>>>,
@@ -593,6 +678,74 @@ impl Harness {
                     args,
                     optional,
                 } => {
+                    if let Expr::IndexGet {
+                        target: index_target,
+                        index,
+                        optional: index_optional,
+                    } = target.as_ref()
+                    {
+                        let Some((callee, this_arg)) = self.eval_index_get_call_target_and_this(
+                            index_target,
+                            index,
+                            *index_optional,
+                            *optional,
+                            env,
+                            event_param,
+                            event,
+                        )?
+                        else {
+                            return Ok(Value::Undefined);
+                        };
+                        let evaluated_args =
+                            self.eval_call_args_with_spread(args, env, event_param, event)?;
+                        return self
+                            .execute_callable_value_with_this_and_env_and_sync(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                env,
+                                Some(this_arg),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime("call target is not a function".into())
+                                }
+                                other => other,
+                            });
+                    }
+                    if let Expr::ArrayIndex { target, index } = target.as_ref() {
+                        let Some((callee, this_arg)) = self.eval_array_index_call_target_and_this(
+                            target,
+                            index,
+                            *optional,
+                            env,
+                            event_param,
+                            event,
+                        )?
+                        else {
+                            return Ok(Value::Undefined);
+                        };
+                        let evaluated_args =
+                            self.eval_call_args_with_spread(args, env, event_param, event)?;
+                        return self
+                            .execute_callable_value_with_this_and_env_and_sync(
+                                &callee,
+                                &evaluated_args,
+                                event,
+                                env,
+                                Some(this_arg),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime("call target is not a function".into())
+                                }
+                                other => other,
+                            });
+                    }
                     let callee = self.eval_expr(target, env, event_param, event)?;
                     if *optional && matches!(callee, Value::Null | Value::Undefined) {
                         return Ok(Value::Undefined);

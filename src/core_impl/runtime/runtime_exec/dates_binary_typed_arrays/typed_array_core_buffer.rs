@@ -382,6 +382,70 @@ impl Harness {
         Ok(Self::new_array_buffer_value(byte_length, max_byte_length))
     }
 
+    pub(crate) fn eval_array_buffer_member_call_from_values(
+        &mut self,
+        buffer: &Rc<RefCell<ArrayBufferValue>>,
+        member: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>> {
+        match member {
+            "resize" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer.resize requires exactly one argument".into(),
+                    ));
+                }
+                self.resize_array_buffer(buffer, Self::value_to_i64(&args[0]))?;
+                Ok(Some(Value::Undefined))
+            }
+            "slice" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer.slice supports up to two arguments".into(),
+                    ));
+                }
+                Self::ensure_array_buffer_not_detached(buffer, "slice")?;
+                let source = buffer.borrow();
+                let len = source.bytes.len();
+                let start = args
+                    .first()
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(0);
+                let end = args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(len);
+                let end = end.max(start);
+                Ok(Some(Value::ArrayBuffer(Rc::new(RefCell::new(
+                    ArrayBufferValue {
+                        bytes: source.bytes[start..end].to_vec(),
+                        max_byte_length: None,
+                        detached: false,
+                    },
+                )))))
+            }
+            "transfer" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer.transfer does not take arguments".into(),
+                    ));
+                }
+                self.transfer_array_buffer(buffer, false).map(Some)
+            }
+            "transferToFixedLength" => {
+                if !args.is_empty() {
+                    return Err(Error::ScriptRuntime(
+                        "ArrayBuffer.transferToFixedLength does not take arguments".into(),
+                    ));
+                }
+                self.transfer_array_buffer(buffer, true).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub(crate) fn resize_array_buffer(
         &mut self,
         buffer: &Rc<RefCell<ArrayBufferValue>>,
@@ -478,6 +542,15 @@ impl Harness {
                 kind.name()
             )));
         }
+        let values = self.eval_call_args_with_spread(args, env, event_param, event)?;
+        self.construct_typed_array_from_values(kind, &values)
+    }
+
+    pub(crate) fn construct_typed_array_from_values(
+        &mut self,
+        kind: TypedArrayKind,
+        args: &[Value],
+    ) -> Result<Value> {
         if args.len() > 3 {
             return Err(Error::ScriptRuntime(format!(
                 "{} supports up to three arguments",
@@ -489,7 +562,7 @@ impl Harness {
             return self.new_typed_array_with_length(kind, 0);
         }
 
-        let first = self.eval_expr(&args[0], env, event_param, event)?;
+        let first = args[0].clone();
         match (&first, args.len()) {
             (Value::ArrayBuffer(buffer), 1) => {
                 self.new_typed_array_view(kind, buffer.clone(), 0, None)
@@ -510,17 +583,15 @@ impl Harness {
             }
             (Value::ArrayBuffer(buffer), _) => {
                 let byte_offset = if args.len() >= 2 {
-                    let offset = self.eval_expr(&args[1], env, event_param, event)?;
-                    Self::to_non_negative_usize(&offset, "typed array byteOffset")?
+                    Self::to_non_negative_usize(&args[1], "typed array byteOffset")?
                 } else {
                     0
                 };
                 let length = if args.len() == 3 {
-                    let length = self.eval_expr(&args[2], env, event_param, event)?;
-                    if matches!(length, Value::Undefined) {
+                    if matches!(args[2], Value::Undefined) {
                         None
                     } else {
-                        Some(Self::to_non_negative_usize(&length, "typed array length")?)
+                        Some(Self::to_non_negative_usize(&args[2], "typed array length")?)
                     }
                 } else {
                     None

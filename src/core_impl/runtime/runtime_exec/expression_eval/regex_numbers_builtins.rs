@@ -314,6 +314,7 @@ impl Harness {
                     event_param,
                     event,
                 ),
+                Expr::UrlSearchParamsConstructor => Ok(Value::UrlSearchParamsConstructor),
                 Expr::UrlSearchParamsMethod {
                     target,
                     method,

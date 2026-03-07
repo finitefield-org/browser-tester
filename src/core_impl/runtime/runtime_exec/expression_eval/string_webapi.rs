@@ -869,43 +869,11 @@ impl Harness {
                     }
                 }
                 Expr::FunctionConstructor { args } => {
-                    if args.is_empty() {
-                        return Err(Error::ScriptRuntime(
-                            "new Function requires at least one argument".into(),
-                        ));
-                    }
-
-                    let mut parts = Vec::with_capacity(args.len());
-                    for arg in args {
-                        let part = self.eval_expr(arg, env, event_param, event)?.as_string();
-                        parts.push(part);
-                    }
-
-                    let body_src = parts.last().cloned().ok_or_else(|| {
-                        Error::ScriptRuntime("new Function requires body argument".into())
-                    })?;
-                    let mut params = Vec::new();
-                    for part in parts.iter().take(parts.len().saturating_sub(1)) {
-                        let names = Self::parse_function_constructor_param_names(part)?;
-                        params.extend(names.into_iter().map(|name| FunctionParam {
-                            name,
-                            default: None,
-                            is_rest: false,
-                        }));
-                    }
-
-                    let stmts = parse_block_statements(&body_src).map_err(|err| {
-                        Error::ScriptRuntime(format!("new Function body parse failed: {err}"))
-                    })?;
-                    Ok(self.make_function_value(
-                        ScriptHandler { params, stmts },
-                        env,
-                        true,
-                        false,
-                        false,
-                        false,
-                        false,
-                    ))
+                    let args = args
+                        .iter()
+                        .map(|arg| self.eval_expr(arg, env, event_param, event))
+                        .collect::<Result<Vec<_>>>()?;
+                    self.build_function_from_constructor_values(&args)
                 }
                 _ => Err(Error::ScriptRuntime(UNHANDLED_EXPR_CHUNK.into())),
             }

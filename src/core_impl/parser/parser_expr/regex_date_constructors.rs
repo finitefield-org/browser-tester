@@ -145,19 +145,20 @@ pub(crate) fn parse_new_callee_expr(src: &str) -> Result<Option<Expr>> {
     if rest.is_empty() {
         return Ok(None);
     }
+    let grouped_callee = rest.starts_with('(');
     if rest.starts_with('.') {
         return Ok(None);
     }
     let rest_bytes = rest.as_bytes();
     if collect_top_level_char_positions(rest, b'.')
         .into_iter()
-        .any(|dot| dot > 0 && rest_bytes[dot - 1] == b')')
+        .any(|dot| dot > 0 && rest_bytes[dot - 1] == b')' && !grouped_callee)
     {
         return Ok(None);
     }
     if collect_top_level_char_positions(rest, b'[')
         .into_iter()
-        .any(|index| index > 0 && rest_bytes[index - 1] == b')')
+        .any(|index| index > 0 && rest_bytes[index - 1] == b')' && !grouped_callee)
     {
         return Ok(None);
     }

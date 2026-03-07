@@ -254,6 +254,30 @@ impl Harness {
                 };
                 Ok(Some(self.new_readable_stream_placeholder_value(chunks)))
             }
+            "slice" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "Blob.slice supports up to two arguments".into(),
+                    ));
+                }
+                let source = blob.borrow();
+                let len = source.bytes.len();
+                let start = args
+                    .first()
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(0);
+                let end = args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .map(|value| Self::normalize_slice_index(len, value))
+                    .unwrap_or(len);
+                let end = end.max(start);
+                Ok(Some(Self::new_blob_value(
+                    source.bytes[start..end].to_vec(),
+                    String::new(),
+                )))
+            }
             _ => Ok(None),
         }
     }
