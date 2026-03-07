@@ -381,6 +381,18 @@ impl Harness {
             })
     }
 
+    pub(crate) fn set_select_size_property_value(
+        &mut self,
+        select_node: NodeId,
+        value: &Value,
+    ) -> Result<()> {
+        if !self.is_select_element(select_node) {
+            return Ok(());
+        }
+        let next = Self::value_to_i64(value).max(0);
+        self.dom.set_attr(select_node, "size", &next.to_string())
+    }
+
     pub(crate) fn select_type_property_value(&self, select_node: NodeId) -> String {
         if self.dom.attr(select_node, "multiple").is_some() {
             "select-multiple".to_string()

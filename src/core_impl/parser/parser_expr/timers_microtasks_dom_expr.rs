@@ -274,9 +274,16 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("elementTiming", None) => DomProp::ElementTiming,
         ("htmlFor", None) => DomProp::HtmlFor,
         ("name", None) => DomProp::Name,
+        ("action", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::Action,
+        ("formAction", None) | ("formaction", None)
+            if !matches!(target, DomQuery::DocumentRoot) =>
+        {
+            DomProp::FormAction
+        }
         ("lang", None) => DomProp::Lang,
         ("dir", None) => DomProp::Dir,
         ("accessKey", None) | ("accesskey", None) => DomProp::AccessKey,
+        ("autocomplete", None) => DomProp::AutoComplete,
         ("autocapitalize", None) => DomProp::AutoCapitalize,
         ("autocorrect", None) => DomProp::AutoCorrect,
         ("contentEditable", None) | ("contenteditable", None) => DomProp::ContentEditable,
@@ -307,6 +314,56 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
         {
             DomProp::ColSpan
+        }
+        ("size", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Size
+        }
+        ("min", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Min
+        }
+        ("max", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Max
+        }
+        ("step", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Step
+        }
+        ("maxLength", None) | ("maxlength", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::MaxLength
+        }
+        ("minLength", None) | ("minlength", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::MinLength
+        }
+        ("rows", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Rows
+        }
+        ("cols", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::Cols
+        }
+        ("colSpan", None) | ("colspan", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::TableCellColSpan
+        }
+        ("rowSpan", None) | ("rowspan", None)
+            if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>
+        {
+            DomProp::RowSpan
         }
         ("width", None)
             if !matches!(target, DomQuery::DocumentRoot) && !is_non_dom_var_target(&target) =>

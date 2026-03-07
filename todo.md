@@ -2,86 +2,72 @@
 
 ## 現在位置
 
-- `P0: Parsing, Tree Construction, and Serialization` の最初の slice として、table context における `innerHTML` / `insertAdjacentHTML` の direct `tr` 正規化は実装済み
-- `cargo test --lib` は green
-- 次は同じ P0 の残件として、`setHTMLUnsafe(table)` と `tbody` / `tr` / `td` 文脈の fragment parsing を固定する
+- `P0: Parsing, Tree Construction, and Serialization` の table fragment / `outerHTML` slice は実装と実行系検証まで完了
+- `P1.1: attribute reflection audit 拡張`（enumerated / URL / numeric 追加）は実装と検証まで完了
+- `P1.2: reflection coverage hardening`（URL 棚卸し / enumerated invalid matrix / numeric clamp 拡張）は実装と検証まで完了
+- `P1.3: reflection parity tightening`（missing-default / fast-path整合 / numeric監査拡張）は実装と検証まで完了
+- `P1.4: reflection edge-case tightening`（formAction owner/default・min/maxLength境界・rows/cols上限・enumerated追加）は実装と検証まで完了
+- `P1.5: reflection consistency sweep`（URL delimiter正規化・numeric validity相互作用・fast-path拡張）は実装と検証まで完了
+- `P1.6: reflection matrix deepening`（URL special/opaque matrix・型別validity再評価・`min/max/step` fast-path）は実装と検証まで完了
 
-## 今回のゴール
+## 今回スライスの実施結果（P1.6: reflection matrix deepening）
 
-- `8.5.2 Unsafe HTML parsing methods` と `13.2.6.4.13` から `13.2.6.4.15` までを次の監査対象として固定する
-- `setHTMLUnsafe` と table row/cell context の挙動を、spec section 付きの failing test で先に固める
-- table 関連の fragment parsing を API ごとの個別対応ではなく、共有アルゴリズムとして寄せる
+- [x] URL reflection の特殊ケース matrix を固定した
+  - `anchor` の `protocol` / `host` / `hostname` / `port` / `pathname` setter を special URL と opaque URL で比較し、差分を shared test で固定した
+  - `username/password` setter を no-host URL（`mailto:` / `data:`）と `file:` で no-op になるように実装し、shared test で回帰化した
 
-## TODO
+- [x] numeric validity の型別再評価を固定した
+  - `number` / `range` / `date` / `time` / `datetime-local` で `min/max/step` 変更後の `rangeUnderflow` / `rangeOverflow` / `stepMismatch` 再計算を shared matrix 化した
+  - `step base`（`min` 優先・`value` 基準）と丸め境界ケースを shared test に追加した
 
-- [ ] `html-standard.txt` から次の節を再確認し、期待挙動をテストメモに落とす
-  - `8.5.2 Unsafe HTML parsing methods`
-  - `13.2.6.4.13 The "in table body" insertion mode`
-  - `13.2.6.4.14 The "in row" insertion mode`
-  - `13.2.6.4.15 The "in cell" insertion mode`
-  - 必要なら `13.2.6.4.9 The "in table" insertion mode` を再参照して、既存 table 正規化との一貫性を確認する
+- [x] parser fast path の候補監査を進めた
+  - `DomProp` に `Min` / `Max` / `Step` を追加した
+  - parser / resolver / runtime getter / runtime setter を接続し、fast-path と通常 property path の挙動を揃えた
+  - member chain + bracket access を含む `min/max/step` parity test を shared に追加した
 
-- [ ] 次の targeted test 追加先を固定する
-  - `src/tests/dom_element_set_html_unsafe_method.rs`
-  - `src/tests/dom_tbody_element.rs`
-  - `src/tests/dom_tr_element.rs`
-  - `src/tests/dom_td_element.rs`
-  - 必要なら `src/tests/dom_table_element.rs` と `src/tests/dom_element_outer_html_property.rs`
+- [x] shared behavior テストを段階追加した
+  - `src/tests/dom_attribute_reflection_shared.rs`
+  - `attribute_reflection_html_2_6_1_url_anchor_setter_special_and_opaque_protocol_host_port_pathname_matrix_work`
+  - `attribute_reflection_html_2_6_1_url_anchor_username_password_setter_is_noop_for_no_host_and_file_urls`
+  - `attribute_reflection_html_2_3_3_numeric_validity_recomputes_after_min_max_step_mutations_across_supported_types`
+  - `attribute_reflection_html_2_3_3_numeric_step_base_prefers_min_then_value_attribute_and_rounding_boundary_work`
+  - `attribute_reflection_html_2_3_3_parser_fast_path_matches_min_max_step_reflection_with_bracket_and_member_chain_access`
 
-- [ ] 先に再現するギャップを 2 系統に分ける
-  - 系統 A: `table.setHTMLUnsafe("<tr>...")` が table-specific fragment parsing を通るか
-  - 系統 B: `tbody` / `tr` / `td` 文脈で row/cell-start tag を含む HTML 文字列が正しい階層になるか
+- [x] 検証完了
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib` (`2137 passed, 0 failed`)
 
-- [ ] failing test の候補を 4 件以内に絞る
-  - `setHTMLUnsafe(table)` で direct `tr` を残さないケース
-  - `tbody.innerHTML` が table body insertion mode を通るケース
-  - `tr.innerHTML` が row insertion mode を通るケース
-  - `td.innerHTML` が cell insertion mode を通るケース
-
-- [ ] 追加するテストに spec section を必ず残す
-  - test 名かコメントで `html_8_5_2_*`, `html_13_2_6_4_13_*`, `html_13_2_6_4_14_*`, `html_13_2_6_4_15_*` を使う
-
-- [ ] 実装方針を先に決める
-  - `setHTMLUnsafe` だけの個別パッチにしない
-  - `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `setHTMLUnsafe` が同じ fragment parsing か同じ post-parse fixup を通る構造を優先する
-  - row/cell context を post-parse 正規化では吸収できない場合は、`src/core_impl/parser` 側の fragment context を先に直す
-
-- [ ] 新規 mock の要否を判定する
-  - この slice では原則として不要
-  - もし test-only mock を増やすなら、同時に `README.md` の `Test Mocks` 節へ利用方法を追記する
-
-- [ ] 実装後の検証コマンドを固定する
-  - `cargo test --lib dom_element_set_html_unsafe_method`
-  - `cargo test --lib dom_tbody_element`
-  - `cargo test --lib dom_tr_element`
-  - `cargo test --lib dom_td_element`
-  - 必要なら `cargo test --lib dom_table_element`
-  - 最後に `cargo test --lib`
-  - parser を触った場合は property/fuzz も確認する
+- [x] 新規 mock 不要を確認（README 追記なし）
 
 ## Traceability
 
 | Spec section | Repo surface | Current coverage | Missing behavior | Required mock | Acceptance test | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| `8.5`, `13.2.6.4.9` | `src/core_impl/dom/text_html_content.rs` | `dom_table_element` に table context の HTML string insertion 回帰テストを追加済み | `table.innerHTML` / `table.insertAdjacentHTML()` の direct `tr` 正規化 | none | `table_inner_html_html_8_5_13_2_6_4_9_*`, `table_insert_adjacent_html_html_13_2_6_4_9_*` | implemented |
-| `8.5.2` | `src/core_impl/dom/text_html_content.rs`, `src/tests/dom_element_set_html_unsafe_method.rs` | `setHTMLUnsafe` の sanitizer / declarative shadow root テストはある | `setHTMLUnsafe(table)` が table-specific fragment parsing を通るか未固定 | none | `set_html_unsafe_table_html_8_5_2_*` | active |
-| `8.5`, `13.2.6.4.13`-`13.2.6.4.15` | `src/core_impl/parser`, `src/core_impl/dom/text_html_content.rs` | table 系要素の静的構造テストはある | `tbody` / `tr` / `td` 文脈の fragment parsing が未固定 | none | `tbody_inner_html_html_13_2_6_4_13_*`, `tr_inner_html_html_13_2_6_4_14_*`, `td_inner_html_html_13_2_6_4_15_*` | active |
-| `8.5`, `8.5.2` | `src/core_impl/dom/text_html_content.rs`, `src/tests/dom_element_outer_html_property.rs` | detached node / document child 制約の既存テストはある | table 親配下の `outerHTML` 置換後に direct `tr` が残らないことは未固定 | none | table 配下の `outerHTML` 置換テスト | next |
-| `2.3`, `2.6.1` | shared attribute reflection helpers | 個別要素テストは多い | boolean / enumerated / numeric / URL reflection の shared audit は未着手 | none | shared microsyntax/reflection test set | queued |
+| `8.5`, `13.2.6.4.9` | `src/core_impl/dom/text_html_content.rs`, `src/tests/dom_element_outer_html_property.rs` | table 親配下 `outerHTML` 置換・table context 補正・回帰テストを固定済み | なし | none | `element_outer_html_set_html_8_5_13_2_6_4_9_*`, `element_outer_html_set_html_8_5_13_2_6_4_13_*` | implemented + verified |
+| `2.3.1` | shared reflection helper + assignment paths | boolean reflected attribute の presence semantics を shared helper に集約済み | 特になし（維持フェーズ） | none | `attribute_reflection_html_2_3_1_*` | implemented + verified |
+| `2.3.2` | shared reflection helper + getter/setter paths | `draggable`/`spellcheck`/`translate` に加え `dir` / `autocapitalize` / `autocomplete` の missing/invalid/case-variant を shared テストで固定済み | form関連 enumerated（`form.autocomplete` など）の owner/default 相互作用監査は継続余地 | none | `attribute_reflection_html_2_3_2_*` | implemented + verified |
+| `2.3.3` | shared reflection helper + getter/setter + fast-path paths | `min/max/step` fast-path + `number/range/date/time/datetime-local` の再評価 matrix + `step base` 境界を固定済み | `step='any'` の型別挙動（特に `datetime-local`）と bracket assignment 系の parser/runtime 経路は継続監査余地 | none | `attribute_reflection_html_2_3_3_*` | implemented + verified |
+| `2.6.1` | shared reflection helper + URL getter/setter paths | `anchor` special/opaque setter matrix + `username/password` の no-host/file no-op を固定済み | default port 正規化（`80/443`）と scheme 切替時（special↔special/opaque）の保持規則監査は継続余地 | none | `attribute_reflection_html_2_6_1_*` | implemented + verified |
 
-## 次の着手順
+## 次のタスク（P1.7: reflection semantics tightening）
 
-1. `8.5.2` と `13.2.6.4.13` から `13.2.6.4.15` の期待挙動を読む
-2. `setHTMLUnsafe(table)` と `tbody` / `tr` / `td` の現在挙動を最小ケースで再現する
-3. spec section 付きの failing test を先に追加する
-4. fragment parsing の共有経路を決めて最小実装を入れる
-5. targeted test と `cargo test --lib` を回す
+- [ ] URL reflection の正規化ルールを詰める
+  - default port（`http:80`, `https:443`）の反映/省略規則を shared test で固定する
+  - `protocol` 切替（special↔special, special↔opaque）での authority/path 保持規則を matrix 化する
 
-## 完了条件
+- [ ] validity の残差分を詰める
+  - `datetime-local` を含む型別 `step='any'` 挙動を shared test 化し、必要なら実装修正する
+  - `time` の跨日レンジ（`min > max`）と `step` 併用時の境界を追加監査する
 
-- `setHTMLUnsafe(table)` の期待挙動が spec section 付きテストで固定されている
-- `tbody` / `tr` / `td` 文脈の fragment parsing が少なくとも 1 ケースずつテスト化されている
-- API ごとの差分ではなく、共有アルゴリズムとして実装箇所が定まっている
-- `cargo test --lib` が通る
+- [ ] parser/property path の整合性を詰める
+  - static string bracket assignment（`el['prop'] = ...`）の parser 対応範囲を拡張し、dot access と parity を確保する
+  - 追加した fast-path key で object path との差分（expando / reflected property）を棚卸しして回帰テスト化する
 
-この TODO が終わった時点で、次の作業は「table 親配下の `outerHTML` 置換と、その後の P1 attribute reflection audit」に進む。
+- [ ] 検証する
+  - 追加した targeted tests（URL-normalization / step-any / bracket-assignment parity）
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib`

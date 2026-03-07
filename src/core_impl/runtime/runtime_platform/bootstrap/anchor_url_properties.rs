@@ -297,13 +297,41 @@ impl Harness {
     }
 
     pub(crate) fn resolve_anchor_href(&self, node: NodeId) -> String {
-        let raw = self.dom.attr(node, "href").unwrap_or_default();
+        let Some(raw) = self.dom.attr(node, "href") else {
+            return String::new();
+        };
         self.resolve_document_target_url(&raw)
     }
 
     pub(crate) fn anchor_location_parts(&self, node: NodeId) -> LocationParts {
         let href = self.resolve_anchor_href(node);
         LocationParts::parse(&href).unwrap_or_else(|| self.current_location_parts())
+    }
+
+    pub(crate) fn normalized_search_getter_value(raw: &str) -> String {
+        if raw == "?" {
+            String::new()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub(crate) fn normalized_hash_getter_value(raw: &str) -> String {
+        if raw == "#" {
+            String::new()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub(crate) fn anchor_search_property_value(&self, node: NodeId) -> String {
+        let parts = self.anchor_location_parts(node);
+        Self::normalized_search_getter_value(parts.search.as_str())
+    }
+
+    pub(crate) fn anchor_hash_property_value(&self, node: NodeId) -> String {
+        let parts = self.anchor_location_parts(node);
+        Self::normalized_hash_getter_value(parts.hash.as_str())
     }
 
     pub(crate) fn set_anchor_url_property(
@@ -368,10 +396,14 @@ impl Harness {
                 parts.hash = ensure_hash_prefix(&value.as_string());
             }
             "username" => {
-                parts.username = value.as_string();
+                if parts.has_authority && !parts.scheme.eq_ignore_ascii_case("file") {
+                    parts.username = value.as_string();
+                }
             }
             "password" => {
-                parts.password = value.as_string();
+                if parts.has_authority && !parts.scheme.eq_ignore_ascii_case("file") {
+                    parts.password = value.as_string();
+                }
             }
             _ => {
                 return Err(Error::ScriptRuntime(format!(

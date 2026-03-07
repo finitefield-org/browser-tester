@@ -161,3 +161,73 @@ fn element_outer_html_set_sanitizes_scripts_and_dangerous_attrs() -> Result<()> 
     )?;
     Ok(())
 }
+
+#[test]
+fn element_outer_html_set_html_8_5_13_2_6_4_9_table_parent_reprocesses_cell_start_tags()
+-> Result<()> {
+    let html = r#"
+        <table id='scores'>
+          <caption id='target'>before</caption>
+        </table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            target.outerHTML = '<td id="late">Late</td><th id="bonus">Bonus</th>';
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody').length,
+              document.querySelectorAll('#scores > tr').length,
+              document.querySelectorAll('#scores > td').length,
+              document.querySelectorAll('#scores > th').length,
+              document.querySelectorAll('#scores > tbody > tr').length,
+              document.querySelectorAll('#scores > tbody > tr > td').length,
+              document.querySelectorAll('#scores > tbody > tr > th').length,
+              Array.from(document.querySelectorAll('#scores > tbody > tr > *'))
+                .map((cell) => cell.textContent)
+                .join(',')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:0:0:0:1:1:1:Late,Bonus")?;
+    Ok(())
+}
+
+#[test]
+fn element_outer_html_set_html_8_5_13_2_6_4_13_tbody_parent_wraps_direct_cells_in_row() -> Result<()>
+{
+    let html = r#"
+        <table id='scores'>
+          <tbody id='body'>
+            <tr id='target'><td>Old</td></tr>
+          </tbody>
+        </table>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            target.outerHTML = '<td id="a">Alpha</td><th id="b">Beta</th>';
+            document.getElementById('result').textContent = [
+              document.querySelectorAll('#scores > tbody > tr').length,
+              document.querySelectorAll('#scores > tbody > td').length,
+              document.querySelectorAll('#scores > tbody > th').length,
+              document.querySelectorAll('#scores > tbody > tr > td').length,
+              document.querySelectorAll('#scores > tbody > tr > th').length,
+              Array.from(document.querySelectorAll('#scores > tbody > tr > *'))
+                .map((cell) => cell.textContent)
+                .join(',')
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "1:0:0:1:1:Alpha,Beta")?;
+    Ok(())
+}

@@ -3366,11 +3366,11 @@ impl Harness {
                                             env,
                                         )?;
                                     } else {
-                                        if value.truthy() {
-                                            self.dom.set_attr(node, "open", "true")?;
-                                        } else {
-                                            self.dom.remove_attr(node, "open")?;
-                                        }
+                                        self.set_reflected_boolean_attribute(
+                                            node,
+                                            "open",
+                                            value.truthy(),
+                                        )?;
                                     }
                                 }
                                 DomProp::ReturnValue => {
@@ -3379,27 +3379,21 @@ impl Harness {
                                 DomProp::ClosedBy => {
                                     self.dom.set_attr(node, "closedby", &value.as_string())?
                                 }
-                                DomProp::Readonly => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "readonly", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "readonly")?;
-                                    }
-                                }
-                                DomProp::Required => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "required", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "required")?;
-                                    }
-                                }
-                                DomProp::Disabled => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "disabled", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "disabled")?;
-                                    }
-                                }
+                                DomProp::Readonly => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "readonly",
+                                    value.truthy(),
+                                )?,
+                                DomProp::Required => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "required",
+                                    value.truthy(),
+                                )?,
+                                DomProp::Disabled => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "disabled",
+                                    value.truthy(),
+                                )?,
                                 DomProp::Hidden => {
                                     if node == self.dom.root {
                                         let call = self.describe_dom_prop(prop);
@@ -3407,11 +3401,11 @@ impl Harness {
                                             "{call} is read-only"
                                         )));
                                     }
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "hidden", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "hidden")?;
-                                    }
+                                    self.set_reflected_boolean_attribute(
+                                        node,
+                                        "hidden",
+                                        value.truthy(),
+                                    )?
                                 }
                                 DomProp::ClassName => {
                                     self.dom.set_attr(node, "class", &value.as_string())?
@@ -3439,6 +3433,31 @@ impl Harness {
                                 DomProp::Name => {
                                     self.dom.set_attr(node, "name", &value.as_string())?
                                 }
+                                DomProp::Action => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+                                    {
+                                        self.dom.set_attr(node, "action", &value.as_string())?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "action".to_string()), value);
+                                    }
+                                }
+                                DomProp::FormAction => {
+                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("button")
+                                            || tag.eq_ignore_ascii_case("input")
+                                    }) {
+                                        self.dom.set_attr(node, "formaction", &value.as_string())?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "formAction".to_string()), value);
+                                    }
+                                }
                                 DomProp::Lang => {
                                     self.dom.set_attr(node, "lang", &value.as_string())?
                                 }
@@ -3448,6 +3467,10 @@ impl Harness {
                                 DomProp::AccessKey => {
                                     self.dom.set_attr(node, "accesskey", &value.as_string())?
                                 }
+                                DomProp::AutoComplete => {
+                                    self.dom
+                                        .set_attr(node, "autocomplete", &value.as_string())?
+                                }
                                 DomProp::AutoCapitalize => {
                                     self.dom
                                         .set_attr(node, "autocapitalize", &value.as_string())?
@@ -3455,27 +3478,26 @@ impl Harness {
                                 DomProp::AutoCorrect => {
                                     self.dom.set_attr(node, "autocorrect", &value.as_string())?
                                 }
-                                DomProp::ContentEditable => self.dom.set_attr(
-                                    node,
-                                    "contenteditable",
-                                    &value.as_string(),
-                                )?,
-                                DomProp::Draggable => self.dom.set_attr(
-                                    node,
-                                    "draggable",
-                                    if value.truthy() { "true" } else { "false" },
-                                )?,
+                                DomProp::ContentEditable => {
+                                    self.set_content_editable_property_value(node, &value)?
+                                }
+                                DomProp::Draggable => self
+                                    .set_reflected_keyword_boolean_attribute(
+                                        node,
+                                        "draggable",
+                                        value.truthy(),
+                                        "true",
+                                        "false",
+                                    )?,
                                 DomProp::EnterKeyHint => {
                                     self.dom
                                         .set_attr(node, "enterkeyhint", &value.as_string())?
                                 }
-                                DomProp::Inert => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "inert", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "inert")?;
-                                    }
-                                }
+                                DomProp::Inert => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "inert",
+                                    value.truthy(),
+                                )?,
                                 DomProp::InputMode => {
                                     self.dom.set_attr(node, "inputmode", &value.as_string())?
                                 }
@@ -3485,21 +3507,25 @@ impl Harness {
                                 DomProp::Popover => {
                                     self.dom.set_attr(node, "popover", &value.as_string())?
                                 }
-                                DomProp::Spellcheck => self.dom.set_attr(
-                                    node,
-                                    "spellcheck",
-                                    if value.truthy() { "true" } else { "false" },
-                                )?,
-                                DomProp::TabIndex => self.dom.set_attr(
-                                    node,
-                                    "tabindex",
-                                    &Self::value_to_i64(&value).to_string(),
-                                )?,
-                                DomProp::Translate => self.dom.set_attr(
-                                    node,
-                                    "translate",
-                                    if value.truthy() { "yes" } else { "no" },
-                                )?,
+                                DomProp::Spellcheck => self
+                                    .set_reflected_keyword_boolean_attribute(
+                                        node,
+                                        "spellcheck",
+                                        value.truthy(),
+                                        "true",
+                                        "false",
+                                    )?,
+                                DomProp::TabIndex => {
+                                    self.set_reflected_i64_attribute(node, "tabindex", &value)?
+                                }
+                                DomProp::Translate => self
+                                    .set_reflected_keyword_boolean_attribute(
+                                        node,
+                                        "translate",
+                                        value.truthy(),
+                                        "yes",
+                                        "no",
+                                    )?,
                                 DomProp::Cite => {
                                     self.dom.set_attr(node, "cite", &value.as_string())?
                                 }
@@ -3522,6 +3548,30 @@ impl Harness {
                                         self.dom_runtime
                                             .node_expando_props
                                             .insert((node, "span".to_string()), value);
+                                    }
+                                }
+                                DomProp::TableCellColSpan => {
+                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("td")
+                                            || tag.eq_ignore_ascii_case("th")
+                                    }) {
+                                        self.set_table_cell_col_span_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "colSpan".to_string()), value);
+                                    }
+                                }
+                                DomProp::RowSpan => {
+                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("td")
+                                            || tag.eq_ignore_ascii_case("th")
+                                    }) {
+                                        self.set_table_cell_row_span_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "rowSpan".to_string()), value);
                                     }
                                 }
                                 DomProp::CanvasWidth => {
@@ -3549,20 +3599,16 @@ impl Harness {
                                 DomProp::AudioSrc => {
                                     self.dom.set_attr(node, "src", &value.as_string())?
                                 }
-                                DomProp::AudioAutoplay => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "autoplay", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "autoplay")?;
-                                    }
-                                }
-                                DomProp::AudioControls => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "controls", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "controls")?;
-                                    }
-                                }
+                                DomProp::AudioAutoplay => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "autoplay",
+                                    value.truthy(),
+                                )?,
+                                DomProp::AudioControls => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "controls",
+                                    value.truthy(),
+                                )?,
                                 DomProp::AudioControlsList => {
                                     self.dom
                                         .set_attr(node, "controlslist", &value.as_string())?
@@ -3570,48 +3616,36 @@ impl Harness {
                                 DomProp::AudioCrossOrigin => {
                                     self.dom.set_attr(node, "crossorigin", &value.as_string())?
                                 }
-                                DomProp::AudioDisableRemotePlayback => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "disableremoteplayback", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "disableremoteplayback")?;
-                                    }
-                                }
-                                DomProp::VideoDisablePictureInPicture => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(
-                                            node,
-                                            "disablepictureinpicture",
-                                            "true",
-                                        )?;
-                                    } else {
-                                        self.dom.remove_attr(node, "disablepictureinpicture")?;
-                                    }
-                                }
-                                DomProp::AudioLoop => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "loop", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "loop")?;
-                                    }
-                                }
-                                DomProp::AudioMuted => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "muted", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "muted")?;
-                                    }
-                                }
+                                DomProp::AudioDisableRemotePlayback => self
+                                    .set_reflected_boolean_attribute(
+                                        node,
+                                        "disableremoteplayback",
+                                        value.truthy(),
+                                    )?,
+                                DomProp::VideoDisablePictureInPicture => self
+                                    .set_reflected_boolean_attribute(
+                                        node,
+                                        "disablepictureinpicture",
+                                        value.truthy(),
+                                    )?,
+                                DomProp::AudioLoop => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "loop",
+                                    value.truthy(),
+                                )?,
+                                DomProp::AudioMuted => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "muted",
+                                    value.truthy(),
+                                )?,
                                 DomProp::AudioPreload => {
                                     self.dom.set_attr(node, "preload", &value.as_string())?
                                 }
-                                DomProp::VideoPlaysInline => {
-                                    if value.truthy() {
-                                        self.dom.set_attr(node, "playsinline", "true")?;
-                                    } else {
-                                        self.dom.remove_attr(node, "playsinline")?;
-                                    }
-                                }
+                                DomProp::VideoPlaysInline => self.set_reflected_boolean_attribute(
+                                    node,
+                                    "playsinline",
+                                    value.truthy(),
+                                )?,
                                 DomProp::VideoPoster => {
                                     self.dom.set_attr(node, "poster", &value.as_string())?
                                 }
@@ -3771,6 +3805,114 @@ impl Harness {
                                 }
                                 DomProp::AnchorShape => {
                                     self.dom.set_attr(node, "shape", &value.as_string())?
+                                }
+                                DomProp::Size => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+                                    {
+                                        self.set_select_size_property_value(node, &value)?
+                                    } else if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                                    {
+                                        self.set_input_size_property_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "size".to_string()), value);
+                                    }
+                                }
+                                DomProp::Min => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                                    {
+                                        self.dom.set_attr(node, "min", &value.as_string())?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "min".to_string()), value);
+                                    }
+                                }
+                                DomProp::Max => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                                    {
+                                        self.dom.set_attr(node, "max", &value.as_string())?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "max".to_string()), value);
+                                    }
+                                }
+                                DomProp::Step => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                                    {
+                                        self.dom.set_attr(node, "step", &value.as_string())?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "step".to_string()), value);
+                                    }
+                                }
+                                DomProp::MaxLength => {
+                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("input")
+                                            || tag.eq_ignore_ascii_case("textarea")
+                                    }) {
+                                        self.set_max_length_property_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "maxLength".to_string()), value);
+                                    }
+                                }
+                                DomProp::MinLength => {
+                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                        tag.eq_ignore_ascii_case("input")
+                                            || tag.eq_ignore_ascii_case("textarea")
+                                    }) {
+                                        self.set_min_length_property_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "minLength".to_string()), value);
+                                    }
+                                }
+                                DomProp::Rows => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
+                                    {
+                                        self.set_textarea_rows_property_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "rows".to_string()), value);
+                                    }
+                                }
+                                DomProp::Cols => {
+                                    if self
+                                        .dom
+                                        .tag_name(node)
+                                        .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
+                                    {
+                                        self.set_textarea_cols_property_value(node, &value)?
+                                    } else {
+                                        self.dom_runtime
+                                            .node_expando_props
+                                            .insert((node, "cols".to_string()), value);
+                                    }
                                 }
                                 DomProp::AriaString(prop_name) => {
                                     let attr_name = Self::aria_property_to_attr_name(prop_name);

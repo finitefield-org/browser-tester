@@ -875,10 +875,22 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("input"));
+        let is_textarea = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"));
         let is_button = self
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("button"));
+        let is_form = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+        let is_table_cell = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th"));
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
@@ -958,53 +970,29 @@ impl Harness {
             "checked" => self.dom.set_checked(node, value.truthy())?,
             "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
             "open" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "open", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "open")?;
-                }
+                self.set_reflected_boolean_attribute(node, "open", value.truthy())?;
             }
             "returnValue" => {
                 self.set_dialog_return_value(node, value.as_string())?;
             }
             "closedBy" | "closedby" => self.dom.set_attr(node, "closedby", &value.as_string())?,
             "readOnly" | "readonly" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "readonly", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "readonly")?;
-                }
+                self.set_reflected_boolean_attribute(node, "readonly", value.truthy())?;
             }
             "required" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "required", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "required")?;
-                }
+                self.set_reflected_boolean_attribute(node, "required", value.truthy())?;
             }
             "multiple" if is_select || is_input => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "multiple", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "multiple")?;
-                }
+                self.set_reflected_boolean_attribute(node, "multiple", value.truthy())?;
             }
             "disabled" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "disabled", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "disabled")?;
-                }
+                self.set_reflected_boolean_attribute(node, "disabled", value.truthy())?;
             }
             "hidden" => {
                 if node == self.dom.root {
                     return Err(Error::ScriptRuntime("hidden is read-only".into()));
                 }
-                if value.truthy() {
-                    self.dom.set_attr(node, "hidden", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "hidden")?;
-                }
+                self.set_reflected_boolean_attribute(node, "hidden", value.truthy())?;
             }
             "className" | "classList" => self.dom.set_attr(node, "class", &value.as_string())?,
             "part" => self.dom.set_attr(node, "part", &value.as_string())?,
@@ -1016,6 +1004,7 @@ impl Harness {
                 .dom
                 .set_attr(node, "elementtiming", &value.as_string())?,
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
+            "action" if is_form => self.dom.set_attr(node, "action", &value.as_string())?,
             "command" => {
                 if is_button {
                     self.dom.set_attr(node, "command", &value.as_string())?;
@@ -1040,7 +1029,7 @@ impl Harness {
                 }
             }
             "formAction" => {
-                if is_button {
+                if is_button || is_input {
                     self.dom.set_attr(node, "formaction", &value.as_string())?;
                 }
             }
@@ -1056,11 +1045,7 @@ impl Harness {
             }
             "formNoValidate" => {
                 if is_button {
-                    if value.truthy() {
-                        self.dom.set_attr(node, "formnovalidate", "true")?;
-                    } else {
-                        self.dom.remove_attr(node, "formnovalidate")?;
-                    }
+                    self.set_reflected_boolean_attribute(node, "formnovalidate", value.truthy())?;
                 }
             }
             "formTarget" => {
@@ -1081,43 +1066,44 @@ impl Harness {
                 .dom
                 .set_attr(node, "autocomplete", &value.as_string())?,
             "contentEditable" | "contenteditable" => {
-                self.dom
-                    .set_attr(node, "contenteditable", &value.as_string())?
+                self.set_content_editable_property_value(node, &value)?
             }
-            "draggable" => self.dom.set_attr(
+            "draggable" => self.set_reflected_keyword_boolean_attribute(
                 node,
                 "draggable",
-                if value.truthy() { "true" } else { "false" },
+                value.truthy(),
+                "true",
+                "false",
             )?,
             "enterKeyHint" | "enterkeyhint" => {
                 self.dom
                     .set_attr(node, "enterkeyhint", &value.as_string())?
             }
             "inert" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "inert", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "inert")?;
-                }
+                self.set_reflected_boolean_attribute(node, "inert", value.truthy())?;
             }
             "inputMode" | "inputmode" => {
                 self.dom.set_attr(node, "inputmode", &value.as_string())?
             }
             "nonce" => self.dom.set_attr(node, "nonce", &value.as_string())?,
             "popover" => self.dom.set_attr(node, "popover", &value.as_string())?,
-            "spellcheck" => self.dom.set_attr(
+            "spellcheck" => self.set_reflected_keyword_boolean_attribute(
                 node,
                 "spellcheck",
-                if value.truthy() { "true" } else { "false" },
+                value.truthy(),
+                "true",
+                "false",
             )?,
             "tabIndex" | "tabindex" => {
-                self.dom
-                    .set_attr(node, "tabindex", &Self::value_to_i64(&value).to_string())?
+                self.set_reflected_i64_attribute(node, "tabindex", &value)?
             }
-            "translate" => {
-                self.dom
-                    .set_attr(node, "translate", if value.truthy() { "yes" } else { "no" })?
-            }
+            "translate" => self.set_reflected_keyword_boolean_attribute(
+                node,
+                "translate",
+                value.truthy(),
+                "yes",
+                "no",
+            )?,
             "cite" => self.dom.set_attr(node, "cite", &value.as_string())?,
             "dateTime" | "datetime" => self.dom.set_attr(node, "datetime", &value.as_string())?,
             "clear" => self.dom.set_attr(node, "clear", &value.as_string())?,
@@ -1142,6 +1128,12 @@ impl Harness {
             "vLink" | "vlink" => self.dom.set_attr(node, "vlink", &value.as_string())?,
             "title" => self.dom.set_attr(node, "title", &value.as_string())?,
             "alt" => self.dom.set_attr(node, "alt", &value.as_string())?,
+            "colSpan" | "colspan" if is_table_cell => {
+                self.set_table_cell_col_span_value(node, &value)?
+            }
+            "rowSpan" | "rowspan" if is_table_cell => {
+                self.set_table_cell_row_span_value(node, &value)?
+            }
             "span"
                 if self.dom.tag_name(node).is_some_and(|tag| {
                     tag.eq_ignore_ascii_case("col") || tag.eq_ignore_ascii_case("colgroup")
@@ -1151,18 +1143,10 @@ impl Harness {
             }
             "src" => self.dom.set_attr(node, "src", &value.as_string())?,
             "autoplay" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "autoplay", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "autoplay")?;
-                }
+                self.set_reflected_boolean_attribute(node, "autoplay", value.truthy())?;
             }
             "controls" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "controls", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "controls")?;
-                }
+                self.set_reflected_boolean_attribute(node, "controls", value.truthy())?;
             }
             "controlsList" | "controlslist" => {
                 self.dom
@@ -1172,40 +1156,28 @@ impl Harness {
                 self.dom.set_attr(node, "crossorigin", &value.as_string())?
             }
             "disableRemotePlayback" | "disableremoteplayback" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "disableremoteplayback", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "disableremoteplayback")?;
-                }
+                self.set_reflected_boolean_attribute(
+                    node,
+                    "disableremoteplayback",
+                    value.truthy(),
+                )?;
             }
             "disablePictureInPicture" | "disablepictureinpicture" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "disablepictureinpicture", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "disablepictureinpicture")?;
-                }
+                self.set_reflected_boolean_attribute(
+                    node,
+                    "disablepictureinpicture",
+                    value.truthy(),
+                )?;
             }
             "loop" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "loop", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "loop")?;
-                }
+                self.set_reflected_boolean_attribute(node, "loop", value.truthy())?;
             }
             "muted" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "muted", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "muted")?;
-                }
+                self.set_reflected_boolean_attribute(node, "muted", value.truthy())?;
             }
             "preload" => self.dom.set_attr(node, "preload", &value.as_string())?,
             "playsInline" | "playsinline" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "playsinline", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "playsinline")?;
-                }
+                self.set_reflected_boolean_attribute(node, "playsinline", value.truthy())?;
             }
             "poster" => self.dom.set_attr(node, "poster", &value.as_string())?,
             "attributionSrc" | "attributionsrc" => {
@@ -1275,10 +1247,19 @@ impl Harness {
             "rel" => self.dom.set_attr(node, "rel", &value.as_string())?,
             "search" => self.set_anchor_url_property(node, "search", value.clone())?,
             "target" => self.dom.set_attr(node, "target", &value.as_string())?,
-            "size" if is_select => {
-                let size = Self::value_to_i64(&value).max(0);
-                self.dom.set_attr(node, "size", &size.to_string())?
+            "size" if is_select => self.set_select_size_property_value(node, &value)?,
+            "size" if is_input => self.set_input_size_property_value(node, &value)?,
+            "min" | "max" | "step" if is_input => {
+                self.dom.set_attr(node, key, &value.as_string())?
             }
+            "maxLength" | "maxlength" if is_input || is_textarea => {
+                self.set_max_length_property_value(node, &value)?
+            }
+            "minLength" | "minlength" if is_input || is_textarea => {
+                self.set_min_length_property_value(node, &value)?
+            }
+            "rows" if is_textarea => self.set_textarea_rows_property_value(node, &value)?,
+            "cols" if is_textarea => self.set_textarea_cols_property_value(node, &value)?,
             "type" if is_select => {}
             "type" => self.dom.set_attr(node, "type", &value.as_string())?,
             "mozOpaque" | "mozopaque"
@@ -1287,11 +1268,7 @@ impl Harness {
                     .tag_name(node)
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("canvas")) =>
             {
-                if value.truthy() {
-                    self.dom.set_attr(node, "moz-opaque", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "moz-opaque")?;
-                }
+                self.set_reflected_boolean_attribute(node, "moz-opaque", value.truthy())?;
             }
             "mozPrintCallback" | "mozprintcallback"
                 if self
@@ -1317,11 +1294,7 @@ impl Harness {
                 self.dom.set_attr(node, "kind", &value.as_string())?
             }
             "noHref" | "nohref" => {
-                if value.truthy() {
-                    self.dom.set_attr(node, "nohref", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "nohref")?;
-                }
+                self.set_reflected_boolean_attribute(node, "nohref", value.truthy())?;
             }
             "srclang" | "srcLang"
                 if self
@@ -1345,11 +1318,7 @@ impl Harness {
                     .tag_name(node)
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
             {
-                if value.truthy() {
-                    self.dom.set_attr(node, "default", "true")?;
-                } else {
-                    self.dom.remove_attr(node, "default")?;
-                }
+                self.set_reflected_boolean_attribute(node, "default", value.truthy())?;
             }
             "media" => self.dom.set_attr(node, "media", &value.as_string())?,
             "sizes" => self.dom.set_attr(node, "sizes", &value.as_string())?,

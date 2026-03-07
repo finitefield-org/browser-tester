@@ -274,6 +274,9 @@ impl Dom {
 
 fn normalize_table_fragment_for_context(fragment: &mut Dom, context_tag: &str) -> Result<()> {
     match context_tag.to_ascii_lowercase().as_str() {
+        "table" => {
+            wrap_top_level_cells_in_implied_rows(fragment)?;
+        }
         "tbody" | "thead" | "tfoot" => {
             flatten_top_level_wrappers(
                 fragment,

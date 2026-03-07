@@ -219,12 +219,50 @@ impl Harness {
                         DomProp::Name => Ok(Value::String(
                             self.dom.attr(node, "name").unwrap_or_default(),
                         )),
+                        DomProp::Action => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+                            {
+                                Ok(Value::String(
+                                    self.form_action_property_value_for_node(node),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "action".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::FormAction => {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("button")
+                                    || tag.eq_ignore_ascii_case("input")
+                            }) {
+                                Ok(Value::String(
+                                    self.submitter_form_action_property_value_for_node(node),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "formAction".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
                         DomProp::Lang => Ok(Value::String(
                             self.dom.attr(node, "lang").unwrap_or_default(),
                         )),
                         DomProp::Dir => Ok(Value::String(self.resolved_dir_for_node(node))),
                         DomProp::AccessKey => Ok(Value::String(
                             self.dom.attr(node, "accesskey").unwrap_or_default(),
+                        )),
+                        DomProp::AutoComplete => Ok(Value::String(
+                            self.dom.attr(node, "autocomplete").unwrap_or_default(),
                         )),
                         DomProp::AutoCapitalize => Ok(Value::String(
                             self.dom.attr(node, "autocapitalize").unwrap_or_default(),
@@ -233,15 +271,11 @@ impl Harness {
                             self.dom.attr(node, "autocorrect").unwrap_or_default(),
                         )),
                         DomProp::ContentEditable => Ok(Value::String(
-                            self.dom
-                                .attr(node, "contenteditable")
-                                .unwrap_or_else(|| "inherit".to_string()),
+                            self.content_editable_property_value_for_node(node),
                         )),
-                        DomProp::Draggable => Ok(Value::Bool(
-                            self.dom
-                                .attr(node, "draggable")
-                                .is_some_and(|value| value.eq_ignore_ascii_case("true")),
-                        )),
+                        DomProp::Draggable => {
+                            Ok(Value::Bool(self.draggable_property_value_for_node(node)))
+                        }
                         DomProp::EnterKeyHint => Ok(Value::String(
                             self.dom.attr(node, "enterkeyhint").unwrap_or_default(),
                         )),
@@ -255,25 +289,17 @@ impl Harness {
                         DomProp::Popover => Ok(Value::String(
                             self.dom.attr(node, "popover").unwrap_or_default(),
                         )),
-                        DomProp::Spellcheck => Ok(Value::Bool(
-                            self.dom
-                                .attr(node, "spellcheck")
-                                .is_some_and(|value| !value.eq_ignore_ascii_case("false")),
-                        )),
+                        DomProp::Spellcheck => {
+                            Ok(Value::Bool(self.spellcheck_property_value_for_node(node)))
+                        }
                         DomProp::TabIndex => Ok(Value::Number(
-                            self.dom
-                                .attr(node, "tabindex")
-                                .and_then(|raw| raw.trim().parse::<i64>().ok())
-                                .unwrap_or(-1),
+                            self.reflected_i64_attribute_or_default(node, "tabindex", -1),
                         )),
-                        DomProp::Translate => Ok(Value::Bool(
-                            !self
-                                .dom
-                                .attr(node, "translate")
-                                .is_some_and(|value| value.eq_ignore_ascii_case("no")),
-                        )),
+                        DomProp::Translate => {
+                            Ok(Value::Bool(self.translate_property_value_for_node(node)))
+                        }
                         DomProp::Cite => Ok(Value::String(
-                            self.dom.attr(node, "cite").unwrap_or_default(),
+                            self.reflected_url_attribute_or_empty(node, "cite"),
                         )),
                         DomProp::DateTime => Ok(Value::String(
                             self.dom.attr(node, "datetime").unwrap_or_default(),
@@ -295,6 +321,34 @@ impl Harness {
                                     .dom_runtime
                                     .node_expando_props
                                     .get(&(node, "span".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::TableCellColSpan => {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th")
+                            }) {
+                                Ok(Value::Number(self.table_cell_col_span_value(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "colSpan".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::RowSpan => {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th")
+                            }) {
+                                Ok(Value::Number(self.table_cell_row_span_value(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "rowSpan".to_string()))
                                     .cloned()
                                     .unwrap_or(Value::Undefined))
                             }
@@ -511,10 +565,7 @@ impl Harness {
                             Ok(Value::Bool(self.dom.has_attr(node, "playsinline")?))
                         }
                         DomProp::VideoPoster => Ok(Value::String(
-                            self.dom
-                                .attr(node, "poster")
-                                .map(|raw| self.resolve_document_target_url(&raw))
-                                .unwrap_or_default(),
+                            self.reflected_url_attribute_or_empty(node, "poster"),
                         )),
                         DomProp::AriaString(prop_name) => Ok(Value::String(
                             self.dom
@@ -540,7 +591,7 @@ impl Harness {
                             self.dom.attr(node, "download").unwrap_or_default(),
                         )),
                         DomProp::AnchorHash => {
-                            Ok(Value::String(self.anchor_location_parts(node).hash))
+                            Ok(Value::String(self.anchor_hash_property_value(node)))
                         }
                         DomProp::AnchorHost => {
                             Ok(Value::String(self.anchor_location_parts(node).host()))
@@ -612,7 +663,7 @@ impl Harness {
                             Ok(Value::Number(self.anchor_rel_tokens(node).len() as i64))
                         }
                         DomProp::AnchorSearch => {
-                            Ok(Value::String(self.anchor_location_parts(node).search))
+                            Ok(Value::String(self.anchor_search_property_value(node)))
                         }
                         DomProp::AnchorTarget => Ok(Value::String(
                             self.dom.attr(node, "target").unwrap_or_default(),
@@ -676,6 +727,148 @@ impl Harness {
                         DomProp::AnchorShape => Ok(Value::String(
                             self.dom.attr(node, "shape").unwrap_or_default(),
                         )),
+                        DomProp::Size => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+                            {
+                                Ok(Value::Number(self.select_size_property_value(node)))
+                            } else if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                            {
+                                Ok(Value::Number(self.input_size_property_value_for_node(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "size".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::Min => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                            {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "min").unwrap_or_default(),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "min".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::Max => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                            {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "max").unwrap_or_default(),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "max".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::Step => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                            {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "step").unwrap_or_default(),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "step".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::MaxLength => {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("input")
+                                    || tag.eq_ignore_ascii_case("textarea")
+                            }) {
+                                Ok(Value::Number(self.max_length_property_value_for_node(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "maxLength".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::MinLength => {
+                            if self.dom.tag_name(node).is_some_and(|tag| {
+                                tag.eq_ignore_ascii_case("input")
+                                    || tag.eq_ignore_ascii_case("textarea")
+                            }) {
+                                Ok(Value::Number(self.min_length_property_value_for_node(node)))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "minLength".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::Rows => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
+                            {
+                                Ok(Value::Number(
+                                    self.textarea_rows_property_value_for_node(node),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "rows".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
+                        DomProp::Cols => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("textarea"))
+                            {
+                                Ok(Value::Number(
+                                    self.textarea_cols_property_value_for_node(node),
+                                ))
+                            } else {
+                                Ok(self
+                                    .dom_runtime
+                                    .node_expando_props
+                                    .get(&(node, "cols".to_string()))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined))
+                            }
+                        }
                     }
                 }
                 Expr::LocationMethodCall { method, url } => match method {

@@ -10,6 +10,7 @@ mod dom_anchor_element;
 mod dom_area_element;
 mod dom_article_element;
 mod dom_aside_element;
+mod dom_attribute_reflection_shared;
 mod dom_audio_element;
 mod dom_b_element;
 mod dom_base_element;
