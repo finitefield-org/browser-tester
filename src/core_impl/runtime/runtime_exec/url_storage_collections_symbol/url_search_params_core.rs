@@ -110,7 +110,7 @@ impl Harness {
     ) -> Result<Vec<(String, String)>> {
         match init {
             Value::Undefined | Value::Null => Ok(Vec::new()),
-            Value::String(text) => parse_url_search_params_pairs_from_query_string(text),
+            Value::String(text) => Ok(parse_url_search_params_pairs_from_query_string(text)),
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 if Self::is_url_search_params_object(&entries) {
@@ -144,7 +144,9 @@ impl Harness {
                 }
                 Ok(pairs)
             }
-            other => parse_url_search_params_pairs_from_query_string(&other.as_string()),
+            other => Ok(parse_url_search_params_pairs_from_query_string(
+                &other.as_string(),
+            )),
         }
     }
 }

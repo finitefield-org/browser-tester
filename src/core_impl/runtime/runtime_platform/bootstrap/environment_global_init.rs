@@ -36,13 +36,14 @@ impl Harness {
         {
             let _ = dom.ensure_document_body_element()?;
         }
+        let normalized_url = Self::resolve_url_string(url, None).unwrap_or_else(|| url.to_string());
         let mut harness = Self {
             dom,
             listeners: ListenerStore::default(),
             dom_runtime: DomRuntimeState::default(),
             script_runtime: ScriptRuntimeState::default(),
-            document_url: url.to_string(),
-            location_history: LocationHistoryState::new(url),
+            document_url: normalized_url.clone(),
+            location_history: LocationHistoryState::new(&normalized_url),
             scheduler: SchedulerState::default(),
             promise_runtime: PromiseRuntimeState::default(),
             symbol_runtime: SymbolRuntimeState::default(),

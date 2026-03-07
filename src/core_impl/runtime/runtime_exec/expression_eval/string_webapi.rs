@@ -1281,6 +1281,10 @@ impl Harness {
         let (input_key, request_url) =
             match self.fetch_request_input_and_url_from_value(request_value) {
                 Ok(ok) => ok,
+                Err(Error::ScriptRuntime(message)) => {
+                    let reason = message.strip_prefix("TypeError: ").unwrap_or("Invalid URL");
+                    return self.fetch_rejected_promise(reason);
+                }
                 Err(_) => return self.fetch_rejected_promise("Invalid URL"),
             };
 

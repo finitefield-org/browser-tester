@@ -217,7 +217,10 @@ pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
     let Some(member) = cursor.parse_identifier() else {
         return Ok(None);
     };
-    if !matches!(member.as_str(), "append" | "getAll" | "has" | "delete") {
+    if !matches!(
+        member.as_str(),
+        "append" | "delete" | "getAll" | "has" | "set" | "sort"
+    ) {
         return Ok(None);
     }
     cursor.skip_ws();
@@ -238,29 +241,36 @@ pub(crate) fn parse_url_search_params_access_expr(src: &str) -> Result<Option<Ex
 
     let method = match member.as_str() {
         "append" => {
-            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            if args.len() < 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
                 return Ok(None);
             }
             UrlSearchParamsInstanceMethod::Append
         }
         "getAll" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Ok(None);
             }
             UrlSearchParamsInstanceMethod::GetAll
         }
         "has" => {
-            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Ok(None);
             }
             UrlSearchParamsInstanceMethod::Has
         }
         "delete" => {
-            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Ok(None);
             }
             UrlSearchParamsInstanceMethod::Delete
         }
+        "set" => {
+            if args.len() < 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Ok(None);
+            }
+            UrlSearchParamsInstanceMethod::Set
+        }
+        "sort" => UrlSearchParamsInstanceMethod::Sort,
         _ => unreachable!(),
     };
 
@@ -307,7 +317,7 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
 
     let method = match member.as_str() {
         "get" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.get requires exactly one argument".into(),
                 ));
@@ -315,7 +325,7 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::Get
         }
         "has" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.has requires exactly one argument".into(),
                 ));
@@ -323,21 +333,14 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::Has
         }
         "delete" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.is_empty() || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.delete requires exactly one argument".into(),
                 ));
             }
             MapInstanceMethod::Delete
         }
-        "clear" => {
-            if !args.is_empty() {
-                return Err(Error::ScriptParse(
-                    "Map.clear does not take arguments".into(),
-                ));
-            }
-            MapInstanceMethod::Clear
-        }
+        "clear" => MapInstanceMethod::Clear,
         "forEach" => {
             if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(

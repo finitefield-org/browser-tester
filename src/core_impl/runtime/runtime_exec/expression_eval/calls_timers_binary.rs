@@ -533,7 +533,7 @@ impl Harness {
 
                     if member == "append" {
                         if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.len() != 2 && evaluated_args.len() != 3 {
+                            if evaluated_args.len() < 2 {
                                 return Err(Error::ScriptRuntime(
                                     "FormData.append requires two or three arguments".into(),
                                 ));
@@ -550,7 +550,7 @@ impl Harness {
 
                     if member == "set" {
                         if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.len() != 2 && evaluated_args.len() != 3 {
+                            if evaluated_args.len() < 2 {
                                 return Err(Error::ScriptRuntime(
                                     "FormData.set requires two or three arguments".into(),
                                 ));
@@ -582,7 +582,7 @@ impl Harness {
 
                     if member == "delete" {
                         if let Value::FormData(entries) = &receiver {
-                            if evaluated_args.len() != 1 {
+                            if evaluated_args.is_empty() {
                                 return Err(Error::ScriptRuntime(
                                     "FormData.delete requires exactly one argument".into(),
                                 ));
@@ -597,11 +597,6 @@ impl Harness {
 
                     if member == "entries" {
                         if let Value::FormData(entries) = &receiver {
-                            if !evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.entries does not take arguments".into(),
-                                ));
-                            }
                             let snapshot = entries.borrow().clone();
                             return Ok(Self::new_array_value(
                                 snapshot
@@ -619,11 +614,6 @@ impl Harness {
 
                     if member == "keys" {
                         if let Value::FormData(entries) = &receiver {
-                            if !evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.keys does not take arguments".into(),
-                                ));
-                            }
                             let snapshot = entries.borrow().clone();
                             return Ok(Self::new_array_value(
                                 snapshot
@@ -636,11 +626,6 @@ impl Harness {
 
                     if member == "values" {
                         if let Value::FormData(entries) = &receiver {
-                            if !evaluated_args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "FormData.values does not take arguments".into(),
-                                ));
-                            }
                             let snapshot = entries.borrow().clone();
                             return Ok(Self::new_array_value(
                                 snapshot
@@ -648,6 +633,60 @@ impl Harness {
                                     .map(|(_, value)| Value::String(value))
                                     .collect::<Vec<_>>(),
                             ));
+                        }
+                    }
+
+                    if member == "get" {
+                        if let Value::FormData(entries) = &receiver {
+                            if evaluated_args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.get requires exactly one argument".into(),
+                                ));
+                            }
+                            let name = evaluated_args[0].as_string();
+                            let entries = entries.borrow();
+                            return Ok(entries
+                                .iter()
+                                .find_map(|(entry_name, value)| {
+                                    (entry_name == &name).then(|| Value::String(value.clone()))
+                                })
+                                .unwrap_or(Value::Null));
+                        }
+                    }
+
+                    if member == "getAll" {
+                        if let Value::FormData(entries) = &receiver {
+                            if evaluated_args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.getAll requires exactly one argument".into(),
+                                ));
+                            }
+                            let name = evaluated_args[0].as_string();
+                            let snapshot = entries.borrow().clone();
+                            return Ok(Self::new_array_value(
+                                snapshot
+                                    .into_iter()
+                                    .filter_map(|(entry_name, value)| {
+                                        (entry_name == name).then(|| Value::String(value))
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ));
+                        }
+                    }
+
+                    if member == "has" {
+                        if let Value::FormData(entries) = &receiver {
+                            if evaluated_args.is_empty() {
+                                return Err(Error::ScriptRuntime(
+                                    "FormData.has requires exactly one argument".into(),
+                                ));
+                            }
+                            let name = evaluated_args[0].as_string();
+                            let has = entries
+                                .borrow()
+                                .iter()
+                                .any(|(entry_name, _)| entry_name == &name);
+                            return Ok(Value::Bool(has));
                         }
                     }
 

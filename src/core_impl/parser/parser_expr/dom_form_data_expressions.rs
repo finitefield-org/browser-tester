@@ -64,24 +64,12 @@ pub(crate) fn parse_form_data_get_all_length_expr(
         raw_args
     };
     if args.len() != 1 {
-        return match source {
-            FormDataSource::New { .. } => Err(Error::ScriptParse(
-                "FormData.getAll requires exactly one string argument".into(),
-            )),
-            FormDataSource::Var(_) => Ok(None),
-        };
+        return Ok(None);
     }
     let arg = args[0].trim();
     let name = match parse_string_literal_exact(arg) {
         Ok(name) => name,
-        Err(_) => {
-            return match source {
-                FormDataSource::New { .. } => Err(Error::ScriptParse(
-                    "FormData.getAll requires exactly one string argument".into(),
-                )),
-                FormDataSource::Var(_) => Ok(None),
-            };
-        }
+        Err(_) => return Ok(None),
     };
     cursor.skip_ws();
 
@@ -137,24 +125,12 @@ pub(crate) fn parse_form_data_method_expr(
         raw_args
     };
     if args.len() != 1 {
-        return match source {
-            FormDataSource::New { .. } => Err(Error::ScriptParse(format!(
-                "FormData.{method} requires exactly one string argument"
-            ))),
-            FormDataSource::Var(_) => Ok(None),
-        };
+        return Ok(None);
     }
     let arg = args[0].trim();
     let name = match parse_string_literal_exact(arg) {
         Ok(name) => name,
-        Err(_) => {
-            return match source {
-                FormDataSource::New { .. } => Err(Error::ScriptParse(format!(
-                    "FormData.{method} requires exactly one string argument"
-                ))),
-                FormDataSource::Var(_) => Ok(None),
-            };
-        }
+        Err(_) => return Ok(None),
     };
     cursor.skip_ws();
     if !cursor.eof() {

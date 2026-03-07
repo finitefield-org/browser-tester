@@ -449,9 +449,9 @@ impl Harness {
                         DomProp::LocationHostname => {
                             Ok(Value::String(self.current_location_parts().hostname))
                         }
-                        DomProp::LocationPort => {
-                            Ok(Value::String(self.current_location_parts().port))
-                        }
+                        DomProp::LocationPort => Ok(Value::String(
+                            self.current_location_parts().effective_port(),
+                        )),
                         DomProp::LocationPathname => {
                             let parts = self.current_location_parts();
                             Ok(Value::String(if parts.has_authority {
@@ -593,12 +593,16 @@ impl Harness {
                         DomProp::AnchorHash => {
                             Ok(Value::String(self.anchor_hash_property_value(node)))
                         }
-                        DomProp::AnchorHost => {
-                            Ok(Value::String(self.anchor_location_parts(node).host()))
-                        }
-                        DomProp::AnchorHostname => {
-                            Ok(Value::String(self.anchor_location_parts(node).hostname))
-                        }
+                        DomProp::AnchorHost => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.host())
+                                .unwrap_or_default(),
+                        )),
+                        DomProp::AnchorHostname => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.hostname)
+                                .unwrap_or_default(),
+                        )),
                         DomProp::AnchorHref => Ok(Value::String(self.resolve_anchor_href(node))),
                         DomProp::AnchorHreflang => Ok(Value::String(
                             self.dom.attr(node, "hreflang").unwrap_or_default(),
@@ -624,29 +628,40 @@ impl Harness {
                                 ))
                             }
                         }
-                        DomProp::AnchorOrigin => {
-                            Ok(Value::String(self.anchor_location_parts(node).origin()))
-                        }
-                        DomProp::AnchorPassword => {
-                            Ok(Value::String(self.anchor_location_parts(node).password))
-                        }
-                        DomProp::AnchorPathname => {
-                            let parts = self.anchor_location_parts(node);
-                            Ok(Value::String(if parts.has_authority {
-                                parts.pathname
-                            } else {
-                                parts.opaque_path
-                            }))
-                        }
+                        DomProp::AnchorOrigin => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.origin())
+                                .unwrap_or_default(),
+                        )),
+                        DomProp::AnchorPassword => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.password)
+                                .unwrap_or_default(),
+                        )),
+                        DomProp::AnchorPathname => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| {
+                                    if parts.has_authority {
+                                        parts.pathname
+                                    } else {
+                                        parts.opaque_path
+                                    }
+                                })
+                                .unwrap_or_default(),
+                        )),
                         DomProp::AnchorPing => Ok(Value::String(
                             self.dom.attr(node, "ping").unwrap_or_default(),
                         )),
-                        DomProp::AnchorPort => {
-                            Ok(Value::String(self.anchor_location_parts(node).port))
-                        }
-                        DomProp::AnchorProtocol => {
-                            Ok(Value::String(self.anchor_location_parts(node).protocol()))
-                        }
+                        DomProp::AnchorPort => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.effective_port())
+                                .unwrap_or_default(),
+                        )),
+                        DomProp::AnchorProtocol => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.protocol())
+                                .unwrap_or_else(|| ":".to_string()),
+                        )),
                         DomProp::AnchorReferrerPolicy => Ok(Value::String(
                             self.dom.attr(node, "referrerpolicy").unwrap_or_default(),
                         )),
@@ -709,9 +724,11 @@ impl Harness {
                                 ))
                             }
                         }
-                        DomProp::AnchorUsername => {
-                            Ok(Value::String(self.anchor_location_parts(node).username))
-                        }
+                        DomProp::AnchorUsername => Ok(Value::String(
+                            self.anchor_location_parts(node)
+                                .map(|parts| parts.username)
+                                .unwrap_or_default(),
+                        )),
                         DomProp::AnchorNoHref => {
                             Ok(Value::Bool(self.dom.attr(node, "nohref").is_some()))
                         }

@@ -17,8 +17,17 @@ impl Harness {
 
     pub(crate) fn normalize_url_parts_for_serialization(parts: &mut LocationParts) {
         parts.scheme = parts.scheme.to_ascii_lowercase();
+        parts.normalize_special_port();
         if parts.has_authority {
             parts.hostname = parts.hostname.to_ascii_lowercase();
+            parts.username = encode_url_component_preserving_percent(
+                &parts.username,
+                UrlPercentEncodeSet::UserInfo,
+            );
+            parts.password = encode_url_component_preserving_percent(
+                &parts.password,
+                UrlPercentEncodeSet::UserInfo,
+            );
             let path = if parts.pathname.is_empty() {
                 "/".to_string()
             } else if parts.pathname.starts_with('/') {
@@ -26,10 +35,19 @@ impl Harness {
             } else {
                 format!("/{}", parts.pathname)
             };
+            let path = if is_special_url_scheme(&parts.scheme) {
+                path.replace('\\', "/")
+            } else {
+                path
+            };
             parts.pathname = normalize_pathname(&path);
-            parts.pathname = encode_uri_like_preserving_percent(&parts.pathname, false);
+            parts.pathname =
+                encode_url_component_preserving_percent(&parts.pathname, UrlPercentEncodeSet::Path);
         } else {
-            parts.opaque_path = encode_uri_like_preserving_percent(&parts.opaque_path, false);
+            parts.opaque_path = encode_url_component_preserving_percent(
+                &parts.opaque_path,
+                UrlPercentEncodeSet::OpaquePath,
+            );
         }
 
         if !parts.search.is_empty() {
@@ -37,11 +55,22 @@ impl Harness {
                 .search
                 .strip_prefix('?')
                 .unwrap_or(parts.search.as_str());
-            parts.search = format!("?{}", encode_uri_like_preserving_percent(body, false));
+            let encode_set = if is_special_url_scheme(&parts.scheme) {
+                UrlPercentEncodeSet::SpecialQuery
+            } else {
+                UrlPercentEncodeSet::Query
+            };
+            parts.search = format!(
+                "?{}",
+                encode_url_component_preserving_percent(body, encode_set)
+            );
         }
         if !parts.hash.is_empty() {
             let body = parts.hash.strip_prefix('#').unwrap_or(parts.hash.as_str());
-            parts.hash = format!("#{}", encode_uri_like_preserving_percent(body, false));
+            parts.hash = format!(
+                "#{}",
+                encode_url_component_preserving_percent(body, UrlPercentEncodeSet::Fragment)
+            );
         }
     }
 
@@ -117,6 +146,9 @@ impl Harness {
             Self::normalize_url_parts_for_serialization(&mut absolute);
             return Some(absolute.href());
         }
+        if looks_like_absolute_url(input) {
+            return None;
+        }
 
         let base = base?;
         let mut base_parts = LocationParts::parse(base)?;
@@ -153,7 +185,7 @@ impl Harness {
         Self::object_set_entry(
             entries,
             "port".to_string(),
-            Value::String(parts.port.clone()),
+            Value::String(parts.effective_port()),
         );
         Self::object_set_entry(
             entries,
@@ -190,8 +222,7 @@ impl Harness {
             Some(Value::Number(id)) if id >= 0 => usize::try_from(id).ok(),
             _ => None,
         };
-        let pairs =
-            parse_url_search_params_pairs_from_query_string(&parts.search).unwrap_or_default();
+        let pairs = parse_url_search_params_pairs_from_query_string(&parts.search);
         if let Some(Value::Object(search_params_object)) =
             Self::object_get_entry(entries, "searchParams")
         {
@@ -266,32 +297,36 @@ impl Harness {
                         value.as_string()
                     )));
                 }
-                parts.scheme = protocol;
+                if !parts.apply_protocol_setter(&protocol) {
+                    return Ok(());
+                }
             }
             "host" => {
-                let host = value.as_string();
-                let (hostname, port) = split_hostname_and_port(host.trim());
-                parts.hostname = hostname;
-                parts.port = port;
+                if !parts.apply_host_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "hostname" => {
-                parts.hostname = value.as_string();
+                if !parts.apply_hostname_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "port" => {
-                parts.port = value.as_string();
+                if !parts.apply_port_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "pathname" => {
-                let raw = value.as_string();
-                if parts.has_authority {
-                    let normalized_input = if raw.starts_with('/') {
-                        raw
-                    } else {
-                        format!("/{raw}")
-                    };
-                    parts.pathname = normalize_pathname(&normalized_input);
-                } else {
-                    parts.opaque_path = raw;
+                if !parts.has_authority {
+                    return Ok(());
                 }
+                let raw = value.as_string();
+                let normalized_input = if raw.starts_with('/') {
+                    raw
+                } else {
+                    format!("/{raw}")
+                };
+                parts.pathname = normalize_pathname(&normalized_input);
             }
             "search" => {
                 parts.search = ensure_search_prefix(&value.as_string());
@@ -300,9 +335,15 @@ impl Harness {
                 parts.hash = ensure_hash_prefix(&value.as_string());
             }
             "username" => {
+                if !parts.has_authority || parts.scheme.eq_ignore_ascii_case("file") {
+                    return Ok(());
+                }
                 parts.username = value.as_string();
             }
             "password" => {
+                if !parts.has_authority || parts.scheme.eq_ignore_ascii_case("file") {
+                    return Ok(());
+                }
                 parts.password = value.as_string();
             }
             _ => {

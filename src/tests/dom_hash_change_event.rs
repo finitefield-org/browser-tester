@@ -123,3 +123,91 @@ fn location_hash_navigation_dispatches_hashchange_event_with_old_and_new_urls() 
     )?;
     Ok(())
 }
+
+#[test]
+fn location_hash_navigation_uses_normalized_urls_after_default_port_navigation() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const logs = [];
+          window.addEventListener('hashchange', (event) => {
+            logs.push(event.oldURL + '~' + event.newURL);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'http://example.com:80/path';
+            location.hash = 'frag';
+            document.getElementById('result').textContent = [
+              location.href,
+              logs.join('||')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "http://example.com/path#frag|http://example.com/path~http://example.com/path#frag",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "about:blank".to_string(),
+                to: "http://example.com/path".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "http://example.com/path".to_string(),
+                to: "http://example.com/path#frag".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_same_url_setters_do_not_dispatch_hashchange_or_record_navigation_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const logs = [];
+          window.addEventListener('hashchange', (event) => {
+            logs.push(event.oldURL + '~' + event.newURL);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://app.local/path#frag';
+            location.hash = 'frag';
+            location.hash = '#frag';
+            location.port = '443';
+            location.hostname = 'app.local';
+            location.pathname = '/path';
+            location.search = '';
+            location.protocol = 'https:';
+            document.getElementById('result').textContent = [
+              location.href,
+              logs.length
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "https://app.local/path#frag|0")?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::HrefSet,
+            from: "about:blank".to_string(),
+            to: "https://app.local/path#frag".to_string(),
+        }]
+    );
+    Ok(())
+}

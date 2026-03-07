@@ -231,3 +231,40 @@ fn base_uri_defaults_to_location_href_when_base_element_is_missing() -> Result<(
     )?;
     Ok(())
 }
+
+#[test]
+fn base_href_protocol_relative_canonicalizes_and_invalid_authority_falls_back_to_document_url()
+-> Result<()> {
+    let html = r#"
+        <head>
+          <base id='base' href='//Example.COM:080/Docs/' />
+        </head>
+        <body>
+          <a id='rel' href='Guide.html'>Guide</a>
+          <button id='run'>run</button>
+          <p id='result'></p>
+          <script>
+            document.getElementById('run').addEventListener('click', () => {
+              const base = document.getElementById('base');
+              const rel = document.getElementById('rel');
+
+              const initial = [document.baseURI, rel.href].join('|');
+
+              base.setAttribute('href', '//Example.COM:99999/Bad/');
+              const invalid = [document.baseURI, rel.href].join('|');
+
+              document.getElementById('result').textContent =
+                [initial, invalid].join(',');
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com:80/Docs/|https://example.com:80/Docs/Guide.html,https://app.local/start/index.html|https://app.local/start/Guide.html",
+    )?;
+    Ok(())
+}

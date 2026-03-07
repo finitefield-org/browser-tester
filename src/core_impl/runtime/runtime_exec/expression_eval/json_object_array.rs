@@ -1312,6 +1312,21 @@ impl Harness {
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?;
+                    if let Some(Value::Object(entries)) =
+                        self.resolve_target_value_with_pending(env, target)
+                    {
+                        if Self::is_url_search_params_object(&entries.borrow()) {
+                            {
+                                let mut object_ref = entries.borrow_mut();
+                                let mut pairs =
+                                    Self::url_search_params_pairs_from_object_entries(&object_ref);
+                                pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+                                Self::set_url_search_params_pairs(&mut object_ref, &pairs);
+                            }
+                            self.sync_url_search_params_owner(&entries);
+                            return Ok(Value::Object(entries));
+                        }
+                    }
                     if comparator
                         .as_ref()
                         .is_some_and(|value| !self.is_callable_value(value))

@@ -161,6 +161,27 @@ pub(crate) fn is_non_dom_var_target(target: &DomQuery) -> bool {
     }
 }
 
+fn parse_dom_property_segment(cursor: &mut Cursor) -> Result<Option<String>> {
+    cursor.skip_ws();
+    if cursor.consume_byte(b'.') {
+        cursor.skip_ws();
+        return Ok(cursor.parse_identifier());
+    }
+    if cursor.consume_byte(b'[') {
+        cursor.skip_ws();
+        let value = match cursor.parse_string_literal() {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        cursor.skip_ws();
+        if !cursor.consume_byte(b']') {
+            return Ok(None);
+        }
+        return Ok(Some(value));
+    }
+    Ok(None)
+}
+
 pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>> {
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
@@ -170,26 +191,11 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         Err(_) => return Ok(None),
     };
 
-    cursor.skip_ws();
-    if !cursor.consume_byte(b'.') {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-
-    let Some(head) = cursor.parse_identifier() else {
+    let Some(head) = parse_dom_property_segment(&mut cursor)? else {
         return Ok(None);
     };
 
-    cursor.skip_ws();
-    let nested = if cursor.consume_byte(b'.') {
-        cursor.skip_ws();
-        let Some(nested) = cursor.parse_identifier() else {
-            return Ok(None);
-        };
-        Some(nested)
-    } else {
-        None
-    };
+    let nested = parse_dom_property_segment(&mut cursor)?;
 
     cursor.skip_ws();
     if !cursor.eof() {

@@ -366,6 +366,9 @@ impl Harness {
         {
             return Ok(());
         }
+        if self.try_resolve_location_target_url(&href).is_err() {
+            return Ok(());
+        }
         self.navigate_location(&href, LocationNavigationKind::Assign)
     }
 

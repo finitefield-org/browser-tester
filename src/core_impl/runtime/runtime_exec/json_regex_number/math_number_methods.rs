@@ -264,6 +264,15 @@ impl Harness {
             };
         }
 
+        if matches!(method, NumberInstanceMethod::ToString)
+            && let Value::Object(entries) = &value
+        {
+            let entries = entries.borrow();
+            if Self::is_url_object(&entries) || Self::is_url_search_params_object(&entries) {
+                return Ok(Value::String(value.as_string()));
+            }
+        }
+
         let numeric = Self::coerce_number_for_number_constructor(&value);
 
         match method {

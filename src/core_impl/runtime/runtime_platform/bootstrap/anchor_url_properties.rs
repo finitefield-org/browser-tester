@@ -303,9 +303,9 @@ impl Harness {
         self.resolve_document_target_url(&raw)
     }
 
-    pub(crate) fn anchor_location_parts(&self, node: NodeId) -> LocationParts {
+    pub(crate) fn anchor_location_parts(&self, node: NodeId) -> Option<LocationParts> {
         let href = self.resolve_anchor_href(node);
-        LocationParts::parse(&href).unwrap_or_else(|| self.current_location_parts())
+        LocationParts::parse(&href)
     }
 
     pub(crate) fn normalized_search_getter_value(raw: &str) -> String {
@@ -325,13 +325,15 @@ impl Harness {
     }
 
     pub(crate) fn anchor_search_property_value(&self, node: NodeId) -> String {
-        let parts = self.anchor_location_parts(node);
-        Self::normalized_search_getter_value(parts.search.as_str())
+        self.anchor_location_parts(node)
+            .map(|parts| Self::normalized_search_getter_value(parts.search.as_str()))
+            .unwrap_or_default()
     }
 
     pub(crate) fn anchor_hash_property_value(&self, node: NodeId) -> String {
-        let parts = self.anchor_location_parts(node);
-        Self::normalized_hash_getter_value(parts.hash.as_str())
+        self.anchor_location_parts(node)
+            .map(|parts| Self::normalized_hash_getter_value(parts.hash.as_str()))
+            .unwrap_or_default()
     }
 
     pub(crate) fn set_anchor_url_property(
@@ -351,7 +353,9 @@ impl Harness {
             _ => {}
         }
 
-        let mut parts = self.anchor_location_parts(node);
+        let Some(mut parts) = self.anchor_location_parts(node) else {
+            return Ok(());
+        };
         match key {
             "protocol" => {
                 let protocol = value.as_string();
@@ -362,32 +366,36 @@ impl Harness {
                         value.as_string()
                     )));
                 }
-                parts.scheme = protocol;
+                if !parts.apply_protocol_setter(&protocol) {
+                    return Ok(());
+                }
             }
             "host" => {
-                let host = value.as_string();
-                let (hostname, port) = split_hostname_and_port(host.trim());
-                parts.hostname = hostname;
-                parts.port = port;
+                if !parts.apply_host_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "hostname" => {
-                parts.hostname = value.as_string();
+                if !parts.apply_hostname_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "port" => {
-                parts.port = value.as_string();
+                if !parts.apply_port_setter(&value.as_string()) {
+                    return Ok(());
+                }
             }
             "pathname" => {
-                let raw = value.as_string();
-                if parts.has_authority {
-                    let normalized_input = if raw.starts_with('/') {
-                        raw
-                    } else {
-                        format!("/{raw}")
-                    };
-                    parts.pathname = normalize_pathname(&normalized_input);
-                } else {
-                    parts.opaque_path = raw;
+                if !parts.has_authority {
+                    return Ok(());
                 }
+                let raw = value.as_string();
+                let normalized_input = if raw.starts_with('/') {
+                    raw
+                } else {
+                    format!("/{raw}")
+                };
+                parts.pathname = normalize_pathname(&normalized_input);
             }
             "search" => {
                 parts.search = ensure_search_prefix(&value.as_string());
@@ -412,6 +420,7 @@ impl Harness {
             }
         }
 
+        Self::normalize_url_parts_for_serialization(&mut parts);
         self.dom.set_attr(node, "href", &parts.href())
     }
 

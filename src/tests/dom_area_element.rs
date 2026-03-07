@@ -104,6 +104,38 @@ fn area_click_follows_href_and_skips_blank_target_or_missing_href() -> Result<()
 }
 
 #[test]
+fn area_invalid_and_special_host_click_matrix_work() -> Result<()> {
+    let html = r#"
+        <map name='routes'>
+          <area id='bad' href='http://' alt='bad'>
+          <area id='bad-query' href='http:?x' alt='bad query'>
+          <area id='blank' href='https://example.com:abc/report' target='_blank' alt='blank'>
+          <area id='download' href='https://example.com:abc/report' download='report.txt' alt='download'>
+          <area id='inactive' href='https://example.com:abc/report' nohref alt='inactive'>
+          <area id='hostless' href='http:Example.COM:080/docs' alt='hostless'>
+        </map>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#bad")?;
+    h.click("#bad-query")?;
+    h.click("#blank")?;
+    h.click("#download")?;
+    h.click("#inactive")?;
+    h.click("#hostless")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "http://example.com/docs".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn area_alt_nohref_interest_and_rel_list_properties_reflect_work() -> Result<()> {
     let html = r#"
         <map name='meta'>

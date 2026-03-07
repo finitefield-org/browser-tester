@@ -135,3 +135,67 @@ fn link_is_void_and_implicit_role_depends_on_href_presence() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn link_null_and_invalid_url_properties_match_anchor_semantics_and_click_is_noop() -> Result<()> {
+    let html = r#"
+        <head>
+          <link id='missing' rel='stylesheet'>
+          <link id='bad' rel='stylesheet' href='http://'>
+          <link id='hostless' rel='stylesheet' href='https:Example.COM:080/styles/main.css'>
+        </head>
+        <body>
+          <button id='run' type='button'>run</button>
+          <p id='result'></p>
+          <script>
+            let clicks = 0;
+            document.getElementById('bad').addEventListener('click', () => {
+              clicks += 1;
+            });
+            document.getElementById('run').addEventListener('click', () => {
+              const missing = document.getElementById('missing');
+              const bad = document.getElementById('bad');
+              const hostless = document.getElementById('hostless');
+
+              const missingState = [
+                'href=' + missing.href,
+                'protocol=' + missing.protocol,
+                'host=' + missing.host,
+                'pathname=' + missing.pathname,
+                'origin=' + missing.origin
+              ].join(',');
+
+              const badState = [
+                'href=' + bad.href,
+                'protocol=' + bad.protocol,
+                'host=' + bad.host,
+                'pathname=' + bad.pathname,
+                'origin=' + bad.origin
+              ].join(',');
+
+              bad.protocol = 'https:';
+              bad.host = 'example.com:443';
+
+              document.getElementById('result').textContent = [
+                missingState,
+                badState,
+                'attr=' + bad.getAttribute('href'),
+                'hostless=' + hostless.href,
+                'clicks=' + clicks
+              ].join('|');
+            });
+          </script>
+        </body>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.click("#bad")?;
+    h.click("#hostless")?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "href=,protocol=:,host=,pathname=,origin=|href=http://,protocol=:,host=,pathname=,origin=|attr=http://|hostless=https://example.com:80/styles/main.css|clicks=1",
+    )?;
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}

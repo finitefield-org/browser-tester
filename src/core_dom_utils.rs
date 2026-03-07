@@ -750,9 +750,9 @@ pub(crate) fn normalize_date_input_value(value: &str) -> String {
 
 pub(crate) fn parse_datetime_local_input_components(
     value: &str,
-) -> Option<(i64, u32, u32, u32, u32)> {
+) -> Option<(i64, u32, u32, u32, u32, u32, u32)> {
     let value = value.trim();
-    if value.len() != 16 {
+    if value.len() < 16 {
         return None;
     }
 
@@ -766,6 +766,36 @@ pub(crate) fn parse_datetime_local_input_components(
     let day = parse_fixed_digits_u32(value, 8, 2)?;
     let hour = parse_fixed_digits_u32(value, 11, 2)?;
     let minute = parse_fixed_digits_u32(value, 14, 2)?;
+    let mut second = 0;
+    let mut millisecond = 0;
+
+    match value.len() {
+        16 => {}
+        19 => {
+            if bytes.get(16) != Some(&b':') {
+                return None;
+            }
+            second = parse_fixed_digits_u32(value, 17, 2)?;
+        }
+        21..=23 => {
+            if bytes.get(16) != Some(&b':') || bytes.get(19) != Some(&b'.') {
+                return None;
+            }
+            second = parse_fixed_digits_u32(value, 17, 2)?;
+            let fraction = value.get(20..)?;
+            if fraction.is_empty()
+                || fraction.len() > 3
+                || !fraction.as_bytes().iter().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            millisecond = fraction.parse::<u32>().ok()?;
+            for _ in 0..(3 - fraction.len()) {
+                millisecond *= 10;
+            }
+        }
+        _ => return None,
+    }
 
     if !(1..=12).contains(&month) {
         return None;
@@ -773,26 +803,38 @@ pub(crate) fn parse_datetime_local_input_components(
     if day == 0 || day > days_in_month(year, month) {
         return None;
     }
-    if hour > 23 || minute > 59 {
+    if hour > 23 || minute > 59 || second > 59 {
         return None;
     }
 
-    Some((year, month, day, hour, minute))
+    Some((year, month, day, hour, minute, second, millisecond))
 }
 
 pub(crate) fn normalize_datetime_local_input_value(value: &str) -> String {
-    let Some((year, month, day, hour, minute)) = parse_datetime_local_input_components(value)
+    let Some((year, month, day, hour, minute, second, millisecond)) =
+        parse_datetime_local_input_components(value)
     else {
         return String::new();
     };
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}")
+    let seconds = if second == 0 && millisecond == 0 {
+        String::new()
+    } else if millisecond == 0 {
+        format!(":{second:02}")
+    } else {
+        let mut fraction = format!("{millisecond:03}");
+        while fraction.ends_with('0') {
+            fraction.pop();
+        }
+        format!(":{second:02}.{fraction}")
+    };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}{seconds}")
 }
 
-pub(crate) fn parse_time_input_components(value: &str) -> Option<(u32, u32, u32, bool)> {
+pub(crate) fn parse_time_input_components(value: &str) -> Option<(u32, u32, u32, u32)> {
     let value = value.trim();
     let has_seconds = match value.len() {
         5 => false,
-        8 => true,
+        8 | 10..=12 => true,
         _ => return None,
     };
 
@@ -800,33 +842,61 @@ pub(crate) fn parse_time_input_components(value: &str) -> Option<(u32, u32, u32,
     if bytes[2] != b':' {
         return None;
     }
-    if has_seconds && bytes[5] != b':' {
+    if has_seconds && bytes.get(5) != Some(&b':') {
         return None;
     }
 
     let hour = parse_fixed_digits_u32(value, 0, 2)?;
     let minute = parse_fixed_digits_u32(value, 3, 2)?;
-    let second = if has_seconds {
-        parse_fixed_digits_u32(value, 6, 2)?
-    } else {
-        0
-    };
+    let mut second = 0;
+    let mut millisecond = 0;
+
+    match value.len() {
+        5 => {}
+        8 => {
+            second = parse_fixed_digits_u32(value, 6, 2)?;
+        }
+        10..=12 => {
+            if bytes.get(8) != Some(&b'.') {
+                return None;
+            }
+            second = parse_fixed_digits_u32(value, 6, 2)?;
+            let fraction = value.get(9..)?;
+            if fraction.is_empty()
+                || fraction.len() > 3
+                || !fraction.as_bytes().iter().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            millisecond = fraction.parse::<u32>().ok()?;
+            for _ in 0..(3 - fraction.len()) {
+                millisecond *= 10;
+            }
+        }
+        _ => return None,
+    }
 
     if hour > 23 || minute > 59 || second > 59 {
         return None;
     }
 
-    Some((hour, minute, second, has_seconds))
+    Some((hour, minute, second, millisecond))
 }
 
 pub(crate) fn normalize_time_input_value(value: &str) -> String {
-    let Some((hour, minute, second, has_seconds)) = parse_time_input_components(value) else {
+    let Some((hour, minute, second, millisecond)) = parse_time_input_components(value) else {
         return String::new();
     };
-    if has_seconds {
+    if second == 0 && millisecond == 0 {
+        format!("{hour:02}:{minute:02}")
+    } else if millisecond == 0 {
         format!("{hour:02}:{minute:02}:{second:02}")
     } else {
-        format!("{hour:02}:{minute:02}")
+        let mut fraction = format!("{millisecond:03}");
+        while fraction.ends_with('0') {
+            fraction.pop();
+        }
+        format!("{hour:02}:{minute:02}:{second:02}.{fraction}")
     }
 }
 
@@ -1474,20 +1544,27 @@ pub(crate) fn encode_uri_like(src: &str, component: bool) -> String {
     out
 }
 
-pub(crate) fn encode_uri_like_preserving_percent(src: &str, component: bool) -> String {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UrlPercentEncodeSet {
+    UserInfo,
+    Path,
+    Query,
+    SpecialQuery,
+    Fragment,
+    OpaquePath,
+}
+
+pub(crate) fn encode_url_component_preserving_percent(
+    src: &str,
+    encode_set: UrlPercentEncodeSet,
+) -> String {
     let mut out = String::new();
     let bytes = src.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && from_hex_digit(bytes[i + 1]).is_some()
-            && from_hex_digit(bytes[i + 2]).is_some()
-        {
-            out.push('%');
-            out.push((bytes[i + 1] as char).to_ascii_uppercase());
-            out.push((bytes[i + 2] as char).to_ascii_uppercase());
-            i += 3;
+        if bytes[i].is_ascii() && is_unescaped_url_component_byte(bytes[i], encode_set) {
+            out.push(bytes[i] as char);
+            i += 1;
             continue;
         }
 
@@ -1495,7 +1572,7 @@ pub(crate) fn encode_uri_like_preserving_percent(src: &str, component: bool) -> 
         let mut encoded = [0u8; 4];
         let encoded = ch.encode_utf8(&mut encoded);
         for b in encoded.as_bytes() {
-            if is_unescaped_uri_byte(*b, component) {
+            if is_unescaped_url_component_byte(*b, encode_set) {
                 out.push(*b as char);
             } else {
                 out.push('%');
@@ -1563,10 +1640,10 @@ pub(crate) fn decode_uri_like(src: &str, component: bool) -> Result<String> {
 
 pub(crate) fn parse_url_search_params_pairs_from_query_string(
     query: &str,
-) -> Result<Vec<(String, String)>> {
+) -> Vec<(String, String)> {
     let query = query.strip_prefix('?').unwrap_or(query);
     if query.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     let mut pairs = Vec::new();
     for part in query.split('&') {
@@ -1578,11 +1655,11 @@ pub(crate) fn parse_url_search_params_pairs_from_query_string(
         } else {
             (part, "")
         };
-        let name = decode_form_urlencoded_component(raw_name)?;
-        let value = decode_form_urlencoded_component(raw_value)?;
+        let name = decode_form_urlencoded_component(raw_name);
+        let value = decode_form_urlencoded_component(raw_value);
         pairs.push((name, value));
     }
-    Ok(pairs)
+    pairs
 }
 
 pub(crate) fn serialize_url_search_params_pairs(pairs: &[(String, String)]) -> String {
@@ -1615,7 +1692,7 @@ pub(crate) fn encode_form_urlencoded_component(src: &str) -> String {
     out
 }
 
-pub(crate) fn decode_form_urlencoded_component(src: &str) -> Result<String> {
+pub(crate) fn decode_form_urlencoded_component(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0usize;
@@ -1625,29 +1702,27 @@ pub(crate) fn decode_form_urlencoded_component(src: &str) -> Result<String> {
                 out.push(b' ');
                 i += 1;
             }
-            b'%' => {
-                if i + 2 >= bytes.len() {
-                    return Err(Error::ScriptRuntime(
-                        "URLSearchParams malformed percent-encoding".into(),
-                    ));
+            b'%' if i + 2 < bytes.len() => {
+                if let (Some(hi), Some(lo)) =
+                    (from_hex_digit(bytes[i + 1]), from_hex_digit(bytes[i + 2]))
+                {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                    continue;
                 }
-                let hi = from_hex_digit(bytes[i + 1]).ok_or_else(|| {
-                    Error::ScriptRuntime("URLSearchParams malformed percent-encoding".into())
-                })?;
-                let lo = from_hex_digit(bytes[i + 2]).ok_or_else(|| {
-                    Error::ScriptRuntime("URLSearchParams malformed percent-encoding".into())
-                })?;
-                out.push((hi << 4) | lo);
-                i += 3;
-            }
-            byte => {
-                out.push(byte);
+                out.push(b'%');
                 i += 1;
+            }
+            _ => {
+                let ch = src[i..].chars().next().unwrap_or_default();
+                let mut encoded = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut encoded);
+                out.extend_from_slice(encoded.as_bytes());
+                i += ch.len_utf8();
             }
         }
     }
-    String::from_utf8(out)
-        .map_err(|_| Error::ScriptRuntime("URLSearchParams malformed UTF-8 sequence".into()))
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub(crate) fn is_form_urlencoded_unescaped_byte(b: u8) -> bool {
@@ -1745,6 +1820,149 @@ pub(crate) fn is_unescaped_uri_byte(b: u8, component: bool) -> bool {
         return true;
     }
     false
+}
+
+pub(crate) fn is_unescaped_url_component_byte(b: u8, encode_set: UrlPercentEncodeSet) -> bool {
+    if !b.is_ascii() || b < 0x20 || b == 0x7F {
+        return false;
+    }
+    if b.is_ascii_alphanumeric() {
+        return true;
+    }
+
+    match encode_set {
+        UrlPercentEncodeSet::UserInfo => matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'%'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b'-'
+                | b'.'
+                | b'_'
+                | b'~'
+        ),
+        UrlPercentEncodeSet::Path => matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'%'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b';'
+                | b'='
+                | b'@'
+                | b'_'
+                | b'~'
+                | b'|'
+                | b'['
+                | b']'
+                | b'\\'
+        ),
+        UrlPercentEncodeSet::Query => matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'%'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b';'
+                | b'='
+                | b'?'
+                | b'@'
+                | b'_'
+                | b'~'
+                | b'`'
+                | b'{'
+                | b'}'
+                | b'|'
+                | b'^'
+                | b'['
+                | b']'
+                | b'\\'
+        ),
+        UrlPercentEncodeSet::SpecialQuery => matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'%'
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b';'
+                | b'='
+                | b'?'
+                | b'@'
+                | b'_'
+                | b'~'
+                | b'`'
+                | b'{'
+                | b'}'
+                | b'|'
+                | b'^'
+                | b'['
+                | b']'
+                | b'\\'
+        ),
+        UrlPercentEncodeSet::Fragment => matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'%'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b';'
+                | b'='
+                | b'?'
+                | b'@'
+                | b'_'
+                | b'~'
+                | b'#'
+                | b'{'
+                | b'}'
+                | b'|'
+                | b'^'
+                | b'['
+                | b']'
+                | b'\\'
+        ),
+        UrlPercentEncodeSet::OpaquePath => true,
+    }
 }
 
 pub(crate) fn is_decode_uri_reserved_char(ch: char) -> bool {

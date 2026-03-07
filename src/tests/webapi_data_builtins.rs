@@ -2184,6 +2184,227 @@ fn fetch_resolves_http_error_status_and_exposes_response_metadata() -> Result<()
 }
 
 #[test]
+fn fetch_invalid_absolute_urls_reject_and_protocol_relative_uses_canonical_mock_key() -> Result<()>
+{
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('https://example.com:abc/api').catch((reason) => String(reason)),
+              fetch('https://example.com:65536/api').catch((reason) => String(reason)),
+              fetch('http://[::1/api').catch((reason) => String(reason)),
+              fetch('//Example.COM:080/api/ok').then((response) => response.text())
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock("https://example.com:80/api/ok", "ok");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "TypeError: Invalid URL|TypeError: Invalid URL|TypeError: Invalid URL|ok",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec!["//Example.COM:080/api/ok".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_special_host_edge_inputs_canonicalize_and_empty_host_reject_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('http:Example.COM:080/api/root').then((response) => response.text()),
+              fetch('http:\\Example.COM\\api\\backslash').then((response) => response.text()),
+              fetch('//Example.COM\\api\\proto').then((response) => response.text()),
+              fetch('http://').catch((reason) => String(reason)),
+              fetch('http:?x').catch((reason) => String(reason)),
+              fetch('http://?x').catch((reason) => String(reason))
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock("http://example.com/api/root", "root");
+    h.set_fetch_mock("http://example.com/api/backslash", "backslash");
+    h.set_fetch_mock("https://example.com/api/proto", "proto");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "root|backslash|proto|TypeError: Invalid URL|TypeError: Invalid URL|TypeError: Invalid URL",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec![
+            "http:Example.COM:080/api/root".to_string(),
+            "http:\\Example.COM\\api\\backslash".to_string(),
+            "//Example.COM\\api\\proto".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_delimiter_inputs_use_canonical_mock_key_and_credentials_reject_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('https://example.com\\docs\\a b?a\'b').then((response) => response.text()),
+              fetch('https://a@b:p@q:r@example.com\\docs\\a b?a\'b').catch((reason) => String(reason))
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock("https://example.com/docs/a%20b?a%27b", "ok");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "ok|TypeError: URL with credentials is not allowed",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec!["https://example.com\\docs\\a b?a'b".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_authority_and_percent_residuals_canonicalize_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('https://ExA%41mple.org/%2f%zz?x=%2f%zz').then((response) => response.text()),
+              fetch('foo://example.com/%2f%zz?x=%2f%zz').then((response) => response.text()),
+              fetch('https://exa%mple.org/').catch((reason) => String(reason)),
+              fetch('https://user:@example.com/%2f%zz').catch((reason) => String(reason))
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock("https://exaample.org/%2f%zz?x=%2f%zz", "host-decoded");
+    h.set_fetch_mock("foo://example.com/%2f%zz?x=%2f%zz", "custom");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "host-decoded|custom|TypeError: Invalid URL|TypeError: URL with credentials is not allowed",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec![
+            "https://ExA%41mple.org/%2f%zz?x=%2f%zz".to_string(),
+            "foo://example.com/%2f%zz?x=%2f%zz".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_malformed_query_and_host_code_point_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('https://\uFF21example.com/?a=%zz&b=%E0%A4&c=%C3%28').then((response) => response.text()),
+              fetch('https://\u00E9xample.com/').then((response) => response.text()),
+              fetch('https://%C3%A9xample.com/').then((response) => response.text()),
+              fetch('https://%00example.com/').catch((reason) => String(reason))
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock(
+        "https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28",
+        "query-host",
+    );
+    h.set_fetch_mock("https://xn--xample-9ua.com/", "idna-host");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "query-host|idna-host|idna-host|TypeError: Invalid URL",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec![
+            "https://\u{FF21}example.com/?a=%zz&b=%E0%A4&c=%C3%28".to_string(),
+            "https://\u{E9}xample.com/".to_string(),
+            "https://%C3%A9xample.com/".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_idna_invalid_label_and_dot_variant_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            Promise.all([
+              fetch('https://example\u3002com./').then((response) => response.text()),
+              fetch('https://\u05D0.com/').then((response) => response.text()),
+              fetch('https://xn--/').catch((reason) => String(reason)),
+              fetch('https://a\u200Db.com/').catch((reason) => String(reason))
+            ]).then((values) => {
+              document.getElementById('result').textContent = values.join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start/index.html", html)?;
+    h.set_fetch_mock("https://example.com./", "dot-host");
+    h.set_fetch_mock("https://xn--4db.com/", "bidi-host");
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "dot-host|bidi-host|TypeError: Invalid URL|TypeError: Invalid URL",
+    )?;
+    assert_eq!(
+        h.take_fetch_calls(),
+        vec![
+            "https://example\u{3002}com./".to_string(),
+            "https://\u{5d0}.com/".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn cookie_store_set_get_get_all_and_delete_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

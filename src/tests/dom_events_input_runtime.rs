@@ -864,6 +864,46 @@ fn html_input_datetime_local_value_normalization_and_value_as_number_work() -> R
 }
 
 #[test]
+fn html_input_datetime_local_seconds_and_fraction_round_trip_work() -> Result<()> {
+    let html = r#"
+        <input id='dt' type='datetime-local' value='2018-06-12T19:30:05.006'>
+        <input id='invalid' type='datetime-local' value='2018-06-12 19:30:05.006'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const dt = document.getElementById('dt');
+          const invalid = document.getElementById('invalid');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = dt.value + ':[' + invalid.value + ']';
+
+            dt.value = '2017-06-01T08:30:05.123';
+            const a = dt.value + ':' + dt.valueAsNumber;
+
+            dt.value = '2017-06-01T08:30:05';
+            const b = dt.value + ':' + dt.valueAsNumber;
+
+            dt.valueAsNumber = 1496305805006;
+            const c = dt.value + ':' + dt.valueAsNumber;
+
+            dt.value = 'invalid';
+            const d = '[' + dt.value + ']:' + String(isNaN(dt.valueAsNumber));
+
+            document.getElementById('result').textContent =
+              first + '|' + a + '|' + b + '|' + c + '|' + d;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "2018-06-12T19:30:05.006:[]|2017-06-01T08:30:05.123:1496305805123|2017-06-01T08:30:05:1496305805000|2017-06-01T08:30:05.006:1496305805006|[]:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_datetime_local_min_max_step_and_required_validity_work() -> Result<()> {
     let html = r#"
         <input id='party' type='datetime-local' min='2017-06-01T08:30' max='2017-06-30T16:30' step='120' required>
@@ -897,6 +937,48 @@ fn html_input_datetime_local_min_max_step_and_required_validity_work() -> Result
     h.assert_text(
         "#result",
         "false:true|true:false|true:false|true:false|true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_datetime_local_sub_minute_step_and_value_as_date_work() -> Result<()> {
+    let html = r#"
+        <input id='when' type='datetime-local' min='2017-06-12T19:30:15.25' max='2017-06-12T19:30:16' step='0.25' value='2017-06-12T19:30:15.25'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const when = document.getElementById('when');
+          document.getElementById('run').addEventListener('click', () => {
+            when.stepUp();
+            const a = when.value;
+
+            when.stepUp(2);
+            const b = when.value;
+
+            when.stepDown(3);
+            const c = when.value;
+
+            when.value = '2017-06-12T19:30:15.375';
+            const d = when.validity.stepMismatch + ':' + when.checkValidity();
+
+            when.value = '2017-06-12T19:30:15.75';
+            const dateObj = when.valueAsDate;
+            const e = when.validity.valid + ':' + (dateObj === null ? 'null' : dateObj.toISOString());
+
+            when.valueAsNumber = 1497295815250;
+            const f = when.value + ':' + when.valueAsNumber;
+
+            document.getElementById('result').textContent = [a, b, c, d, e, f].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "2017-06-12T19:30:15.5|2017-06-12T19:30:16|2017-06-12T19:30:15.25|true:false|true:2017-06-12T19:30:15.750Z|2017-06-12T19:30:15.25:1497295815250",
     )?;
     Ok(())
 }
@@ -990,6 +1072,49 @@ fn html_input_time_value_normalization_and_value_as_number_work() -> Result<()> 
 }
 
 #[test]
+fn html_input_time_seconds_and_fraction_round_trip_work() -> Result<()> {
+    let html = r#"
+        <input id='t' type='time' value='13:30:05.006'>
+        <input id='invalid' type='time' value='25:61:00.001'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const t = document.getElementById('t');
+          const invalid = document.getElementById('invalid');
+          document.getElementById('run').addEventListener('click', () => {
+            const first = t.value + ':[' + invalid.value + ']';
+
+            t.value = '15:30:00.125';
+            const a = t.value + ':' + t.valueAsNumber;
+
+            t.value = '09:00:05.006';
+            const b = t.value + ':' + t.valueAsNumber;
+
+            t.valueAsNumber = 55800125;
+            const c = t.value + ':' + t.valueAsNumber;
+
+            t.valueAsNumber = 32405006;
+            const d = t.value + ':' + t.valueAsNumber;
+
+            t.value = 'invalid';
+            const e = '[' + t.value + ']:' + String(isNaN(t.valueAsNumber));
+
+            document.getElementById('result').textContent =
+              first + '|' + a + '|' + b + '|' + c + '|' + d + '|' + e;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "13:30:05.006:[]|15:30:00.125:55800125|09:00:05.006:32405006|15:30:00.125:55800125|09:00:05.006:32405006|[]:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_time_min_max_step_and_required_validity_work() -> Result<()> {
     let html = r#"
         <input id='office' type='time' min='12:00' max='18:00' step='120' required>
@@ -1035,6 +1160,66 @@ fn html_input_time_min_max_step_and_required_validity_work() -> Result<()> {
     h.assert_text(
         "#result",
         "false:true|true:false|true:false|true:false|true:true|true:true|true:true|false:false:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_time_sub_second_step_and_wrapped_validity_work() -> Result<()> {
+    let html = r#"
+        <input id='ms' type='time' min='09:00:00.25' max='09:00:01' step='0.001' value='09:00:00.25'>
+        <input id='quarter' type='time' min='09:00:00.25' max='09:00:01' step='0.25' value='09:00:00.25'>
+        <input id='wrap' type='time' min='23:59:59.5' max='00:00:00.5' step='0.25'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const ms = document.getElementById('ms');
+          const quarter = document.getElementById('quarter');
+          const wrap = document.getElementById('wrap');
+          document.getElementById('run').addEventListener('click', () => {
+            ms.stepUp();
+            const a = ms.value;
+
+            ms.stepUp(249);
+            const b = ms.value;
+
+            ms.stepDown(250);
+            const c = ms.value;
+
+            quarter.value = '09:00:00.375';
+            const d = quarter.validity.stepMismatch + ':' + quarter.checkValidity();
+
+            quarter.value = '09:00:00.75';
+            const dateObj = quarter.valueAsDate;
+            const e =
+              quarter.validity.valid + ':' +
+              (dateObj === null ? 'null' : dateObj.toISOString());
+
+            ms.valueAsNumber = 32400125;
+            const f = ms.value + ':' + ms.valueAsNumber;
+
+            wrap.value = '23:59:59.75';
+            const g = wrap.validity.valid + ':' + wrap.checkValidity();
+
+            wrap.value = '00:00:00.25';
+            const h = wrap.validity.valid + ':' + wrap.checkValidity();
+
+            wrap.value = '12:00';
+            const i =
+              wrap.validity.valid + ':' + wrap.checkValidity() + ':' +
+              wrap.validity.rangeUnderflow + ':' + wrap.validity.rangeOverflow;
+
+            document.getElementById('result').textContent =
+              [a, b, c, d, e, f, g, h, i].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "09:00:00.251|09:00:00.5|09:00:00.25|true:false|true:1970-01-01T09:00:00.750Z|09:00:00.125:32400125|true:true|true:true|false:false:true:true",
     )?;
     Ok(())
 }

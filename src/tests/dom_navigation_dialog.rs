@@ -1890,6 +1890,769 @@ fn location_properties_and_setters_work_from_location_document_and_window() -> R
 }
 
 #[test]
+fn location_file_host_setters_follow_url_semantics_and_skip_noop_navigation_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'file://server/share/file.txt';
+            const a = [location.href, location.host, location.hostname, location.port].join(',');
+
+            location.port = '8080';
+            const b = [location.href, location.host, location.hostname, location.port].join(',');
+
+            location.hostname = 'example.com';
+            const c = [location.href, location.host, location.hostname, location.port].join(',');
+
+            location.host = 'localhost';
+            const d = [location.href, location.host, location.hostname, location.port].join(',');
+
+            location.host = 'localhost:8080';
+            const e = [location.href, location.host, location.hostname, location.port].join(',');
+
+            document.getElementById('result').textContent = [a, b, c, d, e].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://server/share/file.txt,server,server,|file://server/share/file.txt,server,server,|file://example.com/share/file.txt,example.com,example.com,|file:///share/file.txt,,,|file:///share/file.txt,,,",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "about:blank".to_string(),
+                to: "file://server/share/file.txt".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file://server/share/file.txt".to_string(),
+                to: "file://example.com/share/file.txt".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file://example.com/share/file.txt".to_string(),
+                to: "file:///share/file.txt".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_file_invalid_authority_inputs_throw_and_do_not_navigate_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const outcomes = [];
+            const capture = (label, action) => {
+              try {
+                action();
+                outcomes.push(label + ':false');
+              } catch (err) {
+                outcomes.push(label + ':' + String(err).includes('Invalid URL'));
+              }
+            };
+
+            capture('href', () => {
+              location.href = 'file://server:8080/share/file.txt';
+            });
+            capture('assign', () => {
+              location.assign('file://u:p@server/share/file.txt');
+            });
+            capture('replace', () => {
+              location.replace('file://localhost:8080/Users/me/test.txt');
+            });
+            capture('document', () => {
+              document.location.href = 'file://u@server/share/file.txt';
+            });
+            capture('window', () => {
+              window.location.href = 'file://:p@server/share/file.txt';
+            });
+
+            document.getElementById('result').textContent =
+              outcomes.join('|') + '|' + location.href;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "href:true|assign:true|replace:true|document:true|window:true|https://app.local/start",
+    )?;
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
+fn file_url_document_serialization_and_location_alias_noop_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const before = [
+              document.URL,
+              document.documentURI,
+              document.location.href,
+              window.location.href,
+              document.location.origin,
+              window.location.origin,
+              navigation.currentEntry.url
+            ].join(',');
+
+            location.href = 'FiLe://SeRVer/Share/File.txt';
+            const afterNavigate = [
+              document.URL,
+              document.documentURI,
+              document.location.href,
+              window.location.href,
+              document.location.origin,
+              window.location.origin,
+              navigation.currentEntry.url
+            ].join(',');
+
+            document.location.hostname = 'SERVER';
+            window.location.host = 'SERVER:8080';
+            const afterNoop = [
+              document.location.href,
+              window.location.href,
+              document.location.host,
+              window.location.hostname,
+              navigation.currentEntry.url
+            ].join(',');
+
+            document.getElementById('result').textContent =
+              [before, afterNavigate, afterNoop].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("FiLe://LOCALHOST/Users/Me/Start/Index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file:///Users/Me/Start/Index.html,file:///Users/Me/Start/Index.html,file:///Users/Me/Start/Index.html,file:///Users/Me/Start/Index.html,null,null,file:///Users/Me/Start/Index.html|file://server/Share/File.txt,file://server/Share/File.txt,file://server/Share/File.txt,file://server/Share/File.txt,null,null,file://server/Share/File.txt|file://server/Share/File.txt,file://server/Share/File.txt,server,server,file://server/Share/File.txt",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::HrefSet,
+            from: "file:///Users/Me/Start/Index.html".to_string(),
+            to: "file://server/Share/File.txt".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_file_idna_host_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'file://\u00E9xample.com/share/file.txt';
+            const afterHref = [
+              location.href,
+              location.host,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.host = 'example\u3002com.';
+            const afterHost = [
+              location.href,
+              location.host,
+              location.hostname,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.replaceState({ step: 1 }, '', 'file://\u05D0.com/docs');
+            const afterReplace = [
+              location.href,
+              document.URL,
+              document.documentURI,
+              location.host,
+              location.pathname,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.hostname = 'a\u200Db.com';
+            const afterInvalidSetter = [
+              location.href,
+              location.host,
+              location.hostname,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.host = 'localhost';
+            const afterLocalhost = [
+              location.href,
+              document.URL,
+              document.documentURI,
+              location.host,
+              location.hostname,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              afterHref,
+              afterHost,
+              afterReplace,
+              afterInvalidSetter,
+              afterLocalhost
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("file:///Users/Me/Start/Index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://xn--xample-9ua.com/share/file.txt,xn--xample-9ua.com,file://xn--xample-9ua.com/share/file.txt,2|file://example.com./share/file.txt,example.com.,example.com.,file://example.com./share/file.txt,3|file://xn--4db.com/docs,file://xn--4db.com/docs,file://xn--4db.com/docs,xn--4db.com,/docs,file://xn--4db.com/docs,3|file://xn--4db.com/docs,xn--4db.com,xn--4db.com,file://xn--4db.com/docs,3|file:///docs,file:///docs,file:///docs,,,file:///docs,4",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file:///Users/Me/Start/Index.html".to_string(),
+                to: "file://xn--xample-9ua.com/share/file.txt".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file://xn--xample-9ua.com/share/file.txt".to_string(),
+                to: "file://example.com./share/file.txt".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file://xn--4db.com/docs".to_string(),
+                to: "file:///docs".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_invalid_generic_authority_inputs_throw_and_do_not_navigate_work()
+-> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const outcomes = [];
+            const capture = (label, action) => {
+              try {
+                action();
+                outcomes.push(label + ':false');
+              } catch (err) {
+                outcomes.push(label + ':' + String(err).includes('Invalid URL'));
+              }
+            };
+
+            capture('href', () => {
+              location.href = 'https://example.com:abc/path';
+            });
+            capture('assign', () => {
+              location.assign('https://example.com:65536/path');
+            });
+            capture('push', () => {
+              history.pushState({ step: 1 }, '', 'http://[::1/path');
+            });
+            capture('replace', () => {
+              history.replaceState({ step: 2 }, '', 'https://example.com:99999/path');
+            });
+
+            document.getElementById('result').textContent =
+              outcomes.join('|') + '|' + location.href + '|' + history.length;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "href:true|assign:true|push:true|replace:true|https://app.local/start|1",
+    )?;
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
+fn location_and_history_special_host_inputs_canonicalize_and_empty_host_throw_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let invalidEmpty = false;
+            let invalidQuery = false;
+            let invalidAuthority = false;
+
+            location.href = 'https:Example.COM:080/path';
+            const afterLocation = location.href;
+
+            history.pushState({ step: 1 }, '', 'http:\\Example.COM\\next\\page?x=1#frag');
+            const afterPush = [
+              location.href,
+              navigation.currentEntry.url,
+              history.length,
+              history.state.step
+            ].join(',');
+
+            history.replaceState({ step: 2 }, '', 'http://example.com:');
+            const afterReplace = [
+              location.href,
+              navigation.currentEntry.url,
+              history.length,
+              history.state.step
+            ].join(',');
+
+            try {
+              location.assign('http://');
+            } catch (err) {
+              invalidEmpty = String(err).includes('Invalid URL');
+            }
+
+            try {
+              history.pushState({ step: 3 }, '', 'http:?x');
+            } catch (err) {
+              invalidQuery = String(err).includes('Invalid URL');
+            }
+
+            try {
+              history.replaceState({ step: 4 }, '', 'http://?x');
+            } catch (err) {
+              invalidAuthority = String(err).includes('Invalid URL');
+            }
+
+            document.getElementById('result').textContent = [
+              afterLocation,
+              afterPush,
+              afterReplace,
+              invalidEmpty,
+              invalidQuery,
+              invalidAuthority,
+              location.href,
+              navigation.currentEntry.url,
+              history.length,
+              history.state.step
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com:80/path|http://example.com/next/page?x=1#frag,http://example.com/next/page?x=1#frag,3,1|http://example.com/,http://example.com/,3,2|true|true|true|http://example.com/|http://example.com/|3|2",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::HrefSet,
+            from: "https://app.local/start".to_string(),
+            to: "https://example.com:80/path".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_credentials_and_delimiter_inputs_canonicalize_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://a@b:p@q:r@example.com\\docs\\a b?a\'b#x`y';
+            const afterLocation = [
+              location.href,
+              location.host,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url
+            ].join(',');
+
+            history.pushState({ step: 1 }, '', 'foo://example.com/\\docs\\a b?a\'b#x`y');
+            const afterPush = [
+              location.href,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.replaceState({ step: 2 }, '', 'file:///Users/me/base');
+            location.pathname = '\\docs\\a b';
+            location.search = "a'b";
+            location.hash = 'x`y';
+            const afterReplace = [
+              location.href,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              afterLocation,
+              afterPush,
+              afterReplace
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y,example.com,/docs/a%20b,?a%27b,#x%60y,https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y|foo://example.com/\\docs\\a%20b?a'b#x%60y,/\\docs\\a%20b,?a'b,#x%60y,foo://example.com/\\docs\\a%20b?a'b#x%60y,3|file:///docs/a%20b?a%27b#x%60y,/docs/a%20b,?a%27b,#x%60y,file:///docs/a%20b?a%27b#x%60y,6",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://app.local/start".to_string(),
+                to: "https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file:///Users/me/base".to_string(),
+                to: "file:///docs/a%20b".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file:///docs/a%20b".to_string(),
+                to: "file:///docs/a%20b?a%27b".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "file:///docs/a%20b?a%27b".to_string(),
+                to: "file:///docs/a%20b?a%27b#x%60y".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_authority_and_percent_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const invalid = (() => {
+              try {
+                location.href = 'https://exa%mple.org/';
+                return 'false';
+              } catch (err) {
+                return [
+                  String(err).includes('Invalid URL'),
+                  location.href,
+                  navigation.currentEntry.url,
+                  history.length
+                ].join(',');
+              }
+            })();
+
+            location.href = 'https://a@@ExA%41mple.ORG/%2f%zz?x=%2f%zz#y=%2f%zz';
+            const afterHref = [
+              location.href,
+              location.host,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.host = 'exa%mple.org:77';
+            const afterBadHost = [
+              location.href,
+              location.host,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.host = '%41example.com:0099';
+            const afterHost = [
+              location.href,
+              location.host,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.pushState({ step: 1 }, '', 'foo://example.com/%2f%zz?x=%2f%zz#y=%2f%zz');
+            const afterPush = [
+              location.href,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.replaceState({ step: 2 }, '', 'https://user:@example.com/%2f%zz?x=%2f%zz#y=%2f%zz');
+            const afterReplace = [
+              location.href,
+              location.host,
+              location.pathname,
+              location.search,
+              location.hash,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              invalid,
+              afterHref,
+              afterBadHost,
+              afterHost,
+              afterPush,
+              afterReplace
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true,https://app.local/start,https://app.local/start,1|https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org,/%2f%zz,?x=%2f%zz,#y=%2f%zz,https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz,2|https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org,https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz,2|https://a%40@aexample.com:99/%2f%zz?x=%2f%zz#y=%2f%zz,aexample.com:99,/%2f%zz,?x=%2f%zz,#y=%2f%zz,https://a%40@aexample.com:99/%2f%zz?x=%2f%zz#y=%2f%zz,3|foo://example.com/%2f%zz?x=%2f%zz#y=%2f%zz,/%2f%zz,?x=%2f%zz,#y=%2f%zz,foo://example.com/%2f%zz?x=%2f%zz#y=%2f%zz,4|https://user@example.com/%2f%zz?x=%2f%zz#y=%2f%zz,example.com,/%2f%zz,?x=%2f%zz,#y=%2f%zz,https://user@example.com/%2f%zz?x=%2f%zz#y=%2f%zz,4",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://app.local/start".to_string(),
+                to: "https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://a%40@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz".to_string(),
+                to: "https://a%40@aexample.com:99/%2f%zz?x=%2f%zz#y=%2f%zz".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_malformed_query_and_host_code_point_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const replacement = String.fromCharCode(0xFFFD);
+
+            location.href = 'https://\u00E9xample.com/';
+            const afterIdna = [
+              location.href,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            location.href = 'https://\uFF21example.com/?a=%zz&b=%E0%A4&c=%C3%28';
+            const parsedAfterHref = new URL(location.href);
+            const afterHref = [
+              location.href,
+              location.host,
+              location.search,
+              parsedAfterHref.searchParams.get('a'),
+              parsedAfterHref.searchParams.get('b'),
+              parsedAfterHref.searchParams.get('c'),
+              parsedAfterHref.searchParams.toString(),
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.pushState({ step: 1 }, '', '?b=%E0%A4&a=%zz&a=1');
+            const parsedAfterPush = new URL(location.href);
+            const afterPush = [
+              location.href,
+              location.search,
+              parsedAfterPush.searchParams.getAll('a').join(':'),
+              parsedAfterPush.searchParams.get('b'),
+              parsedAfterPush.searchParams.toString(),
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            const afterReplace = (() => {
+              const mutated = new URL(location.href);
+              mutated.searchParams.sort();
+              mutated.searchParams.set('a', '%zz');
+              history.replaceState({ step: 2 }, '', mutated.href);
+              return [
+                location.href,
+                location.search,
+                mutated.searchParams.getAll('a').join(':'),
+                mutated.searchParams.get('b'),
+                mutated.searchParams.toString(),
+                navigation.currentEntry.url,
+                history.length
+              ].join(',');
+            })();
+
+            const invalidReplace = (() => {
+              try {
+                history.replaceState({ step: 3 }, '', 'https://%00example.com/');
+                return 'false';
+              } catch (err) {
+                return [
+                  String(err).includes('Invalid URL'),
+                  location.href,
+                  navigation.currentEntry.url,
+                  history.length
+                ].join(',');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              afterIdna,
+              afterHref,
+              afterPush,
+              afterReplace,
+              invalidReplace
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://xn--xample-9ua.com/,https://xn--xample-9ua.com/,2|https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28,aexample.com,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28,https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28,3|https://aexample.com/?b=%E0%A4&a=%zz&a=1,?b=%E0%A4&a=%zz&a=1,%zz:1,\u{FFFD},b=%EF%BF%BD&a=%25zz&a=1,https://aexample.com/?b=%E0%A4&a=%zz&a=1,4|https://aexample.com/?a=%25zz&b=%EF%BF%BD,?a=%25zz&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&b=%EF%BF%BD,https://aexample.com/?a=%25zz&b=%EF%BF%BD,4|true,https://aexample.com/?a=%25zz&b=%EF%BF%BD,https://aexample.com/?a=%25zz&b=%EF%BF%BD,4",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://app.local/start".to_string(),
+                to: "https://xn--xample-9ua.com/".to_string(),
+            },
+            LocationNavigation {
+                kind: LocationNavigationKind::HrefSet,
+                from: "https://xn--xample-9ua.com/".to_string(),
+                to: "https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28".to_string(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn location_and_history_idna_invalid_label_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            location.href = 'https://example\u3002com./path';
+            const afterDot = [
+              location.href,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            history.pushState({ step: 1 }, '', 'https://\u05D0.com/');
+            const afterPush = [
+              location.href,
+              navigation.currentEntry.url,
+              history.length
+            ].join(',');
+
+            const invalidHref = (() => {
+              try {
+                location.href = 'https://xn--/';
+                return 'false';
+              } catch (err) {
+                return [
+                  String(err).includes('Invalid URL'),
+                  location.href,
+                  navigation.currentEntry.url,
+                  history.length
+                ].join(',');
+              }
+            })();
+
+            const invalidReplace = (() => {
+              try {
+                history.replaceState({ step: 2 }, '', 'https://a\u200Db.com/');
+                return 'false';
+              } catch (err) {
+                return [
+                  String(err).includes('Invalid URL'),
+                  location.href,
+                  navigation.currentEntry.url,
+                  history.length
+                ].join(',');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              afterDot,
+              afterPush,
+              invalidHref,
+              invalidReplace
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com./path,https://example.com./path,2|https://xn--4db.com/,https://xn--4db.com/,3|true,https://xn--4db.com/,https://xn--4db.com/,3|true,https://xn--4db.com/,https://xn--4db.com/,3",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::HrefSet,
+            from: "https://app.local/start".to_string(),
+            to: "https://example.com./path".to_string(),
+        },]
+    );
+    Ok(())
+}
+
+#[test]
 fn location_assign_replace_reload_and_navigation_logs_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -2492,6 +3255,34 @@ fn anchor_click_navigation_is_skipped_without_href_download_or_target_blank() ->
             kind: LocationNavigationKind::Assign,
             from: "https://app.local/start".to_string(),
             to: "https://app.local/self".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn anchor_invalid_and_special_host_click_matrix_work() -> Result<()> {
+    let html = r#"
+        <a id='bad' href='http://'>bad</a>
+        <a id='bad-query' href='http:?x'>bad query</a>
+        <a id='blank' href='https://example.com:abc/report' target='_blank'>blank</a>
+        <a id='download' href='https://example.com:abc/report' download='report.csv'>download</a>
+        <a id='hostless' href='http:\\Example.COM\\docs\\page?x=1#frag'>hostless</a>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#bad")?;
+    h.click("#bad-query")?;
+    h.click("#blank")?;
+    h.click("#download")?;
+    h.click("#hostless")?;
+
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "http://example.com/docs/page?x=1#frag".to_string(),
         }]
     );
     Ok(())

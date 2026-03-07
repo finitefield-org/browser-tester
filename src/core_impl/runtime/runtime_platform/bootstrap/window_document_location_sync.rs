@@ -2,7 +2,7 @@ use super::*;
 
 impl Harness {
     pub(crate) fn current_location_parts(&self) -> LocationParts {
-        LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
+        let mut parts = LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
             scheme: "about".to_string(),
             has_authority: false,
             username: String::new(),
@@ -13,7 +13,9 @@ impl Harness {
             opaque_path: "blank".to_string(),
             search: String::new(),
             hash: String::new(),
-        })
+        });
+        Self::normalize_url_parts_for_serialization(&mut parts);
+        parts
     }
 
     pub(crate) fn window_is_secure_context(&self) -> bool {
@@ -698,7 +700,7 @@ impl Harness {
                 "hostname".to_string(),
                 Value::String(parts.hostname.clone()),
             ),
-            ("port".to_string(), Value::String(parts.port.clone())),
+            ("port".to_string(), Value::String(parts.effective_port())),
             (
                 "pathname".to_string(),
                 Value::String(if parts.has_authority {

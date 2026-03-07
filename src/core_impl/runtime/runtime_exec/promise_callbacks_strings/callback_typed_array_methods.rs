@@ -141,22 +141,22 @@ impl Harness {
             }
 
             if let Value::FormData(entries) = target_value {
+                let evaluated_args = args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg, env, event_param, event))
+                    .collect::<Result<Vec<_>>>()?;
                 return match method {
                     TypedArrayInstanceMethod::Set => {
-                        if args.len() != 2 && args.len() != 3 {
+                        if evaluated_args.len() < 2 {
                             return Err(Error::ScriptRuntime(
                                 "FormData.set requires two or three arguments".into(),
                             ));
                         }
-                        let name = self
-                            .eval_expr(&args[0], env, event_param, event)?
-                            .as_string();
-                        let value = self.eval_expr(&args[1], env, event_param, event)?;
-                        let filename = args
-                            .get(2)
-                            .map(|expr| self.eval_expr(expr, env, event_param, event))
-                            .transpose()?;
-                        let value = Self::form_data_append_string_value(&value, filename.as_ref());
+                        let name = evaluated_args[0].as_string();
+                        let value = Self::form_data_append_string_value(
+                            &evaluated_args[1],
+                            evaluated_args.get(2),
+                        );
                         let mut entries_ref = entries.borrow_mut();
                         if let Some(first_match) = entries_ref
                             .iter()
@@ -176,11 +176,6 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                     TypedArrayInstanceMethod::Entries => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "FormData.entries does not take arguments".into(),
-                            ));
-                        }
                         let snapshot = entries.borrow().clone();
                         Ok(Self::new_array_value(
                             snapshot
@@ -195,11 +190,6 @@ impl Harness {
                         ))
                     }
                     TypedArrayInstanceMethod::Keys => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "FormData.keys does not take arguments".into(),
-                            ));
-                        }
                         let snapshot = entries.borrow().clone();
                         Ok(Self::new_array_value(
                             snapshot
@@ -209,11 +199,6 @@ impl Harness {
                         ))
                     }
                     TypedArrayInstanceMethod::Values => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "FormData.values does not take arguments".into(),
-                            ));
-                        }
                         let snapshot = entries.borrow().clone();
                         Ok(Self::new_array_value(
                             snapshot
@@ -244,19 +229,19 @@ impl Harness {
                     }
                 }
                 if Self::is_url_search_params_object(&entries.borrow()) {
+                    let evaluated_args = args
+                        .iter()
+                        .map(|arg| self.eval_expr(arg, env, event_param, event))
+                        .collect::<Result<Vec<_>>>()?;
                     return match method {
                         TypedArrayInstanceMethod::Set => {
-                            if args.len() != 2 {
+                            if evaluated_args.len() < 2 {
                                 return Err(Error::ScriptRuntime(
                                     "URLSearchParams.set requires exactly two arguments".into(),
                                 ));
                             }
-                            let name = self
-                                .eval_expr(&args[0], env, event_param, event)?
-                                .as_string();
-                            let value = self
-                                .eval_expr(&args[1], env, event_param, event)?
-                                .as_string();
+                            let name = evaluated_args[0].as_string();
+                            let value = evaluated_args[1].as_string();
                             {
                                 let mut object_ref = entries.borrow_mut();
                                 let mut pairs =
@@ -281,11 +266,6 @@ impl Harness {
                             Ok(Value::Undefined)
                         }
                         TypedArrayInstanceMethod::Entries => {
-                            if !args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "URLSearchParams.entries does not take arguments".into(),
-                                ));
-                            }
                             let pairs = Self::url_search_params_pairs_from_object_entries(
                                 &entries.borrow(),
                             );
@@ -302,11 +282,6 @@ impl Harness {
                             ))
                         }
                         TypedArrayInstanceMethod::Keys => {
-                            if !args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "URLSearchParams.keys does not take arguments".into(),
-                                ));
-                            }
                             let pairs = Self::url_search_params_pairs_from_object_entries(
                                 &entries.borrow(),
                             );
@@ -318,11 +293,6 @@ impl Harness {
                             ))
                         }
                         TypedArrayInstanceMethod::Values => {
-                            if !args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "URLSearchParams.values does not take arguments".into(),
-                                ));
-                            }
                             let pairs = Self::url_search_params_pairs_from_object_entries(
                                 &entries.borrow(),
                             );
@@ -334,11 +304,6 @@ impl Harness {
                             ))
                         }
                         TypedArrayInstanceMethod::Sort => {
-                            if !args.is_empty() {
-                                return Err(Error::ScriptRuntime(
-                                    "URLSearchParams.sort does not take arguments".into(),
-                                ));
-                            }
                             {
                                 let mut object_ref = entries.borrow_mut();
                                 let mut pairs =

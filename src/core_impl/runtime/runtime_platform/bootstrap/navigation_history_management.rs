@@ -40,7 +40,7 @@ impl Harness {
     }
 
     pub(crate) fn document_base_url(&self) -> String {
-        let fallback = self.document_url.clone();
+        let fallback = self.current_location_parts().href();
         let Some(raw_href) = self.first_base_attr("href") else {
             return fallback;
         };
@@ -70,13 +70,12 @@ impl Harness {
 
     pub(crate) fn resolve_document_target_url(&self, input: &str) -> String {
         let input = input.trim();
-        if let Some(parts) = LocationParts::parse(input) {
-            return parts.href();
-        }
-
         let base_url = self.document_base_url();
-        if let Some(base_parts) = LocationParts::parse(&base_url) {
-            return Self::resolve_url_against_base_parts(input, &base_parts);
+        if let Some(resolved) = Self::resolve_url_string(input, Some(&base_url)) {
+            return resolved;
+        }
+        if looks_like_absolute_url(input) {
+            return input.to_string();
         }
 
         self.resolve_location_target_url(input)
@@ -101,72 +100,24 @@ impl Harness {
     pub(crate) fn resolve_location_target_url(&self, input: &str) -> String {
         let input = input.trim();
         if input.is_empty() {
-            return self.document_url.clone();
+            return self.current_location_parts().href();
         }
 
-        if let Some(parts) = LocationParts::parse(input) {
-            return parts.href();
+        if let Some(resolved) = Self::resolve_url_string(input, Some(&self.document_url)) {
+            return resolved;
+        }
+        if looks_like_absolute_url(input) {
+            return input.to_string();
         }
 
         let base = self.current_location_parts();
-        if input.starts_with("//") {
-            return LocationParts::parse(&format!("{}{}", base.protocol(), input))
-                .map(|parts| parts.href())
-                .unwrap_or_else(|| input.to_string());
-        }
+        let resolved = Self::resolve_url_against_base_parts(input, &base);
+        Self::resolve_url_string(&resolved, None).unwrap_or(resolved)
+    }
 
-        let mut next = base.clone();
-        if input.starts_with('#') {
-            next.hash = ensure_hash_prefix(input);
-            return next.href();
-        }
-
-        if input.starts_with('?') {
-            next.search = ensure_search_prefix(input);
-            next.hash.clear();
-            return next.href();
-        }
-
-        if input.starts_with('/') {
-            if next.has_authority {
-                next.pathname = normalize_pathname(input);
-            } else {
-                next.opaque_path = input.to_string();
-            }
-            next.search.clear();
-            next.hash.clear();
-            return next.href();
-        }
-
-        let mut relative = input;
-        let mut next_search = String::new();
-        let mut next_hash = String::new();
-        if let Some(hash_pos) = relative.find('#') {
-            next_hash = ensure_hash_prefix(&relative[hash_pos + 1..]);
-            relative = &relative[..hash_pos];
-        }
-        if let Some(search_pos) = relative.find('?') {
-            next_search = ensure_search_prefix(&relative[search_pos + 1..]);
-            relative = &relative[..search_pos];
-        }
-
-        if next.has_authority {
-            let base_dir = if let Some((prefix, _)) = next.pathname.rsplit_once('/') {
-                if prefix.is_empty() {
-                    "/".to_string()
-                } else {
-                    format!("{prefix}/")
-                }
-            } else {
-                "/".to_string()
-            };
-            next.pathname = normalize_pathname(&format!("{base_dir}{relative}"));
-        } else {
-            next.opaque_path = relative.to_string();
-        }
-        next.search = next_search;
-        next.hash = next_hash;
-        next.href()
+    pub(crate) fn try_resolve_location_target_url(&self, input: &str) -> Result<String> {
+        Self::resolve_url_string(input, Some(&self.document_url))
+            .ok_or_else(|| Error::ScriptRuntime("Invalid URL".into()))
     }
 
     pub(crate) fn is_hash_only_navigation(from: &str, to: &str) -> bool {
@@ -275,7 +226,7 @@ impl Harness {
         kind: LocationNavigationKind,
     ) -> Result<()> {
         let from = self.document_url.clone();
-        let to = self.resolve_location_target_url(next_url);
+        let to = self.try_resolve_location_target_url(next_url)?;
         self.document_url = to.clone();
         match kind {
             LocationNavigationKind::Replace => {
@@ -390,7 +341,7 @@ impl Harness {
     ) -> Result<()> {
         let cloned = Self::structured_clone_value(&state, &mut Vec::new(), &mut Vec::new())?;
         let target_url = url.unwrap_or(&self.document_url);
-        let next_url = self.resolve_location_target_url(target_url);
+        let next_url = self.try_resolve_location_target_url(target_url)?;
         self.document_url = next_url.clone();
 
         if replace {

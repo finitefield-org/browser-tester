@@ -184,30 +184,33 @@ impl Harness {
         )? {
             return Ok(value);
         }
+        let evaluated_args = args
+            .iter()
+            .map(|arg| self.eval_expr(arg, env, event_param, event))
+            .collect::<Result<Vec<_>>>()?;
 
         if let Value::Set(set) = target_value {
             let set = set.clone();
             return match method {
                 MapInstanceMethod::Has => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "Map.has requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
                     Ok(Value::Bool(
-                        self.set_value_index(&set.borrow(), &key).is_some(),
+                        self.set_value_index(&set.borrow(), &evaluated_args[0])
+                            .is_some(),
                     ))
                 }
                 MapInstanceMethod::Delete => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "Map.delete requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
                     let mut set_ref = set.borrow_mut();
-                    if let Some(index) = self.set_value_index(&set_ref, &key) {
+                    if let Some(index) = self.set_value_index(&set_ref, &evaluated_args[0]) {
                         set_ref.values.remove(index);
                         Ok(Value::Bool(true))
                     } else {
@@ -215,24 +218,16 @@ impl Harness {
                     }
                 }
                 MapInstanceMethod::Clear => {
-                    if !args.is_empty() {
-                        return Err(Error::ScriptRuntime(
-                            "Map.clear does not take arguments".into(),
-                        ));
-                    }
                     set.borrow_mut().values.clear();
                     Ok(Value::Undefined)
                 }
                 MapInstanceMethod::ForEach => {
-                    if args.is_empty() || args.len() > 2 {
+                    if evaluated_args.is_empty() || evaluated_args.len() > 2 {
                         return Err(Error::ScriptRuntime(
                             "Map.forEach requires a callback and optional thisArg".into(),
                         ));
                     }
-                    let callback = self.eval_expr(&args[0], env, event_param, event)?;
-                    if args.len() == 2 {
-                        let _ = self.eval_expr(&args[1], env, event_param, event)?;
-                    }
+                    let callback = evaluated_args[0].clone();
                     let snapshot = set.borrow().values.clone();
                     for value in snapshot {
                         let _ = self.execute_callback_value(
@@ -253,14 +248,12 @@ impl Harness {
         if let Value::FormData(entries) = target_value {
             return match method {
                 MapInstanceMethod::Get => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "FormData.get requires exactly one argument".into(),
                         ));
                     }
-                    let key = self
-                        .eval_expr(&args[0], env, event_param, event)?
-                        .as_string();
+                    let key = evaluated_args[0].as_string();
                     let entries = entries.borrow();
                     Ok(entries
                         .iter()
@@ -270,27 +263,23 @@ impl Harness {
                         .unwrap_or(Value::Null))
                 }
                 MapInstanceMethod::Has => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "Map.has requires exactly one argument".into(),
                         ));
                     }
-                    let key = self
-                        .eval_expr(&args[0], env, event_param, event)?
-                        .as_string();
+                    let key = evaluated_args[0].as_string();
                     let entries = entries.borrow();
                     let has = entries.iter().any(|(entry_name, _)| entry_name == &key);
                     Ok(Value::Bool(has))
                 }
                 MapInstanceMethod::Delete => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "FormData.delete requires exactly one argument".into(),
                         ));
                     }
-                    let key = self
-                        .eval_expr(&args[0], env, event_param, event)?
-                        .as_string();
+                    let key = evaluated_args[0].as_string();
                     entries
                         .borrow_mut()
                         .retain(|(entry_name, _)| entry_name != &key);
@@ -307,49 +296,50 @@ impl Harness {
             let weak_map = weak_map.clone();
             return match method {
                 MapInstanceMethod::Get => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakMap.get requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
-                    if !Self::weak_map_accepts_key(&key) {
+                    if !Self::weak_map_accepts_key(&evaluated_args[0]) {
                         return Ok(Value::Undefined);
                     }
                     let weak_map_ref = weak_map.borrow();
-                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                    if let Some(index) =
+                        self.weak_map_entry_index(&weak_map_ref, &evaluated_args[0])
+                    {
                         Ok(weak_map_ref.entries[index].1.clone())
                     } else {
                         Ok(Value::Undefined)
                     }
                 }
                 MapInstanceMethod::Has => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakMap.has requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
-                    if !Self::weak_map_accepts_key(&key) {
+                    if !Self::weak_map_accepts_key(&evaluated_args[0]) {
                         return Ok(Value::Bool(false));
                     }
                     let has = self
-                        .weak_map_entry_index(&weak_map.borrow(), &key)
+                        .weak_map_entry_index(&weak_map.borrow(), &evaluated_args[0])
                         .is_some();
                     Ok(Value::Bool(has))
                 }
                 MapInstanceMethod::Delete => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakMap.delete requires exactly one argument".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
-                    if !Self::weak_map_accepts_key(&key) {
+                    if !Self::weak_map_accepts_key(&evaluated_args[0]) {
                         return Ok(Value::Bool(false));
                     }
                     let mut weak_map_ref = weak_map.borrow_mut();
-                    if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
+                    if let Some(index) =
+                        self.weak_map_entry_index(&weak_map_ref, &evaluated_args[0])
+                    {
                         weak_map_ref.entries.remove(index);
                         Ok(Value::Bool(true))
                     } else {
@@ -357,14 +347,14 @@ impl Harness {
                     }
                 }
                 MapInstanceMethod::GetOrInsert => {
-                    if args.len() != 2 {
+                    if evaluated_args.len() != 2 {
                         return Err(Error::ScriptRuntime(
                             "WeakMap.getOrInsert requires exactly two arguments".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    let key = evaluated_args[0].clone();
                     Self::ensure_weak_map_key(&key)?;
-                    let default_value = self.eval_expr(&args[1], env, event_param, event)?;
+                    let default_value = evaluated_args[1].clone();
                     let mut weak_map_ref = weak_map.borrow_mut();
                     if let Some(index) = self.weak_map_entry_index(&weak_map_ref, &key) {
                         Ok(weak_map_ref.entries[index].1.clone())
@@ -374,12 +364,12 @@ impl Harness {
                     }
                 }
                 MapInstanceMethod::GetOrInsertComputed => {
-                    if args.len() != 2 {
+                    if evaluated_args.len() != 2 {
                         return Err(Error::ScriptRuntime(
                             "WeakMap.getOrInsertComputed requires exactly two arguments".into(),
                         ));
                     }
-                    let key = self.eval_expr(&args[0], env, event_param, event)?;
+                    let key = evaluated_args[0].clone();
                     Self::ensure_weak_map_key(&key)?;
                     {
                         let weak_map_ref = weak_map.borrow();
@@ -387,7 +377,7 @@ impl Harness {
                             return Ok(weak_map_ref.entries[index].1.clone());
                         }
                     }
-                    let callback = self.eval_expr(&args[1], env, event_param, event)?;
+                    let callback = evaluated_args[1].clone();
                     let computed =
                         self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
                     weak_map.borrow_mut().entries.push((key, computed.clone()));
@@ -406,32 +396,32 @@ impl Harness {
             let weak_set = weak_set.clone();
             return match method {
                 MapInstanceMethod::Has => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakSet.has requires exactly one argument".into(),
                         ));
                     }
-                    let value = self.eval_expr(&args[0], env, event_param, event)?;
-                    if !Self::weak_set_accepts_value(&value) {
+                    if !Self::weak_set_accepts_value(&evaluated_args[0]) {
                         return Ok(Value::Bool(false));
                     }
                     let has = self
-                        .weak_set_value_index(&weak_set.borrow(), &value)
+                        .weak_set_value_index(&weak_set.borrow(), &evaluated_args[0])
                         .is_some();
                     Ok(Value::Bool(has))
                 }
                 MapInstanceMethod::Delete => {
-                    if args.len() != 1 {
+                    if evaluated_args.is_empty() {
                         return Err(Error::ScriptRuntime(
                             "WeakSet.delete requires exactly one argument".into(),
                         ));
                     }
-                    let value = self.eval_expr(&args[0], env, event_param, event)?;
-                    if !Self::weak_set_accepts_value(&value) {
+                    if !Self::weak_set_accepts_value(&evaluated_args[0]) {
                         return Ok(Value::Bool(false));
                     }
                     let mut weak_set_ref = weak_set.borrow_mut();
-                    if let Some(index) = self.weak_set_value_index(&weak_set_ref, &value) {
+                    if let Some(index) =
+                        self.weak_set_value_index(&weak_set_ref, &evaluated_args[0])
+                    {
                         weak_set_ref.values.remove(index);
                         Ok(Value::Bool(true))
                     } else {
@@ -469,10 +459,6 @@ impl Harness {
                         )));
                     }
                 };
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expr(arg, env, event_param, event)?);
-                }
                 if let Some(value) =
                     self.eval_cookie_store_member_call(&entries, member, &evaluated_args)?
                 {
@@ -482,11 +468,6 @@ impl Harness {
             if Self::is_storage_object(&entries.borrow()) {
                 return match method {
                     MapInstanceMethod::Clear => {
-                        if !args.is_empty() {
-                            return Err(Error::ScriptRuntime(
-                                "Storage.clear does not take arguments".into(),
-                            ));
-                        }
                         Self::set_storage_pairs(&mut entries.borrow_mut(), &[]);
                         Ok(Value::Undefined)
                     }
@@ -499,14 +480,12 @@ impl Harness {
             if Self::is_url_search_params_object(&entries.borrow()) {
                 return match method {
                     MapInstanceMethod::Get => {
-                        if args.len() != 1 {
+                        if evaluated_args.is_empty() {
                             return Err(Error::ScriptRuntime(
                                 "URLSearchParams.get requires exactly one argument".into(),
                             ));
                         }
-                        let name = self
-                            .eval_expr(&args[0], env, event_param, event)?
-                            .as_string();
+                        let name = evaluated_args[0].as_string();
                         let pairs =
                             Self::url_search_params_pairs_from_object_entries(&entries.borrow());
                         let value = pairs
@@ -519,14 +498,12 @@ impl Harness {
                         Ok(value)
                     }
                     MapInstanceMethod::Has => {
-                        if args.len() != 1 {
+                        if evaluated_args.is_empty() {
                             return Err(Error::ScriptRuntime(
                                 "URLSearchParams.has requires exactly one argument".into(),
                             ));
                         }
-                        let name = self
-                            .eval_expr(&args[0], env, event_param, event)?
-                            .as_string();
+                        let name = evaluated_args[0].as_string();
                         let pairs =
                             Self::url_search_params_pairs_from_object_entries(&entries.borrow());
                         Ok(Value::Bool(
@@ -534,14 +511,12 @@ impl Harness {
                         ))
                     }
                     MapInstanceMethod::Delete => {
-                        if args.len() != 1 {
+                        if evaluated_args.is_empty() {
                             return Err(Error::ScriptRuntime(
                                 "URLSearchParams.delete requires exactly one argument".into(),
                             ));
                         }
-                        let name = self
-                            .eval_expr(&args[0], env, event_param, event)?
-                            .as_string();
+                        let name = evaluated_args[0].as_string();
                         {
                             let mut object_ref = entries.borrow_mut();
                             let mut pairs =
@@ -553,16 +528,13 @@ impl Harness {
                         Ok(Value::Undefined)
                     }
                     MapInstanceMethod::ForEach => {
-                        if args.is_empty() || args.len() > 2 {
+                        if evaluated_args.is_empty() || evaluated_args.len() > 2 {
                             return Err(Error::ScriptRuntime(
                                 "URLSearchParams.forEach requires a callback and optional thisArg"
                                     .into(),
                             ));
                         }
-                        let callback = self.eval_expr(&args[0], env, event_param, event)?;
-                        if args.len() == 2 {
-                            let _ = self.eval_expr(&args[1], env, event_param, event)?;
-                        }
+                        let callback = evaluated_args[0].clone();
                         let snapshot =
                             Self::url_search_params_pairs_from_object_entries(&entries.borrow());
                         for (entry_name, entry_value) in snapshot {
@@ -615,38 +587,37 @@ impl Harness {
         let map = map.clone();
         match method {
             MapInstanceMethod::Get => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.get requires exactly one argument".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?;
                 let map_ref = map.borrow();
-                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                if let Some(index) = self.map_entry_index(&map_ref, &evaluated_args[0]) {
                     Ok(map_ref.entries[index].1.clone())
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             MapInstanceMethod::Has => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.has requires exactly one argument".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?;
-                let has = self.map_entry_index(&map.borrow(), &key).is_some();
+                let has = self
+                    .map_entry_index(&map.borrow(), &evaluated_args[0])
+                    .is_some();
                 Ok(Value::Bool(has))
             }
             MapInstanceMethod::Delete => {
-                if args.len() != 1 {
+                if evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
                         "Map.delete requires exactly one argument".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?;
                 let mut map_ref = map.borrow_mut();
-                if let Some(index) = self.map_entry_index(&map_ref, &key) {
+                if let Some(index) = self.map_entry_index(&map_ref, &evaluated_args[0]) {
                     map_ref.entries.remove(index);
                     Ok(Value::Bool(true))
                 } else {
@@ -654,24 +625,16 @@ impl Harness {
                 }
             }
             MapInstanceMethod::Clear => {
-                if !args.is_empty() {
-                    return Err(Error::ScriptRuntime(
-                        "Map.clear does not take arguments".into(),
-                    ));
-                }
                 map.borrow_mut().entries.clear();
                 Ok(Value::Undefined)
             }
             MapInstanceMethod::ForEach => {
-                if args.is_empty() || args.len() > 2 {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
                     return Err(Error::ScriptRuntime(
                         "Map.forEach requires a callback and optional thisArg".into(),
                     ));
                 }
-                let callback = self.eval_expr(&args[0], env, event_param, event)?;
-                if args.len() == 2 {
-                    let _ = self.eval_expr(&args[1], env, event_param, event)?;
-                }
+                let callback = evaluated_args[0].clone();
                 let snapshot = map.borrow().entries.clone();
                 for (key, value) in snapshot {
                     let _ = self.execute_callback_value(
@@ -683,13 +646,13 @@ impl Harness {
                 Ok(Value::Undefined)
             }
             MapInstanceMethod::GetOrInsert => {
-                if args.len() != 2 {
+                if evaluated_args.len() != 2 {
                     return Err(Error::ScriptRuntime(
                         "Map.getOrInsert requires exactly two arguments".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?;
-                let default_value = self.eval_expr(&args[1], env, event_param, event)?;
+                let key = evaluated_args[0].clone();
+                let default_value = evaluated_args[1].clone();
                 let mut map_ref = map.borrow_mut();
                 if let Some(index) = self.map_entry_index(&map_ref, &key) {
                     Ok(map_ref.entries[index].1.clone())
@@ -699,19 +662,19 @@ impl Harness {
                 }
             }
             MapInstanceMethod::GetOrInsertComputed => {
-                if args.len() != 2 {
+                if evaluated_args.len() != 2 {
                     return Err(Error::ScriptRuntime(
                         "Map.getOrInsertComputed requires exactly two arguments".into(),
                     ));
                 }
-                let key = self.eval_expr(&args[0], env, event_param, event)?;
+                let key = evaluated_args[0].clone();
                 {
                     let map_ref = map.borrow();
                     if let Some(index) = self.map_entry_index(&map_ref, &key) {
                         return Ok(map_ref.entries[index].1.clone());
                     }
                 }
-                let callback = self.eval_expr(&args[1], env, event_param, event)?;
+                let callback = evaluated_args[1].clone();
                 let computed =
                     self.execute_callback_value(&callback, std::slice::from_ref(&key), event)?;
                 map.borrow_mut().entries.push((key, computed.clone()));

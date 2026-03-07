@@ -5295,30 +5295,47 @@ impl Harness {
     }
 
     pub(crate) fn parse_datetime_local_input_value_ms(raw: &str) -> Option<i64> {
-        let (year, month, day, hour, minute) = parse_datetime_local_input_components(raw)?;
+        let (year, month, day, hour, minute, second, millisecond) =
+            parse_datetime_local_input_components(raw)?;
         Some(Self::utc_timestamp_ms_from_components(
             year,
             i64::from(month) - 1,
             i64::from(day),
             i64::from(hour),
             i64::from(minute),
-            0,
-            0,
+            i64::from(second),
+            i64::from(millisecond),
         ))
     }
 
+    fn format_time_precision_suffix(second: u32, millisecond: u32) -> String {
+        if second == 0 && millisecond == 0 {
+            String::new()
+        } else if millisecond == 0 {
+            format!(":{second:02}")
+        } else {
+            let mut fraction = format!("{millisecond:03}");
+            while fraction.ends_with('0') {
+                fraction.pop();
+            }
+            format!(":{second:02}.{fraction}")
+        }
+    }
+
     pub(crate) fn format_datetime_local_input_from_timestamp_ms(timestamp_ms: i64) -> String {
-        let (year, month, day, hour, minute, ..) = Self::date_components_utc(timestamp_ms);
+        let (year, month, day, hour, minute, second, millisecond) =
+            Self::date_components_utc(timestamp_ms);
         if !(0..=9999).contains(&year) {
             return String::new();
         }
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}")
+        let suffix = Self::format_time_precision_suffix(second, millisecond);
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}{suffix}")
     }
 
     pub(crate) fn parse_time_input_value_ms(raw: &str) -> Option<i64> {
-        let (hour, minute, second, _) = parse_time_input_components(raw)?;
+        let (hour, minute, second, millisecond) = parse_time_input_components(raw)?;
         let total_seconds = i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second);
-        Some(total_seconds * 1_000)
+        Some(total_seconds * 1_000 + i64::from(millisecond))
     }
 
     pub(crate) fn format_time_input_from_timestamp_ms(timestamp_ms: i64) -> String {
@@ -5327,11 +5344,13 @@ impl Harness {
         let total_seconds = wrapped / 1_000;
         let hour = total_seconds / 3_600;
         let minute = (total_seconds % 3_600) / 60;
-        let second = total_seconds % 60;
-        if second == 0 {
+        let second = (total_seconds % 60) as u32;
+        let millisecond = wrapped.rem_euclid(1_000) as u32;
+        if second == 0 && millisecond == 0 {
             format!("{hour:02}:{minute:02}")
         } else {
-            format!("{hour:02}:{minute:02}:{second:02}")
+            let suffix = Self::format_time_precision_suffix(second, millisecond);
+            format!("{hour:02}:{minute:02}{suffix}")
         }
     }
 

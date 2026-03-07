@@ -3142,7 +3142,8 @@ impl Harness {
                             }
 
                             let name = name.as_string();
-                            let value =
+                            let url_search_params_value = value.as_string();
+                            let form_data_value =
                                 Self::form_data_append_string_value(&value, filename.as_ref());
                             let target = env.get_mut(target_var).ok_or_else(|| {
                                 Error::ScriptRuntime(format!(
@@ -3152,7 +3153,7 @@ impl Harness {
                             })?;
                             match target {
                                 Value::FormData(entries) => {
-                                    entries.borrow_mut().push((name, value));
+                                    entries.borrow_mut().push((name, form_data_value));
                                 }
                                 Value::Object(entries) => {
                                     if !Self::is_url_search_params_object(&entries.borrow()) {
@@ -3161,19 +3162,13 @@ impl Harness {
                                             target_var
                                         )));
                                     }
-                                    if filename.is_some() {
-                                        return Err(Error::ScriptRuntime(
-                                            "URLSearchParams.append requires exactly two arguments"
-                                                .into(),
-                                        ));
-                                    }
                                     {
                                         let mut object_ref = entries.borrow_mut();
                                         let mut pairs =
                                             Self::url_search_params_pairs_from_object_entries(
                                                 &object_ref,
                                             );
-                                        pairs.push((name, value));
+                                        pairs.push((name, url_search_params_value));
                                         Self::set_url_search_params_pairs(&mut object_ref, &pairs);
                                     }
                                     self.sync_url_search_params_owner(entries);

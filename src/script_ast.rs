@@ -971,6 +971,8 @@ pub(crate) enum UrlSearchParamsInstanceMethod {
     Delete,
     GetAll,
     Has,
+    Set,
+    Sort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1430,6 +1430,211 @@ fn url_constructor_properties_setters_and_methods_work() -> Result<()> {
 }
 
 #[test]
+fn url_protocol_switch_and_opaque_setter_noop_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const httpToFile = new URL('http://example.com/a');
+            httpToFile.protocol = 'file:';
+
+            const portBlocksFile = new URL('http://example.com:81/a');
+            portBlocksFile.protocol = 'file:';
+
+            const credentialBlocksFile = new URL('http://u:p@example.com/a');
+            credentialBlocksFile.protocol = 'file:';
+
+            const fileToHttp = new URL('file://server/share/file.txt');
+            fileToHttp.protocol = 'http:';
+
+            const localFile = new URL('file:///Users/me/test.txt');
+            localFile.protocol = 'http:';
+
+            const opaque = new URL('foo:abc?x=1#h');
+            opaque.pathname = 'new/path';
+            opaque.host = 'ignored.test:1234';
+            opaque.hostname = 'ignored-2.test';
+            opaque.port = '5678';
+            opaque.search = 'z=2';
+            opaque.hash = 'k';
+
+            document.getElementById('result').textContent = [
+              httpToFile.href,
+              portBlocksFile.href,
+              credentialBlocksFile.href,
+              fileToHttp.href,
+              localFile.href,
+              [opaque.href, opaque.pathname, opaque.host, opaque.search, opaque.hash].join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://example.com/a|http://example.com:81/a|http://u:p@example.com/a|http://server/share/file.txt|file:///Users/me/test.txt|foo:abc?z=2#k,abc,,?z=2,#k",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_file_host_setter_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const server = new URL('file://server/share/file.txt');
+            const localhost = new URL('file://localhost/Users/me/test.txt');
+
+            const initial = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [localhost.href, localhost.host, localhost.hostname, localhost.port].join(',')
+            ].join(';');
+
+            server.port = '8080';
+            localhost.port = '8080';
+            const afterPort = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [localhost.href, localhost.host, localhost.hostname, localhost.port].join(',')
+            ].join(';');
+
+            server.host = 'example.com';
+            localhost.hostname = 'example.com';
+            const afterHost = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [localhost.href, localhost.host, localhost.hostname, localhost.port].join(',')
+            ].join(';');
+
+            server.host = 'localhost';
+            localhost.host = 'localhost';
+            const afterLocalhost = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [localhost.href, localhost.host, localhost.hostname, localhost.port].join(',')
+            ].join(';');
+
+            server.host = 'localhost:8080';
+            localhost.host = 'example.com:8080';
+            const blockedPort = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [localhost.href, localhost.host, localhost.hostname, localhost.port].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent =
+              [initial, afterPort, afterHost, afterLocalhost, blockedPort].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://server/share/file.txt,server,server,;file:///Users/me/test.txt,,,|file://server/share/file.txt,server,server,;file:///Users/me/test.txt,,,|file://example.com/share/file.txt,example.com,example.com,;file://example.com/Users/me/test.txt,example.com,example.com,|file:///share/file.txt,,,;file:///Users/me/test.txt,,,|file:///share/file.txt,,,;file:///Users/me/test.txt,,,",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_file_idna_host_and_method_extra_args_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const ctor = [
+              new URL('file://\u00E9xample.com/path'),
+              new URL('file://%C3%A9xample.com/path'),
+              new URL('file://example\u3002com./path'),
+              new URL('file://\u05D0.com/path'),
+              new URL('file://localhost/path')
+            ].map((url) => [url.href, url.host, url.hostname, url.origin].join(',')).join(';');
+
+            const invalid = [
+              'file://xn--/path',
+              'file://a\u200Db.com/path'
+            ].map((value) => {
+              try {
+                new URL(value);
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            }).join(',');
+
+            const setter = (() => {
+              const url = new URL('file://server/share/file.txt');
+              url.host = '\u00E9xample.com';
+              const a = [url.href, url.host, url.hostname].join(',');
+              url.hostname = 'example\u3002com.';
+              const b = [url.href, url.host, url.hostname].join(',');
+              url.host = '\u05D0.com';
+              const c = [url.href, url.host, url.hostname].join(',');
+              url.hostname = 'xn--';
+              const d = [url.href, url.host, url.hostname].join(',');
+              url.host = 'a\u200Db.com';
+              const e = [url.href, url.host, url.hostname].join(',');
+              url.host = 'localhost';
+              const f = [url.href, url.host, url.hostname].join(',');
+              return [a, b, c, d, e, f].join(';');
+            })();
+
+            const url = new URL('https://example.com/?b=2&a=1&a=3');
+            let side = 'start';
+            const urlMethods = [
+              url.toString(side = 'url.toString'),
+              side,
+              url.toJSON(side = 'url.toJSON'),
+              side
+            ].join(',');
+
+            const params = url.searchParams;
+            const entries = [
+              Array.from(params.entries(side = 'params.entries'))
+                .map((pair) => pair.join(':'))
+                .join(';'),
+              side
+            ].join(',');
+            const keys = [
+              Array.from(params.keys(side = 'params.keys')).join(';'),
+              side
+            ].join(',');
+            const values = [
+              Array.from(params.values(side = 'params.values')).join(';'),
+              side
+            ].join(',');
+            const stringified = [
+              params.toString(side = 'params.toString'),
+              side
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              ctor,
+              invalid,
+              setter,
+              urlMethods,
+              entries,
+              keys,
+              values,
+              stringified
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://xn--xample-9ua.com/path,xn--xample-9ua.com,xn--xample-9ua.com,null;file://xn--xample-9ua.com/path,xn--xample-9ua.com,xn--xample-9ua.com,null;file://example.com./path,example.com.,example.com.,null;file://xn--4db.com/path,xn--4db.com,xn--4db.com,null;file:///path,,,null|true,true|file://xn--xample-9ua.com/share/file.txt,xn--xample-9ua.com,xn--xample-9ua.com;file://example.com./share/file.txt,example.com.,example.com.;file://xn--4db.com/share/file.txt,xn--4db.com,xn--4db.com;file://xn--4db.com/share/file.txt,xn--4db.com,xn--4db.com;file://xn--4db.com/share/file.txt,xn--4db.com,xn--4db.com;file:///share/file.txt,,|https://example.com/?b=2&a=1&a=3,url.toString,https://example.com/?b=2&a=1&a=3,url.toJSON|b:2;a:1;a:3,params.entries|b;a;a,params.keys|2;1;3,params.values|b=2&a=1&a=3,params.toString",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn url_search_params_live_sync_with_url_search_and_href_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -1463,6 +1668,677 @@ fn url_search_params_live_sync_with_url_search_and_href_work() -> Result<()> {
     h.assert_text(
         "#result",
         "https://example.com/?a=b%20~|https://example.com/?a=b+%7E&topic=web+dev|https://example.com/?x=1|true:1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_malformed_percent_and_host_code_point_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const replacement = String.fromCharCode(0xFFFD);
+
+            const params = new URLSearchParams('?%zz=1&a=%zz&b=%E0%A4&c=%C3%28&d=%&e=%2');
+            const paramsState = [
+              params.get('%zz'),
+              params.get('a'),
+              params.get('b'),
+              params.get('c'),
+              params.get('d'),
+              params.get('e'),
+              params.toString()
+            ].join(',');
+
+            const url = new URL('https://\uFF21example.com/?a=%zz&b=%E0%A4&c=%C3%28');
+            const fromCtor = [
+              url.href,
+              url.search,
+              url.searchParams.get('a'),
+              url.searchParams.get('b'),
+              url.searchParams.get('c'),
+              url.searchParams.toString()
+            ].join(',');
+
+            url.search = '?a=%zz&b=%E0%A4&c=%C3%28';
+            const afterSearch = [
+              url.href,
+              url.search,
+              url.searchParams.get('a'),
+              url.searchParams.get('b'),
+              url.searchParams.get('c'),
+              url.searchParams.toString()
+            ].join(',');
+
+            url.searchParams.append('%zz', 'x y');
+            const afterAppend = [
+              url.href,
+              url.search,
+              url.searchParams.get('%zz'),
+              url.searchParams.toString()
+            ].join(',');
+
+            const hostCtor = (() => {
+              const rawFullwidth = new URL('https://\uFF21example.com/root');
+              const percentFullwidth = new URL('https://%EF%BC%A1example.com/root');
+              const invalid = [
+                'https://\u00E9xample.com/',
+                'https://%C3%A9xample.com/',
+                'https://%00example.com/'
+              ].map((value) => {
+                const canParse = URL.canParse(value);
+                const parsed = URL.parse(value) === null;
+                const constructed = (() => {
+                  try {
+                    new URL(value);
+                    return 'false';
+                  } catch (err) {
+                    return String(err).includes('Invalid URL');
+                  }
+                })();
+                return [canParse, parsed, constructed].join(':');
+              }).join(';');
+
+              const setter = (() => {
+                const host = new URL('https://base.test/root');
+                host.hostname = '\uFF21example.com';
+                const afterFullwidth = [host.href, host.host].join(',');
+                host.hostname = '\u00E9xample.com';
+                const afterUnicode = [host.href, host.host].join(',');
+                host.hostname = '%00example.com';
+                const afterControl = [host.href, host.host].join(',');
+                return [afterFullwidth, afterUnicode, afterControl].join(';');
+              })();
+
+              return [
+                [rawFullwidth.href, rawFullwidth.host].join(','),
+                [percentFullwidth.href, percentFullwidth.host].join(','),
+                invalid,
+                setter
+              ].join('|');
+            })();
+
+            document.getElementById('result').textContent = [
+              paramsState,
+              fromCtor,
+              afterSearch,
+              afterAppend,
+              hostCtor,
+              replacement
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1,%zz,\u{FFFD},\u{FFFD}(,%,%2,%25zz=1&a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28&d=%25&e=%252|https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28|https://aexample.com/?a=%zz&b=%E0%A4&c=%C3%28,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28|https://aexample.com/?a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28&%25zz=x+y,?a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28&%25zz=x+y,x y,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28&%25zz=x+y|https://aexample.com/root,aexample.com|https://aexample.com/root,aexample.com|true:false:false;true:false:false;false:true:true|https://aexample.com/root,aexample.com;https://xn--xample-9ua.com/root,xn--xample-9ua.com;https://xn--xample-9ua.com/root,xn--xample-9ua.com|\u{FFFD}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_idna_host_and_search_params_duplicate_live_mutation_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const replacement = String.fromCharCode(0xFFFD);
+
+            const idna = [
+              new URL('https://\u00E9xample.com/root'),
+              new URL('https://e\u0301xample.com/root'),
+              new URL('https://%C3%A9xample.com/root'),
+              new URL('https://example\u3002com/root'),
+              new URL('https://%E3%80%82example.com/root')
+            ].map((url) => [url.href, url.host].join(',')).join(';');
+
+            const setter = (() => {
+              const url = new URL('https://base.test/root');
+              url.hostname = '\u00E9xample.com';
+              const afterUnicode = [url.href, url.host].join(',');
+              url.hostname = 'example\u3002com';
+              const afterDot = [url.href, url.host].join(',');
+              url.hostname = '%00example.com';
+              const afterInvalid = [url.href, url.host].join(',');
+              return [afterUnicode, afterDot, afterInvalid].join(';');
+            })();
+
+            const url = new URL('https://\u00E9xample.com/?b=%E0%A4&a=%zz&a=1');
+            const params = url.searchParams;
+            const ctor = [
+              url.href,
+              url.host,
+              params.get('a'),
+              params.get('b'),
+              params.toString()
+            ].join(',');
+
+            params.sort();
+            const afterSort = [
+              url.href,
+              params.get('a'),
+              params.get('b'),
+              params.toString()
+            ].join(',');
+
+            params.set('a', '%zz');
+            const afterSet = [
+              url.href,
+              params.get('a'),
+              params.get('b'),
+              params.toString()
+            ].join(',');
+
+            url.search = '?m=%zz&m=%E0%A4&n=1';
+            const afterSearch = [
+              url.href,
+              params.get('m'),
+              params.get('n'),
+              params.toString()
+            ].join(',');
+
+            params.delete('m', replacement);
+            const afterDelete = [
+              url.href,
+              params.get('m'),
+              params.get('n'),
+              params.toString()
+            ].join(',');
+
+            url.href = 'https://example\u3002com/?q=%zz';
+            params.append('r', '1 2');
+            const afterHref = [
+              url.href,
+              url.host,
+              params.get('q'),
+              params.get('r'),
+              params.toString()
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              idna,
+              setter,
+              ctor,
+              afterSort,
+              afterSet,
+              afterSearch,
+              afterDelete,
+              afterHref
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://xn--xample-9ua.com/root,xn--xample-9ua.com;https://xn--xample-9ua.com/root,xn--xample-9ua.com;https://xn--xample-9ua.com/root,xn--xample-9ua.com;https://example.com/root,example.com;https://.example.com/root,.example.com|https://xn--xample-9ua.com/root,xn--xample-9ua.com;https://example.com/root,example.com;https://example.com/root,example.com|https://xn--xample-9ua.com/?b=%E0%A4&a=%zz&a=1,xn--xample-9ua.com,%zz,\u{FFFD},b=%EF%BF%BD&a=%25zz&a=1|https://xn--xample-9ua.com/?a=%25zz&a=1&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&a=1&b=%EF%BF%BD|https://xn--xample-9ua.com/?a=%25zz&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&b=%EF%BF%BD|https://xn--xample-9ua.com/?m=%zz&m=%E0%A4&n=1,%zz,1,m=%25zz&m=%EF%BF%BD&n=1|https://xn--xample-9ua.com/?m=%25zz&n=1,%zz,1,m=%25zz&n=1|https://example.com/?q=%25zz&r=1+2,example.com,%zz,1 2,q=%25zz&r=1+2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_idna_invalid_labels_and_overlap_dispatch_extra_args_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const invalid = [
+              'https://xn--/',
+              'https://xn--a/',
+              'https://xn--a-.com/',
+              'https://\u200C.com/',
+              'https://a\u200Db.com/'
+            ].map((value) => {
+              try {
+                new URL(value);
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            }).join(',');
+
+            const valid = [
+              new URL('https://-a.com/'),
+              new URL('https://a-.com/'),
+              new URL('https://example.com./'),
+              new URL('https://example\u3002com./'),
+              new URL('https://\u05D0.com/'),
+              new URL('https://a\u3002b\uFF0Ec\uFF61d/')
+            ].map((url) => [url.href, url.host].join(',')).join(';');
+
+            const setter = (() => {
+              const url = new URL('https://base.test/root');
+              url.hostname = 'example.com.';
+              const trailingDot = [url.href, url.host].join(',');
+              url.hostname = 'example\u3002com.';
+              const dotVariant = [url.href, url.host].join(',');
+              url.hostname = '\u05D0.com';
+              const bidi = [url.href, url.host].join(',');
+              url.hostname = 'xn--';
+              const afterInvalidLabel = [url.href, url.host].join(',');
+              url.hostname = 'a\u200Db.com';
+              const afterJoiner = [url.href, url.host].join(',');
+              return [trailingDot, dotVariant, bidi, afterInvalidLabel, afterJoiner].join(';');
+            })();
+
+            const url = new URL('https://example.com/?b=2&a=1');
+            let side = 'start';
+            url.searchParams.sort(side = 'array-sort');
+            const afterArraySort = [url.href, side].join(',');
+
+            const params = new URLSearchParams('a=1&a=2');
+            const has = params.has('a', '2', side = side + '/has');
+            params.delete('a', '2', side = side + '/delete');
+            params.set('b', '3', side = side + '/set');
+            params.append('c', '4', side = side + '/append');
+            params.sort(side = side + '/sort');
+            const afterParams = [has, params.toString(), side].join(',');
+
+            const key = {};
+            const map = new Map([['a', 1]]);
+            const set = new Set(['x']);
+            const weakMap = new WeakMap([[key, 'v']]);
+            const weakSet = new WeakSet([key]);
+            side = 'map-start';
+            const overlap = [
+              map.has('a', side = 'map-has'),
+              map.delete('a', side = side + '/map-delete'),
+              set.has('x', side = side + '/set-has'),
+              set.delete('x', side = side + '/set-delete'),
+              weakMap.has(key, side = side + '/weakmap-has'),
+              weakMap.delete(key, side = side + '/weakmap-delete'),
+              weakSet.has(key, side = side + '/weakset-has'),
+              weakSet.delete(key, side = side + '/weakset-delete'),
+              side
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              invalid,
+              valid,
+              setter,
+              afterArraySort,
+              afterParams,
+              overlap
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true,true,true,true,true|https://-a.com/,-a.com;https://a-.com/,a-.com;https://example.com./,example.com.;https://example.com./,example.com.;https://xn--4db.com/,xn--4db.com;https://a.b.c.d/,a.b.c.d|https://example.com./root,example.com.;https://example.com./root,example.com.;https://xn--4db.com/root,xn--4db.com;https://xn--4db.com/root,xn--4db.com;https://xn--4db.com/root,xn--4db.com|https://example.com/?a=1&b=2,array-sort|true,a=1&b=3&c=4,array-sort/has/delete/set/append/sort|true,true,true,true,true,true,true,true,map-has/map-delete/set-has/set-delete/weakmap-has/weakmap-delete/weakset-has/weakset-delete",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_file_invalid_authority_and_serialization_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const invalid = [
+              'file://server:8080/share/file.txt',
+              'file://u:p@server/share/file.txt',
+              'file://u@server/share/file.txt',
+              'file://localhost:8080/Users/me/test.txt'
+            ];
+            const canParse = invalid.map((value) => URL.canParse(value)).join(',');
+            const parsed = invalid.map((value) => URL.parse(value) === null).join(',');
+            const constructed = invalid.map((value) => {
+              try {
+                new URL(value);
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            }).join(',');
+
+            const hrefSetter = (() => {
+              const url = new URL('file://server/share/file.txt');
+              try {
+                url.href = 'file://server:8080/share/file.txt';
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            })();
+
+            const localhost = new URL('FiLe://LOCALHOST/Users/Me/Test.txt');
+            const server = new URL('FiLe://SeRVer/Share/File.txt');
+
+            document.getElementById('result').textContent = [
+              canParse,
+              parsed,
+              constructed,
+              hrefSetter,
+              [localhost.href, localhost.origin, localhost.host, localhost.hostname].join(','),
+              [server.href, server.origin, server.host, server.hostname].join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false,false,false,false|true,true,true,true|true,true,true,true|true|file:///Users/Me/Test.txt,null,,|file://server/Share/File.txt,null,server,server",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_generic_invalid_authority_and_setter_port_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const invalid = [
+              'http://example.com:abc/',
+              'https://example.com:65536/',
+              'http://[::1/'
+            ];
+            const canParse = invalid.map((value) => URL.canParse(value)).join(',');
+            const parsed = invalid.map((value) => URL.parse(value) === null).join(',');
+            const constructed = invalid.map((value) => {
+              try {
+                new URL(value);
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            }).join(',');
+
+            const leading = new URL('https://Example.COM:080/a');
+
+            const hostInvalidPort = new URL('https://base.test:8080/root/page');
+            hostInvalidPort.host = 'Example.com:abc';
+
+            const hostIpv6KeepPort = new URL('https://base.test:8080/root/page');
+            hostIpv6KeepPort.host = '[::1]:abc';
+
+            const hostInvalidIpv6 = new URL('https://base.test:8080/root/page');
+            hostInvalidIpv6.host = '[::1';
+
+            const hostnameInvalid = new URL('https://base.test:8080/root/page');
+            hostnameInvalid.hostname = 'example.com:123';
+
+            const portCanonical = new URL('https://base.test:8080/root/page');
+            portCanonical.port = '09090';
+
+            const portInvalid = new URL('https://base.test:8080/root/page');
+            portInvalid.port = '99999';
+
+            document.getElementById('result').textContent = [
+              leading.href,
+              canParse,
+              parsed,
+              constructed,
+              hostInvalidPort.href,
+              hostIpv6KeepPort.href,
+              hostInvalidIpv6.href,
+              hostnameInvalid.href,
+              portCanonical.href,
+              portInvalid.href
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://example.com:80/a|false,false,false|true,true,true|true,true,true|https://example.com:8080/root/page|https://[::1]:8080/root/page|https://base.test:8080/root/page|https://base.test:8080/root/page|https://base.test:9090/root/page|https://base.test:8080/root/page",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_special_host_edge_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const constructed = [
+              new URL('http:foo').href,
+              new URL('https:/Example.COM:080/docs').href,
+              new URL('http:\\Example.COM\\docs\\a?x=1#h').href,
+              new URL('http://example.com:').href
+            ].join(',');
+
+            const invalid = [
+              'http://',
+              'http:?x',
+              'http://?x'
+            ].map((value) => {
+              const canParse = URL.canParse(value);
+              const parsed = URL.parse(value) === null;
+              const constructed = (() => {
+                try {
+                  new URL(value);
+                  return 'false';
+                } catch (err) {
+                  return String(err).includes('Invalid URL');
+                }
+              })();
+              return [canParse, parsed, constructed].join(':');
+            }).join(',');
+
+            const hrefSetter = (() => {
+              const url = new URL('https://base.test/root');
+              url.href = 'https:Example.COM:080/next';
+              return url.href;
+            })();
+
+            const backslashSetter = (() => {
+              const url = new URL('https://base.test/root');
+              url.href = 'http:\\Example.COM\\p';
+              return url.href;
+            })();
+
+            document.getElementById('result').textContent = [
+              constructed,
+              invalid,
+              hrefSetter,
+              backslashSetter
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "http://foo/,https://example.com:80/docs,http://example.com/docs/a?x=1#h,http://example.com/|false:true:true,false:true:true,false:true:true|https://example.com:80/next|http://example.com/p",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_credential_and_delimiter_encoding_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const ctor = new URL('https://a@b:p@q:r@example.com/p q?x y#z z');
+
+            const special = new URL('https://u:p@example.com/base');
+            special.username = 'a@b';
+            special.password = 'p@q:r';
+            special.pathname = '\\docs\\a b';
+            special.search = "a'b";
+            special.hash = 'x`y';
+
+            const custom = new URL('foo://example.com/base');
+            custom.pathname = '\\docs\\a b';
+            custom.search = "a'b";
+            custom.hash = 'x`y';
+
+            const file = new URL('file:///Users/me/base');
+            file.username = 'a@b';
+            file.password = 'p@q:r';
+            file.pathname = '\\docs\\a b';
+            file.search = "a'b";
+            file.hash = 'x`y';
+
+            const mail = new URL('mailto:test@example.com?x=1#h');
+            mail.username = 'a@b';
+            mail.password = 'p@q:r';
+            mail.pathname = 'ignored';
+            mail.search = "a'b";
+            mail.hash = 'x`y';
+
+            document.getElementById('result').textContent = [
+              [ctor.href, ctor.username, ctor.password, ctor.pathname, ctor.search, ctor.hash].join(','),
+              [special.href, special.username, special.password, special.pathname, special.search, special.hash].join(','),
+              [custom.href, custom.username, custom.password, custom.pathname, custom.search, custom.hash].join(','),
+              [file.href, file.username, file.password, file.pathname, file.search, file.hash].join(','),
+              [mail.href, mail.username, mail.password, mail.pathname, mail.search, mail.hash].join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://a%40b:p%40q%3Ar@example.com/p%20q?x%20y#z%20z,a%40b,p%40q%3Ar,/p%20q,?x%20y,#z%20z|https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y,a%40b,p%40q%3Ar,/docs/a%20b,?a%27b,#x%60y|foo://example.com/\\docs\\a%20b?a'b#x%60y,,,/\\docs\\a%20b,?a'b,#x%60y|file:///docs/a%20b?a%27b#x%60y,,,/docs/a%20b,?a%27b,#x%60y|mailto:test@example.com?a'b#x%60y,,,test@example.com,?a'b,#x%60y",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn url_authority_and_percent_residual_matrix_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const ctor = new URL('https://user%zz:pa%2fss@ExA%41mple.ORG/%2f%zz?x=%2f%zz#y=%2f%zz');
+
+            const invalid = [
+              'https://exa%mple.org/',
+              'https://exa%25mple.org/',
+              'https://exa%2fmple.org/'
+            ];
+            const canParse = invalid.map((value) => URL.canParse(value)).join(',');
+            const parsed = invalid.map((value) => URL.parse(value) === null).join(',');
+            const constructed = invalid.map((value) => {
+              try {
+                new URL(value);
+                return 'false';
+              } catch (err) {
+                return String(err).includes('Invalid URL');
+              }
+            }).join(',');
+
+            const hrefSetter = (() => {
+              const url = new URL('https://base.test/root');
+              url.href = 'https://%41example.com/%2f%zz?x=%2f%zz#y=%2f%zz';
+              const valid = [url.href, url.host, url.pathname, url.search, url.hash].join(',');
+              try {
+                url.href = 'https://exa%mple.org/';
+                return [valid, 'false', url.href].join(';');
+              } catch (err) {
+                return [
+                  valid,
+                  String(err).includes('Invalid URL'),
+                  url.href
+                ].join(';');
+              }
+            })();
+
+            const hostSetters = (() => {
+              const url = new URL('https://base.test:8080/root');
+              url.host = 'ExA%41mple.ORG:0099';
+              const afterHost = [url.href, url.host, url.hostname].join(',');
+              url.host = 'exa%mple.org:77';
+              const afterBadHost = [url.href, url.host, url.hostname].join(',');
+              url.hostname = '%41lt.EXAMPLE.com';
+              const afterHostname = [url.href, url.host, url.hostname].join(',');
+              url.hostname = 'exa%mple.org';
+              const afterBadHostname = [url.href, url.host, url.hostname].join(',');
+              return [
+                afterHost,
+                afterBadHost,
+                afterHostname,
+                afterBadHostname
+              ].join(';');
+            })();
+
+            const userinfoEdges = [
+              new URL('https://a@@example.com/'),
+              new URL('https://:pass@example.com/'),
+              new URL('https://user:@example.com/')
+            ].map((url) => [url.href, url.username, url.password].join(',')).join(';');
+
+            const setterPreserve = (() => {
+              const url = new URL('https://example.com/base');
+              url.username = 'a%zz';
+              url.password = 'b%2f';
+              url.pathname = '%2f%zz';
+              url.search = '%2f%zz';
+              url.hash = '%2f%zz';
+              return [
+                url.href,
+                url.username,
+                url.password,
+                url.pathname,
+                url.search,
+                url.hash
+              ].join(',');
+            })();
+
+            const custom = (() => {
+              const url = new URL('foo://example.com/base');
+              url.pathname = '%2f%zz';
+              url.search = '%2f%zz';
+              url.hash = '%2f%zz';
+              return [url.href, url.pathname, url.search, url.hash].join(',');
+            })();
+
+            const opaque = new URL('mailto:test@example.com%zz?x=%2f%zz#y=%2f%zz');
+
+            document.getElementById('result').textContent = [
+              [ctor.href, ctor.username, ctor.password, ctor.pathname, ctor.search, ctor.hash].join(','),
+              canParse,
+              parsed,
+              constructed,
+              hrefSetter,
+              hostSetters,
+              userinfoEdges,
+              setterPreserve,
+              custom,
+              [opaque.href, opaque.pathname, opaque.search, opaque.hash].join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://user%zz:pa%2fss@exaample.org/%2f%zz?x=%2f%zz#y=%2f%zz,user%zz,pa%2fss,/%2f%zz,?x=%2f%zz,#y=%2f%zz|false,false,false|true,true,true|true,true,true|https://aexample.com/%2f%zz?x=%2f%zz#y=%2f%zz,aexample.com,/%2f%zz,?x=%2f%zz,#y=%2f%zz;true;https://aexample.com/%2f%zz?x=%2f%zz#y=%2f%zz|https://exaample.org:99/root,exaample.org:99,exaample.org;https://exaample.org:99/root,exaample.org:99,exaample.org;https://alt.example.com:99/root,alt.example.com:99,alt.example.com;https://alt.example.com:99/root,alt.example.com:99,alt.example.com|https://a%40@example.com/,a%40,;https://:pass@example.com/,,pass;https://user@example.com/,user,|https://a%zz:b%2f@example.com/%2f%zz?%2f%zz#%2f%zz,a%zz,b%2f,/%2f%zz,?%2f%zz,#%2f%zz|foo://example.com/%2f%zz?%2f%zz#%2f%zz,/%2f%zz,?%2f%zz,#%2f%zz|mailto:test@example.com%zz?x=%2f%zz#y=%2f%zz,test@example.com%zz,?x=%2f%zz,#y=%2f%zz",
     )?;
     Ok(())
 }

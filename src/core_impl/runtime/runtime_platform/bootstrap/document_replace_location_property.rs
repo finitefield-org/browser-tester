@@ -1,6 +1,16 @@
 use super::*;
 
 impl Harness {
+    fn navigate_location_parts_if_changed(&mut self, parts: &LocationParts) -> Result<()> {
+        let mut next_parts = parts.clone();
+        Self::normalize_url_parts_for_serialization(&mut next_parts);
+        let next_href = next_parts.href();
+        if next_href == self.current_location_parts().href() {
+            return Ok(());
+        }
+        self.navigate_location(&next_href, LocationNavigationKind::HrefSet)
+    }
+
     pub(crate) fn replace_document_with_html(&mut self, html: &str) -> Result<()> {
         let ParseOutput { mut dom, scripts } = parse_html(html)?;
         if scripts
@@ -59,51 +69,55 @@ impl Harness {
                         value.as_string()
                     )));
                 }
-                parts.scheme = protocol;
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                if !parts.apply_protocol_setter(&protocol) {
+                    return Ok(());
+                }
+                self.navigate_location_parts_if_changed(&parts)
             }
             "host" => {
                 let mut parts = self.current_location_parts();
-                let host = value.as_string();
-                let (hostname, port) = split_hostname_and_port(host.trim());
-                parts.hostname = hostname;
-                parts.port = port;
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                if !parts.apply_host_setter(&value.as_string()) {
+                    return Ok(());
+                }
+                self.navigate_location_parts_if_changed(&parts)
             }
             "hostname" => {
                 let mut parts = self.current_location_parts();
-                parts.hostname = value.as_string();
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                if !parts.apply_hostname_setter(&value.as_string()) {
+                    return Ok(());
+                }
+                self.navigate_location_parts_if_changed(&parts)
             }
             "port" => {
                 let mut parts = self.current_location_parts();
-                parts.port = value.as_string();
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                if !parts.apply_port_setter(&value.as_string()) {
+                    return Ok(());
+                }
+                self.navigate_location_parts_if_changed(&parts)
             }
             "pathname" => {
                 let mut parts = self.current_location_parts();
-                let raw = value.as_string();
-                if parts.has_authority {
-                    let normalized_input = if raw.starts_with('/') {
-                        raw
-                    } else {
-                        format!("/{raw}")
-                    };
-                    parts.pathname = normalize_pathname(&normalized_input);
-                } else {
-                    parts.opaque_path = raw;
+                if !parts.has_authority {
+                    return Ok(());
                 }
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                let raw = value.as_string();
+                let normalized_input = if raw.starts_with('/') {
+                    raw
+                } else {
+                    format!("/{raw}")
+                };
+                parts.pathname = normalize_pathname(&normalized_input);
+                self.navigate_location_parts_if_changed(&parts)
             }
             "search" => {
                 let mut parts = self.current_location_parts();
                 parts.search = ensure_search_prefix(&value.as_string());
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                self.navigate_location_parts_if_changed(&parts)
             }
             "hash" => {
                 let mut parts = self.current_location_parts();
                 parts.hash = ensure_hash_prefix(&value.as_string());
-                self.navigate_location(&parts.href(), LocationNavigationKind::HrefSet)
+                self.navigate_location_parts_if_changed(&parts)
             }
             "origin" | "ancestorOrigins" => {
                 Err(Error::ScriptRuntime(format!("location.{key} is read-only")))

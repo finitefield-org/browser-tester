@@ -1834,7 +1834,7 @@ impl Harness {
                 }
 
                 let raw_url = evaluated_args[0].as_string();
-                let destination = self.resolve_location_target_url(&raw_url);
+                let destination = self.try_resolve_location_target_url(&raw_url)?;
                 let mut state = Value::Null;
                 let mut replace = false;
 

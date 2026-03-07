@@ -1334,7 +1334,7 @@ fn attribute_reflection_html_2_6_1_url_anchor_setter_special_and_opaque_protocol
             special.port = '7070';
             special.pathname = 'docs';
 
-            opaque.protocol = 'https:';
+            opaque.protocol = 'foo:';
             opaque.host = 'ignored.test:1234';
             opaque.hostname = 'ignored2.test';
             opaque.port = '5678';
@@ -1357,7 +1357,62 @@ fn attribute_reflection_html_2_6_1_url_anchor_setter_special_and_opaque_protocol
     h.click("#run")?;
     h.assert_text(
         "#result",
-        "https:,example.com:8443,/a/b,https://user:pw@example.com:8443/a/b?x=1#h;mailto:,,person@example.com,mailto:person@example.com?subject=Hi#frag|http:,cdn.example.test:7070,/docs,http://user:pw@cdn.example.test:7070/docs?x=1#h;https:,,new/path,https:new/path?subject=Hi#frag",
+        "https:,example.com:8443,/a/b,https://user:pw@example.com:8443/a/b?x=1#h;mailto:,,person@example.com,mailto:person@example.com?subject=Hi#frag|http:,cdn.example.test:7070,/docs,http://user:pw@cdn.example.test:7070/docs?x=1#h;foo:,,person@example.com,foo:person@example.com?subject=Hi#frag",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_anchor_default_port_and_protocol_switch_matrix_work()
+-> Result<()> {
+    let html = r#"
+        <a id='http-default' href='http://example.com:81/path?x=1#h'>http</a>
+        <a id='https-default' href='https://example.com:80/path?x=1#h'>https</a>
+        <a id='special-to-special' href='https://u:p@example.com:80/a/b?x=1#h'>special</a>
+        <a id='special-to-opaque' href='http://example.com:80/a?x=1#h'>no-op</a>
+        <a id='opaque-to-special' href='mailto:person@example.com?subject=Hi#frag'>opaque</a>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const httpDefault = document.getElementById('http-default');
+            const httpsDefault = document.getElementById('https-default');
+            const specialToSpecial = document.getElementById('special-to-special');
+            const specialToOpaque = document.getElementById('special-to-opaque');
+            const opaqueToSpecial = document.getElementById('opaque-to-special');
+
+            const initial = [
+              [httpDefault.port, httpDefault.host, httpDefault.href].join(','),
+              [httpsDefault.port, httpsDefault.host, httpsDefault.href].join(','),
+              [specialToSpecial.protocol, specialToSpecial.host, specialToSpecial.href].join(','),
+              [specialToOpaque.protocol, specialToOpaque.href].join(','),
+              [opaqueToSpecial.protocol, opaqueToSpecial.href].join(',')
+            ].join(';');
+
+            httpDefault.port = '80';
+            httpsDefault.host = 'example.com:443';
+            specialToSpecial.protocol = 'http:';
+            specialToOpaque.protocol = 'mailto:';
+            opaqueToSpecial.protocol = 'https:';
+
+            const updated = [
+              [httpDefault.port, httpDefault.host, httpDefault.href].join(','),
+              [httpsDefault.port, httpsDefault.host, httpsDefault.href].join(','),
+              [specialToSpecial.protocol, specialToSpecial.host, specialToSpecial.href].join(','),
+              [specialToOpaque.protocol, specialToOpaque.href].join(','),
+              [opaqueToSpecial.protocol, opaqueToSpecial.href].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = [initial, updated].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "81,example.com:81,http://example.com:81/path?x=1#h;80,example.com:80,https://example.com:80/path?x=1#h;https:,example.com:80,https://u:p@example.com:80/a/b?x=1#h;http:,http://example.com/a?x=1#h;mailto:,mailto:person@example.com?subject=Hi#frag|,example.com,http://example.com/path?x=1#h;,example.com,https://example.com/path?x=1#h;http:,example.com,http://u:p@example.com/a/b?x=1#h;http:,http://example.com/a?x=1#h;mailto:,mailto:person@example.com?subject=Hi#frag",
     )?;
     Ok(())
 }
@@ -1409,6 +1464,430 @@ fn attribute_reflection_html_2_6_1_url_anchor_username_password_setter_is_noop_f
     h.assert_text(
         "#result",
         "::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///Users/kazuyoshitoshiya/report.txt|::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///Users/kazuyoshitoshiya/report.txt",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_anchor_file_host_setter_matrix_work() -> Result<()> {
+    let html = r#"
+        <a id='server' href='file://server/share/file.txt'>server</a>
+        <a id='local' href='file://localhost/Users/me/test.txt'>local</a>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const server = document.getElementById('server');
+            const local = document.getElementById('local');
+
+            const initial = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [local.href, local.host, local.hostname, local.port].join(',')
+            ].join(';');
+
+            server.port = '8080';
+            local.port = '8080';
+            const afterPort = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [local.href, local.host, local.hostname, local.port].join(',')
+            ].join(';');
+
+            server.host = 'example.com';
+            local.hostname = 'example.com';
+            const afterHost = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [local.href, local.host, local.hostname, local.port].join(',')
+            ].join(';');
+
+            server.host = 'localhost';
+            local.host = 'localhost';
+            const afterLocalhost = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [local.href, local.host, local.hostname, local.port].join(',')
+            ].join(';');
+
+            server.host = 'localhost:8080';
+            local.host = 'example.com:8080';
+            const blockedPort = [
+              [server.href, server.host, server.hostname, server.port].join(','),
+              [local.href, local.host, local.hostname, local.port].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent =
+              [initial, afterPort, afterHost, afterLocalhost, blockedPort].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://server/share/file.txt,server,server,;file:///Users/me/test.txt,,,|file://server/share/file.txt,server,server,;file:///Users/me/test.txt,,,|file://example.com/share/file.txt,example.com,example.com,;file://example.com/Users/me/test.txt,example.com,example.com,|file:///share/file.txt,,,;file:///Users/me/test.txt,,,|file:///share/file.txt,,,;file:///Users/me/test.txt,,,",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_anchor_invalid_file_href_and_origin_work() -> Result<()> {
+    let html = r#"
+        <a id='bad' href='file://server:8080/share/file.txt'>bad</a>
+        <a id='local' href='FiLe://LOCALHOST/Users/Me/Report.txt'>local</a>
+        <a id='server' href='FiLe://SeRVer/Share/File.txt'>server</a>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const bad = document.getElementById('bad');
+            const local = document.getElementById('local');
+            const server = document.getElementById('server');
+
+            document.getElementById('result').textContent = [
+              [bad.getAttribute('href'), bad.href].join(','),
+              [local.href, local.origin, local.host, local.hostname].join(','),
+              [server.href, server.origin, server.host, server.hostname].join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "file://server:8080/share/file.txt,file://server:8080/share/file.txt|file:///Users/Me/Report.txt,null,,|file://server/Share/File.txt,null,server,server",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_anchor_invalid_absolute_subproperties_are_empty_and_setters_noop()
+-> Result<()> {
+    let html = r#"
+        <a id='bad' href='http://example.com:abc/'>bad</a>
+        <a id='ipv6' href='http://[::1/'>ipv6</a>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const bad = document.getElementById('bad');
+            const ipv6 = document.getElementById('ipv6');
+
+            const initial = [
+              'href=' + bad.href,
+              'protocol=' + bad.protocol,
+              'host=' + bad.host,
+              'hostname=' + bad.hostname,
+              'port=' + bad.port,
+              'pathname=' + bad.pathname,
+              'origin=' + bad.origin,
+              'username=' + bad.username,
+              'password=' + bad.password,
+              'search=' + bad.search,
+              'hash=' + bad.hash
+            ].join(',');
+
+            const invalidIpv6 = [
+              'href=' + ipv6.href,
+              'protocol=' + ipv6.protocol,
+              'host=' + ipv6.host,
+              'pathname=' + ipv6.pathname,
+              'origin=' + ipv6.origin
+            ].join(',');
+
+            bad.protocol = 'https:';
+            bad.host = 'example.com:9090';
+            bad.hostname = 'example.com';
+            bad.port = '9090';
+            bad.pathname = '/docs';
+            bad.search = 'x=1';
+            bad.hash = 'frag';
+
+            const after = [
+              'attr=' + bad.getAttribute('href'),
+              'href=' + bad.href,
+              'protocol=' + bad.protocol,
+              'host=' + bad.host,
+              'pathname=' + bad.pathname,
+              'origin=' + bad.origin
+            ].join(',');
+
+            document.getElementById('result').textContent =
+              [initial, invalidIpv6, after].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "href=http://example.com:abc/,protocol=:,host=,hostname=,port=,pathname=,origin=,username=,password=,search=,hash=|href=http://[::1/,protocol=:,host=,pathname=,origin=|attr=http://example.com:abc/,href=http://example.com:abc/,protocol=:,host=,pathname=,origin=",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_area_and_link_null_url_getters_match_anchor_work()
+-> Result<()> {
+    let html = r#"
+        <a id='anchor-missing'>anchor missing</a>
+        <a id='anchor-bad' href='http://example.com:abc/path'>anchor bad</a>
+        <map name='zones'>
+          <area id='area-missing' alt='area missing'>
+          <area id='area-bad' href='http://example.com:abc/path' alt='area bad'>
+        </map>
+        <link id='link-missing' rel='stylesheet'>
+        <link id='link-bad' rel='stylesheet' href='http://example.com:abc/path'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          function state(node) {
+            return [
+              'href=' + node.href,
+              'protocol=' + node.protocol,
+              'host=' + node.host,
+              'pathname=' + node.pathname,
+              'origin=' + node.origin
+            ].join(',');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const anchorMissing = document.getElementById('anchor-missing');
+            const anchorBad = document.getElementById('anchor-bad');
+            const areaMissing = document.getElementById('area-missing');
+            const areaBad = document.getElementById('area-bad');
+            const linkMissing = document.getElementById('link-missing');
+            const linkBad = document.getElementById('link-bad');
+
+            areaBad.search = 'x=1';
+            linkBad.hash = 'frag';
+
+            document.getElementById('result').textContent = [
+              state(anchorMissing),
+              state(areaMissing),
+              state(linkMissing),
+              state(anchorBad),
+              state(areaBad),
+              state(linkBad),
+              'areaAttr=' + areaBad.getAttribute('href'),
+              'linkAttr=' + linkBad.getAttribute('href')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "href=,protocol=:,host=,pathname=,origin=|href=,protocol=:,host=,pathname=,origin=|href=,protocol=:,host=,pathname=,origin=|href=http://example.com:abc/path,protocol=:,host=,pathname=,origin=|href=http://example.com:abc/path,protocol=:,host=,pathname=,origin=|href=http://example.com:abc/path,protocol=:,host=,pathname=,origin=|areaAttr=http://example.com:abc/path|linkAttr=http://example.com:abc/path",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_hyperlink_credentials_and_delimiter_encoding_work()
+-> Result<()> {
+    let html = r#"
+        <a id='anchor' href='https://u:p@example.com/base'>anchor</a>
+        <map name='zones'>
+          <area id='area' href='https://u:p@example.com/base' alt='area'>
+        </map>
+        <link id='link' rel='stylesheet' href='https://u:p@example.com/base'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          function mutate(node) {
+            node.username = 'a@b';
+            node.password = 'p@q:r';
+            node.pathname = '\\docs\\a b';
+            node.search = "a'b";
+            node.hash = 'x`y';
+            return [
+              node.href,
+              node.username,
+              node.password,
+              node.pathname,
+              node.search,
+              node.hash,
+              node.getAttribute('href')
+            ].join(',');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              mutate(document.getElementById('anchor')),
+              mutate(document.getElementById('area')),
+              mutate(document.getElementById('link'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y,a%40b,p%40q%3Ar,/docs/a%20b,?a%27b,#x%60y,https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y|https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y,a%40b,p%40q%3Ar,/docs/a%20b,?a%27b,#x%60y,https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y|https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y,a%40b,p%40q%3Ar,/docs/a%20b,?a%27b,#x%60y,https://a%40b:p%40q%3Ar@example.com/docs/a%20b?a%27b#x%60y",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_hyperlink_authority_and_percent_residual_work() -> Result<()>
+{
+    let html = r#"
+        <a id='anchor' href='https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz'>anchor</a>
+        <map name='zones'>
+          <area id='area' href='https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz' alt='area'>
+        </map>
+        <link id='link' rel='stylesheet' href='https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          function mutate(node) {
+            const initial = [
+              node.href,
+              node.username,
+              node.password,
+              node.pathname,
+              node.search,
+              node.hash
+            ].join(',');
+
+            node.host = 'ExA%41mple.ORG:0099';
+            const afterHost = [node.href, node.host].join(',');
+
+            node.host = 'exa%mple.org:77';
+            const afterBadHost = [node.href, node.host].join(',');
+
+            node.username = 'a%zz';
+            node.password = 'b%2f';
+            node.pathname = '%2f%zz';
+            node.search = '%2f%zz';
+            node.hash = '%2f%zz';
+
+            return [
+              initial,
+              afterHost,
+              afterBadHost,
+              [
+                node.href,
+                node.username,
+                node.password,
+                node.pathname,
+                node.search,
+                node.hash,
+                node.getAttribute('href')
+              ].join(',')
+            ].join(';');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              mutate(document.getElementById('anchor')),
+              mutate(document.getElementById('area')),
+              mutate(document.getElementById('link'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz,user%zz,pa%2fss,/%2f%zz,?x=%2f%zz,#y=%2f%zz;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz,a%zz,b%2f,/%2f%zz,?%2f%zz,#%2f%zz,https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz|https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz,user%zz,pa%2fss,/%2f%zz,?x=%2f%zz,#y=%2f%zz;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz,a%zz,b%2f,/%2f%zz,?%2f%zz,#%2f%zz,https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz|https://user%zz:pa%2fss@example.com/%2f%zz?x=%2f%zz#y=%2f%zz,user%zz,pa%2fss,/%2f%zz,?x=%2f%zz,#y=%2f%zz;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://user%zz:pa%2fss@exaample.org:99/%2f%zz?x=%2f%zz#y=%2f%zz,exaample.org:99;https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz,a%zz,b%2f,/%2f%zz,?%2f%zz,#%2f%zz,https://a%zz:b%2f@exaample.org:99/%2f%zz?%2f%zz#%2f%zz",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_hyperlink_malformed_query_and_host_code_point_work()
+-> Result<()> {
+    let html = r#"
+        <a id='anchor' href='https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28'>anchor</a>
+        <map name='zones'>
+          <area id='area' href='https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28' alt='area'>
+        </map>
+        <link id='link' rel='stylesheet' href='https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          function state(node) {
+            const initialUrl = new URL(node.href);
+            const initial = [
+              node.href,
+              node.search,
+              initialUrl.searchParams.get('a'),
+              initialUrl.searchParams.get('b'),
+              initialUrl.searchParams.get('c'),
+              initialUrl.searchParams.toString()
+            ].join(',');
+
+            node.hostname = '\uFF21example.com';
+            const afterFullwidth = [node.href, node.host].join(',');
+
+            node.hostname = '\u00E9xample.com';
+            const afterUnicode = [node.href, node.host].join(',');
+
+            node.search = '?b=%E0%A4&a=%zz&a=1';
+            const parsed = new URL(node.href);
+            const afterSearch = [
+              node.href,
+              node.search,
+              parsed.searchParams.getAll('a').join(':'),
+              parsed.searchParams.get('b'),
+              parsed.searchParams.toString(),
+              node.getAttribute('href')
+            ].join(',');
+
+            const mutated = new URL(node.href);
+            mutated.searchParams.sort();
+            mutated.searchParams.set('a', '%zz');
+            node.href = mutated.href;
+            const afterMutation = [
+              node.href,
+              node.search,
+              mutated.searchParams.getAll('a').join(':'),
+              mutated.searchParams.get('b'),
+              mutated.searchParams.toString(),
+              node.getAttribute('href')
+            ].join(',');
+
+            node.hostname = 'example\u3002com';
+            const afterDot = [node.href, node.host].join(',');
+
+            node.hostname = '%00example.com';
+            const afterInvalid = [node.href, node.host].join(',');
+
+            return [
+              initial,
+              afterFullwidth,
+              afterUnicode,
+              afterSearch,
+              afterMutation,
+              afterDot,
+              afterInvalid
+            ].join(';');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              state(document.getElementById('anchor')),
+              state(document.getElementById('area')),
+              state(document.getElementById('link'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28;https://aexample.com/path?a=%zz&b=%E0%A4&c=%C3%28,aexample.com;https://xn--xample-9ua.com/path?a=%zz&b=%E0%A4&c=%C3%28,xn--xample-9ua.com;https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1,?b=%E0%A4&a=%zz&a=1,%zz:1,\u{FFFD},b=%EF%BF%BD&a=%25zz&a=1,https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1;https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD,?a=%25zz&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&b=%EF%BF%BD,https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com|https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28;https://aexample.com/path?a=%zz&b=%E0%A4&c=%C3%28,aexample.com;https://xn--xample-9ua.com/path?a=%zz&b=%E0%A4&c=%C3%28,xn--xample-9ua.com;https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1,?b=%E0%A4&a=%zz&a=1,%zz:1,\u{FFFD},b=%EF%BF%BD&a=%25zz&a=1,https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1;https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD,?a=%25zz&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&b=%EF%BF%BD,https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com|https://base.test/path?a=%zz&b=%E0%A4&c=%C3%28,?a=%zz&b=%E0%A4&c=%C3%28,%zz,\u{FFFD},\u{FFFD}(,a=%25zz&b=%EF%BF%BD&c=%EF%BF%BD%28;https://aexample.com/path?a=%zz&b=%E0%A4&c=%C3%28,aexample.com;https://xn--xample-9ua.com/path?a=%zz&b=%E0%A4&c=%C3%28,xn--xample-9ua.com;https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1,?b=%E0%A4&a=%zz&a=1,%zz:1,\u{FFFD},b=%EF%BF%BD&a=%25zz&a=1,https://xn--xample-9ua.com/path?b=%E0%A4&a=%zz&a=1;https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD,?a=%25zz&b=%EF%BF%BD,%zz,\u{FFFD},a=%25zz&b=%EF%BF%BD,https://xn--xample-9ua.com/path?a=%25zz&b=%EF%BF%BD;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com;https://example.com/path?a=%25zz&b=%EF%BF%BD,example.com",
     )?;
     Ok(())
 }
@@ -1532,6 +2011,63 @@ fn attribute_reflection_html_2_3_3_numeric_validity_recomputes_after_min_max_ste
 }
 
 #[test]
+fn attribute_reflection_html_2_3_3_numeric_step_any_and_time_wrapped_range_validity_matrix_work()
+-> Result<()> {
+    let html = r#"
+        <input id='num' type='number' min='2' max='4' step='any' value='3.3'>
+        <input id='date' type='date' min='2026-01-01' max='2026-01-31' step='any' value='2026-01-10'>
+        <input id='time-ok' type='time' min='23:00' max='01:00' step='1800' value='00:30'>
+        <input id='time-step-bad' type='time' min='23:00' max='01:00' step='1800' value='00:45'>
+        <input id='time-range-bad' type='time' min='23:00' max='01:00' step='1800' value='02:00'>
+        <input id='dt' type='datetime-local' min='2026-01-01T09:00' max='2026-01-01T12:00' step='any' value='2026-01-01T10:37'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          function state(id) {
+            const el = document.getElementById(id);
+            return [
+              el.validity.rangeUnderflow,
+              el.validity.rangeOverflow,
+              el.validity.stepMismatch,
+              el.checkValidity()
+            ].join(':');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            const initial = [
+              state('num'),
+              state('date'),
+              state('time-ok'),
+              state('time-step-bad'),
+              state('time-range-bad'),
+              state('dt')
+            ].join(',');
+
+            document.getElementById('time-step-bad').step = 'any';
+            const timeStepAny = state('time-step-bad');
+
+            document.getElementById('dt').step = '90';
+            const dtExplicitStep = state('dt');
+
+            document.getElementById('result').textContent = [
+              initial,
+              timeStepAny,
+              dtExplicitStep
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:false:false:true,false:false:false:true,false:false:false:true,false:false:true:false,true:true:false:false,false:false:false:true|false:false:false:true|false:false:true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn attribute_reflection_html_2_3_3_numeric_step_base_prefers_min_then_value_attribute_and_rounding_boundary_work()
 -> Result<()> {
     let html = r#"
@@ -1628,5 +2164,66 @@ fn attribute_reflection_html_2_3_3_parser_fast_path_matches_min_max_step_reflect
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#result", "1,9,2,false|3:3,11:11,4:4,true|:,any:any,false")?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_3_3_parser_static_bracket_assignment_matches_min_max_step_reflection_and_expando_paths()
+-> Result<()> {
+    let html = r#"
+        <input id='num' type='number' min='1' max='9' step='2' value='5'>
+        <div id='box'></div>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const initial = [
+              document.getElementById('num').min,
+              document.getElementById('num').max,
+              document.getElementById('num').step,
+              document.getElementById('box').min === undefined,
+              document.getElementById('box').step === undefined
+            ].join(',');
+
+            document.getElementById('num')['min'] = '3';
+            document.getElementById('num')['max'] = '11';
+            document.getElementById('num')['step'] = '4';
+            document.getElementById('box')['min'] = 'shadow-min';
+            document.getElementById('box')['step'] = 'shadow-step';
+
+            const updated = [
+              document.getElementById('num').min + ':' + document.getElementById('num').getAttribute('min'),
+              document.getElementById('num').max + ':' + document.getElementById('num').getAttribute('max'),
+              document.getElementById('num').step + ':' + document.getElementById('num').getAttribute('step'),
+              document.getElementById('num').validity.stepMismatch,
+              document.getElementById('box').min + ':' + (document.getElementById('box').getAttribute('min') === null),
+              document.getElementById('box').step + ':' + (document.getElementById('box').getAttribute('step') === null)
+            ].join(',');
+
+            document.getElementById('num')['min'] = '';
+            document.getElementById('num')['step'] = 'any';
+            document.getElementById('box')['max'] = 7;
+            const cleared = [
+              document.getElementById('num').min + ':' + document.getElementById('num').getAttribute('min'),
+              document.getElementById('num').step + ':' + document.getElementById('num').getAttribute('step'),
+              document.getElementById('num').validity.stepMismatch,
+              document.getElementById('box').max + ':' + (document.getElementById('box').getAttribute('max') === null)
+            ].join(',');
+
+            document.getElementById('result').textContent = [
+              initial,
+              updated,
+              cleared
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "1,9,2,true,true|3:3,11:11,4:4,true,shadow-min:true,shadow-step:true|:,any:any,false,7:true",
+    )?;
     Ok(())
 }

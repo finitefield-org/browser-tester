@@ -229,6 +229,17 @@ pub(crate) fn is_dom_target_chain_stop(ident: &str) -> bool {
     )
 }
 
+fn parse_static_string_index(src: &str) -> Option<String> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+    let value = cursor.parse_string_literal().ok()?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return None;
+    }
+    Some(value)
+}
+
 pub(crate) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> {
     cursor.skip_ws();
     let start = cursor.pos();
@@ -331,6 +342,10 @@ pub(crate) fn parse_element_target(cursor: &mut Cursor<'_>) -> Result<DomQuery> 
         };
         cursor.skip_ws();
         cursor.expect_byte(b']')?;
+        if parse_static_string_index(&index_src).is_some() {
+            cursor.set_pos(index_pos);
+            break;
+        }
         let index = parse_dom_query_index(&index_src)?;
         target = match target {
             DomQuery::BySelectorAll { selector } => {
