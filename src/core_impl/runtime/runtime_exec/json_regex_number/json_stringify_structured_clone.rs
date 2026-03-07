@@ -154,7 +154,7 @@ impl Harness {
                 let entries = entries.borrow();
                 let mut pairs = Vec::new();
                 for (key, value) in entries.iter() {
-                    if Self::is_internal_object_key(key) {
+                    if !Self::is_enumerable_object_key(&*entries, key) {
                         continue;
                     }
                     let Some(serialized) = Self::json_stringify_value(

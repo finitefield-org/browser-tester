@@ -3667,6 +3667,54 @@ fn constructor_raw_static_and_prototype_property_paths_work() -> Result<()> {
 }
 
 #[test]
+fn native_variant_backed_constructor_source_text_is_stable_across_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          function describe(name) {
+            const ctor = globalThis[name];
+            const viaMethod = ctor.toString();
+            const viaCall = Function.prototype.toString.call(ctor);
+            const viaString = String(ctor);
+            const viaNewString = new String(ctor).valueOf();
+            const viaAlias = globalThis[name].toString();
+            const viaBracket = globalThis[name]['toString']();
+            return [
+              String(viaMethod.includes('[native code]')),
+              String(viaMethod.includes(name)),
+              String(viaMethod === viaCall),
+              String(viaMethod === viaString),
+              String(viaMethod === viaNewString),
+              String(viaMethod === viaAlias),
+              String(viaMethod === viaBracket)
+            ].join(':');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              describe('Map'),
+              describe('URL'),
+              describe('URLSearchParams'),
+              describe('ArrayBuffer'),
+              describe('Promise'),
+              describe('RegExp'),
+              describe('Blob')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:true|true:true:true:true:true:true:true|true:true:true:true:true:true:true|true:true:true:true:true:true:true|true:true:true:true:true:true:true|true:true:true:true:true:true:true|true:true:true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn builtin_instanceof_and_object_get_prototype_of_parity_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

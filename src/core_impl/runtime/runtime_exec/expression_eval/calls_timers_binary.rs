@@ -375,12 +375,17 @@ impl Harness {
 
     fn object_assign_enumerable_keys(value: &Value) -> Vec<String> {
         match value {
-            Value::Object(entries) => entries
-                .borrow()
-                .iter()
-                .filter(|(key, _)| Self::object_assign_is_copyable_key(key))
-                .map(|(key, _)| key.clone())
-                .collect(),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                entries
+                    .iter()
+                    .filter(|(key, _)| {
+                        Self::object_assign_is_copyable_key(key)
+                            && !Self::is_non_enumerable_object_key(&*entries, key)
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect()
+            }
             Value::Array(values) => {
                 let values = values.borrow();
                 let mut keys = values
@@ -394,7 +399,10 @@ impl Harness {
                     values
                         .properties
                         .iter()
-                        .filter(|(key, _)| Self::object_assign_is_copyable_key(key))
+                        .filter(|(key, _)| {
+                            Self::object_assign_is_copyable_key(key)
+                                && !Self::is_non_enumerable_object_key(&values.properties, key)
+                        })
                         .map(|(key, _)| key.clone()),
                 );
                 keys
@@ -1582,7 +1590,9 @@ impl Harness {
                         let mut named = function.as_ref().clone();
                         named.expression_name = Some(expression_name.clone());
                         named.local_bindings.insert(expression_name.clone());
-                        Ok(Value::Function(Rc::new(named)))
+                        let named = Rc::new(named);
+                        self.sync_function_prototype_object(&named);
+                        Ok(Value::Function(named))
                     } else {
                         Ok(Value::Function(function))
                     }

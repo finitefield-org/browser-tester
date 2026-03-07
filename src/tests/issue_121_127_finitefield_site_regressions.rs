@@ -1056,3 +1056,60 @@ fn worker_function_object_prototype_chain_and_metadata_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn worker_global_function_family_constructors_are_exposed_and_callable_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const plain = Function('value', 'return value + 1;');
+            const genFactory = GeneratorFunction('yield 1;');
+            const asyncGenFactory = AsyncGeneratorFunction(
+              'yield await Promise.resolve(2);'
+            );
+            const fnText = Function.toString();
+            const genText = GeneratorFunction.toString();
+            const asyncGenText = AsyncGeneratorFunction.toString();
+            Promise.all([asyncGenFactory().next()]).then((results) => {
+              postMessage([
+                String(self.Function === Function),
+                String(self.GeneratorFunction === GeneratorFunction),
+                String(self.AsyncGeneratorFunction === AsyncGeneratorFunction),
+                String(Object.getPrototypeOf(Function) === Function.prototype),
+                String(Object.getPrototypeOf(GeneratorFunction) === Function.prototype),
+                String(Object.getPrototypeOf(AsyncGeneratorFunction) === Function.prototype),
+                plain.name,
+                String(genFactory().next().value),
+                String(results[0].value),
+                String(fnText.includes('Function')),
+                String(fnText === String(Function)),
+                String(genText.includes('GeneratorFunction')),
+                String(genText === String(GeneratorFunction)),
+                String(asyncGenText.includes('AsyncGeneratorFunction')),
+                String(asyncGenText === String(AsyncGeneratorFunction))
+              ].join('|'));
+            });
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|true|true|anonymous|1|2|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}

@@ -33,8 +33,10 @@ impl Harness {
         Self::is_symbol_storage_key(key)
             || key.starts_with(INTERNAL_OBJECT_GETTER_KEY_PREFIX)
             || key.starts_with(INTERNAL_OBJECT_SETTER_KEY_PREFIX)
+            || key.starts_with(INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX)
             || key.starts_with(INTERNAL_ARRAY_HOLE_KEY_PREFIX)
             || key == INTERNAL_OBJECT_PROTOTYPE_KEY
+            || key == INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY
             || key == INTERNAL_CLASS_SUPER_PROTOTYPE_KEY
             || key == INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
@@ -57,6 +59,27 @@ impl Harness {
             || key.starts_with(INTERNAL_ASYNC_GENERATOR_FUNCTION_KEY_PREFIX)
             || key.starts_with(INTERNAL_CSS_STYLE_SHEET_KEY_PREFIX)
             || key.starts_with(INTERNAL_COMPUTED_STYLE_KEY_PREFIX)
+    }
+
+    pub(crate) fn is_non_enumerable_object_key(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> bool {
+        matches!(
+            Self::object_get_entry(entries, &Self::object_non_enumerable_storage_key(key)),
+            Some(Value::Bool(true))
+        ) || (key == "constructor"
+            && matches!(
+                Self::object_get_entry(entries, INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY),
+                Some(Value::Bool(true))
+            ))
+    }
+
+    pub(crate) fn is_enumerable_object_key(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> bool {
+        !Self::is_internal_object_key(key) && !Self::is_non_enumerable_object_key(entries, key)
     }
 
     pub(crate) fn symbol_wrapper_id_from_object(entries: &[(String, Value)]) -> Option<usize> {

@@ -49,6 +49,8 @@ impl Harness {
                         Ok(Value::String(Self::intl_locale_data_to_string(
                             &locale_data,
                         )))
+                    } else if let Some(source_text) = self.callable_source_text(&value) {
+                        Ok(Value::String(source_text))
                     } else {
                         Ok(Value::String(value.as_string()))
                     }
@@ -76,7 +78,9 @@ impl Harness {
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
                         .unwrap_or(Value::Undefined);
-                    let coerced = value.as_string();
+                    let coerced = self
+                        .callable_source_text(&value)
+                        .unwrap_or_else(|| value.as_string());
                     if *called_with_new {
                         Ok(Self::new_string_wrapper_value(coerced))
                     } else {

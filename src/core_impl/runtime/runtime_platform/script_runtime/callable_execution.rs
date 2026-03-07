@@ -82,6 +82,7 @@ impl Harness {
             class_super_constructor,
             class_super_prototype,
         });
+        self.sync_function_prototype_object(&function);
         self.script_runtime
             .function_registry
             .insert(function_id, function.clone());
@@ -664,14 +665,16 @@ impl Harness {
             .get("Object")
             .cloned()
             .unwrap_or_else(Self::new_object_constructor_value);
-        Self::shared_core_constructor_bindings(
+        let mut bindings = Self::shared_core_constructor_bindings(
             &Value::StringConstructor,
             &boolean_constructor,
             &number_constructor,
             &bigint_constructor,
             &Value::SymbolConstructor,
             &object_constructor,
-        )
+        );
+        bindings.extend(self.function_family_constructor_bindings());
+        bindings
     }
 
     pub(crate) fn build_function_from_constructor_values(
@@ -1581,10 +1584,6 @@ impl Harness {
             .ok_or_else(|| {
                 Error::ScriptRuntime(format!("Worker script source not found: {script_url}"))
             })
-    }
-
-    fn function_to_string_reference(function_id: usize) -> String {
-        format!("__bt_function_ref__({function_id})")
     }
 
     fn worker_function_id_from_source(source: &str) -> Option<usize> {
@@ -2513,12 +2512,10 @@ impl Harness {
                         "Function.prototype.toString does not take arguments".into(),
                     ));
                 }
-                match receiver {
-                    Value::Function(function) => Ok(Value::String(
-                        Self::function_to_string_reference(function.function_id),
-                    )),
-                    _ => Ok(Value::String("function () { [native code] }".to_string())),
-                }
+                Ok(Value::String(
+                    self.callable_source_text(receiver)
+                        .unwrap_or_else(|| "function () { [native code] }".to_string()),
+                ))
             }
             _ => Err(Error::ScriptRuntime(format!(
                 "unsupported Function.prototype method: {member}"
@@ -2613,7 +2610,10 @@ impl Harness {
             ),
             Value::StringConstructor => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
-                Ok(Self::new_string_wrapper_value(value.as_string()))
+                Ok(Self::new_string_wrapper_value(
+                    self.callable_source_text(&value)
+                        .unwrap_or_else(|| value.as_string()),
+                ))
             }
             Value::BlobConstructor => self.construct_blob_from_values(args),
             Value::UrlConstructor => self.construct_url_from_values(args),
@@ -2742,7 +2742,10 @@ impl Harness {
             }
             Value::StringConstructor => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
-                Ok(Value::String(value.as_string()))
+                Ok(Value::String(
+                    self.callable_source_text(&value)
+                        .unwrap_or_else(|| value.as_string()),
+                ))
             }
             Value::RegExpConstructor => self.construct_regexp_from_values(args),
             Value::TypedArrayConstructor(kind) => match kind {
@@ -4837,7 +4840,9 @@ impl Harness {
         } else {
             entries
                 .iter()
-                .filter_map(|(key, _)| (!Self::is_internal_object_key(key)).then_some(key.clone()))
+                .filter_map(|(key, _)| {
+                    Self::is_enumerable_object_key(&entries, key).then_some(key.clone())
+                })
                 .collect::<Vec<_>>()
         };
 

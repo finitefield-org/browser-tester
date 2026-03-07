@@ -69,3 +69,87 @@ fn async_generator_function_constructor_builds_async_generator_functions() -> Re
     )?;
     Ok(())
 }
+
+#[test]
+fn global_async_generator_function_constructor_surface_and_prototype_chain_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='out'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const sample = async function* namedAsyncGen() {};
+            const byGlobal = AsyncGeneratorFunction(
+              'yield await Promise.resolve(1); yield 2;'
+            );
+            const iter = byGlobal();
+            Promise.all([iter.next(), iter.next(), iter.next()]).then((results) => {
+              document.getElementById('out').textContent = [
+                typeof AsyncGeneratorFunction,
+                String(window.AsyncGeneratorFunction === AsyncGeneratorFunction),
+                AsyncGeneratorFunction.name,
+                String(AsyncGeneratorFunction.length),
+                String(Object.getPrototypeOf(AsyncGeneratorFunction) === Function.prototype),
+                String(Object.getPrototypeOf(sample) === AsyncGeneratorFunction.prototype),
+                byGlobal.name,
+                String(byGlobal.length),
+                String(byGlobal.constructor === AsyncGeneratorFunction),
+                String(byGlobal.toString().includes('__bt_function_ref__(')),
+                results[0].value + ',' + results[1].value,
+                String(results[2].done)
+              ].join('|');
+            });
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#out",
+        "function|true|AsyncGeneratorFunction|1|true|true|anonymous|0|true|true|1,2|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn async_generator_function_native_source_text_and_hidden_surface_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='out'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const ctorText = AsyncGeneratorFunction.toString();
+            const iterProto = AsyncGeneratorFunction.prototype.prototype;
+
+            function forInKeys(value) {
+              let out = '';
+              for (const key in value) {
+                out += key + ',';
+              }
+              return out || 'empty';
+            }
+
+            document.getElementById('out').textContent = [
+              String(ctorText.includes('[native code]')),
+              String(ctorText.includes('AsyncGeneratorFunction')),
+              String(ctorText === Function.prototype.toString.call(AsyncGeneratorFunction)),
+              String(ctorText === String(AsyncGeneratorFunction)),
+              String(ctorText === new String(AsyncGeneratorFunction).valueOf()),
+              String(Object.keys(AsyncGeneratorFunction).length),
+              String(Object.keys(AsyncGeneratorFunction.prototype).length),
+              String(Object.keys(iterProto).length),
+              String(Object.keys({ ...AsyncGeneratorFunction.prototype }).length),
+              String(Object.keys({ ...iterProto }).length),
+              forInKeys(AsyncGeneratorFunction.prototype),
+              forInKeys(iterProto),
+              JSON.stringify(iterProto)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "true|true|true|true|true|0|0|0|0|0|empty|empty|{}")?;
+    Ok(())
+}

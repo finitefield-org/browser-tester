@@ -9,6 +9,10 @@ pub(crate) const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_
 pub(crate) const INTERNAL_OBJECT_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_object:prototype";
 pub(crate) const INTERNAL_OBJECT_GETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:getter:";
 pub(crate) const INTERNAL_OBJECT_SETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:setter:";
+pub(crate) const INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY: &str =
+    "\u{0}\u{0}bt_object:non_enumerable_constructor";
+pub(crate) const INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:non_enumerable:";
 pub(crate) const INTERNAL_ARRAY_HOLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_array:hole:";
 pub(crate) const INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY: &str =
     "\u{0}\u{0}bt_arguments:param_bindings";

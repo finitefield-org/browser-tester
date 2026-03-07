@@ -177,12 +177,16 @@ impl Harness {
                                     Value::Null | Value::Undefined => {}
                                     Value::Object(entries) => {
                                         let source = Value::Object(entries.clone());
-                                        let keys = entries
-                                            .borrow()
-                                            .iter()
-                                            .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                            .map(|(key, _)| key.clone())
-                                            .collect::<Vec<_>>();
+                                        let keys = {
+                                            let entries = entries.borrow();
+                                            entries
+                                                .iter()
+                                                .filter(|(key, _)| {
+                                                    Self::is_enumerable_object_key(&*entries, key)
+                                                })
+                                                .map(|(key, _)| key.clone())
+                                                .collect::<Vec<_>>()
+                                        };
                                         for key in keys {
                                             let value =
                                                 self.object_property_from_value(&source, &key)?;
@@ -298,12 +302,16 @@ impl Harness {
                     let object = self.eval_expr(object, env, event_param, event)?;
                     match object {
                         Value::Object(entries) => {
-                            let keys = entries
-                                .borrow()
-                                .iter()
-                                .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(key, _)| Value::String(key.clone()))
-                                .collect::<Vec<_>>();
+                            let keys = {
+                                let entries = entries.borrow();
+                                entries
+                                    .iter()
+                                    .filter(|(key, _)| {
+                                        Self::is_enumerable_object_key(&*entries, key)
+                                    })
+                                    .map(|(key, _)| Value::String(key.clone()))
+                                    .collect::<Vec<_>>()
+                            };
                             Ok(Self::new_array_value(keys))
                         }
                         _ => Err(Error::ScriptRuntime(
@@ -316,12 +324,16 @@ impl Harness {
                     match object {
                         Value::Object(entries) => {
                             let source = Value::Object(entries.clone());
-                            let keys = entries
-                                .borrow()
-                                .iter()
-                                .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(key, _)| key.clone())
-                                .collect::<Vec<_>>();
+                            let keys = {
+                                let entries = entries.borrow();
+                                entries
+                                    .iter()
+                                    .filter(|(key, _)| {
+                                        Self::is_enumerable_object_key(&*entries, key)
+                                    })
+                                    .map(|(key, _)| key.clone())
+                                    .collect::<Vec<_>>()
+                            };
                             let mut values = Vec::with_capacity(keys.len());
                             for key in keys {
                                 values.push(self.object_property_from_value(&source, &key)?);
@@ -338,12 +350,16 @@ impl Harness {
                     match object {
                         Value::Object(entries) => {
                             let source = Value::Object(entries.clone());
-                            let keys = entries
-                                .borrow()
-                                .iter()
-                                .filter(|(key, _)| !Self::is_internal_object_key(key))
-                                .map(|(key, _)| key.clone())
-                                .collect::<Vec<_>>();
+                            let keys = {
+                                let entries = entries.borrow();
+                                entries
+                                    .iter()
+                                    .filter(|(key, _)| {
+                                        Self::is_enumerable_object_key(&*entries, key)
+                                    })
+                                    .map(|(key, _)| key.clone())
+                                    .collect::<Vec<_>>()
+                            };
                             let mut values = Vec::with_capacity(keys.len());
                             for key in keys {
                                 let value = self.object_property_from_value(&source, &key)?;

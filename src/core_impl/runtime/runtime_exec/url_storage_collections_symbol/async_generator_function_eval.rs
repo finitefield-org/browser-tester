@@ -1,7 +1,16 @@
 use super::*;
 
 impl Harness {
-    pub(crate) fn new_async_generator_function_constructor_value(&self) -> Value {
+    pub(crate) fn new_async_generator_function_constructor_value(&mut self) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get("AsyncGeneratorFunction")
+            .cloned()
+        {
+            return constructor;
+        }
+
         let constructor = Rc::new(RefCell::new(ObjectValue::new(vec![
             (
                 INTERNAL_ASYNC_GENERATOR_FUNCTION_CONSTRUCTOR_OBJECT_KEY.to_string(),
@@ -34,14 +43,34 @@ impl Harness {
         ])));
         let prototype_value = Value::Object(prototype.clone());
         Self::object_set_entry(
+            &mut constructor.borrow_mut(),
+            INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+            self.cached_function_constructor_prototype_value(),
+        );
+        Self::object_set_entry(
             &mut async_generator_prototype.borrow_mut(),
             "constructor".to_string(),
             prototype_value.clone(),
         );
+        Self::mark_existing_public_properties_non_enumerable(&async_generator_prototype);
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+            self.cached_function_constructor_prototype_value(),
+        );
+        Self::mark_existing_public_properties_non_enumerable(&prototype);
         Self::object_set_entry(
             &mut constructor.borrow_mut(),
             "prototype".to_string(),
             prototype_value,
+        );
+        Self::mark_existing_public_properties_non_enumerable(&constructor);
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("AsyncGeneratorFunction".to_string(), prototype);
+        self.script_runtime.constructor_static_methods.insert(
+            "AsyncGeneratorFunction".to_string(),
+            constructor_value.clone(),
         );
         constructor_value
     }
@@ -81,7 +110,7 @@ impl Harness {
             Error::ScriptRuntime(format!("AsyncGeneratorFunction body parse failed: {err}"))
         })?;
         let empty_env = HashMap::new();
-        Ok(self.make_function_value(
+        let value = self.make_function_value(
             ScriptHandler { params, stmts },
             &empty_env,
             true,
@@ -89,6 +118,10 @@ impl Harness {
             true,
             false,
             false,
-        ))
+        );
+        if let Value::Function(function) = &value {
+            self.set_function_public_name(function, "anonymous");
+        }
+        Ok(value)
     }
 }

@@ -228,6 +228,9 @@ impl Harness {
             "isSecureContext",
             "Intl",
             "String",
+            "Function",
+            "GeneratorFunction",
+            "AsyncGeneratorFunction",
             "Boolean",
             "Number",
             "BigInt",
@@ -392,6 +395,7 @@ impl Harness {
             symbol_constructor,
             object_constructor,
         );
+        let function_family_constructor_bindings = self.function_family_constructor_bindings();
         let mut extras = Vec::new();
         let mut name_value = Value::String(String::new());
         {
@@ -627,6 +631,7 @@ impl Harness {
             ),
         ];
         entries.extend(core_constructor_bindings);
+        entries.extend(function_family_constructor_bindings);
         entries.extend(extras);
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }

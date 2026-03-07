@@ -273,12 +273,14 @@ impl Harness {
 
     fn enumerable_own_keys_for_object_destructure(value: &Value) -> Vec<String> {
         match value {
-            Value::Object(entries) => entries
-                .borrow()
-                .iter()
-                .filter(|(key, _)| !Self::is_internal_object_key(key))
-                .map(|(key, _)| key.clone())
-                .collect(),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                entries
+                    .iter()
+                    .filter(|(key, _)| Self::is_enumerable_object_key(&*entries, key))
+                    .map(|(key, _)| key.clone())
+                    .collect()
+            }
             Value::Array(values) => {
                 let values = values.borrow();
                 let mut keys = values
@@ -292,7 +294,7 @@ impl Harness {
                     values
                         .properties
                         .iter()
-                        .filter(|(key, _)| !Self::is_internal_object_key(key))
+                        .filter(|(key, _)| Self::is_enumerable_object_key(&values.properties, key))
                         .map(|(key, _)| key.clone()),
                 );
                 keys
@@ -1796,7 +1798,7 @@ impl Harness {
         let mut integer_keys: Vec<(u64, String)> = Vec::new();
         let mut string_keys: Vec<String> = Vec::new();
         for (key, _) in entries.iter() {
-            if Self::is_internal_object_key(key) {
+            if !Self::is_enumerable_object_key(entries, key) {
                 continue;
             }
             if let Some(index) = Self::for_in_integer_key(key) {

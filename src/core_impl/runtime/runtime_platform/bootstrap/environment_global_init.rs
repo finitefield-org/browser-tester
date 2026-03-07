@@ -669,6 +669,9 @@ impl Harness {
         for (name, value) in core_constructor_bindings {
             self.script_runtime.env.insert(name, value);
         }
+        for (name, value) in self.function_family_constructor_bindings() {
+            self.script_runtime.env.insert(name, value);
+        }
         self.script_runtime
             .env
             .insert("EventTarget".to_string(), event_target_constructor);

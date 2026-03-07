@@ -30,6 +30,9 @@
 - `P1.25: computed-call parser and constructor surface alias residual sweep`（dynamic computed call receiver 維持・constructor static identity・worker constructor alias surface）は実装と検証まで完了
 - `P1.26: constructor function-surface identity and worker breadth sweep`（constructor `call/apply/bind/toString/name/length` parity・grouped/new callee 境界・worker/global/window core constructor exposure）は実装と検証まで完了
 - `P1.27: constructor raw-static/prototype breadth and bound-new residual sweep`（`RegExp` / `Promise` / `ArrayBuffer` / `Blob` raw static/property path・stable prototype cache・bound constructor `instanceof` residual）は実装と検証まで完了
+- `P1.28: builtin prototype-chain and bound callable surface sweep` is implemented and verified
+- `P1.29: function/object prototype-chain and callable metadata residual sweep` is implemented and verified
+- `P1.30: global Function exposure and generator-family constructor surface sweep` is implemented and verified
 
 ## 今回スライスの実施結果（P1.27: constructor raw-static/prototype breadth and bound-new residual sweep）
 
@@ -122,20 +125,64 @@
 
 - [x] Confirmed no new mock was required (no README update)
 
-## Next Task (P1.30: global Function exposure and generator-family constructor surface sweep)
+## Completed Task (P1.30: global Function exposure and generator-family constructor surface sweep)
 
-- [ ] Expose stable function-family constructors
-  - decide whether `Function`, `GeneratorFunction`, and `AsyncGeneratorFunction` should be surfaced directly on the main realm, `window`, and worker globals instead of relying on hidden constructor objects
-  - align constructor identity, `.prototype`, and `Object.getPrototypeOf` behavior for those function-family constructors across realms
+- [x] Expose stable function-family constructors across realms
+  - `Function`, `GeneratorFunction`, and `AsyncGeneratorFunction` are now surfaced directly on the main realm, `window`, and worker globals through shared constructor bindings instead of hidden one-off objects
+  - constructor identity, `.prototype`, `Object.getPrototypeOf`, and callable metadata are aligned across the main realm and worker bootstrap paths
 
-- [ ] Deepen callable source/prototype parity
-  - compare `.toString()` / `.name` / `.length` results for ordinary functions, class constructors, `new Function(...)`, and generator-family constructor outputs
-  - verify ordinary function `prototype` object shape and `constructor` links after alias extraction, worker bootstrap, and cross-realm access
+- [x] Deepen ordinary/generator-family function surface parity
+  - ordinary functions now repair their public `prototype` object links so `prototype.constructor`, `Object.getPrototypeOf(prototype)`, and named function-expression aliases stay consistent after extraction and rebinding
+  - generator-family constructor outputs now expose stable constructor/prototype chains, `"anonymous"` naming for constructor-built functions, and non-enumerable `constructor` behavior through the shared enumerable-key filters
+
+- [x] Verification completed
+  - `cargo test --lib global_function_constructor_and_ordinary_function_prototype_links_work`
+  - `cargo test --lib generator_function_helpers`
+  - `cargo test --lib async_generator_function_helpers`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo test --lib for_in_loop_includes_inherited_properties_and_skips_shadowed_keys`
+  - `cargo fmt`
+  - `cargo test --lib` (`2223 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.31: native callable source-text and function-prototype descriptor sweep)
+
+- [x] Align native callable source-text breadth
+  - shared callable source-text generation now covers ordinary functions, bound callables, builtin constructors, and function-family constructors so `.toString()`, `Function.prototype.toString.call(...)`, `String(...)`, and alias/bracket access paths return stable native text
+  - variant-backed constructors and object-backed callables now use the same source-text path across the main realm and worker globals, closing parity gaps for `Function`, `GeneratorFunction`, `AsyncGeneratorFunction`, `Map`, `URL`, `URLSearchParams`, `ArrayBuffer`, `Promise`, `RegExp`, and `Blob`
+
+- [x] Deepen function/generator prototype descriptor parity
+  - non-enumerable property tracking now supports generic property keys instead of only `constructor`, and the shared constructor/prototype builders mark exposed surface properties as hidden where required
+  - `Function.prototype`, ordinary function prototype objects, generator-family constructor/prototype objects, and iterator-adjacent generator prototypes now stay aligned for `Object.keys`, spread, `for...in`, and `JSON.stringify`
+
+- [x] Verification completed
+  - `cargo test --lib native_function_source_text_and_prototype_enumerability_work`
+  - `cargo test --lib native_variant_backed_constructor_source_text_is_stable_across_paths_work`
+  - `cargo test --lib generator_function_helpers`
+  - `cargo test --lib async_generator_function_helpers`
+  - `cargo test --lib worker_global_function_family_constructors_are_exposed_and_callable_work`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2227 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.32: callable string-coercion breadth and descriptor residual sweep)
+
+- [ ] Expand callable string-coercion parity outside direct constructor paths
+  - audit remaining generic stringification/coercion sites so callable values reached through concatenation, template interpolation, and indirect coercion use the same native/user-defined source-text rules
+  - verify object-backed callables and bound wrappers stay aligned when coerced through shared utility paths instead of specialized constructor logic
+
+- [ ] Close remaining descriptor gaps on constructor and prototype surfaces
+  - sweep object-backed constructors and prototype objects that still rely on ad hoc enumerable-property behavior, especially around static methods, `.prototype`, and inherited `constructor` exposure
+  - verify descriptor visibility stays stable for `Object.keys`, spread, `JSON.stringify`, and `for...in` after alias access and prototype repair
 
 - [ ] Verify
-  - targeted tests for global `Function` / generator-family exposure, callable source text, and function `prototype` constructor links
-  - `cargo test --lib async_generator_function_helpers`
-  - `cargo test --lib generator_helpers`
+  - targeted tests for indirect callable string coercion and remaining constructor/prototype descriptor visibility
   - `cargo test --lib language_core_expressions`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib generator_function_helpers`
+  - `cargo test --lib async_generator_function_helpers`
   - `cargo test --lib issue_121_127_finitefield_site_regressions`
   - `cargo test --lib`

@@ -1977,6 +1977,12 @@ impl Harness {
                 );
             }
         }
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::mark_existing_public_properties_non_enumerable(prototype_entries);
+        }
+        if let Value::Object(constructor_entries) = &constructor {
+            Self::mark_property_non_enumerable(constructor_entries, "prototype");
+        }
         constructor
     }
 
@@ -2019,11 +2025,15 @@ impl Harness {
     }
 
     pub(crate) fn new_boolean_constructor_callable() -> Value {
-        Self::new_receiver_builtin_constructor_object(
+        let constructor = Self::new_receiver_builtin_constructor_object(
             Some("boolean_constructor"),
             "boolean",
             &["toString", "valueOf"],
-        )
+        );
+        if let Value::Object(entries) = &constructor {
+            Self::mark_existing_public_properties_non_enumerable(entries);
+        }
+        constructor
     }
 
     pub(crate) fn new_number_constructor_callable() -> Value {
@@ -2032,10 +2042,10 @@ impl Harness {
             "number",
             &["toLocaleString", "toString", "valueOf"],
         );
-        let Value::Object(entries) = &constructor else {
+        let Value::Object(constructor_entries) = &constructor else {
             return constructor;
         };
-        let mut entries = entries.borrow_mut();
+        let mut entries = constructor_entries.borrow_mut();
         for (key, value) in [
             (
                 "isFinite",
@@ -2074,6 +2084,7 @@ impl Harness {
             Self::object_set_entry(&mut entries, key.to_string(), value);
         }
         drop(entries);
+        Self::mark_existing_public_properties_non_enumerable(constructor_entries);
         constructor
     }
 
@@ -2083,10 +2094,10 @@ impl Harness {
             "bigint",
             &["toLocaleString", "toString", "valueOf"],
         );
-        let Value::Object(entries) = &constructor else {
+        let Value::Object(constructor_entries) = &constructor else {
             return constructor;
         };
-        let mut entries = entries.borrow_mut();
+        let mut entries = constructor_entries.borrow_mut();
         for (key, value) in [
             ("asIntN", Self::new_bigint_static_method_callable("asIntN")),
             (
@@ -2097,6 +2108,7 @@ impl Harness {
             Self::object_set_entry(&mut entries, key.to_string(), value);
         }
         drop(entries);
+        Self::mark_existing_public_properties_non_enumerable(constructor_entries);
         constructor
     }
 
@@ -2125,6 +2137,12 @@ impl Harness {
                 INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
                 Value::Null,
             );
+        }
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::mark_existing_public_properties_non_enumerable(prototype_entries);
+        }
+        if let Value::Object(constructor_entries) = &constructor {
+            Self::mark_existing_public_properties_non_enumerable(constructor_entries);
         }
         constructor
     }
@@ -3690,7 +3708,11 @@ impl Harness {
                 Self::new_receiver_builtin_callable(family, method),
             ));
         }
-        Self::new_object_value(entries)
+        let prototype = Self::new_object_value(entries);
+        if let Value::Object(entries) = &prototype {
+            Self::mark_existing_public_properties_non_enumerable(entries);
+        }
+        prototype
     }
 
     fn new_receiver_builtin_prototype_with_iterator_value(
@@ -3725,6 +3747,40 @@ impl Harness {
         );
     }
 
+    pub(crate) fn mark_property_non_enumerable(
+        entries: &Rc<RefCell<ObjectValue>>,
+        property_key: &str,
+    ) {
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            Self::object_non_enumerable_storage_key(property_key),
+            Value::Bool(true),
+        );
+    }
+
+    pub(crate) fn mark_existing_public_properties_non_enumerable(
+        entries: &Rc<RefCell<ObjectValue>>,
+    ) {
+        let keys = entries
+            .borrow()
+            .iter()
+            .filter(|(key, _)| !Self::is_internal_object_key(key))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            Self::mark_property_non_enumerable(entries, &key);
+        }
+    }
+
+    pub(crate) fn mark_constructor_non_enumerable(entries: &Rc<RefCell<ObjectValue>>) {
+        Self::mark_property_non_enumerable(entries, "constructor");
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY.to_string(),
+            Value::Bool(true),
+        );
+    }
+
     fn constructor_prototype_from_value(&mut self, constructor: &Value) -> Option<Value> {
         match self.object_property_from_value(constructor, "prototype") {
             Ok(Value::Object(prototype)) => Some(Value::Object(prototype)),
@@ -3742,13 +3798,28 @@ impl Harness {
             .unwrap_or_else(|| Self::new_object_value(Vec::new()))
     }
 
-    fn cached_function_constructor_value(&mut self) -> Value {
+    pub(crate) fn cached_function_constructor_value(&mut self) -> Value {
         if let Some(constructor) = self
             .script_runtime
             .constructor_static_methods
             .get("Function")
             .cloned()
         {
+            if let Value::Object(constructor_entries) = &constructor {
+                let prototype = {
+                    let entries = constructor_entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    Self::mark_existing_public_properties_non_enumerable(&prototype);
+                    Self::mark_existing_public_properties_non_enumerable(constructor_entries);
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                    Self::set_internal_prototype(constructor_entries, Value::Object(prototype));
+                }
+            }
             return constructor;
         }
 
@@ -3779,6 +3850,10 @@ impl Harness {
                 );
             }
         }
+        Self::mark_existing_public_properties_non_enumerable(&prototype);
+        if let Value::Object(constructor_entries) = &constructor {
+            Self::mark_existing_public_properties_non_enumerable(constructor_entries);
+        }
         Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
 
         self.script_runtime
@@ -3790,7 +3865,7 @@ impl Harness {
         constructor
     }
 
-    fn cached_function_constructor_prototype_value(&mut self) -> Value {
+    pub(crate) fn cached_function_constructor_prototype_value(&mut self) -> Value {
         if let Some(prototype) = self
             .script_runtime
             .builtin_constructor_prototypes
@@ -3806,6 +3881,43 @@ impl Harness {
             .cloned()
             .map(Value::Object)
             .unwrap_or_else(|| Self::new_object_value(Vec::new()))
+    }
+
+    pub(crate) fn function_family_constructor_bindings(&mut self) -> Vec<(String, Value)> {
+        vec![
+            (
+                "Function".to_string(),
+                self.cached_function_constructor_value(),
+            ),
+            (
+                "GeneratorFunction".to_string(),
+                self.new_generator_function_constructor_value(),
+            ),
+            (
+                "AsyncGeneratorFunction".to_string(),
+                self.new_async_generator_function_constructor_value(),
+            ),
+        ]
+    }
+
+    pub(crate) fn sync_function_prototype_object(&mut self, function: &Rc<FunctionValue>) {
+        if function.is_arrow || function.is_method {
+            return;
+        }
+        Self::mark_constructor_non_enumerable(&function.prototype_object);
+        let mut prototype = function.prototype_object.borrow_mut();
+        if Self::object_get_entry(&*prototype, INTERNAL_OBJECT_PROTOTYPE_KEY).is_none() {
+            Self::object_set_entry(
+                &mut *prototype,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                self.object_constructor_prototype_value(),
+            );
+        }
+        Self::object_set_entry(
+            &mut *prototype,
+            "constructor".to_string(),
+            Value::Function(function.clone()),
+        );
     }
 
     fn typed_array_constructor_cache_key(kind: &TypedArrayConstructorKind) -> String {
@@ -4250,6 +4362,12 @@ impl Harness {
                 3,
             )),
             Value::Object(_) => match Self::callable_kind_from_value(value) {
+                Some("generator_function_constructor") => {
+                    Some(("GeneratorFunction".to_string(), 1))
+                }
+                Some("async_generator_function_constructor") => {
+                    Some(("AsyncGeneratorFunction".to_string(), 1))
+                }
                 Some("boolean_constructor") => Some(("Boolean".to_string(), 1)),
                 Some("number_constructor") => Some(("Number".to_string(), 1)),
                 Some("bigint_constructor") => Some(("BigInt".to_string(), 1)),
@@ -4270,6 +4388,34 @@ impl Harness {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    pub(crate) fn callable_source_text(&mut self, value: &Value) -> Option<String> {
+        match value {
+            Value::Function(function) if function.function_id != usize::MAX => {
+                return Some(format!("__bt_function_ref__({})", function.function_id));
+            }
+            _ if !self.is_callable_value(value) => return None,
+            Value::Object(_)
+                if matches!(
+                    Self::callable_kind_from_value(value),
+                    Some("bound_function")
+                ) =>
+            {
+                return Some("function () { [native code] }".to_string());
+            }
+            _ => {}
+        }
+
+        let name = self
+            .callable_name_and_length(value)
+            .map(|(name, _)| name)
+            .unwrap_or_default();
+        if name.is_empty() {
+            Some("function () { [native code] }".to_string())
+        } else {
+            Some(format!("function {name}() {{ [native code] }}"))
         }
     }
 
@@ -4315,6 +4461,10 @@ impl Harness {
 
     pub(crate) fn object_setter_storage_key(property_key: &str) -> String {
         format!("{INTERNAL_OBJECT_SETTER_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_non_enumerable_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX}{property_key}")
     }
 
     pub(crate) fn object_getter_from_entries(
@@ -6228,7 +6378,16 @@ impl Harness {
             Value::Number(_) | Value::Float(_) => self.constructor_prototype_from_env("Number"),
             Value::BigInt(_) => self.constructor_prototype_from_env("BigInt"),
             Value::Symbol(_) => Some(self.cached_symbol_constructor_prototype_value()),
-            Value::Function(_) => Some(self.cached_function_constructor_prototype_value()),
+            Value::Function(function) => {
+                if function.is_generator {
+                    Some(
+                        self.generator_constructor_prototype_value(function.is_async)
+                            .unwrap_or_else(|| self.cached_function_constructor_prototype_value()),
+                    )
+                } else {
+                    Some(self.cached_function_constructor_prototype_value())
+                }
+            }
             _ if self.is_callable_value(value) => {
                 Some(self.cached_function_constructor_prototype_value())
             }

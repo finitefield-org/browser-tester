@@ -737,12 +737,8 @@ impl Harness {
                 }
                 Expr::StringToString(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    if let Value::Function(function) = &value {
-                        return Ok(Value::String(if function.function_id == usize::MAX {
-                            "function () { [native code] }".to_string()
-                        } else {
-                            format!("__bt_function_ref__({})", function.function_id)
-                        }));
+                    if let Some(text) = self.callable_source_text(&value) {
+                        return Ok(Value::String(text));
                     }
                     if let Value::Node(node) = &value {
                         if let Some(tag_name) = self.dom.tag_name(*node) {

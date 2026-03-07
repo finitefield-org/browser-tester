@@ -8630,6 +8630,7 @@ fn function_and_object_prototype_chain_and_constructor_metadata_work() -> Result
             String(plain.length),
             Box.name,
             String(Box.length),
+            String(Box.toString().includes('__bt_function_ref__(')),
             bound.constructor.name,
             String(Object.getPrototypeOf(fnProto) === Object.prototype)
           ].join('|');
@@ -8639,7 +8640,112 @@ fn function_and_object_prototype_chain_and_constructor_metadata_work() -> Result
     let h = Harness::from_html(html)?;
     h.assert_text(
         "#result",
-        "true|true|true|true|true|true|true|plain|2|Box|1|Function|true",
+        "true|true|true|true|true|true|true|plain|2|Box|1|true|Function|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn global_function_constructor_and_ordinary_function_prototype_links_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const Alias = Function;
+          const namedExpr = function localName() {};
+          function plain(a, b) {
+            return a + b;
+          }
+          const dynamic = Alias('value', 'return value + 1;');
+          const proto = plain.prototype;
+          document.getElementById('result').textContent = [
+            typeof Function,
+            String(window.Function === Function),
+            String(Alias === Function),
+            Function.name,
+            String(Function.length),
+            String(Object.getPrototypeOf(Function) === Function.prototype),
+            String(plain.constructor === Function),
+            String(Object.getPrototypeOf(plain) === Function.prototype),
+            String(proto.constructor === plain),
+            String(Object.getPrototypeOf(proto) === Object.prototype),
+            String(plain.toString().includes('__bt_function_ref__(')),
+            String(namedExpr.prototype.constructor === namedExpr),
+            namedExpr.name,
+            dynamic.name,
+            String(dynamic.length),
+            String(dynamic.prototype.constructor === dynamic),
+            String(Object.getPrototypeOf(dynamic.prototype) === Object.prototype),
+            String(dynamic.toString().includes('__bt_function_ref__(')),
+            String(dynamic(2))
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "function|true|true|Function|1|true|true|true|true|true|true|true|localName|anonymous|1|true|true|true|3",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn native_function_source_text_and_prototype_enumerability_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function plain() {}
+          const viaMethod = Function.toString();
+          const viaCall = Function.prototype.toString.call(Function);
+          const viaString = String(Function);
+          const viaNewString = new String(Function).valueOf();
+          const viaBracket = globalThis['Function'].toString();
+          const methodSource = Function.prototype.toString.toString();
+
+          function enumerableKeys(value) {
+            return String(Object.keys(value).length);
+          }
+
+          function spreadKeys(value) {
+            return String(Object.keys({ ...value }).length);
+          }
+
+          function forInKeys(value) {
+            let out = '';
+            for (const key in value) {
+              out += key + ',';
+            }
+            return out || 'empty';
+          }
+
+          document.getElementById('result').textContent = [
+            String(viaMethod.includes('[native code]')),
+            String(viaMethod.includes('Function')),
+            String(viaMethod === viaCall),
+            String(viaMethod === viaString),
+            String(viaMethod === viaNewString),
+            String(viaMethod === viaBracket),
+            String(methodSource.includes('toString')),
+            String(methodSource.includes('[native code]')),
+            enumerableKeys(Object.prototype),
+            enumerableKeys(plain.prototype),
+            enumerableKeys(Function.prototype),
+            spreadKeys(Object.prototype),
+            spreadKeys(plain.prototype),
+            spreadKeys(Function.prototype),
+            JSON.stringify(Object.prototype),
+            JSON.stringify(plain.prototype),
+            forInKeys(Object.prototype),
+            forInKeys(plain.prototype),
+            forInKeys(Function.prototype)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|0|0|0|0|0|0|{}|{}|empty|empty|empty",
     )?;
     Ok(())
 }
