@@ -5329,6 +5329,40 @@ impl Harness {
                         Stmt::EventCall { event_var, method } => {
                             if let Some(param) = event_param {
                                 if param == event_var {
+                                    if let Some(Value::Object(event_object)) = env.get(event_var) {
+                                        let mut entries = event_object.borrow_mut();
+                                        match method {
+                                            EventMethod::PreventDefault => {
+                                                if event.cancelable {
+                                                    Self::object_set_entry(
+                                                        &mut entries,
+                                                        "defaultPrevented".to_string(),
+                                                        Value::Bool(true),
+                                                    );
+                                                }
+                                            }
+                                            EventMethod::StopPropagation => {
+                                                Self::object_set_entry(
+                                                    &mut entries,
+                                                    INTERNAL_EVENT_STOP_PROPAGATION_KEY.to_string(),
+                                                    Value::Bool(true),
+                                                );
+                                            }
+                                            EventMethod::StopImmediatePropagation => {
+                                                Self::object_set_entry(
+                                                    &mut entries,
+                                                    INTERNAL_EVENT_STOP_PROPAGATION_KEY.to_string(),
+                                                    Value::Bool(true),
+                                                );
+                                                Self::object_set_entry(
+                                                    &mut entries,
+                                                    INTERNAL_EVENT_STOP_IMMEDIATE_PROPAGATION_KEY
+                                                        .to_string(),
+                                                    Value::Bool(true),
+                                                );
+                                            }
+                                        }
+                                    }
                                     match method {
                                         EventMethod::PreventDefault => {
                                             if event.cancelable {

@@ -1,5 +1,14 @@
 use super::*;
+use crate::core_impl::parser::parser_stmt::parse_document_element_call;
 pub(crate) fn parse_element_ref_expr(src: &str) -> Result<Option<DomQuery>> {
+    let mut document_call_cursor = Cursor::new(src);
+    if parse_document_element_call(&mut document_call_cursor).is_ok() {
+        document_call_cursor.skip_ws();
+        if document_call_cursor.eof() {
+            return Ok(None);
+        }
+    }
+
     let mut cursor = Cursor::new(src);
     cursor.skip_ws();
     let target = match parse_element_target(&mut cursor) {

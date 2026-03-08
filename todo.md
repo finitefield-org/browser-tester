@@ -802,17 +802,267 @@
 
 - [x] Confirmed no new mock was required (no README update)
 
-## Next Task (P1.62: placeholder-backed host method dispatch and inherited callable residual sweep)
+- [x] Completed P1.62: placeholder-backed host method dispatch and inherited callable residual sweep
+  - routed placeholder-backed `Document`, parsed-document, `DOMParser`, `TreeWalker`, `Range`, and `Selection` method surfaces through receiver-aware builtins so extracted calls, `.call(...)`, and inherited lookups hit the specialized host runtime instead of placeholder functions
+  - exposed `Object.create(...)` on the actual `Object` static callable surface so inherited host-method regressions can construct prototype-linked receivers through generic property access instead of relying on parser-only static-call support
+  - taught the DOM property parser to fall back from `document.*` placeholder-backed method getters to generic member access so raw getter/property-path use sites no longer fail before runtime receiver validation
 
-- [ ] Audit placeholder-backed host method surfaces that still depend on parser-specialized dispatch
-  - ensure reflected placeholder callables on DOM and Web API objects consistently fall through to their specialized runtime implementations when reached through direct calls, extracted calls, or prototype mutation
+- [x] Verify
+  - `cargo test --lib dom_parser_tree_walker_and_parsed_document_placeholder_methods_support_extracted_and_inherited_calls_work -- --nocapture`
+  - `cargo test --lib document_range_and_selection_placeholder_methods_support_extracted_and_inherited_calls_work -- --nocapture`
+  - `cargo test --lib dom_selection_interface`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2300 passed, 0 failed`)
 
-- [ ] Close remaining inherited-callable gaps across host objects
-  - align receiver validation and inherited method resolution for the remaining host objects whose method surfaces still mix placeholder properties, direct fast paths, and generic callable lookup
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.63: remaining host raw-getter/property-path breadth sweep
+  - exposed receiver-aware raw getter callables for `cookieStore`, `CacheStorage`, and `Cache` so placeholder-backed method properties reached through dot access, bracket access, extracted calls, and inherited property reads now route into their specialized host implementations instead of leaking placeholder functions
+  - aligned incompatible-receiver validation and callable metadata for the residual secure-context host surfaces that previously only worked through direct member invocation or alias variables
+  - added raw getter regressions covering `cookieStore` and `caches` / `Cache`, including bracket property access, extracted `.call(...)`, and inherited property reads created through `Object.create(...)`
+
+- [x] Verify
+  - `cargo test --lib cookie_store_raw_getter_and_inherited_receiver_parity_work -- --nocapture`
+  - `cargo test --lib cache_storage_and_cache_raw_getter_and_inherited_receiver_parity_work -- --nocapture`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_selection_interface`
+  - `cargo test --lib window_forms_trace`
+  - `cargo fmt`
+  - `cargo test --lib` (`2302 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.64: residual EventTarget-like and host-specialized raw-getter sweep
+  - exposed receiver-aware raw getter callables for `matchMedia`, `DataTransfer`, `clipboardData`, `DataTransferItem`, and `DataTransferItemList` so bracket access, inherited property reads, and extracted method metadata no longer fall back to placeholder functions
+  - aligned incompatible-receiver validation and callable name/length metadata for the remaining EventTarget-like and drag-and-clipboard host surfaces that previously diverged from generic property access
+  - added regressions covering `matchMedia` raw getter/property paths, constructor-backed `DataTransfer` method extraction, item/item-list inherited property reads, and paste `clipboardData` raw getter calls
+
+- [x] Verify
+  - `cargo test --lib match_media_raw_getter_and_inherited_property_paths_work -- --nocapture`
+  - `cargo test --lib data_transfer_raw_getters_and_inherited_property_paths_work -- --nocapture`
+  - `cargo test --lib dispatch_paste_clipboard_data_raw_getter_paths_work -- --nocapture`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_data_transfer_item_list`
+  - `cargo test --lib dom_dispatch_paste_clipboard_data`
+  - `cargo fmt`
+  - `cargo test --lib` (`2305 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.65: event-object placeholder method raw-getter and receiver sweep
+  - exposed receiver-aware raw getter callables for `Event`, `KeyboardEvent`, `PointerEvent`, and `NavigateEvent` placeholder-backed methods so bare property reads, bracket access, extracted calls, and inherited property paths all route through the same callable surface
+  - aligned direct `event.preventDefault()` / `stopPropagation()` / `stopImmediatePropagation()` with extracted-call state updates by reflecting cancellation and stop flags onto the event object immediately, which keeps same-callback property reads in sync with listener dispatch state
+  - added regressions for base `Event` raw getter paths plus `KeyboardEvent.getModifierState()`, `PointerEvent.getCoalescedEvents()` / `getPredictedEvents()`, and `NavigateEvent.intercept()` / `scroll()` callable metadata and incompatible-receiver handling
+
+- [x] Verify
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib dom_keyboard_event`
+  - `cargo test --lib dom_pointer_event`
+  - `cargo test --lib dom_navigate_event`
+  - `cargo test --lib dom_event_target_dispatch_event_method`
+  - `cargo fmt`
+  - `cargo test --lib` (`2310 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.66: event-object property fast-path override and host-event accessor residual sweep
+  - routed specialized `EventExprProp` reads through the live listener event object first, so direct reads like `event.type`, `event.target`, `event.currentTarget`, `event.defaultPrevented`, `event.isTrusted`, `event.bubbles`, `event.cancelable`, `event.eventPhase`, `event.timeStamp`, `event.state`, `event.oldState`, and `event.newState` now stay aligned with generic object-property semantics after same-callback overrides
+  - removed string-only fallback behavior from the `target.name` / `target.id` and `currentTarget.name` / `currentTarget.id` fast paths, preserving raw overridden property values instead of coercing everything through DOM attribute defaults
+  - added regression coverage for live event-object overrides so direct event-property fast paths, nested target/currentTarget reads, and same-callback `preventDefault()` observation all remain consistent with the generic object path
+
+- [x] Verify
+  - `cargo test --lib event_fast_paths_respect_live_event_object_overrides_work -- --nocapture`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2311 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.67: event-object delete/descriptor parity and remaining host-event property-path sweep
+  - routed `delete event.*` and nested deletes like `delete event.target.id` / `delete event.currentTarget.name` through the live listener event object, so parser-specialized event-property fast paths now honor generic own-property deletion semantics instead of falling through to a noop `true`
+  - taught non-node DOM-read delete paths to reuse the generic fallback property chain, which fixed event-adjacent host properties such as `BeforeUnloadEvent.returnValue` when they are shadowed with `Object.defineProperty(...)` and then deleted
+  - added regression coverage for live event-object `defineProperty(...)` overrides, nested target/currentTarget shadowing, and `beforeunload` `returnValue` descriptor/delete behavior so specialized event access stays aligned with the generic object-property path
+
+- [x] Verify
+  - `cargo test --lib event_fast_path_delete_and_define_property_parity_work -- --nocapture`
+  - `cargo test --lib before_unload_return_value_define_property_and_delete_work -- --nocapture`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib dom_before_unload_event`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2313 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.68: host-event descriptor breadth and event-adjacent shadowing residual sweep
+  - synthesized receiver-aware descriptor values for placeholder-backed host-event methods so `Object.getOwnPropertyDescriptor(...)` on `Event`, `KeyboardEvent`, `PointerEvent`, `NavigateEvent`, `clipboardData`, `DataTransfer`, `DataTransferItem`, and `DataTransferItemList` returns the same callable surface exposed by raw property access
+  - taught `delete`, direct property reads, and parser-specialized direct member calls to honor deleted markers and explicit own-property overrides for placeholder-backed host-event methods, preventing fallback into generic array/object builtins after shadowing or deletion
+  - added descriptor/delete/shadowing regressions for event methods, paste `clipboardData`, and drag-and-drop item-list methods so specialized host paths stay aligned with the generic object-property path
+
+- [x] Verify
+  - `cargo test --lib host_event_method_descriptors_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib dispatch_paste_clipboard_data_descriptor_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib data_transfer_placeholder_method_descriptor_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib dom_before_unload_event`
+  - `cargo test --lib dom_dispatch_paste_clipboard_data`
+  - `cargo test --lib dom_data_transfer_item_list`
+  - `cargo test --lib dom_keyboard_event`
+  - `cargo test --lib dom_pointer_event`
+  - `cargo test --lib dom_navigate_event`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2316 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.69: placeholder-backed host method own-key/enumerability and specialized-call shadowing residual sweep
+  - made placeholder-backed host methods non-enumerable own properties across document/window, cookie-store/cache surfaces, range/selection, paste/drag-and-drop objects, and event-like objects so raw getters, descriptors, and own-key APIs stay aligned after shadowing and deletion
+  - taught specialized member-call paths for document, DOMParser, parsed documents, TreeWalker, Range, Selection, `matchMedia`, `cookieStore`, `CacheStorage`, and `Cache` to honor explicit own-property overrides and deleted markers before falling back to specialized runtime dispatch
+  - restored browser-like object-literal accessor overwrite semantics so getter/setter redefinitions drop stale data slots, preserve accessor pairing correctly, and keep compound/logical assignment property references on the single-read accessor path
+
+- [x] Verify
+  - `cargo test --lib placeholder_backed_host_methods_are_non_enumerable_and_shadowable_work -- --nocapture`
+  - `cargo test --lib dom_parser_parsed_document_and_tree_walker_methods_respect_shadowing_work -- --nocapture`
+  - `cargo test --lib document_range_and_selection_methods_are_non_enumerable_and_shadowable_work -- --nocapture`
+  - `cargo test --lib host_event_method_descriptors_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib dispatch_paste_clipboard_data_descriptor_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib data_transfer_placeholder_method_descriptor_and_delete_shadowing_work -- --nocapture`
+  - `cargo test --lib object_literal_`
+  - `cargo test --lib property_reference_once`
+  - `cargo test --lib getter_once_for_property_reference`
+  - `cargo test --lib reference_target`
+  - `cargo test --lib skips_setter_when_left_`
+  - `cargo fmt`
+  - `cargo test --lib` (`2319 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.70: placeholder-backed host sync/rebuild persistence and synthesized-surface parity sweep
+  - preserved placeholder-backed document method overrides, descriptor flags, and deleted markers across history-driven document resync so `pushState(...)` / `replaceState(...)` no longer resurrect or drop shadowed document methods
+  - reused lazily-created clipboard/data-transfer wrapper objects across repeated event reconstruction so multi-listener dispatches keep stable host wrapper identity and expando/method overrides
+  - treated `matchMedia` live `matches` / `media` as synthesized properties that still honor explicit own overrides, accessor redefinitions, deletes, and inherited reads without desynchronizing raw getter behavior
+
+- [x] Verify
+  - `cargo test --lib document_placeholder_method_shadowing_survives_history_resync_work -- --nocapture`
+  - `cargo test --lib match_media_synthesized_properties_respect_override_delete_and_inherited_reads_work -- --nocapture`
+  - `cargo test --lib drag_event_reuses_data_transfer_wrapper_across_listeners_work -- --nocapture`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_dispatch_drag_event_data_transfer`
+  - `cargo fmt`
+  - `cargo test --lib` (`2322 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.71: remaining synthesized host-property descriptor/receiver parity sweep)
+
+- [x] Completed P1.71: remaining synthesized host-property descriptor/receiver parity sweep
+  - preserved hidden canonical clipboard/data-transfer wrapper objects so live `types`, `items`, and `files` wrappers continue to update after `setData(...)`, `clearData(...)`, `add(...)`, `remove(...)`, and `clear()` without reviving deleted or shadowed public properties
+  - aligned inherited reads for event-adjacent synthesized wrapper properties so `Object.create(...)` and saved wrapper references observe the same shadowing/delete state as direct reads while runtime mutations still reach the canonical backing objects
+  - kept paste/drag event wrapper refresh paths receiver-stable by reusing canonical arrays and item-list objects instead of replacing the public surface during host-side synchronization
+
+- [x] Verify
+  - `cargo test --lib dispatch_paste_clipboard_types_wrapper_survives_shadow_delete_and_mutation_work -- --nocapture`
+  - `cargo test --lib data_transfer_live_wrappers_survive_shadow_delete_and_item_list_mutations_work -- --nocapture`
+  - `cargo test --lib dom_dispatch_paste_clipboard_data`
+  - `cargo test --lib dom_data_transfer_item_list`
+  - `cargo test --lib dom_dispatch_drag_event_data_transfer`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo fmt`
+  - `cargo test --lib` (`2324 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.72: residual synthesized host-property own-key/descriptor breadth sweep)
+
+- [x] Completed P1.72: residual synthesized host-property own-key/descriptor breadth sweep
+  - moved `DOMStringMap` own-key synthesis onto live `data-*` attributes so `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, and `Object.hasOwn(...)` reflect current dataset state instead of stale cached entries
+  - stopped caching dataset attribute values inside wrapper object storage and made direct reads honor explicit own property/accessor overrides before falling back to synthesized `data-*` lookups
+  - aligned `Object.getOwnPropertyDescriptor(...)` and object spread for live dataset keys so descriptor metadata and enumerable copy behavior follow the same synthesized surface as direct property reads
+
+- [x] Verify
+  - `cargo test --lib dataset_dom_string_map_own_keys_and_descriptors_track_live_attributes_work -- --nocapture`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib operators_advanced_selectors`
+  - `cargo fmt`
+  - `cargo test --lib` (`2325 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.73: synthesized array-like host own-key/descriptor parity sweep)
+
+- [x] Completed P1.73: synthesized array-like host own-key/descriptor parity sweep
+  - synthesized live own-key and descriptor surfaces for `DOMTokenList` and `NamedNodeMap` so indexed, named, and length/value properties now line up across `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.getOwnPropertyDescriptor(...)`, and `Object.hasOwn(...)`
+  - made `classList` method entries non-enumerable and taught direct reads to honor explicit own data/accessor overrides on `DOMTokenList`, `NamedNodeMap`, and `DOMStringMap` before falling back to computed live collection values
+  - added regressions for `classList` and `attributes` shadow/delete/recovery flows so object spread, descriptors, and live collection refreshes stay aligned after `Object.defineProperty(...)`, `delete`, and host-side mutations
+
+- [x] Verify
+  - `cargo test --lib element_attributes_own_keys_and_descriptors_track_live_entries_work -- --nocapture`
+  - `cargo test --lib class_list_own_keys_and_descriptors_track_live_tokens_work -- --nocapture`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2327 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.74: residual DOM collection iterator/prototype and object-copy parity sweep)
+
+- [x] Completed P1.74: residual DOM collection iterator/prototype and object-copy parity sweep
+  - moved `DOMTokenList` and `NamedNodeMap` iterator/method raw getters onto receiver-aware callables so extracted property reads, bracket access, `Symbol.iterator`, and inherited reads use the same live collection semantics instead of owner-captured placeholders
+  - filled the remaining `NodeList` reflective surface so `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.getOwnPropertyDescriptor(...)`, `Object.hasOwn(...)`, `Object.assign(...)`, and object spread all synthesize live indexed/length properties from the current list snapshot
+  - aligned collection copy paths by teaching object-literal spread and `Object.assign(...)` to enumerate synthesized DOM collection keys, which keeps copied results in sync with live state while still respecting explicit own overrides and accessors
+
+- [x] Verify
+  - `cargo test --lib named_node_map_raw_getter_methods_and_iterators_are_receiver_aware_work -- --nocapture`
+  - `cargo test --lib class_list_iterator_property_paths_and_object_copy_work -- --nocapture`
+  - `cargo test --lib node_list_reflective_surface_and_object_copy_work -- --nocapture`
+  - `cargo test --lib dom_named_node_map`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo fmt`
+  - `cargo test --lib` (`2330 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.75: DOM collection prototype identity and named-property collision residual sweep)
+
+- [x] Completed P1.75: DOM collection prototype identity and named-property collision residual sweep
+  - stabilized `NodeList` default prototype lookup so `Object.getPrototypeOf(...)` on static lists no longer manufactures fresh empty objects and now reuses the shared object prototype when no explicit override is present
+  - cached live `classList` wrappers by owner node so repeated `element.classList` reads reuse the same host collection object instead of recreating wrapper state on every access
+  - filtered `NamedNodeMap` synthesized named properties through built-in/prototype visibility checks so collisions with `item`, `getNamedItem`, `values`, `toString`, `constructor`, and similar surface members no longer leak into own keys, descriptors, or object-copy paths
+
+- [x] Verify
+  - `cargo test --lib static_node_list_default_prototype_is_stable_work -- --nocapture`
+  - `cargo test --lib named_node_map_named_property_collisions_follow_builtin_visibility_work -- --nocapture`
+  - `cargo test --lib dom_named_node_map`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2332 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.76: DOM collection expando-assignment and explicit prototype-mutation residual sweep)
+
+- [ ] Audit residual host collection mutation gaps
+  - cover `DOMTokenList`, `NamedNodeMap`, `NodeList`, and adjacent collection wrappers where expando assignment, custom prototype objects, or inherited custom methods may still diverge from ordinary object behavior
+
+- [ ] Align explicit prototype mutation with host collection method lookup
+  - ensure `Object.setPrototypeOf(...)`, expando reads/writes, and inherited custom methods interact cleanly with synthesized indexed/named properties and built-in collection surfaces
 
 - [ ] Verify
-  - targeted placeholder-dispatch and inherited-callable regression tests for host objects
-  - `cargo test --lib webapi_data_builtins`
-  - `cargo test --lib window_forms_trace`
-  - `cargo test --lib dom_navigation_dialog`
+  - targeted regressions for host collection expando/prototype-mutation parity
+  - related DOM collection and language suites
   - `cargo test --lib`

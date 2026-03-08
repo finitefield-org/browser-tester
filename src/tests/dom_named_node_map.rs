@@ -187,3 +187,95 @@ fn named_node_map_set_named_item_ns_adds_and_replaces() -> Result<()> {
     h.assert_text("#result", "true:old:old:true:true:new")?;
     Ok(())
 }
+
+#[test]
+fn named_node_map_raw_getter_methods_and_iterators_are_receiver_aware_work() -> Result<()> {
+    let html = r#"
+        <div id='box' class='green' data-state='ready'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const attrs = document.getElementById('box').attributes;
+            const item = attrs.item;
+            const getNamedItem = attrs.getNamedItem;
+            const values = attrs.values;
+            const entries = attrs.entries;
+            const iter = attrs[Symbol.iterator];
+
+            let incompatible = false;
+            try {
+              Object.create(attrs).getNamedItem('class');
+            } catch (e) {
+              incompatible = String(e).includes('incompatible receiver');
+            }
+
+            document.getElementById('result').textContent = [
+              item.call(attrs, 0).name,
+              getNamedItem.call(attrs, 'class').value,
+              Array.from(values.call(attrs)).map((attr) => attr.name).join(','),
+              Array.from(entries.call(attrs))
+                .map((pair) => pair[0] + ':' + pair[1].name)
+                .join(','),
+              Array.from(iter.call(attrs)).map((attr) => attr.value).join(','),
+              typeof attrs.getNamedItem,
+              typeof attrs.values,
+              incompatible
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "class|green|class,data-state,id|0:class,1:data-state,2:id|green,ready,box|function|function|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn named_node_map_named_property_collisions_follow_builtin_visibility_work() -> Result<()> {
+    let html = r#"
+        <div normal='ok' item='one' getNamedItem='two' values='three' toString='four' constructor='five' length='six'></div>
+        <p id='result'></p>
+        <script>
+          const attrs = document.querySelector('div').attributes;
+          const assigned = Object.assign({}, attrs);
+          const spread = { ...attrs };
+
+          document.getElementById('result').textContent = [
+            typeof attrs.item,
+            typeof attrs.getNamedItem,
+            typeof attrs.values,
+            typeof attrs['toString'],
+            typeof attrs['constructor'],
+            attrs.normal.value,
+            Object.keys(attrs).includes('item'),
+            Object.keys(attrs).includes('values'),
+            Object.keys(attrs).includes('normal'),
+            Object.getOwnPropertyNames(attrs).includes('toString'),
+            Object.getOwnPropertyNames(attrs).includes('constructor'),
+            Object.hasOwn(attrs, 'item'),
+            Object.hasOwn(attrs, 'toString'),
+            Object.hasOwn(attrs, 'constructor'),
+            Object.getOwnPropertyDescriptor(attrs, 'item') === undefined,
+            Object.getOwnPropertyDescriptor(attrs, 'values') === undefined,
+            Object.getOwnPropertyDescriptor(attrs, 'toString') === undefined,
+            attrs.length,
+            Object.getOwnPropertyDescriptor(attrs, 'length').value,
+            assigned.normal.value,
+            'item' in assigned,
+            'values' in spread
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "function|function|function|function|function|ok|false|false|true|false|false|false|false|false|true|true|true|7|7|ok|false|false",
+    )?;
+    Ok(())
+}

@@ -888,21 +888,13 @@ impl Harness {
                 Expr::MatchMedia(query) => {
                     let query = self.eval_expr(query, env, event_param, event)?.as_string();
                     self.platform_mocks.match_media_calls.push(query.clone());
-                    let matches = self
-                        .platform_mocks
-                        .match_media_mocks
-                        .get(&query)
-                        .copied()
-                        .unwrap_or(self.platform_mocks.default_match_media_matches);
-                    Ok(Self::new_object_value(vec![
+                    let mut entries = vec![
                         (INTERNAL_MATCH_MEDIA_OBJECT_KEY.into(), Value::Bool(true)),
                         (
                             INTERNAL_MATCH_MEDIA_QUERY_KEY.into(),
                             Value::String(query.clone()),
                         ),
                         (INTERNAL_EVENT_TARGET_OBJECT_KEY.into(), Value::Bool(true)),
-                        ("matches".into(), Value::Bool(matches)),
-                        ("media".into(), Value::String(query)),
                         ("onchange".into(), Value::Null),
                         (
                             "addEventListener".into(),
@@ -924,7 +916,18 @@ impl Harness {
                             "removeListener".into(),
                             Self::new_builtin_placeholder_function(),
                         ),
-                    ]))
+                    ];
+                    Self::mark_object_properties_non_enumerable(
+                        &mut entries,
+                        &[
+                            "addEventListener",
+                            "removeEventListener",
+                            "dispatchEvent",
+                            "addListener",
+                            "removeListener",
+                        ],
+                    );
+                    Ok(Self::new_object_value(entries))
                 }
                 Expr::MatchMediaProp { query, prop } => {
                     let query = self.eval_expr(query, env, event_param, event)?.as_string();

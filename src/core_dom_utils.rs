@@ -91,9 +91,12 @@ pub(crate) const INTERNAL_CLIPBOARD_WRITE_TEXT_DEFAULT_KEY: &str =
 pub(crate) const INTERNAL_CLIPBOARD_DATA_OBJECT_KEY: &str = "\u{0}\u{0}bt_clipboard:data";
 pub(crate) const INTERNAL_CLIPBOARD_DATA_TEXT_KEY: &str = "\u{0}\u{0}bt_clipboard:data:text";
 pub(crate) const INTERNAL_CLIPBOARD_DATA_STORE_KEY: &str = "\u{0}\u{0}bt_clipboard:data:store";
+pub(crate) const INTERNAL_CLIPBOARD_DATA_TYPES_KEY: &str = "\u{0}\u{0}bt_clipboard:data:types";
 pub(crate) const INTERNAL_DATA_TRANSFER_OBJECT_KEY: &str = "\u{0}\u{0}bt_data_transfer:object";
 pub(crate) const INTERNAL_DATA_TRANSFER_EVENT_TYPE_KEY: &str =
     "\u{0}\u{0}bt_data_transfer:event_type";
+pub(crate) const INTERNAL_DATA_TRANSFER_FILES_KEY: &str = "\u{0}\u{0}bt_data_transfer:files";
+pub(crate) const INTERNAL_DATA_TRANSFER_ITEMS_KEY: &str = "\u{0}\u{0}bt_data_transfer:items";
 pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY: &str =
     "\u{0}\u{0}bt_data_transfer:item:object";
 pub(crate) const INTERNAL_DATA_TRANSFER_ITEM_KIND_KEY: &str =
@@ -150,6 +153,9 @@ pub(crate) const INTERNAL_KEYBOARD_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:
 pub(crate) const INTERNAL_WHEEL_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:wheel";
 pub(crate) const INTERNAL_NAVIGATE_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:navigate";
 pub(crate) const INTERNAL_POINTER_EVENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_event:pointer";
+pub(crate) const INTERNAL_EVENT_STOP_PROPAGATION_KEY: &str = "\u{0}\u{0}bt_event:stop_propagation";
+pub(crate) const INTERNAL_EVENT_STOP_IMMEDIATE_PROPAGATION_KEY: &str =
+    "\u{0}\u{0}bt_event:stop_immediate_propagation";
 pub(crate) const INTERNAL_TREE_WALKER_OBJECT_KEY: &str = "\u{0}\u{0}bt_tree_walker";
 pub(crate) const INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY: &str =
     "\u{0}\u{0}bt_tree_walker:traversal_nodes";

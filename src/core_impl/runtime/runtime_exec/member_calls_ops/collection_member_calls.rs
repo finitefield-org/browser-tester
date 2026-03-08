@@ -993,6 +993,21 @@ impl Harness {
         evaluated_args: &[Value],
         event: &EventState,
     ) -> Result<Option<Value>> {
+        {
+            let values_ref = values.borrow();
+            if Self::is_data_transfer_item_list_value(&values_ref)
+                && matches!(member, "add" | "remove" | "clear")
+            {
+                let own_override = Self::object_get_entry(&values_ref.properties, member)
+                    .is_some_and(|value| !Self::is_builtin_placeholder_value(&value));
+                let builtin_deleted =
+                    Self::is_builtin_object_property_deleted(&values_ref.properties, member);
+                if own_override || builtin_deleted {
+                    return Ok(None);
+                }
+            }
+        }
+
         let value = match member {
             "forEach" => {
                 if evaluated_args.len() != 1 {
@@ -1376,14 +1391,15 @@ impl Harness {
                             }
                         }
                         if let Some(Value::Array(files)) =
-                            Self::object_get_entry(&owner_entries, "files")
+                            Self::data_transfer_files_array_from_entries(&owner_entries)
                         {
                             files.borrow_mut().push(file.clone());
                         } else {
+                            let files = Self::new_array_value(vec![file.clone()]);
                             Self::object_set_entry(
                                 &mut owner_entries,
-                                "files".to_string(),
-                                Self::new_array_value(vec![file.clone()]),
+                                INTERNAL_DATA_TRANSFER_FILES_KEY.to_string(),
+                                files,
                             );
                         }
                         let mime_type = {
@@ -1411,13 +1427,7 @@ impl Harness {
                             format.clone(),
                             Value::String(data.clone()),
                         );
-                        Self::object_set_entry(
-                            &mut owner_entries,
-                            "types".to_string(),
-                            Self::new_array_value(
-                                types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
-                            ),
-                        );
+                        Self::sync_clipboard_types_array(&mut owner_entries, &types);
                         Self::object_set_entry(
                             &mut owner_entries,
                             INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
@@ -1439,7 +1449,11 @@ impl Harness {
                         &types,
                         &store,
                     );
-                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                        items,
+                    );
                     added
                 }
             }
@@ -1475,20 +1489,14 @@ impl Harness {
                         store.borrow_mut().delete_entry(&removed);
                     } else if let Some(file_index) = index.checked_sub(types.len()) {
                         if let Some(Value::Array(files)) =
-                            Self::object_get_entry(&owner_entries, "files")
+                            Self::data_transfer_files_array_from_entries(&owner_entries)
                         {
                             if file_index < files.borrow().len() {
                                 files.borrow_mut().remove(file_index);
                             }
                         }
                     }
-                    Self::object_set_entry(
-                        &mut owner_entries,
-                        "types".to_string(),
-                        Self::new_array_value(
-                            types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
-                        ),
-                    );
+                    Self::sync_clipboard_types_array(&mut owner_entries, &types);
                     Self::object_set_entry(
                         &mut owner_entries,
                         INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
@@ -1509,7 +1517,11 @@ impl Harness {
                         &types,
                         &store,
                     );
-                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                        items,
+                    );
                     Value::Undefined
                 }
             }
@@ -1537,15 +1549,11 @@ impl Harness {
                         .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
                     store.borrow_mut().clear();
                     if let Some(Value::Array(files)) =
-                        Self::object_get_entry(&owner_entries, "files")
+                        Self::data_transfer_files_array_from_entries(&owner_entries)
                     {
                         files.borrow_mut().clear();
                     }
-                    Self::object_set_entry(
-                        &mut owner_entries,
-                        "types".to_string(),
-                        Self::new_array_value(Vec::new()),
-                    );
+                    Self::sync_clipboard_types_array(&mut owner_entries, &types);
                     Self::object_set_entry(
                         &mut owner_entries,
                         INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
@@ -1563,7 +1571,11 @@ impl Harness {
                         &types,
                         &store,
                     );
-                    Self::object_set_entry(&mut owner_entries, "items".to_string(), items);
+                    Self::object_set_entry(
+                        &mut owner_entries,
+                        INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                        items,
+                    );
                     Value::Undefined
                 }
             }
@@ -2449,15 +2461,27 @@ impl Harness {
         evaluated_args: &[Value],
         event: &EventState,
     ) -> Result<Option<Value>> {
-        let (is_event_object, is_navigate_event_object, is_pointer_event_object) = {
+        let (
+            is_event_object,
+            is_navigate_event_object,
+            is_pointer_event_object,
+            own_override,
+            builtin_deleted,
+        ) = {
             let entries = object.borrow();
             (
                 Self::is_event_object(&entries),
                 Self::is_navigate_event_object(&entries),
                 Self::is_pointer_event_object(&entries),
+                Self::object_get_entry(&entries, member)
+                    .is_some_and(|value| !Self::is_builtin_placeholder_value(&value)),
+                Self::is_builtin_object_property_deleted(&entries, member),
             )
         };
         if !is_event_object {
+            return Ok(None);
+        }
+        if own_override || builtin_deleted {
             return Ok(None);
         }
 
@@ -2488,6 +2512,11 @@ impl Harness {
                         "Event.stopPropagation does not take arguments".into(),
                     ));
                 }
+                Self::object_set_entry(
+                    &mut object.borrow_mut(),
+                    INTERNAL_EVENT_STOP_PROPAGATION_KEY.to_string(),
+                    Value::Bool(true),
+                );
                 Value::Undefined
             }
             "stopImmediatePropagation" => {
@@ -2496,6 +2525,17 @@ impl Harness {
                         "Event.stopImmediatePropagation does not take arguments".into(),
                     ));
                 }
+                let mut entries = object.borrow_mut();
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_EVENT_STOP_PROPAGATION_KEY.to_string(),
+                    Value::Bool(true),
+                );
+                Self::object_set_entry(
+                    &mut entries,
+                    INTERNAL_EVENT_STOP_IMMEDIATE_PROPAGATION_KEY.to_string(),
+                    Value::Bool(true),
+                );
                 Value::Undefined
             }
             "getModifierState" => {
@@ -2949,7 +2989,8 @@ impl Harness {
     }
 
     fn clipboard_data_types_from_entries(entries: &impl ObjectEntryLookup) -> Vec<String> {
-        let Some(Value::Array(types)) = Self::object_get_entry(entries, "types") else {
+        let Some(Value::Array(types)) = Self::clipboard_data_types_array_from_entries(entries)
+        else {
             return Vec::new();
         };
         types
@@ -2957,6 +2998,43 @@ impl Harness {
             .iter()
             .map(|value| value.as_string())
             .collect::<Vec<_>>()
+    }
+
+    fn clipboard_data_types_array_from_entries(entries: &impl ObjectEntryLookup) -> Option<Value> {
+        Self::object_get_entry(entries, INTERNAL_CLIPBOARD_DATA_TYPES_KEY)
+            .or_else(|| Self::object_get_entry(entries, "types"))
+    }
+
+    fn data_transfer_files_array_from_entries(entries: &impl ObjectEntryLookup) -> Option<Value> {
+        Self::object_get_entry(entries, INTERNAL_DATA_TRANSFER_FILES_KEY)
+            .or_else(|| Self::object_get_entry(entries, "files"))
+    }
+
+    fn data_transfer_items_value_from_entries(entries: &impl ObjectEntryLookup) -> Option<Value> {
+        Self::object_get_entry(entries, INTERNAL_DATA_TRANSFER_ITEMS_KEY)
+            .or_else(|| Self::object_get_entry(entries, "items"))
+    }
+
+    fn sync_clipboard_types_array(entries: &mut ObjectValue, types: &[String]) {
+        let array = Self::clipboard_data_types_array_from_entries(entries)
+            .and_then(|value| match value {
+                Value::Array(array) => Some(array),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                let value = Self::new_array_value(Vec::new());
+                let Value::Array(array) = &value else {
+                    unreachable!("new_array_value must return an array");
+                };
+                let array = array.clone();
+                Self::object_set_entry(
+                    entries,
+                    INTERNAL_CLIPBOARD_DATA_TYPES_KEY.to_string(),
+                    value,
+                );
+                array
+            });
+        array.borrow_mut().elements = types.iter().cloned().map(Value::String).collect();
     }
 
     fn clipboard_data_store_from_entries(
@@ -3013,7 +3091,7 @@ impl Harness {
             })
             .collect::<Vec<_>>();
 
-        if let Some(Value::Array(files)) = Self::object_get_entry(entries, "files") {
+        if let Some(Value::Array(files)) = Self::data_transfer_files_array_from_entries(entries) {
             for file in files.borrow().iter() {
                 let Value::Object(file_object) = file else {
                     continue;
@@ -3043,7 +3121,8 @@ impl Harness {
         store: &Rc<RefCell<ObjectValue>>,
     ) -> Value {
         let items = Self::data_transfer_items_from_entries(entries, types, store);
-        if let Some(Value::Array(item_list)) = Self::object_get_entry(entries, "items") {
+        if let Some(Value::Array(item_list)) = Self::data_transfer_items_value_from_entries(entries)
+        {
             let is_item_list = {
                 let item_list_ref = item_list.borrow();
                 Self::is_data_transfer_item_list_value(&item_list_ref)
@@ -3075,12 +3154,21 @@ impl Harness {
         evaluated_args: &[Value],
         event: &EventState,
     ) -> Result<Option<Value>> {
-        let entries = object.borrow();
-        let is_clipboard_data = Self::is_clipboard_data_object(&entries);
-        let is_data_transfer_item = Self::is_data_transfer_item_object(&entries);
-        drop(entries);
+        let (is_clipboard_data, is_data_transfer_item, own_override, builtin_deleted) = {
+            let entries = object.borrow();
+            (
+                Self::is_clipboard_data_object(&entries),
+                Self::is_data_transfer_item_object(&entries),
+                Self::object_get_entry(&entries, member)
+                    .is_some_and(|value| !Self::is_builtin_placeholder_value(&value)),
+                Self::is_builtin_object_property_deleted(&entries, member),
+            )
+        };
 
         if !is_clipboard_data && !is_data_transfer_item {
+            return Ok(None);
+        }
+        if own_override || builtin_deleted {
             return Ok(None);
         }
 
@@ -3200,13 +3288,7 @@ impl Harness {
                 if !types.iter().any(|item| item == &format) {
                     types.push(format.clone());
                 }
-                Self::object_set_entry(
-                    &mut entries,
-                    "types".to_string(),
-                    Self::new_array_value(
-                        types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
-                    ),
-                );
+                Self::sync_clipboard_types_array(&mut entries, &types);
 
                 let store = Self::clipboard_data_store_from_entries(&entries)
                     .unwrap_or_else(|| Rc::new(RefCell::new(ObjectValue::default())));
@@ -3232,7 +3314,11 @@ impl Harness {
                         &types,
                         &store,
                     );
-                    Self::object_set_entry(&mut entries, "items".to_string(), items);
+                    Self::object_set_entry(
+                        &mut entries,
+                        INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                        items,
+                    );
                 }
                 if format == "text/plain" {
                     Self::object_set_entry(
@@ -3283,13 +3369,7 @@ impl Harness {
                     store.borrow_mut().clear();
                 }
 
-                Self::object_set_entry(
-                    &mut entries,
-                    "types".to_string(),
-                    Self::new_array_value(
-                        types.iter().cloned().map(Value::String).collect::<Vec<_>>(),
-                    ),
-                );
+                Self::sync_clipboard_types_array(&mut entries, &types);
                 Self::object_set_entry(
                     &mut entries,
                     INTERNAL_CLIPBOARD_DATA_STORE_KEY.to_string(),
@@ -3307,7 +3387,11 @@ impl Harness {
                         &types,
                         &store,
                     );
-                    Self::object_set_entry(&mut entries, "items".to_string(), items);
+                    Self::object_set_entry(
+                        &mut entries,
+                        INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                        items,
+                    );
                 }
                 let text = Self::object_get_entry(&store.borrow(), "text/plain")
                     .map(|value| value.as_string())

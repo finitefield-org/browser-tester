@@ -2546,6 +2546,54 @@ fn cookie_store_alias_variable_calls_work() -> Result<()> {
 }
 
 #[test]
+fn cookie_store_raw_getter_and_inherited_receiver_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const setCookie = cookieStore['set'];
+            const getCookie = cookieStore.get;
+            const getAllCookies = cookieStore['getAll'];
+            const deleteCookie = cookieStore.delete;
+
+            await setCookie.call(cookieStore, 'cookie1', 'value1');
+            const cookie = await getCookie.call(cookieStore, 'cookie1');
+            const countBeforeDelete = (await getAllCookies.call(cookieStore)).length;
+            await deleteCookie.call(cookieStore, 'cookie1');
+            const afterDelete = await getCookie.call(cookieStore, 'cookie1');
+
+            const receiverError = (() => {
+              const inheritor = Object.create(cookieStore);
+              try {
+                inheritor.get('cookie1');
+                return false;
+              } catch (e) {
+                return String(e).includes('CookieStore method called on incompatible receiver');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              setCookie.name,
+              setCookie.length,
+              getCookie.name,
+              getCookie.length,
+              cookie.value,
+              countBeforeDelete,
+              afterDelete === null,
+              receiverError
+            ].join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "set,1,get,1,value1,1,true,true")?;
+    Ok(())
+}
+
+#[test]
 fn cookie_store_integrates_with_document_cookie() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2761,6 +2809,72 @@ fn cache_storage_and_cache_alias_variables_work() -> Result<()> {
 }
 
 #[test]
+fn cache_storage_and_cache_raw_getter_and_inherited_receiver_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const openCache = caches['open'];
+            const storageMatch = caches.match;
+            const cache = await openCache.call(caches, 'v1');
+            const putEntry = cache['put'];
+            const matchEntry = cache.match;
+            const listKeys = cache['keys'];
+
+            const network = await fetch('/api/raw-getter');
+            await putEntry.call(cache, '/api/raw-getter', network.clone());
+
+            const matched = await matchEntry.call(cache, '/api/raw-getter');
+            const matchedText = await matched.text();
+            const storageMatched = await storageMatch.call(caches, '/api/raw-getter');
+            const storageText = await storageMatched.text();
+            const keyCount = (await listKeys.call(cache)).length;
+
+            const storageReceiverError = (() => {
+              const inheritor = Object.create(caches);
+              try {
+                inheritor.open('v2');
+                return false;
+              } catch (e) {
+                return String(e).includes('CacheStorage method called on incompatible receiver');
+              }
+            })();
+
+            const cacheReceiverError = (() => {
+              const inheritor = Object.create(cache);
+              const inheritedKeys = inheritor['keys'];
+              try {
+                inheritedKeys.call(inheritor);
+                return false;
+              } catch (e) {
+                return String(e).includes('Cache method called on incompatible receiver');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              openCache.name,
+              openCache.length,
+              putEntry.name,
+              putEntry.length,
+              matchedText,
+              storageText,
+              keyCount,
+              storageReceiverError,
+              cacheReceiverError
+            ].join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.set_fetch_mock("/api/raw-getter", "payload");
+    h.click("#btn")?;
+    h.assert_text("#result", "open,1,put,2,payload,payload,1,true,true")?;
+    Ok(())
+}
+
+#[test]
 fn cache_add_and_add_all_work_with_fetch_mocks() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2908,6 +3022,159 @@ fn match_media_add_listener_alias_and_onchange_work() -> Result<()> {
 }
 
 #[test]
+fn match_media_raw_getter_and_inherited_property_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(prefers-reduced-motion: reduce)');
+          let count = 0;
+          const legacy = () => { count += 1; };
+          const modern = () => { count += 10; };
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const addLegacy = mql['addListener'];
+            const removeLegacy = Object.create(mql).removeListener;
+            const addModern = mql.addEventListener;
+            const dispatch = mql['dispatchEvent'];
+
+            let incompatible = false;
+            try {
+              addLegacy.call({}, legacy);
+            } catch (error) {
+              incompatible = String(error).includes('MediaQueryList');
+            }
+
+            document.getElementById('result').textContent = [
+              addLegacy.name,
+              addLegacy.length,
+              removeLegacy.name,
+              removeLegacy.length,
+              addModern.name,
+              addModern.length,
+              dispatch.name,
+              dispatch.length,
+              incompatible
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "addListener|1|removeListener|1|addEventListener|2|dispatchEvent|1|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn placeholder_backed_host_methods_are_non_enumerable_and_shadowable_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(prefers-reduced-motion: reduce)');
+
+          document.getElementById('btn').addEventListener('click', async () => {
+            const mqlDesc = Object.getOwnPropertyDescriptor(mql, 'addListener');
+            const mqlSummary = [
+              mqlDesc.value.name,
+              mqlDesc.value.length,
+              mqlDesc.enumerable,
+              Object.keys(mql).includes('addListener'),
+              Object.getOwnPropertyNames(mql).includes('addListener')
+            ].join(':');
+            Object.defineProperty(mql, 'addListener', {
+              value() { return 'shadow-mql'; },
+              configurable: true
+            });
+            const mqlShadow = mql.addListener(() => {});
+            const mqlDeleted = delete mql.addListener;
+            const mqlGone = mql.addListener === undefined;
+
+            const cookieDesc = Object.getOwnPropertyDescriptor(cookieStore, 'get');
+            const cookieSummary = [
+              cookieDesc.value.name,
+              cookieDesc.value.length,
+              cookieDesc.enumerable,
+              Object.keys(cookieStore).includes('get'),
+              Object.getOwnPropertyNames(cookieStore).includes('get')
+            ].join(':');
+            Object.defineProperty(cookieStore, 'get', {
+              value() { return Promise.resolve('shadow-cookie'); },
+              configurable: true
+            });
+            const cookieShadow = await cookieStore.get('alpha');
+            const cookieDeleted = delete cookieStore.get;
+            const cookieGone = cookieStore.get === undefined;
+
+            const storageDesc = Object.getOwnPropertyDescriptor(caches, 'keys');
+            const storageSummary = [
+              storageDesc.value.name,
+              storageDesc.value.length,
+              storageDesc.enumerable,
+              Object.keys(caches).includes('keys'),
+              Object.getOwnPropertyNames(caches).includes('keys')
+            ].join(':');
+            Object.defineProperty(caches, 'keys', {
+              value() { return Promise.resolve(['shadow-storage']); },
+              configurable: true
+            });
+            const storageShadow = (await caches.keys()).join(',');
+            const storageDeleted = delete caches.keys;
+            const storageGone = caches.keys === undefined;
+
+            const cache = await caches.open('v1');
+            const cacheDesc = Object.getOwnPropertyDescriptor(cache, 'keys');
+            const cacheSummary = [
+              cacheDesc.value.name,
+              cacheDesc.value.length,
+              cacheDesc.enumerable,
+              Object.keys(cache).includes('keys'),
+              Object.getOwnPropertyNames(cache).includes('keys')
+            ].join(':');
+            Object.defineProperty(cache, 'keys', {
+              value() { return Promise.resolve(['shadow-cache']); },
+              configurable: true
+            });
+            const cacheShadow = (await cache.keys()).join(',');
+            const cacheDeleted = delete cache.keys;
+            const cacheGone = cache.keys === undefined;
+
+            document.getElementById('result').textContent = [
+              mqlSummary,
+              mqlShadow,
+              mqlDeleted,
+              mqlGone,
+              cookieSummary,
+              cookieShadow,
+              cookieDeleted,
+              cookieGone,
+              storageSummary,
+              storageShadow,
+              storageDeleted,
+              storageGone,
+              cacheSummary,
+              cacheShadow,
+              cacheDeleted,
+              cacheGone
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "addListener:1:false:false:true|shadow-mql|true|true|get:1:false:false:true|shadow-cookie|true|true|keys:0:false:false:true|shadow-storage|true|true|keys:0:false:false:true|shadow-cache|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn match_media_matches_property_is_live_for_existing_objects() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2928,6 +3195,77 @@ fn match_media_matches_property_is_live_for_existing_objects() -> Result<()> {
     h.set_default_match_media_matches(true);
     h.click("#btn")?;
     h.assert_text("#result", "true:(unknown-query)")?;
+    Ok(())
+}
+
+#[test]
+fn match_media_synthesized_properties_respect_override_delete_and_inherited_reads_work()
+-> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const mql = matchMedia('(unknown-query)');
+          const child = Object.create(mql);
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const defaultDesc = Object.getOwnPropertyDescriptor(mql, 'matches');
+            const defaultSummary = [
+              String(mql.matches),
+              String(child.matches),
+              String(defaultDesc === undefined),
+              String(Object.keys(mql).includes('matches')),
+              String(Reflect.ownKeys(mql).includes('matches'))
+            ].join(':');
+
+            Object.defineProperty(mql, 'matches', {
+              get() { return 'shadow-match'; },
+              configurable: true
+            });
+            Object.defineProperty(mql, 'media', {
+              value: 'shadow-media',
+              enumerable: true,
+              configurable: true
+            });
+
+            const overrideDesc = Object.getOwnPropertyDescriptor(mql, 'matches');
+            const overrideSummary = [
+              String(mql.matches),
+              String(child.matches),
+              String(mql.media),
+              String(child.media),
+              String(typeof overrideDesc.get === 'function'),
+              String(Object.keys(mql).includes('media')),
+              String(Reflect.ownKeys(mql).includes('media'))
+            ].join(':');
+
+            delete mql.matches;
+            delete mql.media;
+
+            const afterDelete = [
+              String(mql.matches),
+              String(child.matches),
+              String(mql.media),
+              String(child.media),
+              String(Object.keys(mql).includes('media')),
+              String(Reflect.ownKeys(mql).includes('media'))
+            ].join(':');
+
+            document.getElementById('result').textContent = [
+              defaultSummary,
+              overrideSummary,
+              afterDelete
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "false:false:true:false:false|shadow-match:shadow-match:shadow-media:shadow-media:true:true:true|false:false:(unknown-query):(unknown-query):false:false",
+    )?;
     Ok(())
 }
 
@@ -4419,8 +4757,8 @@ fn dom_parser_and_tree_walker_basics_are_supported() -> Result<()> {
 }
 
 #[test]
-fn dom_parser_tree_walker_and_parsed_document_placeholder_methods_support_extracted_and_inherited_calls_work(
-) -> Result<()> {
+fn dom_parser_tree_walker_and_parsed_document_placeholder_methods_support_extracted_and_inherited_calls_work()
+-> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
         <p id='result'></p>
@@ -4490,6 +4828,67 @@ fn dom_parser_tree_walker_and_parsed_document_placeholder_methods_support_extrac
     h.assert_text(
         "#result",
         "parseFromString|2|root|nextNode|0|AB|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dom_parser_parsed_document_and_tree_walker_methods_respect_shadowing_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parser = new DOMParser();
+            Object.defineProperty(parser, 'parseFromString', {
+              value() { return 'shadow-parser'; },
+              configurable: true
+            });
+            const parserShadow = parser.parseFromString('<p></p>', 'text/html');
+            const parserDeleted = delete parser.parseFromString;
+            const parserGone = parser.parseFromString === undefined;
+
+            const parsed = new DOMParser().parseFromString(
+              '<div id="root"><span>A</span></div>',
+              'text/html'
+            );
+            Object.defineProperty(parsed, 'getElementById', {
+              value() { return 'shadow-parsed'; },
+              configurable: true
+            });
+            const parsedShadow = parsed.getElementById('root');
+            const parsedDeleted = delete parsed.getElementById;
+            const parsedGone = parsed.getElementById === undefined;
+
+            const walker = parsed.createTreeWalker(parsed.documentElement, NodeFilter.SHOW_TEXT);
+            Object.defineProperty(walker, 'nextNode', {
+              value() { return 'shadow-walker'; },
+              configurable: true
+            });
+            const walkerShadow = walker.nextNode();
+            const walkerDeleted = delete walker.nextNode;
+            const walkerGone = walker.nextNode === undefined;
+
+            document.getElementById('result').textContent = [
+              parserShadow,
+              parserDeleted,
+              parserGone,
+              parsedShadow,
+              parsedDeleted,
+              parsedGone,
+              walkerShadow,
+              walkerDeleted,
+              walkerGone
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "shadow-parser|true|true|shadow-parsed|true|true|shadow-walker|true|true",
     )?;
     Ok(())
 }
@@ -7021,5 +7420,88 @@ fn object_like_constructor_prototype_lookup_work() -> Result<()> {
 
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn host_event_method_descriptors_and_delete_shadowing_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const event = new Event('click', { cancelable: true });
+          const eventDesc = Object.getOwnPropertyDescriptor(event, 'preventDefault');
+          const eventEnumerable = eventDesc.enumerable;
+          const eventKeysHasMethod = Object.keys(event).includes('preventDefault');
+          eventDesc.value.call(event);
+          const eventDeleted = delete event.preventDefault;
+          const eventGone = event.preventDefault === undefined;
+          Object.defineProperty(event, 'preventDefault', {
+            value() { return 'shadow'; },
+            configurable: true
+          });
+          const eventOverride = event.preventDefault();
+
+          const keyboard = new KeyboardEvent('keydown', { ctrlKey: true });
+          const keyDesc = Object.getOwnPropertyDescriptor(keyboard, 'getModifierState');
+          const keyEnumerable = keyDesc.enumerable;
+          const keyValue = keyDesc.value.call(keyboard, 'Control');
+          const keyDeleted = delete keyboard.getModifierState;
+          const keyGone = keyboard.getModifierState === undefined;
+
+          const pointer = new PointerEvent('pointerdown');
+          const pointerDesc = Object.getOwnPropertyDescriptor(pointer, 'getCoalescedEvents');
+          const pointerEnumerable = pointerDesc.enumerable;
+          const pointerValue = Array.isArray(pointerDesc.value.call(pointer));
+          const pointerDeleted = delete pointer.getCoalescedEvents;
+          const pointerGone = pointer.getCoalescedEvents === undefined;
+
+          const navigate = new NavigateEvent('navigate', { canIntercept: true });
+          const interceptDesc = Object.getOwnPropertyDescriptor(navigate, 'intercept');
+          const scrollDesc = Object.getOwnPropertyDescriptor(navigate, 'scroll');
+          const navigateEnumerable = interceptDesc.enumerable && scrollDesc.enumerable;
+          const navigateDeleted = delete navigate.intercept;
+          const navigateGone = navigate.intercept === undefined;
+          const scrollDeleted = delete navigate.scroll;
+          const scrollGone = navigate.scroll === undefined;
+
+          document.getElementById('result').textContent = [
+            eventDesc.value.name,
+            eventDesc.value.length,
+            eventEnumerable,
+            eventKeysHasMethod,
+            event.defaultPrevented,
+            eventDeleted,
+            eventGone,
+            eventOverride,
+            keyDesc.value.name,
+            keyDesc.value.length,
+            keyEnumerable,
+            keyValue,
+            keyDeleted,
+            keyGone,
+            pointerDesc.value.name,
+            pointerDesc.value.length,
+            pointerEnumerable,
+            pointerValue,
+            pointerDeleted,
+            pointerGone,
+            interceptDesc.value.name,
+            interceptDesc.value.length,
+            scrollDesc.value.name,
+            scrollDesc.value.length,
+            navigateEnumerable,
+            navigateDeleted,
+            navigateGone,
+            scrollDeleted,
+            scrollGone
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "preventDefault|0|false|false|true|true|true|shadow|getModifierState|1|false|true|true|true|getCoalescedEvents|0|false|true|true|true|intercept|1|scroll|0|false|true|true|true|true",
+    )?;
     Ok(())
 }

@@ -118,7 +118,7 @@ impl Harness {
         })
     }
 
-    fn listener_event_argument(event: &EventState) -> Value {
+    fn listener_event_argument(event: &mut EventState) -> Value {
         let target = event
             .target_value
             .as_ref()
@@ -136,13 +136,27 @@ impl Harness {
             if let Some(object) = &event.clipboard_data_object {
                 Value::Object(object.clone())
             } else {
-                Self::new_clipboard_data_object_value(event.clipboard_data.as_deref().unwrap_or(""))
+                let value = Self::new_clipboard_data_object_value(
+                    event.clipboard_data.as_deref().unwrap_or(""),
+                );
+                if let Value::Object(object) = &value {
+                    event.clipboard_data_object = Some(object.clone());
+                }
+                value
             }
         } else {
             Value::Undefined
         };
         let data_transfer = if Self::event_exposes_data_transfer(&event.event_type) {
-            Self::new_data_transfer_object_value(&event.event_type)
+            if let Some(object) = &event.data_transfer_object {
+                Value::Object(object.clone())
+            } else {
+                let value = Self::new_data_transfer_object_value(&event.event_type);
+                if let Value::Object(object) = &value {
+                    event.data_transfer_object = Some(object.clone());
+                }
+                value
+            }
         } else {
             Value::Undefined
         };
@@ -464,6 +478,30 @@ impl Harness {
             ));
         }
 
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "preventDefault",
+                "stopPropagation",
+                "stopImmediatePropagation",
+            ],
+        );
+        if matches!(
+            event.event_type.to_ascii_lowercase().as_str(),
+            "keydown" | "keyup" | "keypress"
+        ) {
+            Self::mark_object_properties_non_enumerable(&mut entries, &["getModifierState"]);
+        }
+        if Self::event_is_pointer_event(&event.event_type) {
+            Self::mark_object_properties_non_enumerable(
+                &mut entries,
+                &["getCoalescedEvents", "getPredictedEvents"],
+            );
+        }
+        if event.event_type.eq_ignore_ascii_case("navigate") {
+            Self::mark_object_properties_non_enumerable(&mut entries, &["intercept", "scroll"]);
+        }
+
         Self::new_object_value(entries)
     }
 
@@ -487,6 +525,17 @@ impl Harness {
             && Self::object_get_entry(&entries, "defaultPrevented").is_some_and(|v| v.truthy())
         {
             event.default_prevented = true;
+        }
+        if Self::object_get_entry(&entries, INTERNAL_EVENT_STOP_PROPAGATION_KEY)
+            .is_some_and(|v| v.truthy())
+        {
+            event.propagation_stopped = true;
+        }
+        if Self::object_get_entry(&entries, INTERNAL_EVENT_STOP_IMMEDIATE_PROPAGATION_KEY)
+            .is_some_and(|v| v.truthy())
+        {
+            event.immediate_propagation_stopped = true;
+            event.propagation_stopped = true;
         }
 
         if Self::is_before_unload_event_object(&entries)

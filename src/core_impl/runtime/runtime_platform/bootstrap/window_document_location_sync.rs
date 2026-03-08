@@ -1,6 +1,27 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn document_method_keys() -> &'static [&'static str] {
+        &[
+            "createElement",
+            "createElementNS",
+            "createTextNode",
+            "createAttribute",
+            "createDocumentFragment",
+            "createRange",
+            "getSelection",
+            "append",
+            "getElementById",
+            "getElementsByClassName",
+            "getElementsByName",
+            "getElementsByTagName",
+            "getElementsByTagNameNS",
+            "querySelector",
+            "querySelectorAll",
+            "createTreeWalker",
+        ]
+    }
+
     pub(crate) fn current_location_parts(&self) -> LocationParts {
         let mut parts = LocationParts::parse(&self.document_url).unwrap_or_else(|| LocationParts {
             scheme: "about".to_string(),
@@ -52,11 +73,66 @@ impl Harness {
         ]
     }
 
+    fn preserved_placeholder_backed_property_state(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Vec<(String, Value)>> {
+        let stored = Self::object_get_entry(entries, key);
+        let should_preserve = stored.as_ref().is_some_and(|value| {
+            !Self::is_builtin_placeholder_value(value)
+                || !Self::is_non_enumerable_object_key(entries, key)
+                || !Self::is_writable_object_key(entries, key)
+                || !Self::is_configurable_object_key(entries, key)
+        }) || Self::has_object_accessor_property(entries, key)
+            || Self::is_builtin_object_property_deleted(entries, key);
+        if !should_preserve {
+            return None;
+        }
+
+        let mut state = Vec::new();
+        for state_key in [
+            key.to_string(),
+            Self::object_getter_storage_key(key),
+            Self::object_setter_storage_key(key),
+            Self::object_undefined_getter_storage_key(key),
+            Self::object_undefined_setter_storage_key(key),
+            Self::object_non_enumerable_storage_key(key),
+            Self::object_non_writable_storage_key(key),
+            Self::object_non_configurable_storage_key(key),
+            Self::object_deleted_builtin_storage_key(key),
+        ] {
+            if let Some(value) = Self::object_get_entry(entries, &state_key) {
+                state.push((state_key, value));
+            }
+        }
+        Some(state)
+    }
+
+    fn restore_preserved_object_property_state(
+        entries: &mut ObjectValue,
+        key: &str,
+        state: &[(String, Value)],
+    ) {
+        Self::delete_object_property_entries(entries, key);
+        entries.delete_entry(&Self::object_deleted_builtin_storage_key(key));
+        for (state_key, value) in state {
+            Self::object_set_entry(entries, state_key.clone(), value.clone());
+        }
+    }
+
     pub(crate) fn sync_document_object(&mut self) {
         let mut extras = Vec::new();
         let mut adopted_style_sheets: Option<Value> = None;
+        let mut preserved_method_states = Vec::new();
         {
             let entries = self.dom_runtime.document_object.borrow();
+            for key in Self::document_method_keys() {
+                if let Some(state) =
+                    Self::preserved_placeholder_backed_property_state(&entries, key)
+                {
+                    preserved_method_states.push(((*key).to_string(), state));
+                }
+            }
             for (key, value) in entries.iter() {
                 if Self::is_internal_object_key(key) {
                     continue;
@@ -173,7 +249,12 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
-        *self.dom_runtime.document_object.borrow_mut() = entries.into();
+        Self::mark_object_properties_non_enumerable(&mut entries, Self::document_method_keys());
+        let mut entries = ObjectValue::new(entries);
+        for (key, state) in preserved_method_states {
+            Self::restore_preserved_object_property_state(&mut entries, &key, &state);
+        }
+        *self.dom_runtime.document_object.borrow_mut() = entries;
     }
 
     pub(crate) fn window_builtin_keys() -> &'static [&'static str] {
@@ -636,6 +717,7 @@ impl Harness {
         entries.extend(core_constructor_bindings);
         entries.extend(function_family_constructor_bindings);
         entries.extend(extras);
+        Self::mark_object_properties_non_enumerable(&mut entries, &["getSelection"]);
         *self.dom_runtime.window_object.borrow_mut() = entries.into();
     }
 

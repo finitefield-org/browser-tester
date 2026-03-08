@@ -128,11 +128,17 @@ impl Harness {
         member: &str,
         args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_cookie_store = {
+        let (is_cookie_store, shadowed) = {
             let entries = cookie_store_object.borrow();
-            Self::is_cookie_store_object(&entries)
+            (
+                Self::is_cookie_store_object(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
         };
         if !is_cookie_store {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 

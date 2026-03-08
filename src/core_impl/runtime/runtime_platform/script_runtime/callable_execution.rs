@@ -303,6 +303,18 @@ impl Harness {
             "tree_walker" => "TreeWalker",
             "range" => "Range",
             "selection" => "Selection",
+            "event" => "Event",
+            "keyboard_event" => "KeyboardEvent",
+            "pointer_event" => "PointerEvent",
+            "navigate_event" => "NavigateEvent",
+            "data_transfer" => "DataTransfer",
+            "data_transfer_item" => "DataTransferItem",
+            "data_transfer_item_list" => "DataTransferItemList",
+            "match_media" => "MediaQueryList",
+            "cookie_store" => "CookieStore",
+            "cache_storage" => "CacheStorage",
+            "cache" => "Cache",
+            "named_node_map" => "NamedNodeMap",
             "url" => "URL",
             "url_search_params" => "URLSearchParams",
             "storage" => "Storage",
@@ -1007,6 +1019,156 @@ impl Harness {
                 self.eval_selection_member_call(&object, &member, args)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!("unsupported Selection method: {member}"))
+                    })
+            }
+            "event" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_event_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_event_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Event method: {member}"))
+                    })
+            }
+            "keyboard_event" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_keyboard_event_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_event_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported KeyboardEvent method: {member}"))
+                    })
+            }
+            "pointer_event" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_pointer_event_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_event_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported PointerEvent method: {member}"))
+                    })
+            }
+            "navigate_event" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_navigate_event_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_event_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported NavigateEvent method: {member}"))
+                    })
+            }
+            "data_transfer" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                {
+                    let entries = object.borrow();
+                    if !Self::is_data_transfer_object(&entries)
+                        && !Self::is_clipboard_data_object(&entries)
+                    {
+                        return Err(Self::incompatible_receiver_error(&family));
+                    }
+                }
+                self.eval_clipboard_data_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported DataTransfer method: {member}"))
+                    })
+            }
+            "data_transfer_item" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_data_transfer_item_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_clipboard_data_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!(
+                            "unsupported DataTransferItem method: {member}"
+                        ))
+                    })
+            }
+            "data_transfer_item_list" => {
+                let Value::Array(values) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_data_transfer_item_list_value(&values.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_array_member_call(&values, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!(
+                            "unsupported DataTransferItemList method: {member}"
+                        ))
+                    })
+            }
+            "match_media" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_match_media_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                if member == "dispatchEvent" {
+                    if args.len() != 1 {
+                        return Err(Error::ScriptRuntime(
+                            "dispatchEvent requires exactly one argument".into(),
+                        ));
+                    }
+                    let dispatched = self.dispatch_event_target(object.clone(), args[0].clone())?;
+                    return Ok(Value::Bool(!dispatched.default_prevented));
+                }
+                self.eval_event_target_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported MediaQueryList method: {member}"))
+                    })
+            }
+            "cookie_store" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_cookie_store_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_cookie_store_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported CookieStore method: {member}"))
+                    })
+            }
+            "cache_storage" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_cache_storage_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_cache_storage_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported CacheStorage method: {member}"))
+                    })
+            }
+            "cache" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_cache_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_cache_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Cache method: {member}"))
                     })
             }
             "blob" => {
@@ -1934,6 +2096,33 @@ impl Harness {
                 "DOMTokenList method called on incompatible receiver".into(),
             )),
         }
+    }
+
+    fn named_node_map_receiver_object_and_owner(
+        receiver: Option<&Value>,
+    ) -> Result<(Rc<RefCell<ObjectValue>>, NodeId)> {
+        let Some(Value::Object(object)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "NamedNodeMap method called on incompatible receiver".into(),
+            ));
+        };
+        let owner = {
+            let entries = object.borrow();
+            if !Self::is_named_node_map_object(&entries) {
+                return Err(Error::ScriptRuntime(
+                    "NamedNodeMap method called on incompatible receiver".into(),
+                ));
+            }
+            match Self::named_node_map_owner_node(&entries) {
+                Some(node) => node,
+                None => {
+                    return Err(Error::ScriptRuntime(
+                        "NamedNodeMap method called on incompatible receiver".into(),
+                    ));
+                }
+            }
+        };
+        Ok((object.clone(), owner))
     }
 
     fn text_decoder_input_bytes(&self, input: Option<&Value>) -> Result<Vec<u8>> {
@@ -2953,6 +3142,26 @@ impl Harness {
             entries.push(("lineno".to_string(), Value::Number(error_lineno)));
             entries.push(("colno".to_string(), Value::Number(error_colno)));
             entries.push(("error".to_string(), error_value));
+        }
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "preventDefault",
+                "stopPropagation",
+                "stopImmediatePropagation",
+            ],
+        );
+        if include_keyboard_fields {
+            Self::mark_object_properties_non_enumerable(&mut entries, &["getModifierState"]);
+        }
+        if include_pointer_fields {
+            Self::mark_object_properties_non_enumerable(
+                &mut entries,
+                &["getCoalescedEvents", "getPredictedEvents"],
+            );
+        }
+        if include_navigate_fields {
+            Self::mark_object_properties_non_enumerable(&mut entries, &["intercept", "scroll"]);
         }
         Ok(Self::new_object_value(entries))
     }
@@ -4590,10 +4799,210 @@ impl Harness {
                         }
                         Ok(Value::Undefined)
                     }
+                    "class_list_keys" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DOMTokenList.keys does not take arguments".into(),
+                            ));
+                        }
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+                        Ok(self.new_iterator_value(
+                            (0..classes.len()).map(|index| Value::Number(index as i64)).collect(),
+                        ))
+                    }
+                    "class_list_values" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DOMTokenList.values does not take arguments".into(),
+                            ));
+                        }
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        Ok(self.new_iterator_value(
+                            class_tokens(self.dom.attr(node, "class").as_deref())
+                                .into_iter()
+                                .map(Value::String)
+                                .collect(),
+                        ))
+                    }
+                    "class_list_entries" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "DOMTokenList.entries does not take arguments".into(),
+                            ));
+                        }
+                        let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
+                        Ok(self.new_iterator_value(
+                            class_tokens(self.dom.attr(node, "class").as_deref())
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, class_name)| {
+                                    Self::new_array_value(vec![
+                                        Value::Number(index as i64),
+                                        Value::String(class_name),
+                                    ])
+                                })
+                                .collect(),
+                        ))
+                    }
                     "class_list_to_string" => {
                         let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
                         Ok(Value::String(
                             class_tokens(self.dom.attr(node, "class").as_deref()).join(" "),
+                        ))
+                    }
+                    "named_node_map_item" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(&object, "item", args, event)?
+                            .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_get_named_item" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "getNamedItem",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_set_named_item" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "setNamedItem",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_remove_named_item" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "removeNamedItem",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_get_named_item_ns" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "getNamedItemNS",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_set_named_item_ns" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "setNamedItemNS",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_remove_named_item_ns" => {
+                        let (object, _owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        self.eval_named_node_map_member_call(
+                            &object,
+                            "removeNamedItemNS",
+                            args,
+                            event,
+                        )?
+                        .ok_or_else(|| Self::incompatible_receiver_error("named_node_map"))
+                    }
+                    "named_node_map_for_each" => {
+                        if args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap.forEach requires a callback".into(),
+                            ));
+                        }
+                        let callback = args[0].clone();
+                        if !self.is_callable_value(&callback) {
+                            return Err(Error::ScriptRuntime("callback is not a function".into()));
+                        }
+                        let (object, owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        let this_value = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let attrs = self.named_node_map_entries(owner);
+                        for (index, (name, value)) in attrs.iter().enumerate() {
+                            let callback_args = [
+                                Self::new_attr_object_value(name, value, Some(owner)),
+                                Value::Number(index as i64),
+                                Value::Object(object.clone()),
+                            ];
+                            let _ = self.execute_callable_value_with_this_and_env(
+                                &callback,
+                                &callback_args,
+                                event,
+                                caller_env,
+                                Some(this_value.clone()),
+                            )?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "named_node_map_keys" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap.keys does not take arguments".into(),
+                            ));
+                        }
+                        let (_object, owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        Ok(self.new_iterator_value(
+                            (0..self.named_node_map_entries(owner).len())
+                                .map(|index| Value::Number(index as i64))
+                                .collect(),
+                        ))
+                    }
+                    "named_node_map_values" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap.values does not take arguments".into(),
+                            ));
+                        }
+                        let (_object, owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        Ok(self.new_iterator_value(
+                            self.named_node_map_entries(owner)
+                                .into_iter()
+                                .map(|(name, value)| {
+                                    Self::new_attr_object_value(&name, &value, Some(owner))
+                                })
+                                .collect(),
+                        ))
+                    }
+                    "named_node_map_entries" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "NamedNodeMap.entries does not take arguments".into(),
+                            ));
+                        }
+                        let (_object, owner) =
+                            Self::named_node_map_receiver_object_and_owner(this_arg.as_ref())?;
+                        Ok(self.new_iterator_value(
+                            self.named_node_map_entries(owner)
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, (name, value))| {
+                                    Self::new_array_value(vec![
+                                        Value::Number(index as i64),
+                                        Self::new_attr_object_value(&name, &value, Some(owner)),
+                                    ])
+                                })
+                                .collect(),
                         ))
                     }
                     "worker_constructor" => {
@@ -4915,6 +5324,14 @@ impl Harness {
                         self.eval_string_static_method_from_values(StringStaticMethod::Raw, args)
                     }
                     "object_static_method" => match Self::static_method_name(callable)?.as_str() {
+                        "create" => {
+                            if args.is_empty() || args.len() > 2 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.create requires one or two arguments".into(),
+                                ));
+                            }
+                            self.object_create_value(&args[0], args.get(1))
+                        }
                         "assign" => self.eval_object_assign_static_call(args, event),
                         "getOwnPropertyDescriptor" => {
                             if args.len() != 2 {

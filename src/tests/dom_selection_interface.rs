@@ -173,8 +173,8 @@ fn selection_direction_extend_collapse_and_set_position_work() -> Result<()> {
 }
 
 #[test]
-fn document_range_and_selection_placeholder_methods_support_extracted_and_inherited_calls_work(
-) -> Result<()> {
+fn document_range_and_selection_placeholder_methods_support_extracted_and_inherited_calls_work()
+-> Result<()> {
     let html = r#"
         <div id='host'></div>
         <button id='run'>run</button>
@@ -253,6 +253,100 @@ fn document_range_and_selection_placeholder_methods_support_extracted_and_inheri
     h.assert_text(
         "#result",
         "getElementById|1|host|setStart|2|1|4|addRange|1|BCD|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_range_and_selection_methods_are_non_enumerable_and_shadowable_work() -> Result<()> {
+    let html = r#"
+        <div id='host'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const host = document.getElementById('host');
+            const text = document.createTextNode('ABCDE');
+            host.replaceChildren(text);
+
+            const docDesc = Object.getOwnPropertyDescriptor(document, 'getElementById');
+            const docSummary = [
+              docDesc.value.name,
+              docDesc.value.length,
+              docDesc.enumerable,
+              Object.keys(document).includes('getElementById'),
+              Object.getOwnPropertyNames(document).includes('getElementById')
+            ].join(':');
+            Object.defineProperty(document, 'getElementById', {
+              value(id) { return 'shadow-doc:' + id; },
+              configurable: true
+            });
+            const docShadow = document.getElementById('host');
+            const docDeleted = delete document.getElementById;
+            const docGone = document.getElementById === undefined;
+
+            const range = document.createRange();
+            const rangeDesc = Object.getOwnPropertyDescriptor(range, 'setStart');
+            const rangeSummary = [
+              rangeDesc.value.name,
+              rangeDesc.value.length,
+              rangeDesc.enumerable,
+              Object.keys(range).includes('setStart'),
+              Object.getOwnPropertyNames(range).includes('setStart')
+            ].join(':');
+            Object.defineProperty(range, 'setStart', {
+              value() { return 'shadow-range'; },
+              configurable: true
+            });
+            const rangeShadow = range.setStart(text, 2);
+            const rangeOffset = range.startOffset;
+            const rangeDeleted = delete range.setStart;
+            const rangeGone = range.setStart === undefined;
+
+            const selection = document.getSelection();
+            selection.removeAllRanges();
+            const selectionDesc = Object.getOwnPropertyDescriptor(selection, 'addRange');
+            const selectionSummary = [
+              selectionDesc.value.name,
+              selectionDesc.value.length,
+              selectionDesc.enumerable,
+              Object.keys(selection).includes('addRange'),
+              Object.getOwnPropertyNames(selection).includes('addRange')
+            ].join(':');
+            Object.defineProperty(selection, 'addRange', {
+              value() { return 'shadow-selection'; },
+              configurable: true
+            });
+            const selectionShadow = selection.addRange(range);
+            const selectionCount = selection.rangeCount;
+            const selectionDeleted = delete selection.addRange;
+            const selectionGone = selection.addRange === undefined;
+
+            document.getElementById('result').textContent = [
+              docSummary,
+              docShadow,
+              docDeleted,
+              docGone,
+              rangeSummary,
+              rangeShadow,
+              rangeOffset,
+              rangeDeleted,
+              rangeGone,
+              selectionSummary,
+              selectionShadow,
+              selectionCount,
+              selectionDeleted,
+              selectionGone
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "getElementById:1:false:false:true|shadow-doc:host|true|true|setStart:2:false:false:true|shadow-range|0|true|true|addRange:1:false:false:true|shadow-selection|0|true|true",
     )?;
     Ok(())
 }

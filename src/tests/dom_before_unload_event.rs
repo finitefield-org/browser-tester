@@ -110,6 +110,49 @@ fn before_unload_event_return_value_propagates_to_later_listeners() -> Result<()
 }
 
 #[test]
+fn before_unload_return_value_define_property_and_delete_work() -> Result<()> {
+    let html = r#"
+        <div id='target'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const target = document.getElementById('target');
+          target.addEventListener('beforeunload', (event) => {
+            Object.defineProperty(event, 'returnValue', {
+              value: 'stay',
+              configurable: true
+            });
+            const descriptor = Object.getOwnPropertyDescriptor(event, 'returnValue').value;
+            const before = event.returnValue;
+            const deleted = delete event.returnValue;
+            const afterDelete = event.returnValue === undefined;
+            Object.defineProperty(event, 'returnValue', {
+              value: 'next',
+              configurable: true
+            });
+            document.getElementById('result').textContent = [
+              descriptor,
+              before,
+              deleted,
+              afterDelete,
+              event.returnValue
+            ].join('|');
+          });
+          document.getElementById('btn').addEventListener('click', () => {
+            target.dispatchEvent(
+              new BeforeUnloadEvent('beforeunload', { cancelable: true })
+            );
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "stay|stay|true|true|next")?;
+    Ok(())
+}
+
+#[test]
 fn before_unload_event_constructor_rejects_non_object_options() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

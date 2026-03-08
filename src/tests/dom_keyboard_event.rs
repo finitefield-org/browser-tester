@@ -143,3 +143,37 @@ fn keyboard_event_constructor_rejects_non_object_options() -> Result<()> {
     h.assert_text("#result", "true")?;
     Ok(())
 }
+
+#[test]
+fn keyboard_event_raw_getter_and_inherited_property_paths_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const e = new KeyboardEvent('keydown', {
+            ctrlKey: true,
+            shiftKey: true
+          });
+          const getModifierState = Object.create(e).getModifierState;
+
+          let incompatible = false;
+          try {
+            getModifierState.call({}, 'Shift');
+          } catch (error) {
+            incompatible = String(error).includes('KeyboardEvent');
+          }
+
+          document.getElementById('result').textContent = [
+            getModifierState.name,
+            getModifierState.length,
+            getModifierState.call(e, 'Control'),
+            getModifierState.call(e, 'Shift'),
+            getModifierState.call(e, 'Alt'),
+            incompatible
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "getModifierState:1:true:true:false:true")?;
+    Ok(())
+}

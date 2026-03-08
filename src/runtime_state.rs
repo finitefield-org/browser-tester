@@ -936,6 +936,7 @@ pub(crate) struct EventState {
     pub(crate) message_source: Option<Value>,
     pub(crate) clipboard_data: Option<String>,
     pub(crate) clipboard_data_object: Option<Rc<RefCell<ObjectValue>>>,
+    pub(crate) data_transfer_object: Option<Rc<RefCell<ObjectValue>>>,
     pub(crate) propagation_stopped: bool,
     pub(crate) immediate_propagation_stopped: bool,
 }
@@ -1011,6 +1012,7 @@ impl EventState {
             message_source: None,
             clipboard_data: None,
             clipboard_data_object: None,
+            data_transfer_object: None,
             propagation_stopped: false,
             immediate_propagation_stopped: false,
         }
@@ -1307,6 +1309,7 @@ pub(crate) struct DomRuntimeState {
     pub(crate) document_scroll_y: i64,
     pub(crate) node_event_handler_props: HashMap<(NodeId, String), ScriptHandler>,
     pub(crate) node_expando_props: HashMap<(NodeId, String), Value>,
+    pub(crate) live_class_lists: HashMap<NodeId, Rc<RefCell<ObjectValue>>>,
     pub(crate) live_child_nodes_lists: HashMap<NodeId, Rc<RefCell<NodeListValue>>>,
     pub(crate) live_children_lists: HashMap<NodeId, Rc<RefCell<NodeListValue>>>,
     pub(crate) live_named_node_maps: HashMap<NodeId, Rc<RefCell<ObjectValue>>>,
@@ -1330,6 +1333,7 @@ impl Default for DomRuntimeState {
             document_scroll_y: 0,
             node_event_handler_props: HashMap::new(),
             node_expando_props: HashMap::new(),
+            live_class_lists: HashMap::new(),
             live_child_nodes_lists: HashMap::new(),
             live_children_lists: HashMap::new(),
             live_named_node_maps: HashMap::new(),

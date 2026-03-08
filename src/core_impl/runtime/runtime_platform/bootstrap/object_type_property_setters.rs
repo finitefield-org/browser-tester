@@ -1488,7 +1488,6 @@ impl Harness {
                 {
                     let value = value.as_string();
                     self.dom.dataset_set(owner, &key, &value)?;
-                    Self::object_set_entry(&mut object.borrow_mut(), key, Value::String(value));
                     return Ok(());
                 }
                 if is_computed_style {

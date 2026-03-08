@@ -1,7 +1,7 @@
 use super::*;
 
 impl Harness {
-    fn dom_prop_non_node_fallback_path(prop: &DomProp) -> Option<Vec<&'static str>> {
+    pub(crate) fn dom_prop_non_node_fallback_path(prop: &DomProp) -> Option<Vec<&'static str>> {
         match prop {
             DomProp::ValueLength => Some(vec!["value", "length"]),
             DomProp::FilesLength => Some(vec!["files", "length"]),
@@ -156,7 +156,7 @@ impl Harness {
                         DomProp::ClassName => Ok(Value::String(
                             self.dom.attr(node, "class").unwrap_or_default(),
                         )),
-                        DomProp::ClassList => Ok(Self::new_class_list_value(node)),
+                        DomProp::ClassList => Ok(self.class_list_live_value(node)),
                         DomProp::ClassListLength => Ok(Value::Number(
                             class_tokens(self.dom.attr(node, "class").as_deref()).len() as i64,
                         )),
@@ -1408,6 +1408,21 @@ impl Harness {
         Value::Object(map)
     }
 
+    pub(crate) fn class_list_live_value(&mut self, owner: NodeId) -> Value {
+        let existing = self.dom_runtime.live_class_lists.get(&owner).cloned();
+        let list = existing.unwrap_or_else(|| {
+            let class_list = Self::new_class_list_value(owner);
+            let Value::Object(object) = class_list else {
+                unreachable!("new_class_list_value must return an object");
+            };
+            self.dom_runtime
+                .live_class_lists
+                .insert(owner, object.clone());
+            object
+        });
+        Value::Object(list)
+    }
+
     pub(crate) fn refresh_node_list(&self, list: &Rc<RefCell<NodeListValue>>) {
         let source = list.borrow().live_source.clone();
         let Some(source) = source else {
@@ -1904,7 +1919,7 @@ impl Harness {
 
     pub(crate) fn parsed_document_property_from_entries(
         &mut self,
-        entries: &[(String, Value)],
+        entries: &ObjectValue,
         key: &str,
     ) -> Result<Option<Value>> {
         let Some(root) = Self::parsed_document_root_from_entries(entries) else {
@@ -1941,22 +1956,14 @@ impl Harness {
             | "createAttribute"
             | "createDocumentFragment"
             | "createRange"
-            | "append" => {
-                if let Some(value) = Self::object_get_entry(entries, key)
-                    && !Self::is_builtin_placeholder_value(&value)
-                {
-                    Some(value)
-                } else {
-                    Self::parsed_document_receiver_builtin_method(key)
-                }
-            }
+            | "append" => Self::placeholder_backed_object_builtin_property_value(entries, key),
             _ => None,
         })
     }
 
     pub(crate) fn dom_parser_object_property(
         &self,
-        entries: &[(String, Value)],
+        entries: &ObjectValue,
         key: &str,
     ) -> Option<Value> {
         if !matches!(
@@ -1967,13 +1974,7 @@ impl Harness {
         }
         match key {
             "parseFromString" => {
-                if let Some(value) = Self::object_get_entry(entries, key)
-                    && !Self::is_builtin_placeholder_value(&value)
-                {
-                    Some(value)
-                } else {
-                    Self::dom_parser_receiver_builtin_method(key)
-                }
+                Self::placeholder_backed_object_builtin_property_value(entries, key)
             }
             _ => None,
         }
@@ -2020,7 +2021,7 @@ impl Harness {
 
     pub(crate) fn tree_walker_property_from_entries(
         &mut self,
-        entries: &[(String, Value)],
+        entries: &ObjectValue,
         key: &str,
     ) -> Result<Option<Value>> {
         if !matches!(
@@ -2031,15 +2032,7 @@ impl Harness {
         }
         Ok(match key {
             "currentNode" => Some(self.tree_walker_current_node_from_entries(entries)),
-            "nextNode" => {
-                if let Some(value) = Self::object_get_entry(entries, key)
-                    && !Self::is_builtin_placeholder_value(&value)
-                {
-                    Some(value)
-                } else {
-                    Self::tree_walker_receiver_builtin_method(key)
-                }
-            }
+            "nextNode" => Self::placeholder_backed_object_builtin_property_value(entries, key),
             "root" => {
                 let traversal =
                     Self::object_get_entry(entries, INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY);
@@ -2059,14 +2052,20 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_parser = {
+        let (is_parser, shadowed) = {
             let entries = parser_object.borrow();
-            matches!(
-                Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
-                Some(Value::Bool(true))
+            (
+                matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
             )
         };
         if !is_parser {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 
@@ -2100,7 +2099,7 @@ impl Harness {
         evaluated_args: &[Value],
         _event: &EventState,
     ) -> Result<Option<Value>> {
-        let root = {
+        let (root, shadowed) = {
             let entries = document_object.borrow();
             if !matches!(
                 Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
@@ -2111,8 +2110,14 @@ impl Harness {
             let Some(root) = Self::parsed_document_root_from_entries(&entries) else {
                 return Ok(None);
             };
-            root
+            (
+                root,
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
         };
+        if shadowed {
+            return Ok(None);
+        }
 
         match member {
             "append" => Ok(Some(self.eval_document_append_call(root, evaluated_args)?)),
@@ -2270,14 +2275,20 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_tree_walker = {
+        let (is_tree_walker, shadowed) = {
             let entries = walker_object.borrow();
-            matches!(
-                Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
-                Some(Value::Bool(true))
+            (
+                matches!(
+                    Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
             )
         };
         if !is_tree_walker {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 
@@ -2369,11 +2380,17 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_range = {
+        let (is_range, shadowed) = {
             let entries = range_object.borrow();
-            Self::is_range_object(&entries)
+            (
+                Self::is_range_object(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
         };
         if !is_range {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 

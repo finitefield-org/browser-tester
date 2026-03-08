@@ -153,11 +153,17 @@ impl Harness {
         member: &str,
         args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_cache_storage = {
+        let (is_cache_storage, shadowed) = {
             let entries = cache_storage_object.borrow();
-            Self::is_cache_storage_object(&entries)
+            (
+                Self::is_cache_storage_object(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
         };
         if !is_cache_storage {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 
@@ -261,14 +267,18 @@ impl Harness {
         member: &str,
         args: &[Value],
     ) -> Result<Option<Value>> {
-        let (is_cache, cache_name) = {
+        let (is_cache, cache_name, shadowed) = {
             let entries = cache_object.borrow();
             (
                 Self::is_cache_object(&entries),
                 Self::cache_name_from_object_entries(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
             )
         };
         if !is_cache {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
         let Some(cache_name) = cache_name else {
@@ -416,6 +426,24 @@ impl Harness {
             return Ok(Some(value));
         }
         if let Some(value) = self.eval_cache_member_call(object, member, &evaluated_args)? {
+            return Ok(Some(value));
+        }
+        let callee = self.object_property_from_value(target_value, member)?;
+        if !matches!(callee, Value::Function(ref function) if function.function_id == usize::MAX) {
+            let value = self
+                .execute_callable_value_with_this_and_env(
+                    &callee,
+                    &evaluated_args,
+                    event,
+                    Some(env),
+                    Some(target_value.clone()),
+                )
+                .map_err(|err| match err {
+                    Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                        Error::ScriptRuntime(format!("'{}' is not a function", member))
+                    }
+                    other => other,
+                })?;
             return Ok(Some(value));
         }
         Ok(None)

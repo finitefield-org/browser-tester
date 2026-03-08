@@ -779,6 +779,54 @@ impl Harness {
         attrs
     }
 
+    fn is_named_node_map_builtin_property_name(key: &str) -> bool {
+        matches!(
+            key,
+            "length"
+                | "item"
+                | "getNamedItem"
+                | "setNamedItem"
+                | "removeNamedItem"
+                | "getNamedItemNS"
+                | "setNamedItemNS"
+                | "removeNamedItemNS"
+                | "forEach"
+                | "keys"
+                | "values"
+                | "entries"
+        )
+    }
+
+    pub(crate) fn named_node_map_named_property_is_visible(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        if Self::is_named_node_map_builtin_property_name(key) {
+            return false;
+        }
+
+        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            .or_else(|| Some(self.object_constructor_prototype_value()));
+        while let Some(current) = prototype {
+            match current {
+                Value::Null | Value::Undefined => break,
+                Value::Object(object) => {
+                    let object_value = Value::Object(object.clone());
+                    if self
+                        .object_has_own_value(&object_value, key)
+                        .is_ok_and(|value| value.truthy())
+                    {
+                        return false;
+                    }
+                    prototype = self.value_internal_prototype_value(&object_value);
+                }
+                _ => break,
+            }
+        }
+        true
+    }
+
     pub(crate) fn is_range_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_RANGE_OBJECT_KEY),
@@ -983,7 +1031,8 @@ impl Harness {
             vec![Value::String("text/plain".to_string())]
         };
         let store = Value::Object(Rc::new(RefCell::new(store)));
-        Self::new_object_value(vec![
+        let types_array = Self::new_array_value(types);
+        let mut entries = vec![
             (
                 INTERNAL_CLIPBOARD_DATA_OBJECT_KEY.to_string(),
                 Value::Bool(true),
@@ -1005,8 +1054,17 @@ impl Harness {
                 "clearData".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-            ("types".to_string(), Self::new_array_value(types)),
-        ])
+            (
+                INTERNAL_CLIPBOARD_DATA_TYPES_KEY.to_string(),
+                types_array.clone(),
+            ),
+            ("types".to_string(), types_array),
+        ];
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &["getData", "setData", "clearData"],
+        );
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn new_data_transfer_object_value(event_type: &str) -> Value {
@@ -1033,13 +1091,20 @@ impl Harness {
                 "effectAllowed".to_string(),
                 Value::String("all".to_string()),
             );
+            let files = Self::new_array_value(Vec::new());
             Self::object_set_entry(
                 &mut entries,
-                "files".to_string(),
-                Self::new_array_value(Vec::new()),
+                INTERNAL_DATA_TRANSFER_FILES_KEY.to_string(),
+                files.clone(),
             );
+            Self::object_set_entry(&mut entries, "files".to_string(), files);
             let items =
                 Self::new_data_transfer_item_list_value(owner.clone(), event_type, Vec::new());
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_DATA_TRANSFER_ITEMS_KEY.to_string(),
+                items.clone(),
+            );
             Self::object_set_entry(&mut entries, "items".to_string(), items);
             Self::object_set_entry(
                 &mut entries,
@@ -1051,12 +1116,22 @@ impl Harness {
                 "addElement".to_string(),
                 Self::new_builtin_placeholder_function(),
             );
+            Self::mark_object_properties_non_enumerable(
+                &mut entries,
+                &[
+                    "getData",
+                    "setData",
+                    "clearData",
+                    "setDragImage",
+                    "addElement",
+                ],
+            );
         }
         value
     }
 
     pub(crate) fn new_data_transfer_item_string_value(format: &str, data: &str) -> Value {
-        Self::new_object_value(vec![
+        let mut entries = vec![
             (
                 INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY.to_string(),
                 Value::Bool(true),
@@ -1091,11 +1166,21 @@ impl Harness {
                 "webkitGetAsEntry".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-        ])
+        ];
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "getAsFile",
+                "getAsFileSystemHandle",
+                "getAsString",
+                "webkitGetAsEntry",
+            ],
+        );
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn new_data_transfer_item_file_value(format: &str, file: Value) -> Value {
-        Self::new_object_value(vec![
+        let mut entries = vec![
             (
                 INTERNAL_DATA_TRANSFER_ITEM_OBJECT_KEY.to_string(),
                 Value::Bool(true),
@@ -1127,7 +1212,17 @@ impl Harness {
                 "webkitGetAsEntry".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-        ])
+        ];
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "getAsFile",
+                "getAsFileSystemHandle",
+                "getAsString",
+                "webkitGetAsEntry",
+            ],
+        );
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn new_data_transfer_item_list_value(
@@ -1167,30 +1262,15 @@ impl Harness {
                 "clear".to_string(),
                 Self::new_builtin_placeholder_function(),
             );
+            Self::mark_object_properties_non_enumerable(
+                &mut list.borrow_mut().properties,
+                &["add", "remove", "clear"],
+            );
         }
         value
     }
 
-    fn new_named_node_map_iterator_callable(owner: NodeId) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("named_node_map_iterator".to_string()),
-            ),
-            (
-                INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY.to_string(),
-                Value::Node(owner),
-            ),
-        ])
-    }
-
     pub(crate) fn new_named_node_map_value(&mut self, owner: NodeId) -> Value {
-        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
-        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
-        let to_string_tag_symbol =
-            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
-        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
-
         Self::new_object_value(vec![
             (
                 INTERNAL_NAMED_NODE_MAP_OBJECT_KEY.to_string(),
@@ -1200,16 +1280,11 @@ impl Harness {
                 INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY.to_string(),
                 Value::Node(owner),
             ),
-            (
-                iterator_key,
-                Self::new_named_node_map_iterator_callable(owner),
-            ),
-            (to_string_tag_key, Value::String("NamedNodeMap".to_string())),
         ])
     }
 
     pub(crate) fn new_range_object_value(root: NodeId) -> Value {
-        Self::new_object_value(vec![
+        let mut entries = vec![
             (INTERNAL_RANGE_OBJECT_KEY.to_string(), Value::Bool(true)),
             (
                 INTERNAL_RANGE_START_CONTAINER_KEY.to_string(),
@@ -1236,12 +1311,14 @@ impl Harness {
                 "setEnd".to_string(),
                 Self::new_builtin_placeholder_function(),
             ),
-        ])
+        ];
+        Self::mark_object_properties_non_enumerable(&mut entries, &["setStart", "setEnd"]);
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn new_selection_object_value(root: NodeId) -> Value {
         let range = Self::new_range_object_value(root);
-        Self::new_object_value(vec![
+        let mut entries = vec![
             (INTERNAL_SELECTION_OBJECT_KEY.to_string(), Value::Bool(true)),
             (INTERNAL_SELECTION_RANGE_KEY.to_string(), range),
             ("anchorNode".to_string(), Value::Null),
@@ -1318,9 +1395,32 @@ impl Harness {
             ),
             (
                 "toString".to_string(),
-                Self::new_receiver_builtin_callable("selection", "toString"),
+                Self::new_builtin_placeholder_function(),
             ),
-        ])
+        ];
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "addRange",
+                "collapse",
+                "collapseToEnd",
+                "collapseToStart",
+                "containsNode",
+                "deleteFromDocument",
+                "empty",
+                "extend",
+                "getComposedRanges",
+                "getRangeAt",
+                "modify",
+                "removeAllRanges",
+                "removeRange",
+                "selectAllChildren",
+                "setBaseAndExtent",
+                "setPosition",
+                "toString",
+            ],
+        );
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn new_animation_object_value(
@@ -1922,22 +2022,24 @@ impl Harness {
         )])
     }
 
+    fn new_named_node_map_method_callable(kind: &str) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String(kind.to_string()),
+        )])
+    }
+
     pub(crate) fn new_dom_string_map_value(&self, node: NodeId) -> Value {
-        let mut entries = self.dataset_entries_for_node(node);
-        entries.insert(
-            0,
+        let entries = vec![
             (
                 INTERNAL_DOM_STRING_MAP_OBJECT_KEY.to_string(),
                 Value::Bool(true),
             ),
-        );
-        entries.insert(
-            1,
             (
                 INTERNAL_DOM_STRING_MAP_OWNER_NODE_KEY.to_string(),
                 Value::Node(node),
             ),
-        );
+        ];
         Self::new_object_value(entries)
     }
 
@@ -1948,38 +2050,6 @@ impl Harness {
                 Value::Bool(true),
             ),
             (INTERNAL_CLASS_LIST_NODE_KEY.to_string(), Value::Node(node)),
-            (
-                "add".to_string(),
-                Self::new_class_list_method_callable("class_list_add"),
-            ),
-            (
-                "remove".to_string(),
-                Self::new_class_list_method_callable("class_list_remove"),
-            ),
-            (
-                "toggle".to_string(),
-                Self::new_class_list_method_callable("class_list_toggle"),
-            ),
-            (
-                "contains".to_string(),
-                Self::new_class_list_method_callable("class_list_contains"),
-            ),
-            (
-                "replace".to_string(),
-                Self::new_class_list_method_callable("class_list_replace"),
-            ),
-            (
-                "item".to_string(),
-                Self::new_class_list_method_callable("class_list_item"),
-            ),
-            (
-                "forEach".to_string(),
-                Self::new_class_list_method_callable("class_list_for_each"),
-            ),
-            (
-                "toString".to_string(),
-                Self::new_class_list_method_callable("class_list_to_string"),
-            ),
         ])
     }
 
@@ -2250,6 +2320,10 @@ impl Harness {
                 Value::String("object_constructor".to_string()),
             ),
             ("prototype".to_string(), prototype.clone()),
+            (
+                "create".to_string(),
+                Self::new_object_static_method_callable("create"),
+            ),
             (
                 "assign".to_string(),
                 Self::new_object_static_method_callable("assign"),
@@ -3791,6 +3865,271 @@ impl Harness {
         }
     }
 
+    fn event_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "preventDefault" | "stopPropagation" | "stopImmediatePropagation"
+        ) {
+            Some(Self::new_receiver_builtin_callable("event", key))
+        } else {
+            None
+        }
+    }
+
+    fn keyboard_event_receiver_builtin_method(key: &str) -> Option<Value> {
+        if key == "getModifierState" {
+            Some(Self::new_receiver_builtin_callable("keyboard_event", key))
+        } else {
+            None
+        }
+    }
+
+    fn pointer_event_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "getCoalescedEvents" | "getPredictedEvents") {
+            Some(Self::new_receiver_builtin_callable("pointer_event", key))
+        } else {
+            None
+        }
+    }
+
+    fn navigate_event_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "intercept" | "scroll") {
+            Some(Self::new_receiver_builtin_callable("navigate_event", key))
+        } else {
+            None
+        }
+    }
+
+    fn data_transfer_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "getData" | "setData" | "clearData" | "setDragImage" | "addElement"
+        ) {
+            Some(Self::new_receiver_builtin_callable("data_transfer", key))
+        } else {
+            None
+        }
+    }
+
+    fn data_transfer_item_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "getAsFile" | "getAsFileSystemHandle" | "getAsString" | "webkitGetAsEntry"
+        ) {
+            Some(Self::new_receiver_builtin_callable(
+                "data_transfer_item",
+                key,
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn data_transfer_item_list_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "add" | "remove" | "clear") {
+            Some(Self::new_receiver_builtin_callable(
+                "data_transfer_item_list",
+                key,
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn placeholder_backed_object_receiver_builtin_method(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::is_event_object(entries)
+            && let Some(value) = Self::event_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_keyboard_event_object(entries)
+            && let Some(value) = Self::keyboard_event_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_pointer_event_object(entries)
+            && let Some(value) = Self::pointer_event_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_navigate_event_object(entries)
+            && let Some(value) = Self::navigate_event_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if (Self::is_data_transfer_object(entries) || Self::is_clipboard_data_object(entries))
+            && let Some(value) = Self::data_transfer_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_data_transfer_item_object(entries)
+            && let Some(value) = Self::data_transfer_item_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_document_object(entries)
+            && let Some(value) = Self::document_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) && let Some(value) = Self::parsed_document_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) && let Some(value) = Self::dom_parser_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) && let Some(value) = Self::tree_walker_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_range_object(entries)
+            && let Some(value) = Self::range_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_selection_object(entries)
+            && let Some(value) = Self::selection_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_match_media_object(entries)
+            && let Some(value) = Self::match_media_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_cookie_store_object(entries)
+            && let Some(value) = Self::cookie_store_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_cache_storage_object(entries)
+            && let Some(value) = Self::cache_storage_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_cache_object(entries)
+            && let Some(value) = Self::cache_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        None
+    }
+
+    pub(crate) fn placeholder_backed_object_builtin_property_value(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(value) = Self::object_get_entry(entries, key)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Some(value);
+        }
+        let builtin = Self::placeholder_backed_object_receiver_builtin_method(entries, key)?;
+        if Self::is_builtin_object_property_deleted(entries, key) {
+            return None;
+        }
+        Some(builtin)
+    }
+
+    pub(crate) fn placeholder_backed_object_builtin_surface_exists(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        Self::placeholder_backed_object_receiver_builtin_method(entries, key).is_some()
+    }
+
+    pub(crate) fn placeholder_backed_object_builtin_is_shadowed(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        Self::placeholder_backed_object_builtin_surface_exists(entries, key)
+            && (Self::object_get_entry(entries, key)
+                .is_some_and(|value| !Self::is_builtin_placeholder_value(&value))
+                || Self::is_builtin_object_property_deleted(entries, key))
+    }
+
+    pub(crate) fn placeholder_backed_array_builtin_property_value(
+        values: &ArrayValue,
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(value) = Self::object_get_entry(&values.properties, key)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Some(value);
+        }
+        if Self::is_builtin_object_property_deleted(&values.properties, key) {
+            return None;
+        }
+        if Self::is_data_transfer_item_list_value(values) {
+            return Self::data_transfer_item_list_receiver_builtin_method(key);
+        }
+        None
+    }
+
+    pub(crate) fn placeholder_backed_array_builtin_surface_exists(
+        values: &ArrayValue,
+        key: &str,
+    ) -> bool {
+        Self::data_transfer_item_list_receiver_builtin_method(key).is_some()
+            && Self::is_data_transfer_item_list_value(values)
+    }
+
+    fn match_media_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "addEventListener"
+                | "removeEventListener"
+                | "dispatchEvent"
+                | "addListener"
+                | "removeListener"
+        ) {
+            Some(Self::new_receiver_builtin_callable("match_media", key))
+        } else {
+            None
+        }
+    }
+
+    fn cookie_store_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "set" | "get" | "getAll" | "delete" | "addEventListener" | "removeEventListener"
+        ) {
+            Some(Self::new_receiver_builtin_callable("cookie_store", key))
+        } else {
+            None
+        }
+    }
+
+    fn cache_storage_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "open" | "match" | "has" | "delete" | "keys") {
+            Some(Self::new_receiver_builtin_callable("cache_storage", key))
+        } else {
+            None
+        }
+    }
+
+    fn cache_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "match" | "put" | "delete" | "keys" | "add" | "addAll") {
+            Some(Self::new_receiver_builtin_callable("cache", key))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn is_builtin_placeholder_value(value: &Value) -> bool {
         matches!(value, Value::Function(function) if function.function_id == usize::MAX)
     }
@@ -3838,7 +4177,7 @@ impl Harness {
         prototype
     }
 
-    fn set_internal_prototype(entries: &Rc<RefCell<ObjectValue>>, prototype: Value) {
+    pub(crate) fn set_internal_prototype(entries: &Rc<RefCell<ObjectValue>>, prototype: Value) {
         Self::object_set_entry(
             &mut entries.borrow_mut(),
             INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
@@ -4654,6 +4993,28 @@ impl Harness {
             "text_decoder_stream_get_ignore_bom" => Some(("ignoreBOM", 0)),
             "text_decoder_stream_get_readable" => Some(("readable", 0)),
             "text_decoder_stream_get_writable" => Some(("writable", 0)),
+            "class_list_add" => Some(("add", 1)),
+            "class_list_remove" => Some(("remove", 1)),
+            "class_list_toggle" => Some(("toggle", 1)),
+            "class_list_contains" => Some(("contains", 1)),
+            "class_list_replace" => Some(("replace", 2)),
+            "class_list_item" => Some(("item", 1)),
+            "class_list_for_each" => Some(("forEach", 1)),
+            "class_list_keys" => Some(("keys", 0)),
+            "class_list_values" => Some(("values", 0)),
+            "class_list_entries" => Some(("entries", 0)),
+            "class_list_to_string" => Some(("toString", 0)),
+            "named_node_map_item" => Some(("item", 1)),
+            "named_node_map_get_named_item" => Some(("getNamedItem", 1)),
+            "named_node_map_set_named_item" => Some(("setNamedItem", 1)),
+            "named_node_map_remove_named_item" => Some(("removeNamedItem", 1)),
+            "named_node_map_get_named_item_ns" => Some(("getNamedItemNS", 2)),
+            "named_node_map_set_named_item_ns" => Some(("setNamedItemNS", 1)),
+            "named_node_map_remove_named_item_ns" => Some(("removeNamedItemNS", 2)),
+            "named_node_map_for_each" => Some(("forEach", 1)),
+            "named_node_map_keys" => Some(("keys", 0)),
+            "named_node_map_values" => Some(("values", 0)),
+            "named_node_map_entries" => Some(("entries", 0)),
             _ => None,
         }
     }
@@ -4668,6 +5029,7 @@ impl Harness {
             _ => return None,
         };
         let length = match method.as_str() {
+            "create" => 2,
             "assign" => 2,
             "getOwnPropertyDescriptor" => 2,
             "defineProperty" => 3,
@@ -4891,6 +5253,48 @@ impl Harness {
             ("selection", "setBaseAndExtent") => ("setBaseAndExtent", 4),
             ("selection", "setPosition") => ("setPosition", 1),
             ("selection", "toString") => ("toString", 0),
+            ("event", "preventDefault") => ("preventDefault", 0),
+            ("event", "stopPropagation") => ("stopPropagation", 0),
+            ("event", "stopImmediatePropagation") => ("stopImmediatePropagation", 0),
+            ("keyboard_event", "getModifierState") => ("getModifierState", 1),
+            ("pointer_event", "getCoalescedEvents") => ("getCoalescedEvents", 0),
+            ("pointer_event", "getPredictedEvents") => ("getPredictedEvents", 0),
+            ("navigate_event", "intercept") => ("intercept", 1),
+            ("navigate_event", "scroll") => ("scroll", 0),
+            ("data_transfer", "getData") => ("getData", 1),
+            ("data_transfer", "setData") => ("setData", 2),
+            ("data_transfer", "clearData") => ("clearData", 0),
+            ("data_transfer", "setDragImage") => ("setDragImage", 3),
+            ("data_transfer", "addElement") => ("addElement", 1),
+            ("data_transfer_item", "getAsFile") => ("getAsFile", 0),
+            ("data_transfer_item", "getAsFileSystemHandle") => ("getAsFileSystemHandle", 0),
+            ("data_transfer_item", "getAsString") => ("getAsString", 1),
+            ("data_transfer_item", "webkitGetAsEntry") => ("webkitGetAsEntry", 0),
+            ("data_transfer_item_list", "add") => ("add", 1),
+            ("data_transfer_item_list", "remove") => ("remove", 1),
+            ("data_transfer_item_list", "clear") => ("clear", 0),
+            ("match_media", "addEventListener") => ("addEventListener", 2),
+            ("match_media", "removeEventListener") => ("removeEventListener", 2),
+            ("match_media", "dispatchEvent") => ("dispatchEvent", 1),
+            ("match_media", "addListener") => ("addListener", 1),
+            ("match_media", "removeListener") => ("removeListener", 1),
+            ("cookie_store", "set") => ("set", 1),
+            ("cookie_store", "get") => ("get", 1),
+            ("cookie_store", "getAll") => ("getAll", 1),
+            ("cookie_store", "delete") => ("delete", 1),
+            ("cookie_store", "addEventListener") => ("addEventListener", 2),
+            ("cookie_store", "removeEventListener") => ("removeEventListener", 2),
+            ("cache_storage", "open") => ("open", 1),
+            ("cache_storage", "match") => ("match", 1),
+            ("cache_storage", "has") => ("has", 1),
+            ("cache_storage", "delete") => ("delete", 1),
+            ("cache_storage", "keys") => ("keys", 0),
+            ("cache", "match") => ("match", 1),
+            ("cache", "put") => ("put", 2),
+            ("cache", "delete") => ("delete", 1),
+            ("cache", "keys") => ("keys", 0),
+            ("cache", "add") => ("add", 1),
+            ("cache", "addAll") => ("addAll", 1),
             ("canvas_2d_context", "toString") => ("toString", 0),
             _ => return None,
         };
@@ -5429,6 +5833,19 @@ impl Harness {
         format!("{INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX}{property_key}")
     }
 
+    pub(crate) fn mark_object_properties_non_enumerable(
+        entries: &mut impl ObjectEntryMut,
+        keys: &[&str],
+    ) {
+        for key in keys {
+            Self::object_set_entry(
+                entries,
+                Self::object_non_enumerable_storage_key(key),
+                Value::Bool(true),
+            );
+        }
+    }
+
     pub(crate) fn object_non_writable_storage_key(property_key: &str) -> String {
         format!("{INTERNAL_NON_WRITABLE_PROPERTY_KEY_PREFIX}{property_key}")
     }
@@ -5762,7 +6179,21 @@ impl Harness {
                 "class_list_replace" => "class_list_replace",
                 "class_list_item" => "class_list_item",
                 "class_list_for_each" => "class_list_for_each",
+                "class_list_keys" => "class_list_keys",
+                "class_list_values" => "class_list_values",
+                "class_list_entries" => "class_list_entries",
                 "class_list_to_string" => "class_list_to_string",
+                "named_node_map_item" => "named_node_map_item",
+                "named_node_map_get_named_item" => "named_node_map_get_named_item",
+                "named_node_map_set_named_item" => "named_node_map_set_named_item",
+                "named_node_map_remove_named_item" => "named_node_map_remove_named_item",
+                "named_node_map_get_named_item_ns" => "named_node_map_get_named_item_ns",
+                "named_node_map_set_named_item_ns" => "named_node_map_set_named_item_ns",
+                "named_node_map_remove_named_item_ns" => "named_node_map_remove_named_item_ns",
+                "named_node_map_for_each" => "named_node_map_for_each",
+                "named_node_map_keys" => "named_node_map_keys",
+                "named_node_map_values" => "named_node_map_values",
+                "named_node_map_entries" => "named_node_map_entries",
                 "worker_main_post_message" => "worker_main_post_message",
                 "worker_context_post_message" => "worker_context_post_message",
                 "worker_terminate" => "worker_terminate",
@@ -6046,6 +6477,15 @@ impl Harness {
         if key == "length" {
             return Ok(Value::Number(values.len() as i64));
         }
+        let is_data_transfer_item_list_method = Self::is_data_transfer_item_list_value(&values)
+            && Self::data_transfer_item_list_receiver_builtin_method(key).is_some();
+        if is_data_transfer_item_list_method {
+            if let Some(value) = Self::placeholder_backed_array_builtin_property_value(&values, key)
+            {
+                return Ok(value);
+            }
+            return Ok(Value::Undefined);
+        }
         let has_explicit_prototype =
             Self::object_get_entry(&values.properties, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
         if let Ok(index) = key.parse::<usize>() {
@@ -6087,13 +6527,20 @@ impl Harness {
         nodes: &Rc<RefCell<NodeListValue>>,
         key: &str,
     ) -> Result<Value> {
-        if key == "length" {
-            return Ok(Value::Number(self.node_list_len(nodes) as i64));
+        let own_override = {
+            let nodes_ref = nodes.borrow();
+            self.object_property_from_entries_with_getter(receiver, &nodes_ref.properties, key)?
+        };
+        if let Some(value) = own_override {
+            return Ok(value);
         }
         let has_explicit_prototype = {
             let nodes_ref = nodes.borrow();
             Self::object_get_entry(&nodes_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some()
         };
+        if key == "length" {
+            return Ok(Value::Number(self.node_list_len(nodes) as i64));
+        }
         if let Ok(index) = key.parse::<usize>() {
             if let Some(node) = self.node_list_get(nodes, index) {
                 return Ok(Value::Node(node));
@@ -6106,13 +6553,6 @@ impl Harness {
                     .unwrap_or(Value::Undefined));
             }
             return Ok(Value::Undefined);
-        }
-        let own_value = {
-            let nodes_ref = nodes.borrow();
-            Self::object_get_entry(&nodes_ref.properties, key)
-        };
-        if let Some(value) = own_value {
-            return Ok(value);
         }
         if !has_explicit_prototype {
             if self.is_iterator_property_key(key) {
@@ -6999,7 +7439,7 @@ impl Harness {
             "className" => Ok(Value::String(
                 self.dom.attr(*node, "class").unwrap_or_default(),
             )),
-            "classList" => Ok(Self::new_class_list_value(*node)),
+            "classList" => Ok(self.class_list_live_value(*node)),
             "slot" => Ok(Value::String(
                 self.dom.attr(*node, "slot").unwrap_or_default(),
             )),
@@ -7238,6 +7678,8 @@ impl Harness {
                 return Some(Value::Undefined);
             };
             let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+            let has_explicit_prototype =
+                Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
             let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
             if key == "length" {
                 return Some(Value::Number(classes.len() as i64));
@@ -7246,10 +7688,30 @@ impl Harness {
                 return Some(Value::String(classes.join(" ")));
             }
             if key == "constructor" {
-                return Some(Value::Undefined);
+                return (!has_explicit_prototype).then_some(Value::Undefined);
             }
             if key_is_to_string_tag {
-                return Some(Value::String("DOMTokenList".to_string()));
+                return (!has_explicit_prototype)
+                    .then_some(Value::String("DOMTokenList".to_string()));
+            }
+            if !has_explicit_prototype {
+                if let Some(kind) = match key {
+                    "add" => Some("class_list_add"),
+                    "remove" => Some("class_list_remove"),
+                    "toggle" => Some("class_list_toggle"),
+                    "contains" => Some("class_list_contains"),
+                    "replace" => Some("class_list_replace"),
+                    "item" => Some("class_list_item"),
+                    "forEach" => Some("class_list_for_each"),
+                    "keys" => Some("class_list_keys"),
+                    "values" => Some("class_list_values"),
+                    "entries" => Some("class_list_entries"),
+                    "toString" => Some("class_list_to_string"),
+                    _ if self.is_iterator_property_key(key) => Some("class_list_values"),
+                    _ => None,
+                } {
+                    return Some(Self::new_class_list_method_callable(kind));
+                }
             }
             if let Ok(index) = key.parse::<usize>() {
                 return Some(
@@ -7263,7 +7725,7 @@ impl Harness {
             if let Some(value) = Self::object_get_entry(entries, key) {
                 return Some(value);
             }
-            return Some(Value::Undefined);
+            return (!has_explicit_prototype).then_some(Value::Undefined);
         }
 
         None
@@ -7274,7 +7736,17 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Result<Option<Value>> {
+        if let Some(value) = Self::object_property_from_event_entries(entries, key) {
+            return Ok(Some(value));
+        }
+        if let Some(value) = Self::object_property_from_data_transfer_entries(entries, key) {
+            return Ok(Some(value));
+        }
         if let Some(value) = Self::object_property_from_range_or_selection_entries(entries, key) {
+            return Ok(Some(value));
+        }
+        if let Some(value) = Self::object_property_from_cookie_store_or_cache_entries(entries, key)
+        {
             return Ok(Some(value));
         }
         if let Some(value) = self.computed_style_object_property_from_entries(entries, key)? {
@@ -7316,17 +7788,47 @@ impl Harness {
         Ok(None)
     }
 
+    fn object_property_from_event_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
+        if Self::is_event_object(entries)
+            || Self::is_keyboard_event_object(entries)
+            || Self::is_pointer_event_object(entries)
+            || Self::is_navigate_event_object(entries)
+        {
+            return Self::placeholder_backed_object_builtin_property_value(entries, key);
+        }
+        None
+    }
+
+    fn object_property_from_data_transfer_entries(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::is_data_transfer_object(entries)
+            || Self::is_clipboard_data_object(entries)
+            || Self::is_data_transfer_item_object(entries)
+        {
+            return Self::placeholder_backed_object_builtin_property_value(entries, key);
+        }
+        None
+    }
+
     fn object_property_from_match_media_entries(
         &mut self,
+        receiver: &Value,
         entries: &ObjectValue,
         key: &str,
         key_is_to_string_tag: bool,
-    ) -> Option<Value> {
+    ) -> Result<Option<Value>> {
         if !Self::is_match_media_object(entries) {
-            return None;
+            return Ok(None);
+        }
+        if matches!(key, "matches" | "media")
+            && let Some(value) =
+                self.object_property_from_entries_with_getter(receiver, entries, key)?
+        {
+            return Ok(Some(value));
         }
         let query = Self::object_get_entry(entries, INTERNAL_MATCH_MEDIA_QUERY_KEY)
-            .or_else(|| Self::object_get_entry(entries, "media"))
             .map(|value| value.as_string())
             .unwrap_or_default();
         if key == "matches" {
@@ -7336,15 +7838,18 @@ impl Harness {
                 .get(&query)
                 .copied()
                 .unwrap_or(self.platform_mocks.default_match_media_matches);
-            return Some(Value::Bool(matches));
+            return Ok(Some(Value::Bool(matches)));
         }
         if key == "media" {
-            return Some(Value::String(query));
+            return Ok(Some(Value::String(query)));
+        }
+        if let Some(value) = Self::placeholder_backed_object_builtin_property_value(entries, key) {
+            return Ok(Some(value));
         }
         if key_is_to_string_tag {
-            return Some(Value::String("MediaQueryList".to_string()));
+            return Ok(Some(Value::String("MediaQueryList".to_string())));
         }
-        None
+        Ok(None)
     }
 
     fn object_property_from_named_node_map_entries(
@@ -7354,6 +7859,26 @@ impl Harness {
     ) -> Option<Value> {
         if !Self::is_named_node_map_object(entries) {
             return None;
+        }
+        if self.is_to_string_tag_property_key(key) {
+            return Some(Value::String("NamedNodeMap".to_string()));
+        }
+        if let Some(kind) = match key {
+            "item" => Some("named_node_map_item"),
+            "getNamedItem" => Some("named_node_map_get_named_item"),
+            "setNamedItem" => Some("named_node_map_set_named_item"),
+            "removeNamedItem" => Some("named_node_map_remove_named_item"),
+            "getNamedItemNS" => Some("named_node_map_get_named_item_ns"),
+            "setNamedItemNS" => Some("named_node_map_set_named_item_ns"),
+            "removeNamedItemNS" => Some("named_node_map_remove_named_item_ns"),
+            "forEach" => Some("named_node_map_for_each"),
+            "keys" => Some("named_node_map_keys"),
+            "values" => Some("named_node_map_values"),
+            "entries" => Some("named_node_map_entries"),
+            _ if self.is_iterator_property_key(key) => Some("named_node_map_values"),
+            _ => None,
+        } {
+            return Some(Self::new_named_node_map_method_callable(kind));
         }
         let owner = Self::named_node_map_owner_node(entries)
             .filter(|node| self.dom.element(*node).is_some());
@@ -7373,6 +7898,9 @@ impl Harness {
                 })
                 .unwrap_or(Value::Undefined);
             return Some(value);
+        }
+        if !self.named_node_map_named_property_is_visible(entries, key) {
+            return None;
         }
         if let Some(owner_node) = owner {
             if let Some((name, value)) = attrs.iter().find(|(name, _)| name == key) {
@@ -7414,19 +7942,23 @@ impl Harness {
 
     fn object_property_from_match_media_named_node_map_or_string_wrapper_entries(
         &mut self,
+        receiver: &Value,
         entries: &ObjectValue,
         key: &str,
-    ) -> Option<Value> {
+    ) -> Result<Option<Value>> {
         let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
-        if let Some(value) =
-            self.object_property_from_match_media_entries(entries, key, key_is_to_string_tag)
-        {
-            return Some(value);
+        if let Some(value) = self.object_property_from_match_media_entries(
+            receiver,
+            entries,
+            key,
+            key_is_to_string_tag,
+        )? {
+            return Ok(Some(value));
         }
         if let Some(value) = self.object_property_from_named_node_map_entries(entries, key) {
-            return Some(value);
+            return Ok(Some(value));
         }
-        self.object_property_from_string_wrapper_entries(entries, key)
+        Ok(self.object_property_from_string_wrapper_entries(entries, key))
     }
 
     fn generator_constructor_prototype_value(&mut self, is_async: bool) -> Option<Value> {
@@ -7604,13 +8136,8 @@ impl Harness {
         if !is_document_object {
             return None;
         }
-        if Self::document_receiver_builtin_method(key).is_some() {
-            if let Some(value) = Self::object_get_entry(entries, key)
-                && !Self::is_builtin_placeholder_value(&value)
-            {
-                return Some(value);
-            }
-            return Self::document_receiver_builtin_method(key);
+        if let Some(value) = Self::placeholder_backed_object_builtin_property_value(entries, key) {
+            return Some(value);
         }
         let value = match key {
             "nodeType" => Value::Number(self.node_type_number(self.dom.root)),
@@ -7646,27 +8173,14 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Option<Value> {
-        if Self::is_range_object(entries) {
-            if Self::range_receiver_builtin_method(key).is_some() {
-                if let Some(value) = Self::object_get_entry(entries, key)
-                    && !Self::is_builtin_placeholder_value(&value)
-                {
-                    return Some(value);
-                }
-                return Self::range_receiver_builtin_method(key);
-            }
-        }
-        if Self::is_selection_object(entries) {
-            if Self::selection_receiver_builtin_method(key).is_some() {
-                if let Some(value) = Self::object_get_entry(entries, key)
-                    && !Self::is_builtin_placeholder_value(&value)
-                {
-                    return Some(value);
-                }
-                return Self::selection_receiver_builtin_method(key);
-            }
-        }
-        None
+        Self::placeholder_backed_object_builtin_property_value(entries, key)
+    }
+
+    fn object_property_from_cookie_store_or_cache_entries(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        Self::placeholder_backed_object_builtin_property_value(entries, key)
     }
 
     fn object_property_from_url_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
@@ -7808,9 +8322,10 @@ impl Harness {
             }
             Value::Blob(_) => Some(self.cached_blob_constructor_prototype_value()),
             Value::ArrayBuffer(_) => Some(self.cached_array_buffer_constructor_prototype_value()),
-            Value::NodeList(nodes) => {
+            Value::NodeList(nodes) => Some(
                 Self::object_get_entry(&nodes.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            }
+                    .unwrap_or_else(|| self.object_constructor_prototype_value()),
+            ),
             Value::String(_) => Some(self.cached_string_constructor_prototype_value()),
             Value::Bool(_) => self.constructor_prototype_from_env("Boolean"),
             Value::Number(_) | Value::Float(_) => self.constructor_prototype_from_env("Number"),
@@ -7939,6 +8454,14 @@ impl Harness {
         key: &str,
     ) -> Result<Value> {
         let entries = entries.borrow();
+        if (Self::is_dom_string_map_object(&entries)
+            || Self::is_class_list_object(&entries)
+            || Self::is_named_node_map_object(&entries))
+            && let Some(value) =
+                self.object_property_from_entries_with_getter(value, &entries, key)?
+        {
+            return Ok(value);
+        }
         if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key) {
             return Ok(value);
         }
@@ -7947,8 +8470,8 @@ impl Harness {
         }
         if let Some(value) = self
             .object_property_from_match_media_named_node_map_or_string_wrapper_entries(
-                &entries, key,
-            )
+                value, &entries, key,
+            )?
         {
             return Ok(value);
         }
@@ -8007,6 +8530,14 @@ impl Harness {
     ) -> Result<Value> {
         let owner = Value::Object(entries.clone());
         let entries = entries.borrow();
+        if (Self::is_dom_string_map_object(&entries)
+            || Self::is_class_list_object(&entries)
+            || Self::is_named_node_map_object(&entries))
+            && let Some(value) =
+                self.object_property_from_entries_with_getter(receiver, &entries, key)?
+        {
+            return Ok(value);
+        }
         if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key)
             && self.is_callable_value(&value)
             && !Self::is_builtin_placeholder_value(&value)
@@ -8021,10 +8552,10 @@ impl Harness {
         }
         if let Some(value) = self
             .object_property_from_match_media_named_node_map_or_string_wrapper_entries(
-                &entries, key,
-            )
-            && self.is_callable_value(&value)
-            && !Self::is_builtin_placeholder_value(&value)
+                receiver, &entries, key,
+            )?
+            && (Self::is_match_media_object(&entries)
+                || (self.is_callable_value(&value) && !Self::is_builtin_placeholder_value(&value)))
         {
             return Ok(value);
         }

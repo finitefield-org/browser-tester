@@ -5074,3 +5074,52 @@ fn document_scrollend_does_not_fire_when_scroll_position_does_not_change() -> Re
     h.assert_text("#result", "0")?;
     Ok(())
 }
+
+#[test]
+fn document_placeholder_method_shadowing_survives_history_resync_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const out = document.getElementById('result');
+          document.getElementById('run').addEventListener('click', () => {
+            Object.defineProperty(document, 'getElementById', {
+              value(id) { return 'shadow:' + id; },
+              enumerable: true,
+              configurable: true
+            });
+
+            const beforePush = document.getElementById('first');
+            history.pushState({ step: 1 }, '', 'https://app.local/one');
+            const afterPush = document.getElementById('second');
+            const pushDesc = Object.getOwnPropertyDescriptor(document, 'getElementById');
+            const keysInclude = Object.keys(document).includes('getElementById');
+            const namesInclude = Object.getOwnPropertyNames(document).includes('getElementById');
+
+            const deleted = delete document.getElementById;
+            const goneBeforeReplace = document.getElementById === undefined;
+            history.replaceState({ step: 2 }, '', 'https://app.local/two');
+            const goneAfterReplace = document.getElementById === undefined;
+
+            out.textContent = [
+              beforePush,
+              afterPush,
+              String(pushDesc.enumerable),
+              String(keysInclude),
+              String(namesInclude),
+              String(deleted),
+              String(goneBeforeReplace),
+              String(goneAfterReplace)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow:first|shadow:second|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}

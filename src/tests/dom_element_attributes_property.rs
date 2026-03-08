@@ -66,3 +66,65 @@ fn element_attributes_is_iterable_and_yields_attr_nodes() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn element_attributes_own_keys_and_descriptors_track_live_entries_work() -> Result<()> {
+    let html = r#"
+        <p id='paragraph' class='green' contenteditable>Sample Paragraph</p>
+        <button id='run'>run</button>
+        <pre id='result'></pre>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const paragraph = document.getElementById('paragraph');
+            const attrs = paragraph.attributes;
+
+            const firstDesc = Object.getOwnPropertyDescriptor(attrs, '0');
+            const classDesc = Object.getOwnPropertyDescriptor(attrs, 'class');
+            const before = [
+              String(Object.keys(attrs).includes('0')),
+              String(Object.keys(attrs).includes('class')),
+              String(Object.getOwnPropertyNames(attrs).includes('length')),
+              String(Reflect.ownKeys(attrs).includes('class')),
+              String(Object.hasOwn(attrs, 'class')),
+              firstDesc.value.name,
+              classDesc.value.value
+            ].join(':');
+
+            Object.defineProperty(attrs, 'class', {
+              value: 'shadow',
+              enumerable: true,
+              configurable: true
+            });
+
+            const shadow = [
+              String(attrs.class === 'shadow'),
+              String(Object.getOwnPropertyDescriptor(attrs, 'class').value === 'shadow'),
+              String(Object.keys(attrs).includes('class'))
+            ].join(':');
+
+            delete attrs.class;
+            paragraph.setAttribute('data-state', 'ready');
+
+            const dataDesc = Object.getOwnPropertyDescriptor(attrs, 'data-state');
+            const after = [
+              attrs.class.value,
+              attrs['data-state'].value,
+              String(Object.keys(attrs).includes('data-state')),
+              String(Object.hasOwn(attrs, 'data-state')),
+              dataDesc.value.value,
+              Object.getOwnPropertyDescriptor(attrs, '0').value.name
+            ].join(':');
+
+            document.getElementById('result').textContent = [before, shadow, after].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:class:green|true:true:true|green:ready:true:true:ready:class",
+    )?;
+    Ok(())
+}

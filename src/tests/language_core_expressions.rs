@@ -4944,6 +4944,137 @@ fn class_list_toggle_force_argument_works() -> Result<()> {
 }
 
 #[test]
+fn class_list_own_keys_and_descriptors_track_live_tokens_work() -> Result<()> {
+    let html = r#"
+        <div id='box' class='base active'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const list = document.getElementById('box').classList;
+            const firstDesc = Object.getOwnPropertyDescriptor(list, '0');
+            const lengthDesc = Object.getOwnPropertyDescriptor(list, 'length');
+            const valueDesc = Object.getOwnPropertyDescriptor(list, 'value');
+
+            const before = [
+              Object.keys(list).join(','),
+              String(Object.getOwnPropertyNames(list).includes('length')),
+              String(Reflect.ownKeys(list).includes('0')),
+              String(Object.hasOwn(list, '0')),
+              firstDesc.value,
+              lengthDesc.value,
+              valueDesc.value,
+              ({ ...list })['0']
+            ].join(':');
+
+            Object.defineProperty(list, '0', {
+              value: 'shadow-token',
+              enumerable: true,
+              configurable: true
+            });
+            Object.defineProperty(list, 'value', {
+              value: 'shadow-value',
+              configurable: true
+            });
+
+            const shadow = [
+              list[0],
+              list.value,
+              String(Object.hasOwn(list, 'value')),
+              String(Object.keys(list).join(','))
+            ].join(':');
+
+            delete list[0];
+            delete list.value;
+            list.add('z');
+
+            const after = [
+              list[0],
+              list[2],
+              Object.keys(list).join(','),
+              Object.getOwnPropertyDescriptor(list, '2').value,
+              Object.getOwnPropertyDescriptor(list, 'value').value,
+              ({ ...list })['2']
+            ].join(':');
+
+            document.getElementById('result').textContent = [before, shadow, after].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "0,1:true:true:true:base:2:base active:base|shadow-token:shadow-value:true:0,1|base:z:0,1,2:z:base active z:z",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn class_list_iterator_property_paths_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <div id='box' class='base active'></div>
+        <p id='result'></p>
+        <script>
+          const list = document.getElementById('box').classList;
+          const assigned = Object.assign({}, list);
+          const spread = { ...list };
+
+          let incompatible = false;
+          try {
+            Object.create(list).values();
+          } catch (e) {
+            incompatible = String(e).includes('incompatible receiver');
+          }
+
+          document.getElementById('result').textContent = [
+            Array.from(list['keys'].call(list)).join(','),
+            Array.from(list['values'].call(list)).join(','),
+            Array.from(list['entries'].call(list))
+              .map((pair) => pair[0] + ':' + pair[1])
+              .join(','),
+            Array.from(list[Symbol.iterator].call(list)).join(','),
+            assigned['0'],
+            assigned['1'],
+            Object.keys(assigned).join(','),
+            spread['0'],
+            spread['1'],
+            Object.keys(spread).join(','),
+            incompatible
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "0,1|base,active|0:base,1:active|base,active|base|active|0,1|base|active|0,1|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn static_node_list_default_prototype_is_stable_work() -> Result<()> {
+    let html = r#"
+        <div><span>alpha</span><span>beta</span></div>
+        <p id='result'></p>
+        <script>
+          const protoA = Object.getPrototypeOf(document.querySelectorAll('span'));
+          const protoB = Object.getPrototypeOf(document.querySelectorAll('span'));
+          document.getElementById('result').textContent = [
+            protoA === Object.prototype,
+            protoA === protoB
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true")?;
+    Ok(())
+}
+
+#[test]
 fn logical_and_relational_and_strict_operators_work() -> Result<()> {
     let html = r#"
         <input id='age' value='25'>
@@ -6586,6 +6717,89 @@ fn dataset_dom_string_map_reflects_attribute_mutations_and_missing_reads_undefin
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "undefined:starter:pro:undefined")?;
+    Ok(())
+}
+
+#[test]
+fn dataset_dom_string_map_own_keys_and_descriptors_track_live_attributes_work() -> Result<()> {
+    let html = r#"
+        <div id='box' data-user-id='u1'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const ds = box.dataset;
+
+            const beforeDesc = Object.getOwnPropertyDescriptor(ds, 'userId');
+            const before = [
+              Object.keys(ds).sort().join(','),
+              Object.getOwnPropertyNames(ds).sort().join(','),
+              Reflect.ownKeys(ds).sort().join(','),
+              String(Object.hasOwn(ds, 'userId')),
+              beforeDesc.value,
+              String(beforeDesc.writable),
+              String(beforeDesc.enumerable),
+              String(beforeDesc.configurable),
+              ({ ...ds }).userId
+            ].join(':');
+
+            box.setAttribute('data-plan-id', 'pro');
+
+            const addedDesc = Object.getOwnPropertyDescriptor(ds, 'planId');
+            const afterAdd = [
+              Object.keys(ds).sort().join(','),
+              Object.getOwnPropertyNames(ds).sort().join(','),
+              Reflect.ownKeys(ds).sort().join(','),
+              String(Object.hasOwn(ds, 'planId')),
+              addedDesc.value,
+              String(addedDesc.enumerable),
+              ({ ...ds }).planId
+            ].join(':');
+
+            Object.defineProperty(ds, 'planId', {
+              value: 'shadow',
+              configurable: true
+            });
+
+            const shadowDesc = Object.getOwnPropertyDescriptor(ds, 'planId');
+            const afterShadow = [
+              ds.planId,
+              Object.keys(ds).sort().join(','),
+              Object.getOwnPropertyNames(ds).sort().join(','),
+              Reflect.ownKeys(ds).sort().join(','),
+              String(shadowDesc.enumerable),
+              String(Object.hasOwn(ds, 'planId')),
+              String(({ ...ds }).planId)
+            ].join(':');
+
+            box.removeAttribute('data-user-id');
+
+            const afterRemove = [
+              Object.keys(ds).sort().join(','),
+              Object.getOwnPropertyNames(ds).sort().join(','),
+              Reflect.ownKeys(ds).sort().join(','),
+              String(Object.getOwnPropertyDescriptor(ds, 'userId') === undefined),
+              String(Object.hasOwn(ds, 'userId')),
+              String(ds.userId)
+            ].join(':');
+
+            document.getElementById('result').textContent = [
+              before,
+              afterAdd,
+              afterShadow,
+              afterRemove
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "userId:userId:userId:true:u1:true:true:true:u1|planId,userId:planId,userId:planId,userId:true:pro:true:pro|shadow:userId:planId,userId:planId,userId:false:true:undefined|:planId:planId:true:false:undefined",
+    )?;
     Ok(())
 }
 
@@ -8975,5 +9189,48 @@ fn node_list_explicit_prototype_override_controls_inherited_lookup_work() -> Res
 
     let h = Harness::from_html(html)?;
     h.assert_text("#result", "true|true|true|list|true|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn node_list_reflective_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <ul>
+          <li>alpha</li>
+          <li>beta</li>
+        </ul>
+        <p id='result'></p>
+        <script>
+          const list = document.querySelectorAll('li');
+          const zeroDesc = Object.getOwnPropertyDescriptor(list, '0');
+          const lengthDesc = Object.getOwnPropertyDescriptor(list, 'length');
+          const assigned = Object.assign({}, list);
+          const spread = { ...list };
+
+          document.getElementById('result').textContent = [
+            Object.keys(list).join(','),
+            Object.getOwnPropertyNames(list).join(','),
+            Reflect.ownKeys(list).join(','),
+            String(Object.hasOwn(list, '1')),
+            zeroDesc.value.textContent,
+            lengthDesc.value,
+            assigned['0'].textContent,
+            assigned['1'].textContent,
+            Object.keys(assigned).join(','),
+            spread['0'].textContent,
+            spread['1'].textContent,
+            Object.keys(spread).join(','),
+            Object.entries(list)
+              .map((entry) => entry[0] + ':' + entry[1].textContent)
+              .join(',')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "0,1|0,1,length|0,1,length|true|alpha|2|alpha|beta|0,1|alpha|beta|0,1|0:alpha,1:beta",
+    )?;
     Ok(())
 }

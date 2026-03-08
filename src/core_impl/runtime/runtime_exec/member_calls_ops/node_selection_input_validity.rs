@@ -1468,6 +1468,14 @@ impl Harness {
         evaluated_args: &[Value],
         _event: &EventState,
     ) -> Result<Option<Value>> {
+        let shadowed = {
+            let entries = self.dom_runtime.document_object.borrow();
+            Self::placeholder_backed_object_builtin_is_shadowed(&entries, member)
+        };
+        if shadowed {
+            return Ok(None);
+        }
+
         match member {
             "getElementById" => {
                 if evaluated_args.len() != 1 {
@@ -1708,6 +1716,16 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
+        let shadowed = {
+            let entries = self.dom_runtime.window_object.borrow();
+            Self::object_get_entry(&entries, member)
+                .is_some_and(|value| !Self::is_builtin_placeholder_value(&value))
+                || Self::is_builtin_object_property_deleted(&entries, member)
+        };
+        if shadowed {
+            return Ok(None);
+        }
+
         match member {
             "getSelection" => {
                 if !evaluated_args.is_empty() {
@@ -2207,11 +2225,17 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let is_selection = {
+        let (is_selection, shadowed) = {
             let entries = selection_object.borrow();
-            Self::is_selection_object(&entries)
+            (
+                Self::is_selection_object(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
         };
         if !is_selection {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 
@@ -2703,14 +2727,18 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
     ) -> Result<Option<Value>> {
-        let (is_event_target, is_match_media) = {
+        let (is_event_target, is_match_media, shadowed) = {
             let entries = object.borrow();
             (
                 Self::is_event_target_object(&entries),
                 Self::is_match_media_object(&entries),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
             )
         };
         if !is_event_target {
+            return Ok(None);
+        }
+        if shadowed {
             return Ok(None);
         }
 

@@ -373,11 +373,47 @@ impl Harness {
         Self::is_symbol_storage_key(key) || !Self::is_internal_object_key(key)
     }
 
-    fn object_assign_enumerable_keys(value: &Value) -> Vec<String> {
+    fn object_assign_enumerable_keys(&mut self, value: &Value) -> Vec<String> {
         match value {
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 if let Some(mut keys) = Self::string_wrapper_own_string_keys(&entries, true) {
+                    keys.extend(
+                        entries
+                            .iter()
+                            .filter(|(key, _)| {
+                                Self::is_symbol_storage_key(key)
+                                    && !Self::is_non_enumerable_object_key(&*entries, key)
+                            })
+                            .map(|(key, _)| key.clone()),
+                    );
+                    return keys;
+                }
+                if let Some(mut keys) = self.class_list_synthesized_keys(&entries, true) {
+                    keys.extend(
+                        entries
+                            .iter()
+                            .filter(|(key, _)| {
+                                Self::is_symbol_storage_key(key)
+                                    && !Self::is_non_enumerable_object_key(&*entries, key)
+                            })
+                            .map(|(key, _)| key.clone()),
+                    );
+                    return keys;
+                }
+                if let Some(mut keys) = self.named_node_map_synthesized_keys(&entries, true) {
+                    keys.extend(
+                        entries
+                            .iter()
+                            .filter(|(key, _)| {
+                                Self::is_symbol_storage_key(key)
+                                    && !Self::is_non_enumerable_object_key(&*entries, key)
+                            })
+                            .map(|(key, _)| key.clone()),
+                    );
+                    return keys;
+                }
+                if let Some(mut keys) = self.dom_string_map_synthesized_keys(&entries, true) {
                     keys.extend(
                         entries
                             .iter()
@@ -414,6 +450,21 @@ impl Harness {
                         .filter(|(key, _)| {
                             Self::object_assign_is_copyable_key(key)
                                 && !Self::is_non_enumerable_object_key(&values.properties, key)
+                        })
+                        .map(|(key, _)| key.clone()),
+                );
+                keys
+            }
+            Value::NodeList(nodes) => {
+                let mut keys = self.node_list_synthesized_keys(nodes, true);
+                let nodes_ref = nodes.borrow();
+                keys.extend(
+                    nodes_ref
+                        .properties
+                        .iter()
+                        .filter(|(key, _)| {
+                            Self::is_symbol_storage_key(key)
+                                && !Self::is_non_enumerable_object_key(&nodes_ref.properties, key)
                         })
                         .map(|(key, _)| key.clone()),
                 );
@@ -499,7 +550,7 @@ impl Harness {
             if matches!(source, Value::Null | Value::Undefined) {
                 continue;
             }
-            for key in Self::object_assign_enumerable_keys(source) {
+            for key in self.object_assign_enumerable_keys(source) {
                 let value = self.object_property_from_value(source, &key)?;
                 self.object_assign_set_target_property(&target, &key, value, event)?;
             }

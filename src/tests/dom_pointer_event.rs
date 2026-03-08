@@ -137,3 +137,43 @@ fn pointer_event_constructor_rejects_non_object_options() -> Result<()> {
     h.assert_text("#result", "true")?;
     Ok(())
 }
+
+#[test]
+fn pointer_event_raw_getter_and_inherited_property_paths_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const e = new PointerEvent('pointermove', {
+            pointerId: 7
+          });
+          const getCoalescedEvents = Object.create(e).getCoalescedEvents;
+          const getPredictedEvents = e['getPredictedEvents'];
+
+          let incompatible = false;
+          try {
+            getCoalescedEvents.call({});
+          } catch (error) {
+            incompatible = String(error).includes('PointerEvent');
+          }
+
+          document.getElementById('result').textContent = [
+            getCoalescedEvents.name,
+            getCoalescedEvents.length,
+            Array.isArray(getCoalescedEvents.call(e)),
+            getCoalescedEvents.call(e).length,
+            getPredictedEvents.name,
+            getPredictedEvents.length,
+            Array.isArray(getPredictedEvents.call(e)),
+            getPredictedEvents.call(e).length,
+            incompatible
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "getCoalescedEvents:0:true:0:getPredictedEvents:0:true:0:true",
+    )?;
+    Ok(())
+}

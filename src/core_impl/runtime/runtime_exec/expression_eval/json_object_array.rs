@@ -124,6 +124,47 @@ impl Harness {
         if !self.descriptor_has_property(descriptor, key)? {
             return Ok(None);
         }
+        if let Value::Object(entries) = descriptor {
+            let mut current = Some(entries.clone());
+            while let Some(object) = current {
+                let (value, next) = {
+                    let entries = object.borrow();
+                    let value = if let Some(getter) =
+                        Self::object_getter_from_entries(&*entries, key)
+                    {
+                        if !self.is_callable_value(&getter) {
+                            return Err(Error::ScriptRuntime(
+                                "object getter is not callable".into(),
+                            ));
+                        }
+                        let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                        Some(self.execute_callable_value_with_this_and_env(
+                            &getter,
+                            &[],
+                            &event,
+                            None,
+                            Some(descriptor.clone()),
+                        )?)
+                    } else if Self::has_object_accessor_property(&*entries, key) {
+                        Some(Value::Undefined)
+                    } else {
+                        Self::object_get_entry(&*entries, key)
+                    };
+                    (
+                        value,
+                        Self::object_get_entry(&*entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
+                    )
+                };
+                if let Some(value) = value {
+                    return Ok(Some(value));
+                }
+                current = match next {
+                    Some(Value::Object(next)) => Some(next),
+                    _ => None,
+                };
+            }
+            return Ok(Some(Value::Undefined));
+        }
         Ok(Some(self.object_property_from_value(descriptor, key)?))
     }
 
@@ -677,10 +718,12 @@ impl Harness {
         key: String,
         getter: Value,
     ) {
-        Self::delete_object_getter_entries(entries, &key);
-        let getter_key = Self::object_getter_storage_key(&key);
-        Self::object_set_entry(entries, getter_key, getter);
-        Self::object_set_entry(entries, key, Value::Undefined);
+        let existing_setter = Self::object_setter_from_entries(entries, &key);
+        Self::delete_object_property_entries(entries, &key);
+        Self::object_set_entry(entries, Self::object_getter_storage_key(&key), getter);
+        if let Some(setter) = existing_setter {
+            Self::object_set_entry(entries, Self::object_setter_storage_key(&key), setter);
+        }
     }
 
     fn define_object_literal_setter_entry(
@@ -688,10 +731,12 @@ impl Harness {
         key: String,
         setter: Value,
     ) {
-        Self::delete_object_setter_entries(entries, &key);
-        let setter_key = Self::object_setter_storage_key(&key);
-        Self::object_set_entry(entries, setter_key, setter);
-        Self::object_set_entry(entries, key, Value::Undefined);
+        let existing_getter = Self::object_getter_from_entries(entries, &key);
+        Self::delete_object_property_entries(entries, &key);
+        if let Some(getter) = existing_getter {
+            Self::object_set_entry(entries, Self::object_getter_storage_key(&key), getter);
+        }
+        Self::object_set_entry(entries, Self::object_setter_storage_key(&key), setter);
     }
 
     fn callable_object_surface_descriptor_value(
@@ -712,6 +757,42 @@ impl Harness {
         let value = self.callable_own_surface_value(object, key)?;
         Some(Self::own_data_property_descriptor_with_attrs(
             value, false, false, true,
+        ))
+    }
+
+    fn placeholder_backed_object_builtin_descriptor_value(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        let stored = Self::object_get_entry(entries, key)?;
+        if !Self::is_builtin_placeholder_value(&stored) {
+            return None;
+        }
+        let value = Self::placeholder_backed_object_builtin_property_value(entries, key)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            value,
+            Self::is_writable_object_key(entries, key),
+            Self::is_enumerable_object_key(entries, key),
+            Self::is_configurable_object_key(entries, key),
+        ))
+    }
+
+    fn placeholder_backed_array_builtin_descriptor_value(
+        &mut self,
+        array: &ArrayValue,
+        key: &str,
+    ) -> Option<Value> {
+        let stored = Self::object_get_entry(&array.properties, key)?;
+        if !Self::is_builtin_placeholder_value(&stored) {
+            return None;
+        }
+        let value = Self::placeholder_backed_array_builtin_property_value(array, key)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            value,
+            Self::is_writable_object_key(&array.properties, key),
+            Self::is_enumerable_object_key(&array.properties, key),
+            Self::is_configurable_object_key(&array.properties, key),
         ))
     }
 
@@ -763,6 +844,11 @@ impl Harness {
     ) -> Option<Value> {
         let array_ref = array.borrow();
         if let Some(descriptor) =
+            self.placeholder_backed_array_builtin_descriptor_value(&array_ref, key)
+        {
+            return Some(descriptor);
+        }
+        if let Some(descriptor) =
             Self::own_property_descriptor_object_from_entries(&array_ref.properties, key)
         {
             return Some(descriptor);
@@ -804,11 +890,305 @@ impl Harness {
         builtin_descriptor
     }
 
-    fn object_like_enumerable_keys(&self, object: &Value) -> Result<Vec<String>> {
+    pub(crate) fn dom_string_map_synthesized_keys(
+        &self,
+        entries: &ObjectValue,
+        enumerable_only: bool,
+    ) -> Option<Vec<String>> {
+        if !Self::is_dom_string_map_object(entries) {
+            return None;
+        }
+        let node = Self::dom_string_map_owner_node(entries)
+            .filter(|node| self.dom.element(*node).is_some())?;
+        let mut keys = self
+            .dataset_entries_for_node(node)
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| Self::own_property_descriptor_object_from_entries(entries, key).is_none())
+            .collect::<Vec<_>>();
+        keys.extend(if enumerable_only {
+            Self::ordered_enumerable_string_keys(entries)
+        } else {
+            Self::ordered_visible_string_keys(entries)
+        });
+        Some(keys)
+    }
+
+    pub(crate) fn dom_string_map_synthesized_descriptor_value(
+        &self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !Self::is_dom_string_map_object(entries)
+            || Self::own_property_descriptor_object_from_entries(entries, key).is_some()
+        {
+            return None;
+        }
+        let node = Self::dom_string_map_owner_node(entries)
+            .filter(|node| self.dom.element(*node).is_some())?;
+        let attr_name = dataset_key_to_attr_name(key);
+        let value = self.dom.attr(node, &attr_name)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            Value::String(value),
+            true,
+            true,
+            true,
+        ))
+    }
+
+    pub(crate) fn class_list_synthesized_keys(
+        &self,
+        entries: &ObjectValue,
+        enumerable_only: bool,
+    ) -> Option<Vec<String>> {
+        if !Self::is_class_list_object(entries) {
+            return None;
+        }
+        let node = match Self::object_get_entry(entries, INTERNAL_CLASS_LIST_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }?;
+        let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+        let mut integer_keys = classes
+            .iter()
+            .enumerate()
+            .map(|(index, _)| (index as u64, index.to_string()))
+            .collect::<Vec<_>>();
+        let property_keys = if enumerable_only {
+            Self::ordered_enumerable_string_keys(entries)
+        } else {
+            Self::ordered_visible_string_keys(entries)
+        };
+        for key in &property_keys {
+            if let Some(index) = Self::own_property_integer_key(key)
+                && !integer_keys.iter().any(|(existing, _)| *existing == index)
+            {
+                integer_keys.push((index, key.clone()));
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = integer_keys
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect::<Vec<_>>();
+        if !enumerable_only {
+            out.push("length".to_string());
+            out.push("value".to_string());
+        }
+        out.extend(property_keys.into_iter().filter(|key| {
+            Self::own_property_integer_key(key).is_none()
+                && (enumerable_only || (key != "length" && key != "value"))
+        }));
+        Some(out)
+    }
+
+    fn class_list_synthesized_descriptor_value(
+        &self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !Self::is_class_list_object(entries)
+            || Self::own_property_descriptor_object_from_entries(entries, key).is_some()
+        {
+            return None;
+        }
+        let node = match Self::object_get_entry(entries, INTERNAL_CLASS_LIST_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }?;
+        let classes = class_tokens(self.dom.attr(node, "class").as_deref());
+        if key == "length" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(classes.len() as i64),
+                true,
+                false,
+                true,
+            ));
+        }
+        if key == "value" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::String(classes.join(" ")),
+                true,
+                false,
+                true,
+            ));
+        }
+        let index = Self::own_property_integer_key(key)? as usize;
+        let class_name = classes.get(index)?.clone();
+        Some(Self::own_data_property_descriptor_with_attrs(
+            Value::String(class_name),
+            true,
+            true,
+            true,
+        ))
+    }
+
+    pub(crate) fn named_node_map_synthesized_keys(
+        &mut self,
+        entries: &ObjectValue,
+        enumerable_only: bool,
+    ) -> Option<Vec<String>> {
+        if !Self::is_named_node_map_object(entries) {
+            return None;
+        }
+        let node = Self::named_node_map_owner_node(entries)
+            .filter(|node| self.dom.element(*node).is_some())?;
+        let attrs = self.named_node_map_entries(node);
+        let mut integer_keys = attrs
+            .iter()
+            .enumerate()
+            .map(|(index, _)| (index as u64, index.to_string()))
+            .collect::<Vec<_>>();
+        let property_keys = if enumerable_only {
+            Self::ordered_enumerable_string_keys(entries)
+        } else {
+            Self::ordered_visible_string_keys(entries)
+        };
+        for key in &property_keys {
+            if let Some(index) = Self::own_property_integer_key(key)
+                && !integer_keys.iter().any(|(existing, _)| *existing == index)
+            {
+                integer_keys.push((index, key.clone()));
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = integer_keys
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect::<Vec<_>>();
+        if !enumerable_only {
+            out.push("length".to_string());
+        }
+        out.extend(attrs.iter().map(|(name, _)| name.clone()).filter(|key| {
+            !property_keys.iter().any(|existing| existing == key)
+                && self.named_node_map_named_property_is_visible(entries, key)
+        }));
+        out.extend(property_keys.into_iter().filter(|key| {
+            Self::own_property_integer_key(key).is_none() && (enumerable_only || key != "length")
+        }));
+        Some(out)
+    }
+
+    fn named_node_map_synthesized_descriptor_value(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !Self::is_named_node_map_object(entries)
+            || Self::own_property_descriptor_object_from_entries(entries, key).is_some()
+        {
+            return None;
+        }
+        let node = Self::named_node_map_owner_node(entries)
+            .filter(|node| self.dom.element(*node).is_some())?;
+        let attrs = self.named_node_map_entries(node);
+        if key == "length" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(attrs.len() as i64),
+                true,
+                false,
+                true,
+            ));
+        }
+        if let Some(index) = Self::own_property_integer_key(key) {
+            let (name, value) = attrs.get(index as usize)?;
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Self::new_attr_object_value(name, value, Some(node)),
+                true,
+                true,
+                true,
+            ));
+        }
+        if !self.named_node_map_named_property_is_visible(entries, key) {
+            return None;
+        }
+        let (name, value) = attrs.iter().find(|(name, _)| name == key)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            Self::new_attr_object_value(name, value, Some(node)),
+            true,
+            true,
+            true,
+        ))
+    }
+
+    pub(crate) fn node_list_synthesized_keys(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        enumerable_only: bool,
+    ) -> Vec<String> {
+        let snapshot = self.node_list_snapshot(nodes);
+        let nodes_ref = nodes.borrow();
+        let mut integer_keys = snapshot
+            .iter()
+            .enumerate()
+            .map(|(index, _)| (index as u64, index.to_string()))
+            .collect::<Vec<_>>();
+        let property_keys = if enumerable_only {
+            Self::ordered_enumerable_string_keys(&nodes_ref.properties)
+        } else {
+            Self::ordered_visible_string_keys(&nodes_ref.properties)
+        };
+        for key in &property_keys {
+            if let Some(index) = Self::own_property_integer_key(key)
+                && !integer_keys.iter().any(|(existing, _)| *existing == index)
+            {
+                integer_keys.push((index, key.clone()));
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = integer_keys
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect::<Vec<_>>();
+        if !enumerable_only {
+            out.push("length".to_string());
+        }
+        out.extend(property_keys.into_iter().filter(|key| {
+            Self::own_property_integer_key(key).is_none() && (enumerable_only || key != "length")
+        }));
+        out
+    }
+
+    fn node_list_synthesized_descriptor_value(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        key: &str,
+    ) -> Option<Value> {
+        {
+            let nodes_ref = nodes.borrow();
+            if Self::own_property_descriptor_object_from_entries(&nodes_ref.properties, key)
+                .is_some()
+            {
+                return None;
+            }
+        }
+        let snapshot = self.node_list_snapshot(nodes);
+        if key == "length" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(snapshot.len() as i64),
+                true,
+                false,
+                true,
+            ));
+        }
+        let index = Self::own_property_integer_key(key)? as usize;
+        let node = *snapshot.get(index)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            Value::Node(node),
+            true,
+            true,
+            true,
+        ))
+    }
+
+    fn object_like_enumerable_keys(&mut self, object: &Value) -> Result<Vec<String>> {
         match object {
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 Ok(Self::string_wrapper_own_string_keys(&entries, true)
+                    .or_else(|| self.class_list_synthesized_keys(&entries, true))
+                    .or_else(|| self.named_node_map_synthesized_keys(&entries, true))
+                    .or_else(|| self.dom_string_map_synthesized_keys(&entries, true))
                     .unwrap_or_else(|| Self::ordered_enumerable_string_keys(&entries)))
             }
             Value::Array(array) => {
@@ -825,6 +1205,7 @@ impl Harness {
                 keys.extend(Self::ordered_enumerable_string_keys(&array_ref.properties));
                 Ok(keys)
             }
+            Value::NodeList(nodes) => Ok(self.node_list_synthesized_keys(nodes, true)),
             Value::Function(function) => Ok(self
                 .script_runtime
                 .function_public_properties
@@ -852,11 +1233,20 @@ impl Harness {
         }
     }
 
-    fn object_like_own_string_keys(&self, object: &Value) -> Result<Vec<String>> {
+    fn object_like_own_string_keys(&mut self, object: &Value) -> Result<Vec<String>> {
         match object {
             Value::Object(entries) => {
                 let entries = entries.borrow();
                 if let Some(keys) = Self::string_wrapper_own_string_keys(&entries, false) {
+                    return Ok(keys);
+                }
+                if let Some(keys) = self.class_list_synthesized_keys(&entries, false) {
+                    return Ok(keys);
+                }
+                if let Some(keys) = self.named_node_map_synthesized_keys(&entries, false) {
+                    return Ok(keys);
+                }
+                if let Some(keys) = self.dom_string_map_synthesized_keys(&entries, false) {
                     return Ok(keys);
                 }
                 let (integer_keys, string_keys) = Self::ordered_visible_string_keys_split(&entries);
@@ -900,6 +1290,7 @@ impl Harness {
                 );
                 Ok(out)
             }
+            Value::NodeList(nodes) => Ok(self.node_list_synthesized_keys(nodes, false)),
             Value::Function(function) => {
                 let (integer_keys, string_keys, builtin_keys) = self
                     .script_runtime
@@ -980,6 +1371,9 @@ impl Harness {
             Value::Array(array) => {
                 Ok(self.collection_property_symbol_values(&array.borrow().properties))
             }
+            Value::NodeList(nodes) => {
+                Ok(self.collection_property_symbol_values(&nodes.borrow().properties))
+            }
             Value::Function(function) => Ok(self
                 .script_runtime
                 .function_public_properties
@@ -1003,7 +1397,7 @@ impl Harness {
         }
     }
 
-    pub(crate) fn object_get_own_property_names_value(&self, object: &Value) -> Result<Value> {
+    pub(crate) fn object_get_own_property_names_value(&mut self, object: &Value) -> Result<Value> {
         Ok(Self::new_array_value(
             self.object_like_own_string_keys(object)?
                 .into_iter()
@@ -1012,7 +1406,7 @@ impl Harness {
         ))
     }
 
-    pub(crate) fn reflect_own_keys_value(&self, object: &Value) -> Result<Value> {
+    pub(crate) fn reflect_own_keys_value(&mut self, object: &Value) -> Result<Value> {
         let mut keys = self
             .object_like_own_string_keys(object)?
             .into_iter()
@@ -1031,7 +1425,13 @@ impl Harness {
             Value::Object(entries) => Ok({
                 let entries = entries.borrow();
                 Self::string_wrapper_builtin_descriptor_value(&entries, key)
+                    .or_else(|| self.class_list_synthesized_descriptor_value(&entries, key))
+                    .or_else(|| self.named_node_map_synthesized_descriptor_value(&entries, key))
+                    .or_else(|| {
+                        self.placeholder_backed_object_builtin_descriptor_value(&entries, key)
+                    })
                     .or_else(|| Self::own_property_descriptor_object_from_entries(&*entries, key))
+                    .or_else(|| self.dom_string_map_synthesized_descriptor_value(&entries, key))
                     .or_else(|| {
                         self.callable_object_surface_descriptor_value(object, &entries, key)
                     })
@@ -1040,6 +1440,15 @@ impl Harness {
             Value::Array(array) => Ok(self
                 .array_own_property_descriptor_value(array, key)
                 .unwrap_or(Value::Undefined)),
+            Value::NodeList(nodes) => {
+                let own = {
+                    let nodes_ref = nodes.borrow();
+                    Self::own_property_descriptor_object_from_entries(&nodes_ref.properties, key)
+                };
+                Ok(own
+                    .or_else(|| self.node_list_synthesized_descriptor_value(nodes, key))
+                    .unwrap_or(Value::Undefined))
+            }
             Value::Function(function) => Ok(self
                 .function_own_property_descriptor_value(function, key)
                 .unwrap_or(Value::Undefined)),
@@ -1856,6 +2265,15 @@ impl Harness {
                 Ok(Value::Bool(
                     Self::object_get_entry(&*entries, key).is_some()
                         || Self::has_object_accessor_property(&*entries, key)
+                        || self
+                            .class_list_synthesized_descriptor_value(&entries, key)
+                            .is_some()
+                        || self
+                            .named_node_map_synthesized_descriptor_value(&entries, key)
+                            .is_some()
+                        || self
+                            .dom_string_map_synthesized_descriptor_value(&entries, key)
+                            .is_some()
                         || Self::string_wrapper_builtin_has_own_property(&entries, key)
                         || (self.callable_own_surface_value(object, key).is_some()
                             && !Self::is_builtin_object_property_deleted(&*entries, key)),
@@ -1872,6 +2290,19 @@ impl Harness {
                         || Self::has_object_accessor_property(&array_ref.properties, key)
                 };
                 Ok(Value::Bool(has))
+            }
+            Value::NodeList(nodes) => {
+                let snapshot = self.node_list_snapshot(nodes);
+                let nodes_ref = nodes.borrow();
+                Ok(Value::Bool(
+                    key == "length"
+                        || key
+                            .parse::<usize>()
+                            .ok()
+                            .is_some_and(|index| index < snapshot.len())
+                        || Self::object_get_entry(&nodes_ref.properties, key).is_some()
+                        || Self::has_object_accessor_property(&nodes_ref.properties, key),
+                ))
             }
             Value::Function(function) => Ok(Value::Bool(
                 self.script_runtime
@@ -1950,6 +2381,52 @@ impl Harness {
         Ok(self
             .value_internal_prototype_value(value)
             .unwrap_or_else(|| Value::Object(Rc::new(RefCell::new(ObjectValue::default())))))
+    }
+
+    pub(crate) fn object_create_value(
+        &mut self,
+        prototype: &Value,
+        properties: Option<&Value>,
+    ) -> Result<Value> {
+        if !matches!(prototype, Value::Null) && Self::is_primitive_value(prototype) {
+            return Err(Error::ScriptRuntime(
+                "Object prototype may only be an Object or null".into(),
+            ));
+        }
+
+        let created = Self::new_object_value(Vec::new());
+        let Value::Object(entries) = &created else {
+            unreachable!("new_object_value always returns an object");
+        };
+        Self::set_internal_prototype(entries, prototype.clone());
+
+        if let Some(properties) = properties
+            && !matches!(properties, Value::Undefined)
+        {
+            let own_keys = self.reflect_own_keys_value(properties)?;
+            let Value::Array(keys) = own_keys else {
+                unreachable!("Reflect.ownKeys returns an array");
+            };
+            for key in keys.borrow().iter() {
+                let storage_key = self.property_key_to_storage_key(key);
+                let descriptor =
+                    self.object_get_own_property_descriptor_value(properties, &storage_key)?;
+                if !matches!(descriptor, Value::Object(_)) {
+                    continue;
+                }
+                let enumerable = self
+                    .object_property_from_value(&descriptor, "enumerable")?
+                    .truthy();
+                if !enumerable {
+                    continue;
+                }
+                let property_descriptor =
+                    self.object_property_from_value(properties, &storage_key)?;
+                self.object_define_property_value(&created, &storage_key, &property_descriptor)?;
+            }
+        }
+
+        Ok(created)
     }
 
     fn object_set_prototype_would_cycle(&mut self, target: &Value, prototype: &Value) -> bool {
@@ -2306,6 +2783,19 @@ impl Harness {
                                     Value::Null | Value::Undefined => {}
                                     Value::Object(entries) => {
                                         let source = Value::Object(entries.clone());
+                                        let keys = self.object_like_enumerable_keys(&source)?;
+                                        for key in keys {
+                                            let value =
+                                                self.object_property_from_value(&source, &key)?;
+                                            Self::define_object_literal_data_entry(
+                                                &mut object_entries,
+                                                key,
+                                                value,
+                                            );
+                                        }
+                                    }
+                                    Value::NodeList(nodes) => {
+                                        let source = Value::NodeList(nodes.clone());
                                         let keys = self.object_like_enumerable_keys(&source)?;
                                         for key in keys {
                                             let value =

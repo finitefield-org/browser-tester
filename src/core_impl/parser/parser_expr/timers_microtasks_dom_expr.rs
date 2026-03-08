@@ -200,6 +200,30 @@ fn dom_access_uses_known_non_dom_global(target: &DomQuery) -> bool {
     }
 }
 
+fn is_document_placeholder_method_property(name: &str) -> bool {
+    matches!(
+        name,
+        "createElement"
+            | "createElementNS"
+            | "createTextNode"
+            | "createAttribute"
+            | "createDocumentFragment"
+            | "createRange"
+            | "getSelection"
+            | "append"
+            | "getElementById"
+            | "getElementsByClassName"
+            | "getElementsByName"
+            | "getElementsByTagName"
+            | "getElementsByTagNameNS"
+            | "querySelector"
+            | "querySelectorAll"
+            | "createTreeWalker"
+            | "addEventListener"
+            | "removeEventListener"
+    )
+}
+
 fn parse_dom_property_segment(cursor: &mut Cursor) -> Result<Option<String>> {
     cursor.skip_ws();
     if cursor.consume_byte(b'.') {
@@ -671,6 +695,11 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         }
         _ => {
             if matches!(target, DomQuery::DocumentRoot) && head == "cookie" && nested.is_none() {
+                return Ok(None);
+            }
+            if matches!(target, DomQuery::DocumentRoot)
+                && is_document_placeholder_method_property(&head)
+            {
                 return Ok(None);
             }
             if matches!(target, DomQuery::DocumentRoot) && starts_with_window_member_access(src) {

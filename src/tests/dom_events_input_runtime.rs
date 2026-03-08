@@ -3282,6 +3282,126 @@ fn event_trusted_and_target_subproperties_are_accessible() -> Result<()> {
 }
 
 #[test]
+fn event_fast_paths_respect_live_event_object_overrides_work() -> Result<()> {
+    let html = r#"
+        <button id='btn' name='button-name'>run</button>
+        <p id='result'></p>
+        <script>
+          const btn = document.getElementById('btn');
+          btn.addEventListener('custom', (event) => {
+            event.type = 'override';
+            event.target = { id: 7, name: 'target-name' };
+            event.currentTarget = { id: 8, name: 'current-name' };
+            event.isTrusted = 'manual';
+            event.bubbles = 'bubble';
+            event.cancelable = 'cancel';
+            event.eventPhase = 99;
+            event.timeStamp = 123;
+            event.state = { step: 1 };
+            event.oldState = 'closed';
+            event.newState = 'open';
+            event.preventDefault();
+
+            const target = event.target;
+            const current = event.currentTarget;
+            const state = event.state;
+            document.getElementById('result').textContent = [
+              event.type,
+              target.id,
+              event.target.id,
+              event.target.name,
+              current.id,
+              event.currentTarget.name,
+              event.defaultPrevented,
+              event.isTrusted,
+              event.bubbles,
+              event.cancelable,
+              event.eventPhase,
+              event.timeStamp,
+              state.step,
+              event.oldState,
+              event.newState
+            ].join('|');
+          });
+          btn.addEventListener('click', () => {
+            btn.dispatchEvent(new Event('custom', { cancelable: true }));
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "override|7|7|target-name|8|current-name|true|manual|bubble|cancel|99|123|1|closed|open",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn event_fast_path_delete_and_define_property_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const btn = document.getElementById('btn');
+          btn.addEventListener('custom', (event) => {
+            Object.defineProperty(event, 'defaultPrevented', {
+              value: 'shadow',
+              configurable: true
+            });
+            Object.defineProperty(event, 'target', {
+              value: { id: 7, name: 'target-name' },
+              configurable: true
+            });
+            Object.defineProperty(event, 'currentTarget', {
+              value: { id: 8, name: 'current-name' },
+              configurable: true
+            });
+
+            const before = [
+              event.defaultPrevented,
+              event.target.id,
+              event.currentTarget.name
+            ].join(':');
+
+            const deletedDefault = delete event.defaultPrevented;
+            const afterDefault = event.defaultPrevented === undefined;
+            const deletedTargetId = delete event.target.id;
+            const afterTargetId = 'id' in event.target;
+            const deletedCurrentName = delete event.currentTarget.name;
+            const afterCurrentName = 'name' in event.currentTarget;
+            const deletedTarget = delete event.target;
+            const afterTarget = event.target === undefined;
+
+            document.getElementById('result').textContent = [
+              before,
+              deletedDefault,
+              afterDefault,
+              deletedTargetId,
+              afterTargetId,
+              deletedCurrentName,
+              afterCurrentName,
+              deletedTarget,
+              afterTarget
+            ].join('|');
+          });
+          btn.addEventListener('click', () => {
+            btn.dispatchEvent(new Event('custom', { cancelable: true }));
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "shadow:7:current-name|true|true|true|false|true|false|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn type_text_input_handler_supports_current_target_closest_dataset_chain() -> Result<()> {
     let html = r#"
         <div id='root'>
@@ -3353,6 +3473,96 @@ fn dispatch_event_origin_is_untrusted_and_supports_event_methods() -> Result<()>
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
     h.assert_text("#result", "false:false")?;
+    Ok(())
+}
+
+#[test]
+fn event_raw_getter_and_inherited_call_paths_work() -> Result<()> {
+    let html = r#"
+        <div id='box'></div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const result = document.getElementById('result');
+
+          box.addEventListener('custom', (event) => {
+            const prevent = Object.create(event).preventDefault;
+
+            let incompatible = false;
+            try {
+              prevent.call({});
+            } catch (error) {
+              incompatible = String(error).includes('Event');
+            }
+
+            prevent.call(event);
+            result.textContent = [
+              prevent.name,
+              prevent.length,
+              event.defaultPrevented,
+              incompatible
+            ].join(':');
+          });
+
+          document.getElementById('btn').addEventListener('click', () => {
+            const ok = box.dispatchEvent(
+              new Event('custom', { bubbles: true, cancelable: true })
+            );
+            result.textContent = result.textContent + '|' + String(ok === false);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "preventDefault:0:true:true|true")?;
+    Ok(())
+}
+
+#[test]
+fn constructed_event_stop_methods_raw_getter_and_incompatible_receiver_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const ev = new Event('custom', { cancelable: true });
+            const prevent = Object.create(ev).preventDefault;
+            const stop = ev['stopPropagation'];
+            const stopImmediate = ev.stopImmediatePropagation;
+
+            let incompatible = false;
+            try {
+              stop.call({});
+            } catch (error) {
+              incompatible = String(error).includes('Event');
+            }
+
+            prevent.call(ev);
+            stop.call(ev);
+            stopImmediate.call(ev);
+
+            document.getElementById('result').textContent = [
+              prevent.name,
+              prevent.length,
+              stop.name,
+              stop.length,
+              stopImmediate.name,
+              stopImmediate.length,
+              ev.defaultPrevented,
+              incompatible
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "preventDefault:0:stopPropagation:0:stopImmediatePropagation:0:true:true",
+    )?;
     Ok(())
 }
 

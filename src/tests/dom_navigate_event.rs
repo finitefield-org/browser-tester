@@ -194,3 +194,43 @@ fn navigate_event_constructor_rejects_non_object_options() -> Result<()> {
     h.assert_text("#result", "true")?;
     Ok(())
 }
+
+#[test]
+fn navigate_event_raw_getter_and_inherited_property_paths_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const ev = new NavigateEvent('navigate', { canIntercept: true });
+          const intercept = Object.create(ev).intercept;
+          const scroll = ev['scroll'];
+          let handled = 0;
+
+          intercept.call(ev, {
+            handler() {
+              handled += 1;
+            }
+          });
+          scroll.call(ev);
+
+          let incompatible = false;
+          try {
+            scroll.call({});
+          } catch (error) {
+            incompatible = String(error).includes('NavigateEvent');
+          }
+
+          document.getElementById('result').textContent = [
+            intercept.name,
+            intercept.length,
+            scroll.name,
+            scroll.length,
+            handled,
+            incompatible
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "intercept:1:scroll:0:1:true")?;
+    Ok(())
+}

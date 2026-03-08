@@ -55,6 +55,10 @@ impl Harness {
             ),
         ];
         entries.extend(extras);
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            Self::cookie_store_builtin_keys(),
+        );
         *self.browser_apis.cookie_store_object.borrow_mut() = entries.into();
     }
 
