@@ -5055,22 +5055,203 @@ fn class_list_iterator_property_paths_and_object_copy_work() -> Result<()> {
 }
 
 #[test]
-fn static_node_list_default_prototype_is_stable_work() -> Result<()> {
+fn class_list_expando_assignment_and_explicit_prototype_mutation_work() -> Result<()> {
     let html = r#"
-        <div><span>alpha</span><span>beta</span></div>
+        <div id='box' class='base active'></div>
         <p id='result'></p>
         <script>
-          const protoA = Object.getPrototypeOf(document.querySelectorAll('span'));
-          const protoB = Object.getPrototypeOf(document.querySelectorAll('span'));
+          const list = document.getElementById('box').classList;
+          list.marker = 'own';
+
+          const sameList = document.getElementById('box').classList;
+          const proto = {
+            5: 'proto-index',
+            protoOnly: 'proto',
+            pick() {
+              return this[5];
+            }
+          };
+
+          Object.setPrototypeOf(list, proto);
+          const child = Object.create(list);
+
           document.getElementById('result').textContent = [
-            protoA === Object.prototype,
-            protoA === protoB
+            String(sameList === list),
+            sameList.marker,
+            String(Object.getPrototypeOf(list) === proto),
+            list[0],
+            list[5],
+            list.protoOnly,
+            String(list.pick() === 'proto-index'),
+            child[0],
+            child[5],
+            child.marker,
+            String('5' in list),
+            String('marker' in child),
+            String(typeof list.add === 'undefined'),
+            String(list.length === 2)
           ].join('|');
         </script>
         "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#result", "true|true")?;
+    h.assert_text(
+        "#result",
+        "true|own|true|base|proto-index|proto|true|base|proto-index|own|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn static_node_list_default_prototype_is_stable_work() -> Result<()> {
+    let html = r#"
+        <div id="box"><span id="alpha" name="hero">alpha</span><span id="beta">beta</span></div>
+        <p id='result'></p>
+        <script>
+          const staticList = document.querySelectorAll('span');
+          const liveList = document.getElementById('box').children;
+          const protoA = Object.getPrototypeOf(staticList);
+          const protoB = Object.getPrototypeOf(document.querySelectorAll('span'));
+          const liveProto = Object.getPrototypeOf(liveList);
+          let mismatch = '';
+          try {
+            liveProto.namedItem.call(staticList, 'alpha');
+          } catch (error) {
+            mismatch = String(error).includes('HTMLCollection method called on incompatible receiver');
+          }
+          document.getElementById('result').textContent = [
+            Object.prototype.toString.call(staticList),
+            Object.prototype.toString.call(liveList),
+            String(protoA === protoB),
+            String(protoA !== Object.prototype),
+            String(liveProto !== Object.prototype),
+            String(protoA !== liveProto),
+            staticList.constructor.name,
+            liveList.constructor.name,
+            String(staticList.constructor.prototype === protoA),
+            String(liveList.constructor.prototype === liveProto),
+            String(staticList.item === protoA.item),
+            String(liveList.item === liveProto.item),
+            String(liveList.namedItem === liveProto.namedItem),
+            String(typeof staticList.namedItem),
+            String(mismatch)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "[object NodeList]|[object HTMLCollection]|true|true|true|true|NodeList|HTMLCollection|true|true|true|true|true|undefined|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dom_collection_constructors_are_exposed_and_specialized_prototypes_chain_work() -> Result<()> {
+    let html = r#"
+        <div id="host"><span></span></div>
+        <form id="form"><input id="email" name="email"></form>
+        <select id="list"><option id="o1" name="alpha" value="a">A</option></select>
+        <p id='result'></p>
+        <script>
+          const staticList = document.querySelectorAll('span');
+          const liveList = document.getElementById('host').children;
+          const formElements = document.getElementById('form').elements;
+          const options = document.getElementById('list').options;
+          document.getElementById('result').textContent = [
+            typeof NodeList,
+            typeof HTMLCollection,
+            typeof HTMLFormControlsCollection,
+            typeof HTMLOptionsCollection,
+            String(window.NodeList === NodeList),
+            String(window.HTMLCollection === HTMLCollection),
+            String(window.HTMLFormControlsCollection === HTMLFormControlsCollection),
+            String(window.HTMLOptionsCollection === HTMLOptionsCollection),
+            String(staticList.constructor === NodeList),
+            String(liveList.constructor === HTMLCollection),
+            String(formElements.constructor === HTMLFormControlsCollection),
+            String(options.constructor === HTMLOptionsCollection),
+            String(Object.getPrototypeOf(HTMLFormControlsCollection.prototype) === HTMLCollection.prototype),
+            String(Object.getPrototypeOf(HTMLOptionsCollection.prototype) === HTMLCollection.prototype),
+            String(liveList),
+            String(formElements),
+            String(options)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "function|function|function|function|true|true|true|true|true|true|true|true|true|true|[object HTMLCollection]|[object HTMLFormControlsCollection]|[object HTMLOptionsCollection]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn specialized_collection_constructors_share_html_collection_callable_surface_work() -> Result<()> {
+    let html = r#"
+        <form id="form"><input id="email" name="email"></form>
+        <select id="list">
+          <option id="o1" name="alpha" value="a">A</option>
+          <option id="o2" value="b">B</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const formElements = document.getElementById('form').elements;
+          const options = document.getElementById('list').options;
+          const htmlProto = HTMLCollection.prototype;
+          const formProto = HTMLFormControlsCollection.prototype;
+          const optionsProto = HTMLOptionsCollection.prototype;
+          const bracketItem = HTMLOptionsCollection['prototype']['item'];
+          const bracketNamedItem = HTMLFormControlsCollection['prototype']['namedItem'];
+
+          let directIllegal = '';
+          let callIllegal = '';
+          let mismatch = '';
+
+          try {
+            HTMLFormControlsCollection();
+          } catch (error) {
+            directIllegal = String(error);
+          }
+
+          try {
+            Function.prototype.call.call(HTMLOptionsCollection, null);
+          } catch (error) {
+            callIllegal = String(error);
+          }
+
+          try {
+            bracketItem.call(document.querySelectorAll('input'), 0);
+          } catch (error) {
+            mismatch = String(error);
+          }
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(HTMLFormControlsCollection) === Function.prototype),
+            String(Object.getPrototypeOf(HTMLOptionsCollection) === Function.prototype),
+            String(formProto.item === htmlProto.item),
+            String(formProto.namedItem === htmlProto.namedItem),
+            String(optionsProto.item === htmlProto.item),
+            String(optionsProto.namedItem === htmlProto.namedItem),
+            bracketItem.call(options, 1).id,
+            bracketNamedItem.call(formElements, 'email').id,
+            String(directIllegal.includes('Illegal constructor')),
+            String(callIllegal.includes('Illegal constructor')),
+            String(mismatch.includes('HTMLCollection method called on incompatible receiver')),
+            HTMLFormControlsCollection.name,
+            String(HTMLOptionsCollection.length)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|o2|email|true|true|true|HTMLFormControlsCollection|0",
+    )?;
     Ok(())
 }
 
@@ -6799,6 +6980,173 @@ fn dataset_dom_string_map_own_keys_and_descriptors_track_live_attributes_work() 
     h.assert_text(
         "#result",
         "userId:userId:userId:true:u1:true:true:true:u1|planId,userId:planId,userId:planId,userId:true:pro:true:pro|shadow:userId:planId,userId:planId,userId:false:true:undefined|:planId:planId:true:false:undefined",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dataset_expando_assignment_and_explicit_prototype_mutation_work() -> Result<()> {
+    let html = r#"
+        <div id='box' data-user-id='u1'></div>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const ds = box.dataset;
+          ds.marker = 'own';
+
+          const proto = {
+            planId: 'proto-plan',
+            protoOnly: 'proto',
+            pick() {
+              return this.planId;
+            }
+          };
+
+          const sameDs = box.dataset;
+          Object.setPrototypeOf(ds, proto);
+          const child = Object.create(ds);
+
+          const before = [
+            ds.planId,
+            child.planId,
+            String('planId' in ds)
+          ].join(':');
+
+          box.setAttribute('data-plan-id', 'live');
+
+          document.getElementById('result').textContent = [
+            String(sameDs === ds),
+            sameDs.marker,
+            String(Object.getPrototypeOf(ds) === proto),
+            before,
+            ds.userId,
+            ds.planId,
+            ds.protoOnly,
+            String(ds.pick() === 'live'),
+            child.userId,
+            child.planId,
+            child.marker,
+            String('planId' in ds),
+            String('marker' in child)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|own|true|proto-plan:proto-plan:true|u1|live|proto|true|u1|live|own|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dataset_define_property_delete_and_live_wrapper_identity_work() -> Result<()> {
+    let html = r#"
+        <div id='box' data-user-id='u1'></div>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const ds = box.dataset;
+          const sameDs = box.dataset;
+
+          Object.defineProperty(ds, 'userId', {
+            value: 'shadow',
+            enumerable: true,
+            configurable: true
+          });
+
+          const before = [
+            String(sameDs === ds),
+            sameDs.userId,
+            box.getAttribute('data-user-id'),
+            String('userId' in ds),
+            String(Object.hasOwn(ds, 'userId')),
+            Object.keys(ds).join(',')
+          ].join(':');
+
+          delete sameDs.userId;
+
+          const afterDesc = Object.getOwnPropertyDescriptor(ds, 'userId');
+          const after = [
+            ds.userId,
+            box.getAttribute('data-user-id'),
+            afterDesc.value,
+            String(Object.hasOwn(ds, 'userId')),
+            String('userId' in ds),
+            Object.keys(ds).join(',')
+          ].join(':');
+
+          document.getElementById('result').textContent = [before, after].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:shadow:u1:true:true:userId|u1:u1:u1:true:true:userId",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dataset_direct_fast_path_respects_live_wrapper_shadow_and_proto_work() -> Result<()> {
+    let html = r#"
+        <div id='box' data-user-id='u1'></div>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const ds = box.dataset;
+          Object.setPrototypeOf(ds, { planId: 'proto' });
+
+          const before = [
+            box.dataset.userId,
+            box.dataset['userId'],
+            box.dataset.planId,
+            box.dataset['planId']
+          ].join(':');
+
+          Object.defineProperty(ds, 'userId', {
+            value: 'shadow',
+            configurable: true,
+            enumerable: true
+          });
+
+          const shadow = [
+            box.dataset.userId,
+            box.dataset['userId'],
+            String(Object.hasOwn(box.dataset, 'userId'))
+          ].join(':');
+
+          box.setAttribute('data-plan-id', 'live');
+
+          const live = [
+            box.dataset.planId,
+            box.dataset['planId'],
+            String(Object.hasOwn(box.dataset, 'planId'))
+          ].join(':');
+
+          delete ds.userId;
+
+          const after = [
+            box.dataset.userId,
+            box.dataset['userId'],
+            String(Object.hasOwn(box.dataset, 'userId'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadow,
+            live,
+            after
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "u1:u1:proto:proto|shadow:shadow:true|live:live:true|u1:u1:true",
     )?;
     Ok(())
 }
@@ -9193,6 +9541,54 @@ fn node_list_explicit_prototype_override_controls_inherited_lookup_work() -> Res
 }
 
 #[test]
+fn live_children_node_list_expando_assignment_and_explicit_prototype_mutation_work() -> Result<()> {
+    let html = r#"
+        <div id='host'><span id='only'></span></div>
+        <p id='result'></p>
+        <script>
+          const list = document.getElementById('host').children;
+          list.marker = 'own';
+
+          const proto = {
+            5: 'proto-index',
+            protoOnly: 'proto',
+            pick() {
+              return this[5];
+            }
+          };
+
+          const sameList = document.getElementById('host').children;
+          Object.setPrototypeOf(list, proto);
+          const child = Object.create(list);
+
+          document.getElementById('result').textContent = [
+            String(sameList === list),
+            sameList.marker,
+            String(Object.getPrototypeOf(list) === proto),
+            list[0].id,
+            list[5],
+            list.protoOnly,
+            String(list.pick() === 'proto-index'),
+            child[0].id,
+            child[5],
+            child.marker,
+            String('5' in list),
+            String('marker' in child),
+            String(typeof list.forEach === 'undefined'),
+            String(list.length === 1)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|own|true|only|proto-index|proto|true|only|proto-index|own|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn node_list_reflective_surface_and_object_copy_work() -> Result<()> {
     let html = r#"
         <ul>
@@ -9232,5 +9628,136 @@ fn node_list_reflective_surface_and_object_copy_work() -> Result<()> {
         "#result",
         "0,1|0,1,length|0,1,length|true|alpha|2|alpha|beta|0,1|alpha|beta|0,1|0:alpha,1:beta",
     )?;
+    Ok(())
+}
+
+#[test]
+fn live_children_node_list_define_property_delete_and_in_parity_work() -> Result<()> {
+    let html = r#"
+        <div id='host'><span id='only'></span></div>
+        <p id='result'></p>
+        <script>
+          const list = document.getElementById('host').children;
+          const sameList = document.getElementById('host').children;
+
+          Object.defineProperty(list, 'marker', {
+            value: 'own',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(list, '0', {
+            value: 'shadow',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(list, 'length', {
+            get() {
+              return 99;
+            },
+            configurable: true
+          });
+
+          const before = [
+            String(sameList === list),
+            sameList.marker,
+            list[0],
+            list.length,
+            String('marker' in list),
+            String('0' in list),
+            String(Object.hasOwn(list, 'marker')),
+            Object.keys(list).join(',')
+          ].join(':');
+
+          delete sameList.marker;
+          delete sameList[0];
+          delete sameList.length;
+
+          const afterZeroDesc = Object.getOwnPropertyDescriptor(list, '0');
+          const afterLengthDesc = Object.getOwnPropertyDescriptor(list, 'length');
+          const after = [
+            String(Object.hasOwn(list, 'marker')),
+            list[0].id,
+            list.length,
+            afterZeroDesc.value.id,
+            afterLengthDesc.value,
+            String('marker' in list),
+            String('0' in list),
+            Object.keys(list).join(',')
+          ].join(':');
+
+          document.getElementById('result').textContent = [before, after].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:own:shadow:99:true:true:true:0,only,marker|false:only:1:only:1:false:true:0,only",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn direct_dom_collection_fast_paths_respect_live_wrapper_shadowing_work() -> Result<()> {
+    let html = r#"
+        <div id='box' class='base active'><span></span></div>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const list = box.classList;
+          const children = box.children;
+
+          Object.defineProperty(list, '0', {
+            value: 'shadow-token',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(list, 'length', {
+            get() {
+              return 99;
+            },
+            configurable: true
+          });
+
+          Object.defineProperty(children, '0', {
+            value: 'shadow-child',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(children, 'length', {
+            get() {
+              return 77;
+            },
+            configurable: true
+          });
+
+          const shadow = [
+            box.classList[0],
+            box.classList.length,
+            box.children[0],
+            box.children.length
+          ].join(':');
+
+          delete list[0];
+          delete list.length;
+          delete children[0];
+          delete children.length;
+
+          box.classList.add('z');
+          box.appendChild(document.createElement('b'));
+
+          const live = [
+            box.classList[0],
+            box.classList.length,
+            box.children[0].tagName.toLowerCase(),
+            box.children.length
+          ].join(':');
+
+          document.getElementById('result').textContent = [shadow, live].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "shadow-token:99:shadow-child:77|base:3:span:2")?;
     Ok(())
 }

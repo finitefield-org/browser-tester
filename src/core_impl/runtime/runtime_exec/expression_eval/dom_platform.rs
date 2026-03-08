@@ -157,9 +157,10 @@ impl Harness {
                             self.dom.attr(node, "class").unwrap_or_default(),
                         )),
                         DomProp::ClassList => Ok(self.class_list_live_value(node)),
-                        DomProp::ClassListLength => Ok(Value::Number(
-                            class_tokens(self.dom.attr(node, "class").as_deref()).len() as i64,
-                        )),
+                        DomProp::ClassListLength => {
+                            let list = self.class_list_live_value(node);
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
+                        }
                         DomProp::Part => Ok(Self::new_array_value(
                             class_tokens(self.dom.attr(node, "part").as_deref())
                                 .into_iter()
@@ -394,11 +395,10 @@ impl Harness {
                         DomProp::ClientLeft => Ok(Value::Number(self.dom.client_left(node)?)),
                         DomProp::ClientTop => Ok(Value::Number(self.dom.client_top(node)?)),
                         DomProp::CurrentCssZoom => Ok(Value::Number(1)),
-                        DomProp::Dataset(key) => Ok(self
-                            .dom
-                            .dataset_get(node, key)?
-                            .map(Value::String)
-                            .unwrap_or(Value::Undefined)),
+                        DomProp::Dataset(key) => {
+                            let map = self.dom_string_map_live_value(node);
+                            self.object_property_from_value_with_receiver(&map, key, &map)
+                        }
                         DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
                         DomProp::OffsetWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
                         DomProp::OffsetHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
@@ -495,18 +495,10 @@ impl Harness {
                         DomProp::VisibilityState => Ok(Value::String(
                             self.dom_runtime.document_visibility_state.clone(),
                         )),
-                        DomProp::Forms => Ok(Self::new_static_node_list_value(
-                            self.dom.query_selector_all("form")?,
-                        )),
-                        DomProp::Images => Ok(Self::new_static_node_list_value(
-                            self.dom.query_selector_all("img")?,
-                        )),
-                        DomProp::Links => Ok(Self::new_static_node_list_value(
-                            self.dom.query_selector_all("a[href], area[href]")?,
-                        )),
-                        DomProp::Scripts => Ok(Self::new_static_node_list_value(
-                            self.dom.query_selector_all("script")?,
-                        )),
+                        DomProp::Forms => Ok(self.document_forms_live_list_value()),
+                        DomProp::Images => Ok(self.document_images_live_list_value()),
+                        DomProp::Links => Ok(self.document_links_live_list_value()),
+                        DomProp::Scripts => Ok(self.document_scripts_live_list_value()),
                         DomProp::Children => Ok(self.child_elements_live_list_value(node)),
                         DomProp::ChildElementCount => {
                             Ok(Value::Number(self.dom.child_element_count(node) as i64))
@@ -522,20 +514,25 @@ impl Harness {
                             .map(Value::Node)
                             .unwrap_or(Value::Null)),
                         DomProp::CurrentScript => Ok(Value::Null),
-                        DomProp::FormsLength => Ok(Value::Number(
-                            self.dom.query_selector_all("form")?.len() as i64,
-                        )),
-                        DomProp::ImagesLength => Ok(Value::Number(
-                            self.dom.query_selector_all("img")?.len() as i64,
-                        )),
-                        DomProp::LinksLength => Ok(Value::Number(
-                            self.dom.query_selector_all("a[href], area[href]")?.len() as i64,
-                        )),
-                        DomProp::ScriptsLength => Ok(Value::Number(
-                            self.dom.query_selector_all("script")?.len() as i64,
-                        )),
+                        DomProp::FormsLength => {
+                            let list = self.document_forms_live_list_value();
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
+                        }
+                        DomProp::ImagesLength => {
+                            let list = self.document_images_live_list_value();
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
+                        }
+                        DomProp::LinksLength => {
+                            let list = self.document_links_live_list_value();
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
+                        }
+                        DomProp::ScriptsLength => {
+                            let list = self.document_scripts_live_list_value();
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
+                        }
                         DomProp::ChildrenLength => {
-                            Ok(Value::Number(self.dom.child_element_count(node) as i64))
+                            let list = self.child_elements_live_list_value(node);
+                            self.object_property_from_value_with_receiver(&list, "length", &list)
                         }
                         DomProp::AudioSrc => Ok(Value::String(self.resolve_media_src(node))),
                         DomProp::AudioAutoplay => {
@@ -1290,6 +1287,53 @@ impl Harness {
         Value::NodeList(Rc::new(RefCell::new(NodeListValue::static_list(nodes))))
     }
 
+    fn document_query_selector_live_list_value(&mut self, selector: &'static str) -> Value {
+        let existing = match selector {
+            "form" => self.dom_runtime.live_document_forms_list.clone(),
+            "img" => self.dom_runtime.live_document_images_list.clone(),
+            "a[href], area[href]" => self.dom_runtime.live_document_links_list.clone(),
+            "script" => self.dom_runtime.live_document_scripts_list.clone(),
+            _ => None,
+        };
+        let list = existing.unwrap_or_else(|| {
+            let nodes = self.dom.query_selector_all(selector).unwrap_or_default();
+            let list = Rc::new(RefCell::new(NodeListValue::live_query_selector_all(
+                self.dom.root,
+                selector.to_string(),
+                NodeListKind::HtmlCollection,
+                nodes,
+            )));
+            match selector {
+                "form" => self.dom_runtime.live_document_forms_list = Some(list.clone()),
+                "img" => self.dom_runtime.live_document_images_list = Some(list.clone()),
+                "a[href], area[href]" => {
+                    self.dom_runtime.live_document_links_list = Some(list.clone())
+                }
+                "script" => self.dom_runtime.live_document_scripts_list = Some(list.clone()),
+                _ => {}
+            }
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
+    pub(crate) fn document_forms_live_list_value(&mut self) -> Value {
+        self.document_query_selector_live_list_value("form")
+    }
+
+    pub(crate) fn document_images_live_list_value(&mut self) -> Value {
+        self.document_query_selector_live_list_value("img")
+    }
+
+    pub(crate) fn document_links_live_list_value(&mut self) -> Value {
+        self.document_query_selector_live_list_value("a[href], area[href]")
+    }
+
+    pub(crate) fn document_scripts_live_list_value(&mut self) -> Value {
+        self.document_query_selector_live_list_value("script")
+    }
+
     pub(crate) fn class_names_from_argument(value: &Value) -> Vec<String> {
         value
             .as_string()
@@ -1393,6 +1437,117 @@ impl Harness {
         Value::NodeList(list)
     }
 
+    pub(crate) fn form_elements_live_list_value(&mut self, form: NodeId) -> Result<Value> {
+        let existing = self
+            .dom_runtime
+            .live_form_elements_lists
+            .get(&form)
+            .cloned();
+        let list = if let Some(existing) = existing {
+            existing
+        } else {
+            let list = Rc::new(RefCell::new(NodeListValue::live_form_elements(
+                form,
+                self.form_elements(form)?,
+            )));
+            self.dom_runtime
+                .live_form_elements_lists
+                .insert(form, list.clone());
+            list
+        };
+        self.refresh_node_list(&list);
+        Ok(Value::NodeList(list))
+    }
+
+    pub(crate) fn form_named_group_live_list_value(
+        &mut self,
+        form: NodeId,
+        name: &str,
+    ) -> Result<Value> {
+        let cache_key = (form, name.to_string());
+        let existing = self
+            .dom_runtime
+            .live_form_named_group_lists
+            .get(&cache_key)
+            .cloned();
+        let list = if let Some(existing) = existing {
+            existing
+        } else {
+            let list = Rc::new(RefCell::new(NodeListValue::live_form_elements_named_group(
+                form,
+                name.to_string(),
+                self.form_controls_named_matches(form, name)?,
+            )));
+            self.dom_runtime
+                .live_form_named_group_lists
+                .insert(cache_key, list.clone());
+            list
+        };
+        self.refresh_node_list(&list);
+        Ok(Value::NodeList(list))
+    }
+
+    pub(crate) fn select_options_live_list_value(&mut self, select: NodeId) -> Value {
+        let existing = self
+            .dom_runtime
+            .live_select_options_lists
+            .get(&select)
+            .cloned();
+        let list = existing.unwrap_or_else(|| {
+            let list = Rc::new(RefCell::new(NodeListValue::live_select_options(
+                select,
+                self.select_option_nodes(select),
+            )));
+            self.dom_runtime
+                .live_select_options_lists
+                .insert(select, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
+    pub(crate) fn selected_options_live_list_value(&mut self, select: NodeId) -> Value {
+        let existing = self
+            .dom_runtime
+            .live_selected_options_lists
+            .get(&select)
+            .cloned();
+        let list = existing.unwrap_or_else(|| {
+            let list = Rc::new(RefCell::new(NodeListValue::live_selected_options(
+                select,
+                self.select_selected_option_nodes(select),
+            )));
+            self.dom_runtime
+                .live_selected_options_lists
+                .insert(select, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
+    pub(crate) fn datalist_options_live_list_value(&mut self, datalist: NodeId) -> Value {
+        let existing = self
+            .dom_runtime
+            .live_datalist_options_lists
+            .get(&datalist)
+            .cloned();
+        let list = existing.unwrap_or_else(|| {
+            let mut options = Vec::new();
+            self.dom.collect_select_options(datalist, &mut options);
+            let list = Rc::new(RefCell::new(NodeListValue::live_datalist_options(
+                datalist, options,
+            )));
+            self.dom_runtime
+                .live_datalist_options_lists
+                .insert(datalist, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
     pub(crate) fn named_node_map_live_value(&mut self, owner: NodeId) -> Value {
         let existing = self.dom_runtime.live_named_node_maps.get(&owner).cloned();
         let map = existing.unwrap_or_else(|| {
@@ -1402,6 +1557,21 @@ impl Harness {
             };
             self.dom_runtime
                 .live_named_node_maps
+                .insert(owner, object.clone());
+            object
+        });
+        Value::Object(map)
+    }
+
+    pub(crate) fn dom_string_map_live_value(&mut self, owner: NodeId) -> Value {
+        let existing = self.dom_runtime.live_dom_string_maps.get(&owner).cloned();
+        let map = existing.unwrap_or_else(|| {
+            let dom_string_map = self.new_dom_string_map_value(owner);
+            let Value::Object(object) = dom_string_map else {
+                unreachable!("new_dom_string_map_value must return an object");
+            };
+            self.dom_runtime
+                .live_dom_string_maps
                 .insert(owner, object.clone());
             object
         });
@@ -1444,6 +1614,44 @@ impl Harness {
                     Vec::new()
                 }
             }
+            LiveNodeListSource::FormElements { form } => {
+                if self.dom.is_valid_node(form) {
+                    self.form_elements(form).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::FormElementsNamedGroup { form, name } => {
+                if self.dom.is_valid_node(form) {
+                    self.form_controls_named_matches(form, name.as_str())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::SelectOptions { select } => {
+                if self.dom.is_valid_node(select) {
+                    self.select_option_nodes(select)
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::SelectedOptions { select } => {
+                if self.dom.is_valid_node(select) {
+                    self.select_selected_option_nodes(select)
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::DataListOptions { datalist } => {
+                if self.dom.is_valid_node(datalist) {
+                    let mut options = Vec::new();
+                    self.dom.collect_select_options(datalist, &mut options);
+                    options
+                } else {
+                    Vec::new()
+                }
+            }
             LiveNodeListSource::DescendantsByClassNames { root, class_names } => {
                 if !self.dom.is_valid_node(root) || class_names.is_empty() {
                     Vec::new()
@@ -1479,6 +1687,15 @@ impl Harness {
                         namespace_uri.as_deref(),
                         &local_name,
                     )
+                }
+            }
+            LiveNodeListSource::QuerySelectorAll { root, selector } => {
+                if !self.dom.is_valid_node(root) {
+                    Vec::new()
+                } else {
+                    self.dom
+                        .query_selector_all_from(&root, &selector)
+                        .unwrap_or_default()
                 }
             }
         };

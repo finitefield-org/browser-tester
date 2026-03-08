@@ -3537,6 +3537,214 @@ fn document_body_chain_supports_query_selector_and_query_selector_all() -> Resul
 }
 
 #[test]
+fn document_backed_collections_are_live_cached_and_shadow_aware_work() -> Result<()> {
+    let html = r#"
+        <html id='doc'>
+          <head>
+            <script id='boot'></script>
+          </head>
+          <body>
+            <form id='f1'></form>
+            <img id='img1' src='a.png'>
+            <a id='l1' href='/one'>one</a>
+            <button id='run'>run</button>
+            <p id='result'></p>
+            <script>
+              document.getElementById('run').addEventListener('click', () => {
+                const doc = document;
+                const forms = doc.forms;
+                const images = doc.images;
+                const links = doc.links;
+                const scripts = doc.scripts;
+
+                Object.defineProperty(forms, 'length', {
+                  get() { return 41; },
+                  configurable: true
+                });
+                Object.defineProperty(images, '0', {
+                  value: 'shadow-image',
+                  enumerable: true,
+                  configurable: true
+                });
+                Object.defineProperty(links, 'length', {
+                  get() { return 77; },
+                  configurable: true
+                });
+                Object.defineProperty(scripts, 'length', {
+                  get() { return 55; },
+                  configurable: true
+                });
+
+                const shadow = [
+                  String(doc.forms === forms),
+                  String(doc.images === images),
+                  String(doc.links === links),
+                  String(doc.scripts === scripts),
+                  document.forms.length,
+                  doc.images[0],
+                  document.links.length,
+                  doc.scripts.length
+                ].join(':');
+
+                delete forms.length;
+                delete images[0];
+                delete links.length;
+                delete scripts.length;
+
+                const form = document.createElement('form');
+                form.id = 'f2';
+                document.body.appendChild(form);
+
+                const img = document.createElement('img');
+                img.id = 'img2';
+                img.src = 'b.png';
+                document.body.appendChild(img);
+
+                const link = document.createElement('a');
+                link.id = 'l2';
+                link.href = '/two';
+                document.body.appendChild(link);
+
+                const script = document.createElement('script');
+                script.id = 's2';
+                document.body.appendChild(script);
+
+                const formsDesc = Object.getOwnPropertyDescriptor(forms, '1');
+                const linksDesc = Object.getOwnPropertyDescriptor(links, '1');
+                const scriptsDesc = Object.getOwnPropertyDescriptor(scripts, '2');
+
+                const live = [
+                  forms.length,
+                  document.forms[1].id,
+                  formsDesc.value.id,
+                  Object.keys(forms).join(','),
+                  images.length,
+                  document.images[0].id,
+                  doc.images[1].id,
+                  links.length,
+                  doc.links[1].id,
+                  linksDesc.value.id,
+                  scripts.length,
+                  document.scripts[2].id,
+                  scriptsDesc.value.id
+                ].join(':');
+
+                document.getElementById('result').textContent = [shadow, live].join('|');
+              });
+            </script>
+          </body>
+        </html>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://example.com/app", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:41:shadow-image:77:55|2:f2:f2:0,1,f1,f2:2:img1:img2:2:l2:l2:3:s2:s2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_backed_collections_expose_named_properties_and_hide_builtin_collisions_work()
+-> Result<()> {
+    let html = r#"
+        <html>
+          <body>
+            <form id="login" name="auth"></form>
+            <form id="item" name="prefs"></form>
+            <a id="docs" name="guide" href="/docs">Docs</a>
+            <map name="site-map">
+              <area id="namedItem" name="areaGuide" href="/area"></area>
+            </map>
+            <button id="run">run</button>
+            <p id="result"></p>
+            <script>
+              document.getElementById('run').addEventListener('click', () => {
+                const forms = document.forms;
+                const links = document.links;
+
+                Object.defineProperty(forms, 'login', {
+                  value: 'shadow-login',
+                  enumerable: true,
+                  configurable: true
+                });
+                Object.defineProperty(links, 'docs', {
+                  value: 'shadow-link',
+                  enumerable: true,
+                  configurable: true
+                });
+
+                const shadow = [
+                  forms.login,
+                  forms.namedItem('login').id,
+                  links.docs,
+                  links.namedItem('docs').id,
+                  typeof forms.item,
+                  forms.namedItem('item').id,
+                  typeof links.namedItem,
+                  links.namedItem('namedItem').id
+                ].join(':');
+
+                delete forms.login;
+                delete links.docs;
+
+                const formKeys = Reflect.ownKeys(forms);
+                const linkKeys = Reflect.ownKeys(links);
+                const formsCopy = { ...forms };
+                const linksCopy = { ...links };
+
+                const lateForm = document.createElement('form');
+                lateForm.id = 'later';
+                lateForm.name = 'laterName';
+                document.body.appendChild(lateForm);
+
+                const lateLink = document.createElement('a');
+                lateLink.id = 'laterLink';
+                lateLink.name = 'laterGuide';
+                lateLink.href = '/later';
+                document.body.appendChild(lateLink);
+
+                const live = [
+                  forms.login.id,
+                  forms.auth.id,
+                  formKeys.includes('login'),
+                  formKeys.includes('prefs'),
+                  formKeys.includes('item'),
+                  formsCopy.login.id,
+                  formsCopy.prefs.id,
+                  links.docs.id,
+                  links.guide.id,
+                  linkKeys.includes('docs'),
+                  linkKeys.includes('guide'),
+                  linkKeys.includes('namedItem'),
+                  linksCopy.docs.id,
+                  linksCopy.guide.id,
+                  forms.laterName.id,
+                  forms.namedItem('later').id,
+                  links.laterGuide.id,
+                  links.namedItem('laterLink').id,
+                  document.forms.length,
+                  document.links.length
+                ].join(':');
+
+                document.getElementById('result').textContent = [shadow, live].join('|');
+              });
+            </script>
+          </body>
+        </html>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://example.com/app", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow-login:login:shadow-link:docs:function:item:function:namedItem|login:login:true:true:false:login:item:docs:docs:true:true:false:docs:docs:later:later:laterLink:laterLink:3:3",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn class_list_for_each_supports_single_arg_and_index() -> Result<()> {
     let html = r#"
         <div id='box' class='red green blue'></div>

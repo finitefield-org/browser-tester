@@ -17,7 +17,7 @@ enum NormalizedOwnPropertyDescriptor {
 }
 
 impl Harness {
-    fn own_property_integer_key(key: &str) -> Option<u64> {
+    pub(crate) fn own_property_integer_key(key: &str) -> Option<u64> {
         if key.is_empty() || !key.as_bytes().iter().all(|b| b.is_ascii_digit()) {
             return None;
         }
@@ -1117,16 +1117,18 @@ impl Harness {
         enumerable_only: bool,
     ) -> Vec<String> {
         let snapshot = self.node_list_snapshot(nodes);
-        let nodes_ref = nodes.borrow();
         let mut integer_keys = snapshot
             .iter()
             .enumerate()
             .map(|(index, _)| (index as u64, index.to_string()))
             .collect::<Vec<_>>();
-        let property_keys = if enumerable_only {
-            Self::ordered_enumerable_string_keys(&nodes_ref.properties)
-        } else {
-            Self::ordered_visible_string_keys(&nodes_ref.properties)
+        let property_keys = {
+            let nodes_ref = nodes.borrow();
+            if enumerable_only {
+                Self::ordered_enumerable_string_keys(&nodes_ref.properties)
+            } else {
+                Self::ordered_visible_string_keys(&nodes_ref.properties)
+            }
         };
         for key in &property_keys {
             if let Some(index) = Self::own_property_integer_key(key)
@@ -1140,9 +1142,19 @@ impl Harness {
             .into_iter()
             .map(|(_, key)| key)
             .collect::<Vec<_>>();
+        let named_keys = self
+            .html_collection_named_entries(nodes)
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|key| {
+                !property_keys.iter().any(|existing| existing == key)
+                    && self.html_collection_named_property_is_visible(nodes, key)
+            })
+            .collect::<Vec<_>>();
         if !enumerable_only {
             out.push("length".to_string());
         }
+        out.extend(named_keys);
         out.extend(property_keys.into_iter().filter(|key| {
             Self::own_property_integer_key(key).is_none() && (enumerable_only || key != "length")
         }));
@@ -1166,19 +1178,23 @@ impl Harness {
         if key == "length" {
             return Some(Self::own_data_property_descriptor_with_attrs(
                 Value::Number(snapshot.len() as i64),
-                true,
+                false,
                 false,
                 true,
             ));
         }
-        let index = Self::own_property_integer_key(key)? as usize;
-        let node = *snapshot.get(index)?;
-        Some(Self::own_data_property_descriptor_with_attrs(
-            Value::Node(node),
-            true,
-            true,
-            true,
-        ))
+        if let Some(index) = Self::own_property_integer_key(key) {
+            if let Some(node) = snapshot.get(index as usize).copied() {
+                return Some(Self::own_data_property_descriptor_with_attrs(
+                    Value::Node(node),
+                    false,
+                    true,
+                    true,
+                ));
+            }
+        }
+        self.html_collection_named_property_value(nodes, key)
+            .map(|value| Self::own_data_property_descriptor_with_attrs(value, false, true, true))
     }
 
     fn object_like_enumerable_keys(&mut self, object: &Value) -> Result<Vec<String>> {
@@ -1670,6 +1686,24 @@ impl Harness {
                 self.script_runtime
                     .function_public_properties
                     .insert(function.function_id, entries);
+                Ok(object.clone())
+            }
+            Value::NodeList(nodes) => {
+                let current_descriptor = {
+                    let nodes_ref = nodes.borrow();
+                    Self::own_property_descriptor_object_from_entries(&nodes_ref.properties, key)
+                }
+                .or_else(|| self.node_list_synthesized_descriptor_value(nodes, key));
+                let normalized = self.normalize_property_descriptor(
+                    current_descriptor.as_ref(),
+                    key,
+                    descriptor,
+                )?;
+                Self::apply_normalized_descriptor_to_object_entries(
+                    &mut nodes.borrow_mut().properties,
+                    key,
+                    normalized,
+                );
                 Ok(object.clone())
             }
             Value::Map(map) => {
@@ -2293,15 +2327,21 @@ impl Harness {
             }
             Value::NodeList(nodes) => {
                 let snapshot = self.node_list_snapshot(nodes);
-                let nodes_ref = nodes.borrow();
+                let has_own_surface = {
+                    let nodes_ref = nodes.borrow();
+                    Self::object_get_entry(&nodes_ref.properties, key).is_some()
+                        || Self::has_object_accessor_property(&nodes_ref.properties, key)
+                };
                 Ok(Value::Bool(
                     key == "length"
                         || key
                             .parse::<usize>()
                             .ok()
                             .is_some_and(|index| index < snapshot.len())
-                        || Self::object_get_entry(&nodes_ref.properties, key).is_some()
-                        || Self::has_object_accessor_property(&nodes_ref.properties, key),
+                        || self
+                            .html_collection_named_property_value(nodes, key)
+                            .is_some()
+                        || has_own_surface,
                 ))
             }
             Value::Function(function) => Ok(Value::Bool(
@@ -3041,7 +3081,20 @@ impl Harness {
                         Ok(Value::Number(values.borrow().observed_length() as i64))
                     }
                     Some(Value::NodeList(nodes)) => {
-                        Ok(Value::Number(self.node_list_len(&nodes) as i64))
+                        let receiver = Value::NodeList(nodes.clone());
+                        let own_override = {
+                            let nodes_ref = nodes.borrow();
+                            self.object_property_from_entries_with_getter(
+                                &receiver,
+                                &nodes_ref.properties,
+                                "length",
+                            )?
+                        };
+                        if let Some(value) = own_override {
+                            Ok(value)
+                        } else {
+                            Ok(Value::Number(self.node_list_len(&nodes) as i64))
+                        }
                     }
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                     Some(Value::Function(function)) => {

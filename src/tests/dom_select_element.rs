@@ -452,3 +452,232 @@ fn select_item_requires_an_index_argument() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn select_options_and_selected_options_are_live_cached_specialized_collections_work() -> Result<()>
+{
+    let html = r#"
+        <select id='list' multiple>
+          <option id='o1' name='alpha' value='a' selected>A</option>
+          <option id='o2' value='b'>B</option>
+        </select>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const list = document.getElementById('list');
+            const options = list.options;
+            const sameOptions = list.options;
+            const selected = list.selectedOptions;
+            const sameSelected = list.selectedOptions;
+
+            const o3 = document.createElement('option');
+            o3.id = 'o3';
+            o3.setAttribute('name', 'gamma');
+            o3.value = 'c';
+            o3.textContent = 'C';
+            o3.setAttribute('selected', '');
+            list.appendChild(o3);
+
+            document.getElementById('result').textContent = [
+              String(sameOptions === options),
+              String(sameSelected === selected),
+              Object.prototype.toString.call(options),
+              Object.prototype.toString.call(selected),
+              options.constructor.name,
+              selected.constructor.name,
+              String(Object.getPrototypeOf(options) === HTMLOptionsCollection.prototype),
+              String(Object.getPrototypeOf(selected) === HTMLCollection.prototype),
+              options.namedItem('alpha').id,
+              options.namedItem('gamma').id,
+              String(options.length),
+              String(selected.length),
+              selected.item(1).id,
+              String(list.options === options),
+              String(list.selectedOptions === selected)
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:[object HTMLOptionsCollection]:[object HTMLCollection]:HTMLOptionsCollection:HTMLCollection:true:true:o1:o3:3:2:o3:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn select_options_define_property_delete_and_shadow_parity_work() -> Result<()> {
+    let html = r#"
+        <select id='list'>
+          <option id='o1' name='alpha' value='a'>A</option>
+          <option id='o2' value='b'>B</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const options = document.getElementById('list').options;
+
+          const returnedZero = Object.defineProperty(options, '0', { value: 'shadow-zero' });
+          const returnedLength = Object.defineProperty(options, 'length', { value: 41 });
+          const returnedAlpha = Object.defineProperty(options, 'alpha', { value: 'shadow-alpha' });
+
+          const zeroDesc = Object.getOwnPropertyDescriptor(options, '0');
+          const lengthDesc = Object.getOwnPropertyDescriptor(options, 'length');
+          const alphaDesc = Object.getOwnPropertyDescriptor(options, 'alpha');
+
+          const before = [
+            String(returnedZero === options),
+            String(returnedLength === options),
+            String(returnedAlpha === options),
+            options[0],
+            options.length,
+            options.alpha,
+            String(zeroDesc.enumerable),
+            String(zeroDesc.configurable),
+            String(zeroDesc.writable),
+            String(lengthDesc.enumerable),
+            String(lengthDesc.configurable),
+            String(lengthDesc.writable),
+            String(alphaDesc.enumerable),
+            String(alphaDesc.configurable),
+            String(alphaDesc.writable)
+          ].join(':');
+
+          const deleted = [
+            String(delete options[0]),
+            String(delete options.length),
+            String(delete options.alpha)
+          ].join(':');
+
+          const after = [
+            options[0].id,
+            String(options.length),
+            options.alpha.id,
+            options.namedItem('alpha').id
+          ].join(':');
+
+          document.getElementById('result').textContent = [before, deleted, after].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:true:true:shadow-zero:41:shadow-alpha:true:true:false:false:true:false:true:true:false|true:true:true|o1:2:o1:o1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn selected_options_and_datalist_options_keep_html_collection_collision_rules_work() -> Result<()> {
+    let html = r#"
+        <select id='list' multiple>
+          <option id='sel-item' name='namedItem' value='a' selected>A</option>
+          <option id='sel-hidden' name='item' value='b'>B</option>
+          <option id='sel-values' name='values' value='c' selected>C</option>
+          <option id='sel-ctor' name='constructor' value='d' selected>D</option>
+        </select>
+        <datalist id='choices'>
+          <option id='dl-named' name='namedItem' value='x'></option>
+          <option id='dl-length' name='length' value='y'></option>
+          <option id='dl-values' name='values' value='z'></option>
+        </datalist>
+        <p id='result'></p>
+        <script>
+          const list = document.getElementById('list');
+          const datalist = document.getElementById('choices');
+          const selected = list.selectedOptions;
+          const sameSelected = list.selectedOptions;
+          const options = datalist.options;
+          const sameOptions = datalist.options;
+          const selectedKeys = Reflect.ownKeys(selected);
+          const datalistKeys = Reflect.ownKeys(options);
+
+          const later = document.createElement('option');
+          later.id = 'dl-entries';
+          later.setAttribute('name', 'entries');
+          later.value = 'later';
+          datalist.appendChild(later);
+
+          document.getElementById('result').textContent = [
+            String(sameSelected === selected),
+            Object.prototype.toString.call(selected),
+            selected.constructor.name,
+            String(Object.getPrototypeOf(selected) === HTMLCollection.prototype),
+            typeof selected.item,
+            typeof selected.namedItem,
+            selected.namedItem('namedItem').id,
+            selected.namedItem('values').id,
+            selected.namedItem('constructor').id,
+            String(selectedKeys.includes('item')),
+            String(selectedKeys.includes('namedItem')),
+            String(selectedKeys.includes('values')),
+            String(selectedKeys.includes('constructor')),
+            String(sameOptions === options),
+            Object.prototype.toString.call(options),
+            options.constructor.name,
+            String(Object.getPrototypeOf(options) === HTMLCollection.prototype),
+            options.namedItem('namedItem').id,
+            options.namedItem('length').id,
+            options.namedItem('values').id,
+            options.namedItem('entries').id,
+            String(datalistKeys.includes('namedItem')),
+            String(datalistKeys.includes('length')),
+            String(datalistKeys.includes('values')),
+            String(datalistKeys.includes('constructor')),
+            String(datalist.options === options)
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:[object HTMLCollection]:HTMLCollection:true:function:function:sel-item:sel-values:sel-ctor:false:false:false:false:true:[object HTMLCollection]:HTMLCollection:true:dl-named:dl-length:dl-values:dl-entries:false:true:false:false:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn selected_options_and_options_duplicate_names_do_not_switch_to_radio_node_lists_work()
+-> Result<()> {
+    let html = r#"
+        <select id='list' multiple>
+          <option id='o1' name='dup' value='a' selected>A</option>
+          <option id='o2' name='dup' value='b' selected>B</option>
+          <option id='o3' name='dup' value='c'>C</option>
+        </select>
+        <p id='result'></p>
+        <script>
+          const list = document.getElementById('list');
+          const selected = list.selectedOptions;
+          const selectedNamed = selected.namedItem('dup');
+          const selectedDirect = selected['dup'];
+          const optionsNamed = list.options.namedItem('dup');
+          const optionsDirect = list.options['dup'];
+
+          document.getElementById('result').textContent = [
+            Object.prototype.toString.call(selected),
+            selected.constructor.name,
+            selectedNamed.id,
+            String(selectedNamed === document.getElementById('o1')),
+            String(selectedDirect === selectedNamed),
+            typeof selectedDirect.namedItem,
+            String(optionsNamed === document.getElementById('o1')),
+            String(optionsDirect === optionsNamed),
+            typeof optionsDirect.namedItem,
+            String(list.selectedOptions === selected)
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "[object HTMLCollection]:HTMLCollection:o1:true:true:undefined:true:true:undefined:true",
+    )?;
+    Ok(())
+}

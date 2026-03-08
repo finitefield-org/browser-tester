@@ -46,7 +46,12 @@ impl Harness {
                 Err(Error::ScriptRuntime("value is not an object".into()))
             }
             Value::Object(entries) => {
-                let (is_string_wrapper_builtin, placeholder_builtin_surface, owner) = {
+                let (
+                    is_string_wrapper_builtin,
+                    placeholder_builtin_surface,
+                    owner,
+                    has_explicit_own_surface,
+                ) = {
                     let entries_ref = entries.borrow();
                     (
                         Self::string_wrapper_builtin_has_own_property(&entries_ref, key),
@@ -58,12 +63,14 @@ impl Harness {
                         } else {
                             None
                         },
+                        Self::object_get_entry(&entries_ref, key).is_some()
+                            || Self::has_object_accessor_property(&entries_ref, key),
                     )
                 };
                 if is_string_wrapper_builtin {
                     return Ok(false);
                 }
-                if let Some(owner) = owner {
+                if let Some(owner) = owner.filter(|_| !has_explicit_own_surface) {
                     self.dom.dataset_delete(owner, key)?;
                 }
                 if !Self::is_configurable_object_key(&*entries.borrow(), key) {
@@ -198,6 +205,21 @@ impl Harness {
                     Self::mark_builtin_object_property_deleted(entries, key);
                     return Ok(true);
                 }
+                Ok(true)
+            }
+            Value::NodeList(nodes) => {
+                let has_own_surface = {
+                    let nodes_ref = nodes.borrow();
+                    Self::object_get_entry(&nodes_ref.properties, key).is_some()
+                        || Self::has_object_accessor_property(&nodes_ref.properties, key)
+                };
+                if !has_own_surface {
+                    return Ok(true);
+                }
+                if !Self::is_configurable_object_key(&nodes.borrow().properties, key) {
+                    return Ok(false);
+                }
+                Self::delete_object_property_entries(&mut nodes.borrow_mut().properties, key);
                 Ok(true)
             }
             Value::Node(node) => {

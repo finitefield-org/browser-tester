@@ -697,6 +697,9 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
             if matches!(target, DomQuery::DocumentRoot) && head == "cookie" && nested.is_none() {
                 return Ok(None);
             }
+            if matches!(head.as_str(), "elements" | "options" | "selectedOptions") {
+                return Ok(None);
+            }
             if matches!(target, DomQuery::DocumentRoot)
                 && is_document_placeholder_method_property(&head)
             {

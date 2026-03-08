@@ -118,6 +118,14 @@ impl Harness {
             Value::Object(selection) => selection,
             _ => Rc::new(RefCell::new(ObjectValue::default())),
         };
+        self.dom_runtime.live_form_elements_lists.clear();
+        self.dom_runtime.live_select_options_lists.clear();
+        self.dom_runtime.live_selected_options_lists.clear();
+        self.dom_runtime.live_datalist_options_lists.clear();
+        self.dom_runtime.live_document_forms_list = None;
+        self.dom_runtime.live_document_images_list = None;
+        self.dom_runtime.live_document_links_list = None;
+        self.dom_runtime.live_document_scripts_list = None;
         self.browser_apis
             .url_constructor_properties
             .borrow_mut()
@@ -403,6 +411,13 @@ impl Harness {
         let worker_constructor = Self::new_worker_constructor_value();
         let data_transfer_constructor = Self::new_data_transfer_constructor_value();
         let option_constructor = Self::new_option_constructor_value();
+        let node_list_constructor = self.cached_node_list_constructor_value();
+        let radio_node_list_constructor = self.cached_radio_node_list_constructor_value();
+        let html_collection_constructor = self.cached_html_collection_constructor_value();
+        let html_form_controls_collection_constructor =
+            self.cached_html_form_controls_collection_constructor_value();
+        let html_options_collection_constructor =
+            self.cached_html_options_collection_constructor_value();
         let text_encoder_constructor = Self::new_text_encoder_constructor_value();
         let text_decoder_constructor = Self::new_text_decoder_constructor_value();
         let text_encoder_stream_constructor = Self::new_text_encoder_stream_constructor_value();
@@ -521,6 +536,11 @@ impl Harness {
             &url_constructor,
             &audio_constructor,
             &data_transfer_constructor,
+            &node_list_constructor,
+            &radio_node_list_constructor,
+            &html_collection_constructor,
+            &html_form_controls_collection_constructor,
+            &html_options_collection_constructor,
             &text_encoder_constructor,
             &text_decoder_constructor,
             &text_encoder_stream_constructor,
@@ -623,6 +643,31 @@ impl Harness {
                 &mut window_entries,
                 "Option".to_string(),
                 option_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "NodeList".to_string(),
+                node_list_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "RadioNodeList".to_string(),
+                radio_node_list_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLCollection".to_string(),
+                html_collection_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLFormControlsCollection".to_string(),
+                html_form_controls_collection_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "HTMLOptionsCollection".to_string(),
+                html_options_collection_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -917,6 +962,23 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Option".to_string(), option_constructor);
+        self.script_runtime
+            .env
+            .insert("NodeList".to_string(), node_list_constructor);
+        self.script_runtime
+            .env
+            .insert("RadioNodeList".to_string(), radio_node_list_constructor);
+        self.script_runtime
+            .env
+            .insert("HTMLCollection".to_string(), html_collection_constructor);
+        self.script_runtime.env.insert(
+            "HTMLFormControlsCollection".to_string(),
+            html_form_controls_collection_constructor,
+        );
+        self.script_runtime.env.insert(
+            "HTMLOptionsCollection".to_string(),
+            html_options_collection_constructor,
+        );
         self.script_runtime
             .env
             .insert("TextEncoder".to_string(), text_encoder_constructor);

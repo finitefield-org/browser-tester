@@ -130,6 +130,22 @@ impl Harness {
         Ok(out)
     }
 
+    pub(crate) fn form_controls_named_matches(
+        &self,
+        form: NodeId,
+        key: &str,
+    ) -> Result<Vec<NodeId>> {
+        let mut out = Vec::new();
+        for control in self.form_elements(form)? {
+            let matches_id = self.dom.attr(control, "id").as_deref() == Some(key);
+            let matches_name = self.dom.attr(control, "name").as_deref() == Some(key);
+            if (matches_id || matches_name) && !out.contains(&control) {
+                out.push(control);
+            }
+        }
+        Ok(out)
+    }
+
     pub(crate) fn form_data_entries(&self, form: NodeId) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
         for control in self.form_elements(form)? {

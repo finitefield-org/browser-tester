@@ -412,6 +412,11 @@ pub(crate) fn parse_form_elements_item_target(cursor: &mut Cursor<'_>) -> Result
     cursor.skip_ws();
     cursor.expect_byte(b']')?;
     let index = parse_dom_query_index(&index_src)?;
+    if !matches!(index, DomIndex::Static(_)) {
+        return Err(Error::ScriptParse(
+            "form.elements dynamic or named lookup must use generic property access".into(),
+        ));
+    }
     Ok(DomQuery::FormElementsIndex {
         form: Box::new(form),
         index,

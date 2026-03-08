@@ -66,6 +66,70 @@ fn element_get_elements_by_tag_name_wildcard_returns_descendants_in_tree_order()
 }
 
 #[test]
+fn live_html_collection_named_properties_and_builtin_collisions_work() -> Result<()> {
+    let html = r#"
+        <section id='root'>
+          <span id='alpha' name='hero'></span>
+          <div id='host'><span id='item'></span></div>
+        </section>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const root = document.getElementById('root');
+            const list = root.getElementsByTagName('span');
+
+            Object.defineProperty(list, 'alpha', {
+              value: 'shadow-alpha',
+              enumerable: true,
+              configurable: true
+            });
+
+            const shadow = [
+              list.alpha,
+              list.namedItem('alpha').id,
+              list.hero.id,
+              typeof list.item,
+              list.namedItem('item').id
+            ].join(':');
+
+            delete list.alpha;
+
+            const keys = Reflect.ownKeys(list);
+            const copy = { ...list };
+
+            const beta = document.createElement('span');
+            beta.id = 'beta';
+            beta.setAttribute('name', 'bonus');
+            document.getElementById('host').appendChild(beta);
+
+            const live = [
+              list.alpha.id,
+              list.bonus.id,
+              keys.includes('alpha'),
+              keys.includes('hero'),
+              keys.includes('item'),
+              copy.alpha.id,
+              copy.hero.id,
+              list.namedItem('beta').id,
+              list.length
+            ].join(':');
+
+            document.getElementById('result').textContent = [shadow, live].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow-alpha:alpha:alpha:function:item|alpha:beta:true:true:false:alpha:alpha:beta:3",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn element_get_elements_by_tag_name_rejects_wrong_argument_count() -> Result<()> {
     let html = r#"
         <div id='root'><p></p></div>

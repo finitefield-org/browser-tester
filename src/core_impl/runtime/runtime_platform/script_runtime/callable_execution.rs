@@ -275,6 +275,7 @@ impl Harness {
             "date" => "Date",
             "map" => "Map",
             "node_list" => "NodeList",
+            "html_collection" => "HTMLCollection",
             "weak_map" => "WeakMap",
             "set" => "Set",
             "weak_set" => "WeakSet",
@@ -473,13 +474,26 @@ impl Harness {
                         }),
                 }
             }
-            "node_list" => {
+            "node_list" | "html_collection" => {
                 let Value::NodeList(nodes) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
                 };
+                if family == "html_collection" && !Self::node_list_is_html_collection(&nodes) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                if family == "node_list" && Self::node_list_is_html_collection(&nodes) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
                 self.eval_nodelist_member_call(&nodes, &member, args, event)?
                     .ok_or_else(|| {
-                        Error::ScriptRuntime(format!("unsupported NodeList method: {member}"))
+                        Error::ScriptRuntime(format!(
+                            "unsupported {} method: {member}",
+                            if family == "html_collection" {
+                                "HTMLCollection"
+                            } else {
+                                "NodeList"
+                            }
+                        ))
                     })
             }
             "typed_array" => {
@@ -3953,6 +3967,13 @@ impl Harness {
                                 _ => Self::box_primitive_value(args[0].clone()),
                             })
                         }
+                    }
+                    "node_list_constructor"
+                    | "radio_node_list_constructor"
+                    | "html_collection_constructor"
+                    | "html_form_controls_collection_constructor"
+                    | "html_options_collection_constructor" => {
+                        Err(Error::ScriptRuntime("Illegal constructor".into()))
                     }
                     "event_target_constructor" => {
                         if !args.is_empty() {

@@ -827,6 +827,155 @@ impl Harness {
         true
     }
 
+    fn is_html_collection_builtin_property_name(key: &str) -> bool {
+        matches!(
+            key,
+            "length" | "item" | "namedItem" | "forEach" | "keys" | "values" | "entries"
+        )
+    }
+
+    pub(crate) fn node_list_is_html_collection(nodes: &Rc<RefCell<NodeListValue>>) -> bool {
+        nodes.borrow().kind.is_html_collection_family()
+    }
+
+    pub(crate) fn node_list_is_radio_node_list(nodes: &Rc<RefCell<NodeListValue>>) -> bool {
+        matches!(nodes.borrow().kind, NodeListKind::RadioNodeList)
+    }
+
+    fn node_list_display_name(nodes: &Rc<RefCell<NodeListValue>>) -> &'static str {
+        nodes.borrow().kind.display_name()
+    }
+
+    pub(crate) fn html_collection_named_entries(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+    ) -> Vec<(String, NodeId)> {
+        if !Self::node_list_is_html_collection(nodes) {
+            return Vec::new();
+        }
+
+        let mut supported = Vec::new();
+        let mut seen = HashSet::new();
+        for node in self.node_list_snapshot(nodes) {
+            let Some(_) = self.dom.element(node) else {
+                continue;
+            };
+            for candidate in [self.dom.attr(node, "id"), self.dom.attr(node, "name")] {
+                let Some(candidate) = candidate.filter(|candidate| !candidate.is_empty()) else {
+                    continue;
+                };
+                if seen.insert(candidate.clone()) {
+                    supported.push((candidate, node));
+                }
+            }
+        }
+        supported
+    }
+
+    pub(crate) fn html_collection_named_property_is_visible(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        key: &str,
+    ) -> bool {
+        if !Self::node_list_is_html_collection(nodes)
+            || key.is_empty()
+            || Self::own_property_integer_key(key).is_some()
+            || Self::is_html_collection_builtin_property_name(key)
+        {
+            return false;
+        }
+
+        let collection = Value::NodeList(nodes.clone());
+        let mut prototype = self.value_internal_prototype_value(&collection);
+        while let Some(current) = prototype {
+            match current {
+                Value::Null | Value::Undefined => break,
+                _ => {
+                    if self
+                        .object_has_own_value(&current, key)
+                        .is_ok_and(|value| value.truthy())
+                    {
+                        return false;
+                    }
+                    prototype = self.value_internal_prototype_value(&current);
+                }
+            }
+        }
+        true
+    }
+
+    pub(crate) fn html_collection_named_property_value(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        key: &str,
+    ) -> Option<Value> {
+        if !self.html_collection_named_property_is_visible(nodes, key) {
+            return None;
+        }
+        let owner_form = {
+            let nodes_ref = nodes.borrow();
+            match nodes_ref.live_source {
+                Some(LiveNodeListSource::FormElements { form }) => Some(form),
+                _ => None,
+            }
+        };
+        if let Some(form) = owner_form {
+            return self
+                .form_controls_named_item_value(form, key)
+                .ok()
+                .flatten();
+        }
+        self.html_collection_named_entries(nodes)
+            .into_iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, node)| Value::Node(node))
+    }
+
+    pub(crate) fn form_controls_named_item_value(
+        &mut self,
+        form: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let matches = self.form_controls_named_matches(form, key)?;
+        Ok(match matches.len() {
+            0 => None,
+            1 => Some(Value::Node(matches[0])),
+            _ => Some(self.form_named_group_live_list_value(form, key)?),
+        })
+    }
+
+    fn radio_node_list_value_string_from_nodes(&self, nodes: &[NodeId]) -> Result<String> {
+        for node in nodes {
+            if is_radio_input(&self.dom, *node) && self.dom.checked(*node)? {
+                return Ok(self.dom.value(*node)?);
+            }
+        }
+        Ok(String::new())
+    }
+
+    fn radio_node_list_value_string(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+    ) -> Result<String> {
+        let snapshot = self.node_list_snapshot(nodes);
+        self.radio_node_list_value_string_from_nodes(&snapshot)
+    }
+
+    pub(crate) fn set_radio_node_list_value(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        next_value: &str,
+    ) -> Result<()> {
+        let snapshot = self.node_list_snapshot(nodes);
+        for node in snapshot {
+            if is_radio_input(&self.dom, node) && self.dom.value(node)? == next_value {
+                self.dom.set_checked(node, true)?;
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_range_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_RANGE_OBJECT_KEY),
@@ -4406,6 +4555,235 @@ impl Harness {
         })
     }
 
+    fn cached_collection_like_constructor_value(
+        &mut self,
+        name: &str,
+        callable_kind: &str,
+        family: &str,
+        methods: &[&str],
+        prototype_parent: Option<Value>,
+    ) -> Value {
+        let iterator_symbol = self.eval_symbol_static_property(SymbolStaticProperty::Iterator);
+        let iterator_key = self.property_key_to_storage_key(&iterator_symbol);
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let prototype_parent =
+            prototype_parent.unwrap_or_else(|| self.object_constructor_prototype_value());
+        self.cached_constructor_static_method_value(name, || {
+            let constructor =
+                Self::new_receiver_builtin_constructor_object(Some(callable_kind), family, methods);
+            let Value::Object(constructor_entries) = &constructor else {
+                return constructor;
+            };
+            let prototype = {
+                let entries = constructor_entries.borrow();
+                Self::object_get_entry(&entries, "prototype")
+            };
+            let Some(Value::Object(prototype)) = prototype else {
+                return constructor;
+            };
+            if !methods.is_empty() {
+                Self::object_set_entry(
+                    &mut prototype.borrow_mut(),
+                    iterator_key.clone(),
+                    Self::new_receiver_builtin_callable(family, "values"),
+                );
+            }
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
+                to_string_tag_key.clone(),
+                Value::String(name.to_string()),
+            );
+            Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+            Self::set_internal_prototype(&prototype, prototype_parent.clone());
+            constructor
+        })
+    }
+
+    pub(crate) fn cached_node_list_constructor_value(&mut self) -> Value {
+        self.cached_collection_like_constructor_value(
+            "NodeList",
+            "node_list_constructor",
+            "node_list",
+            &["item", "forEach", "entries", "keys", "values"],
+            None,
+        )
+    }
+
+    fn cached_node_list_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("NodeList")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_node_list_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("NodeList".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_html_collection_constructor_value(&mut self) -> Value {
+        self.cached_collection_like_constructor_value(
+            "HTMLCollection",
+            "html_collection_constructor",
+            "html_collection",
+            &["item", "namedItem", "forEach", "entries", "keys", "values"],
+            None,
+        )
+    }
+
+    fn cached_html_collection_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("HTMLCollection")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_html_collection_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("HTMLCollection".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_radio_node_list_constructor_value(&mut self) -> Value {
+        let parent = self.cached_node_list_constructor_prototype_value();
+        self.cached_collection_like_constructor_value(
+            "RadioNodeList",
+            "radio_node_list_constructor",
+            "node_list",
+            &["item", "forEach", "entries", "keys", "values"],
+            Some(parent),
+        )
+    }
+
+    fn cached_radio_node_list_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("RadioNodeList")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_radio_node_list_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("RadioNodeList".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_html_form_controls_collection_constructor_value(&mut self) -> Value {
+        let parent = self.cached_html_collection_constructor_prototype_value();
+        self.cached_collection_like_constructor_value(
+            "HTMLFormControlsCollection",
+            "html_form_controls_collection_constructor",
+            "html_collection",
+            &[],
+            Some(parent),
+        )
+    }
+
+    fn cached_html_form_controls_collection_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("HTMLFormControlsCollection")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_html_form_controls_collection_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("HTMLFormControlsCollection".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_html_options_collection_constructor_value(&mut self) -> Value {
+        let parent = self.cached_html_collection_constructor_prototype_value();
+        self.cached_collection_like_constructor_value(
+            "HTMLOptionsCollection",
+            "html_options_collection_constructor",
+            "html_collection",
+            &[],
+            Some(parent),
+        )
+    }
+
+    fn cached_html_options_collection_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("HTMLOptionsCollection")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_html_options_collection_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("HTMLOptionsCollection".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
     fn cached_symbol_static_method_value(&mut self, method: &str) -> Value {
         self.cached_constructor_static_method_value(&format!("Symbol.{method}"), || {
             Self::new_symbol_static_method_callable(method)
@@ -4921,6 +5299,11 @@ impl Harness {
             "bigint_constructor" => Some(("BigInt", 1)),
             "object_constructor" => Some(("Object", 1)),
             "function_constructor" => Some(("Function", 1)),
+            "node_list_constructor" => Some(("NodeList", 0)),
+            "radio_node_list_constructor" => Some(("RadioNodeList", 0)),
+            "html_collection_constructor" => Some(("HTMLCollection", 0)),
+            "html_form_controls_collection_constructor" => Some(("HTMLFormControlsCollection", 0)),
+            "html_options_collection_constructor" => Some(("HTMLOptionsCollection", 0)),
             "function_call" => Some(("call", 1)),
             "function_apply" => Some(("apply", 2)),
             "function_bind" => Some(("bind", 1)),
@@ -5125,6 +5508,18 @@ impl Harness {
             ("string", "trimEnd") => ("trimEnd", 0),
             ("string", "trimStart") => ("trimStart", 0),
             ("string", "valueOf") => ("valueOf", 0),
+            ("node_list", "item") => ("item", 1),
+            ("node_list", "namedItem") => ("namedItem", 1),
+            ("node_list", "forEach") => ("forEach", 1),
+            ("node_list", "entries") => ("entries", 0),
+            ("node_list", "keys") => ("keys", 0),
+            ("node_list", "values") => ("values", 0),
+            ("html_collection", "item") => ("item", 1),
+            ("html_collection", "namedItem") => ("namedItem", 1),
+            ("html_collection", "forEach") => ("forEach", 1),
+            ("html_collection", "entries") => ("entries", 0),
+            ("html_collection", "keys") => ("keys", 0),
+            ("html_collection", "values") => ("values", 0),
             ("date", "getTime") => ("getTime", 0),
             ("date", "setTime") => ("setTime", 1),
             ("date", "toISOString") => ("toISOString", 0),
@@ -5330,7 +5725,7 @@ impl Harness {
             Value::TypedArray(values) => values.borrow().kind.name().to_string(),
             Value::RegExp(_) => "RegExp".to_string(),
             Value::Date(_) => "Date".to_string(),
-            Value::NodeList(_) => "NodeList".to_string(),
+            Value::NodeList(nodes) => Self::node_list_display_name(nodes).to_string(),
             Value::FormData(_) => "FormData".to_string(),
             Value::Function(_) => "Function".to_string(),
             Value::StringConstructor
@@ -6059,7 +6454,7 @@ impl Harness {
         )
     }
 
-    fn object_property_from_entries_with_getter(
+    pub(crate) fn object_property_from_entries_with_getter(
         &mut self,
         receiver: &Value,
         entries: &(impl ObjectEntryLookup + ?Sized),
@@ -6106,6 +6501,13 @@ impl Harness {
                 "object_constructor" => "object_constructor",
                 "object_static_method" => "object_static_method",
                 "function_constructor" => "function_constructor",
+                "node_list_constructor" => "node_list_constructor",
+                "radio_node_list_constructor" => "radio_node_list_constructor",
+                "html_collection_constructor" => "html_collection_constructor",
+                "html_form_controls_collection_constructor" => {
+                    "html_form_controls_collection_constructor"
+                }
+                "html_options_collection_constructor" => "html_options_collection_constructor",
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
                 "custom_event_constructor" => "custom_event_constructor",
@@ -6342,8 +6744,38 @@ impl Harness {
         )
     }
 
-    fn is_node_list_method_name(name: &str) -> bool {
-        matches!(name, "item" | "forEach" | "entries" | "keys" | "values")
+    fn is_class_list_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "add"
+                | "remove"
+                | "toggle"
+                | "contains"
+                | "replace"
+                | "item"
+                | "forEach"
+                | "keys"
+                | "values"
+                | "entries"
+                | "toString"
+        )
+    }
+
+    fn is_named_node_map_method_name(name: &str) -> bool {
+        matches!(
+            name,
+            "item"
+                | "getNamedItem"
+                | "setNamedItem"
+                | "removeNamedItem"
+                | "getNamedItemNS"
+                | "setNamedItemNS"
+                | "removeNamedItemNS"
+                | "forEach"
+                | "keys"
+                | "values"
+                | "entries"
+        )
     }
 
     fn is_typed_array_method_name(name: &str) -> bool {
@@ -6541,6 +6973,9 @@ impl Harness {
         if key == "length" {
             return Ok(Value::Number(self.node_list_len(nodes) as i64));
         }
+        if key == "value" && Self::node_list_is_radio_node_list(nodes) {
+            return Ok(Value::String(self.radio_node_list_value_string(nodes)?));
+        }
         if let Ok(index) = key.parse::<usize>() {
             if let Some(node) = self.node_list_get(nodes, index) {
                 return Ok(Value::Node(node));
@@ -6554,14 +6989,8 @@ impl Harness {
             }
             return Ok(Value::Undefined);
         }
-        if !has_explicit_prototype {
-            if self.is_iterator_property_key(key) {
-                return Ok(Self::new_receiver_builtin_callable("node_list", "values"));
-            }
-            if Self::is_node_list_method_name(key) {
-                return Ok(Self::new_receiver_builtin_callable("node_list", key));
-            }
-            return Ok(Value::Undefined);
+        if let Some(value) = self.html_collection_named_property_value(nodes, key) {
+            return Ok(value);
         }
         Ok(self
             .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
@@ -6980,11 +7409,6 @@ impl Harness {
             .map(|tag| tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th"))
             .unwrap_or(false);
         let select_options = || self.select_option_nodes(*node);
-        let datalist_options = || {
-            let mut options = Vec::new();
-            self.dom.collect_select_options(*node, &mut options);
-            options
-        };
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
@@ -7104,6 +7528,13 @@ impl Harness {
                         .resolve_form_for_submit(*node)
                         .map(Value::Node)
                         .unwrap_or(Value::Null))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "elements" => {
+                if is_form {
+                    self.form_elements_live_list_value(*node)
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -7454,13 +7885,13 @@ impl Harness {
                 }
             }
             "baseURI" => Ok(Value::String(self.document_base_url())),
-            "dataset" => Ok(self.new_dom_string_map_value(*node)),
+            "dataset" => Ok(self.dom_string_map_live_value(*node)),
             "options" => {
                 if is_select {
-                    return Ok(Self::new_static_node_list_value(select_options()));
+                    return Ok(self.select_options_live_list_value(*node));
                 }
                 if is_datalist {
-                    return Ok(Self::new_static_node_list_value(datalist_options()));
+                    return Ok(self.datalist_options_live_list_value(*node));
                 }
                 Ok(Value::Undefined)
             }
@@ -7474,9 +7905,7 @@ impl Harness {
                 if !is_select {
                     return Ok(Value::Undefined);
                 }
-                Ok(Self::new_static_node_list_value(
-                    self.select_selected_option_nodes(*node),
-                ))
+                Ok(self.selected_options_live_list_value(*node))
             }
             "size" => {
                 if is_select {
@@ -7647,27 +8076,19 @@ impl Harness {
 
         if Self::is_dom_string_map_object(entries) {
             let Some(node) = Self::dom_string_map_owner_node(entries) else {
-                return Some(Value::Undefined);
+                return None;
             };
             if self.dom.element(node).is_none() {
-                return Some(Value::Undefined);
+                return None;
             }
             if Self::is_symbol_storage_key(key) {
                 return Some(Self::object_get_entry(entries, key).unwrap_or(Value::Undefined));
-            }
-            if key == "constructor" {
-                return Some(Value::Undefined);
             }
             if self.is_to_string_tag_property_key(key) {
                 return Some(Value::String("DOMStringMap".to_string()));
             }
             let attr_name = dataset_key_to_attr_name(key);
-            return Some(
-                self.dom
-                    .attr(node, &attr_name)
-                    .map(Value::String)
-                    .unwrap_or(Value::Undefined),
-            );
+            return self.dom.attr(node, &attr_name).map(Value::String);
         }
 
         if Self::is_class_list_object(entries) {
@@ -7675,7 +8096,7 @@ impl Harness {
                 Some(Value::Node(node)) => Some(node),
                 _ => None,
             }) else {
-                return Some(Value::Undefined);
+                return None;
             };
             let classes = class_tokens(self.dom.attr(node, "class").as_deref());
             let has_explicit_prototype =
@@ -7686,9 +8107,6 @@ impl Harness {
             }
             if key == "value" {
                 return Some(Value::String(classes.join(" ")));
-            }
-            if key == "constructor" {
-                return (!has_explicit_prototype).then_some(Value::Undefined);
             }
             if key_is_to_string_tag {
                 return (!has_explicit_prototype)
@@ -7714,18 +8132,12 @@ impl Harness {
                 }
             }
             if let Ok(index) = key.parse::<usize>() {
-                return Some(
-                    classes
-                        .get(index)
-                        .cloned()
-                        .map(Value::String)
-                        .unwrap_or(Value::Undefined),
-                );
+                return classes.get(index).cloned().map(Value::String);
             }
             if let Some(value) = Self::object_get_entry(entries, key) {
                 return Some(value);
             }
-            return (!has_explicit_prototype).then_some(Value::Undefined);
+            return None;
         }
 
         None
@@ -7860,25 +8272,29 @@ impl Harness {
         if !Self::is_named_node_map_object(entries) {
             return None;
         }
+        let has_explicit_prototype =
+            Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
         if self.is_to_string_tag_property_key(key) {
-            return Some(Value::String("NamedNodeMap".to_string()));
+            return (!has_explicit_prototype).then_some(Value::String("NamedNodeMap".to_string()));
         }
-        if let Some(kind) = match key {
-            "item" => Some("named_node_map_item"),
-            "getNamedItem" => Some("named_node_map_get_named_item"),
-            "setNamedItem" => Some("named_node_map_set_named_item"),
-            "removeNamedItem" => Some("named_node_map_remove_named_item"),
-            "getNamedItemNS" => Some("named_node_map_get_named_item_ns"),
-            "setNamedItemNS" => Some("named_node_map_set_named_item_ns"),
-            "removeNamedItemNS" => Some("named_node_map_remove_named_item_ns"),
-            "forEach" => Some("named_node_map_for_each"),
-            "keys" => Some("named_node_map_keys"),
-            "values" => Some("named_node_map_values"),
-            "entries" => Some("named_node_map_entries"),
-            _ if self.is_iterator_property_key(key) => Some("named_node_map_values"),
-            _ => None,
-        } {
-            return Some(Self::new_named_node_map_method_callable(kind));
+        if !has_explicit_prototype {
+            if let Some(kind) = match key {
+                "item" => Some("named_node_map_item"),
+                "getNamedItem" => Some("named_node_map_get_named_item"),
+                "setNamedItem" => Some("named_node_map_set_named_item"),
+                "removeNamedItem" => Some("named_node_map_remove_named_item"),
+                "getNamedItemNS" => Some("named_node_map_get_named_item_ns"),
+                "setNamedItemNS" => Some("named_node_map_set_named_item_ns"),
+                "removeNamedItemNS" => Some("named_node_map_remove_named_item_ns"),
+                "forEach" => Some("named_node_map_for_each"),
+                "keys" => Some("named_node_map_keys"),
+                "values" => Some("named_node_map_values"),
+                "entries" => Some("named_node_map_entries"),
+                _ if self.is_iterator_property_key(key) => Some("named_node_map_values"),
+                _ => None,
+            } {
+                return Some(Self::new_named_node_map_method_callable(kind));
+            }
         }
         let owner = Self::named_node_map_owner_node(entries)
             .filter(|node| self.dom.element(*node).is_some());
@@ -7889,15 +8305,9 @@ impl Harness {
             return Some(Value::Number(attrs.len() as i64));
         }
         if let Ok(index) = key.parse::<usize>() {
-            let value = attrs
-                .get(index)
-                .and_then(|(name, value)| {
-                    owner.map(|owner_node| {
-                        Self::new_attr_object_value(name, value, Some(owner_node))
-                    })
-                })
-                .unwrap_or(Value::Undefined);
-            return Some(value);
+            return attrs.get(index).and_then(|(name, value)| {
+                owner.map(|owner_node| Self::new_attr_object_value(name, value, Some(owner_node)))
+            });
         }
         if !self.named_node_map_named_property_is_visible(entries, key) {
             return None;
@@ -8149,6 +8559,10 @@ impl Harness {
                 .document_element()
                 .map(Value::Node)
                 .unwrap_or(Value::Null),
+            "forms" => self.document_forms_live_list_value(),
+            "images" => self.document_images_live_list_value(),
+            "links" => self.document_links_live_list_value(),
+            "scripts" => self.document_scripts_live_list_value(),
             "readyState" => Value::String(self.dom_runtime.document_ready_state.clone()),
             "cookie" => Value::String(self.document_cookie_string()),
             "hidden" => Value::Bool(self.dom_runtime.document_visibility_state == "hidden"),
@@ -8324,7 +8738,23 @@ impl Harness {
             Value::ArrayBuffer(_) => Some(self.cached_array_buffer_constructor_prototype_value()),
             Value::NodeList(nodes) => Some(
                 Self::object_get_entry(&nodes.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
-                    .unwrap_or_else(|| self.object_constructor_prototype_value()),
+                    .unwrap_or_else(|| match nodes.borrow().kind {
+                        NodeListKind::NodeList => {
+                            self.cached_node_list_constructor_prototype_value()
+                        }
+                        NodeListKind::RadioNodeList => {
+                            self.cached_radio_node_list_constructor_prototype_value()
+                        }
+                        NodeListKind::HtmlCollection => {
+                            self.cached_html_collection_constructor_prototype_value()
+                        }
+                        NodeListKind::HtmlFormControlsCollection => {
+                            self.cached_html_form_controls_collection_constructor_prototype_value()
+                        }
+                        NodeListKind::HtmlOptionsCollection => {
+                            self.cached_html_options_collection_constructor_prototype_value()
+                        }
+                    }),
             ),
             Value::String(_) => Some(self.cached_string_constructor_prototype_value()),
             Value::Bool(_) => self.constructor_prototype_from_env("Boolean"),
@@ -8538,10 +8968,7 @@ impl Harness {
         {
             return Ok(value);
         }
-        if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key)
-            && self.is_callable_value(&value)
-            && !Self::is_builtin_placeholder_value(&value)
-        {
+        if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key) {
             return Ok(value);
         }
         if let Some(value) = self.object_property_from_web_api_entries(&entries, key)?
@@ -8554,8 +8981,6 @@ impl Harness {
             .object_property_from_match_media_named_node_map_or_string_wrapper_entries(
                 receiver, &entries, key,
             )?
-            && (Self::is_match_media_object(&entries)
-                || (self.is_callable_value(&value) && !Self::is_builtin_placeholder_value(&value)))
         {
             return Ok(value);
         }
@@ -8845,6 +9270,38 @@ impl Harness {
             }
             _ => Err(Error::ScriptRuntime("value is not an object".into())),
         }
+    }
+
+    pub(crate) fn object_synthesized_own_property_exists(
+        &mut self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        if Self::is_class_list_object(entries) {
+            let has_explicit_prototype =
+                Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
+            if key == "length" || key == "value" {
+                return true;
+            }
+            if Self::is_class_list_method_name(key) || self.is_iterator_property_key(key) {
+                return !has_explicit_prototype;
+            }
+        }
+        if Self::is_named_node_map_object(entries) {
+            let has_explicit_prototype =
+                Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
+            if key == "length" {
+                return true;
+            }
+            if Self::is_named_node_map_method_name(key) || self.is_iterator_property_key(key) {
+                return !has_explicit_prototype;
+            }
+        }
+        self.object_property_from_attr_or_class_list_entries(entries, key)
+            .is_some()
+            || self
+                .object_property_from_named_node_map_entries(entries, key)
+                .is_some()
     }
 
     pub(crate) fn object_property_from_value_with_receiver(

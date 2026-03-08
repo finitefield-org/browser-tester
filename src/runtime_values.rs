@@ -294,6 +294,22 @@ pub(crate) enum LiveNodeListSource {
     ChildElements {
         parent: NodeId,
     },
+    FormElements {
+        form: NodeId,
+    },
+    FormElementsNamedGroup {
+        form: NodeId,
+        name: String,
+    },
+    SelectOptions {
+        select: NodeId,
+    },
+    SelectedOptions {
+        select: NodeId,
+    },
+    DataListOptions {
+        datalist: NodeId,
+    },
     DescendantsByClassNames {
         root: NodeId,
         class_names: Vec<String>,
@@ -311,11 +327,44 @@ pub(crate) enum LiveNodeListSource {
         namespace_uri: Option<String>,
         local_name: String,
     },
+    QuerySelectorAll {
+        root: NodeId,
+        selector: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NodeListKind {
+    NodeList,
+    RadioNodeList,
+    HtmlCollection,
+    HtmlFormControlsCollection,
+    HtmlOptionsCollection,
+}
+
+impl NodeListKind {
+    pub(crate) fn display_name(&self) -> &'static str {
+        match self {
+            Self::NodeList => "NodeList",
+            Self::RadioNodeList => "RadioNodeList",
+            Self::HtmlCollection => "HTMLCollection",
+            Self::HtmlFormControlsCollection => "HTMLFormControlsCollection",
+            Self::HtmlOptionsCollection => "HTMLOptionsCollection",
+        }
+    }
+
+    pub(crate) fn is_html_collection_family(&self) -> bool {
+        matches!(
+            self,
+            Self::HtmlCollection | Self::HtmlFormControlsCollection | Self::HtmlOptionsCollection
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NodeListValue {
     pub(crate) nodes: Vec<NodeId>,
+    pub(crate) kind: NodeListKind,
     pub(crate) live_source: Option<LiveNodeListSource>,
     pub(crate) properties: ObjectValue,
 }
@@ -324,6 +373,7 @@ impl NodeListValue {
     pub(crate) fn static_list(nodes: Vec<NodeId>) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::NodeList,
             live_source: None,
             properties: ObjectValue::default(),
         }
@@ -332,6 +382,7 @@ impl NodeListValue {
     pub(crate) fn live_child_nodes(parent: NodeId, nodes: Vec<NodeId>) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::NodeList,
             live_source: Some(LiveNodeListSource::ChildNodes { parent }),
             properties: ObjectValue::default(),
         }
@@ -340,7 +391,57 @@ impl NodeListValue {
     pub(crate) fn live_child_elements(parent: NodeId, nodes: Vec<NodeId>) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::HtmlCollection,
             live_source: Some(LiveNodeListSource::ChildElements { parent }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_form_elements(form: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::HtmlFormControlsCollection,
+            live_source: Some(LiveNodeListSource::FormElements { form }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_form_elements_named_group(
+        form: NodeId,
+        name: String,
+        nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::RadioNodeList,
+            live_source: Some(LiveNodeListSource::FormElementsNamedGroup { form, name }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_select_options(select: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::HtmlOptionsCollection,
+            live_source: Some(LiveNodeListSource::SelectOptions { select }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_selected_options(select: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::HtmlCollection,
+            live_source: Some(LiveNodeListSource::SelectedOptions { select }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_datalist_options(datalist: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::HtmlCollection,
+            live_source: Some(LiveNodeListSource::DataListOptions { datalist }),
             properties: ObjectValue::default(),
         }
     }
@@ -352,6 +453,7 @@ impl NodeListValue {
     ) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::HtmlCollection,
             live_source: Some(LiveNodeListSource::DescendantsByClassNames { root, class_names }),
             properties: ObjectValue::default(),
         }
@@ -360,6 +462,7 @@ impl NodeListValue {
     pub(crate) fn live_descendants_by_name(root: NodeId, name: String, nodes: Vec<NodeId>) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::NodeList,
             live_source: Some(LiveNodeListSource::DescendantsByName { root, name }),
             properties: ObjectValue::default(),
         }
@@ -372,6 +475,7 @@ impl NodeListValue {
     ) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::HtmlCollection,
             live_source: Some(LiveNodeListSource::DescendantsByTagName { root, tag_name }),
             properties: ObjectValue::default(),
         }
@@ -385,11 +489,26 @@ impl NodeListValue {
     ) -> Self {
         Self {
             nodes,
+            kind: NodeListKind::HtmlCollection,
             live_source: Some(LiveNodeListSource::DescendantsByTagNameNs {
                 root,
                 namespace_uri,
                 local_name,
             }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_query_selector_all(
+        root: NodeId,
+        selector: String,
+        kind: NodeListKind,
+        nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            kind,
+            live_source: Some(LiveNodeListSource::QuerySelectorAll { root, selector }),
             properties: ObjectValue::default(),
         }
     }
@@ -826,7 +945,7 @@ impl Value {
             Self::Null => "null".into(),
             Self::Undefined => "undefined".into(),
             Self::Node(node) => format!("node-{}", node.0),
-            Self::NodeList(_) => "[object NodeList]".into(),
+            Self::NodeList(nodes) => format!("[object {}]", nodes.borrow().kind.display_name()),
             Self::FormData(_) => "[object FormData]".into(),
             Self::Function(function) => {
                 if function.function_id == usize::MAX {

@@ -2198,6 +2198,37 @@ impl Harness {
                         .unwrap_or(Value::Null),
                 ))
             }
+            "namedItem" => {
+                if !Self::node_list_is_html_collection(nodes) {
+                    return Ok(None);
+                }
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "namedItem requires exactly one name argument".into(),
+                    ));
+                }
+                let name = evaluated_args[0].as_string();
+                let owner_form = {
+                    let nodes_ref = nodes.borrow();
+                    match nodes_ref.live_source {
+                        Some(LiveNodeListSource::FormElements { form }) => Some(form),
+                        _ => None,
+                    }
+                };
+                if let Some(form) = owner_form {
+                    return Ok(Some(
+                        self.form_controls_named_item_value(form, name.as_str())?
+                            .unwrap_or(Value::Null),
+                    ));
+                }
+                Ok(Some(
+                    self.html_collection_named_entries(nodes)
+                        .into_iter()
+                        .find(|(candidate, _)| candidate == &name)
+                        .map(|(_, node)| Value::Node(node))
+                        .unwrap_or(Value::Null),
+                ))
+            }
             "forEach" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(

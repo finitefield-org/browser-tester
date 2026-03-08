@@ -1790,6 +1790,41 @@ impl Harness {
                 };
                 self.typed_array_set_index(values, index, value)
             }
+            Value::NodeList(nodes) => {
+                let key = self.property_key_to_storage_key(key_value);
+                let has_own_surface = {
+                    let nodes_ref = nodes.borrow();
+                    Self::object_get_entry(&nodes_ref.properties, &key).is_some()
+                        || Self::has_object_accessor_property(&nodes_ref.properties, &key)
+                };
+                if key == "value" && Self::node_list_is_radio_node_list(nodes) && !has_own_surface {
+                    self.set_radio_node_list_value(nodes, value.as_string().as_str())?;
+                    return Ok(());
+                }
+                if key == "length" && !has_own_surface {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if let Ok(index) = key.parse::<usize>()
+                    && index < self.node_list_len(nodes)
+                    && !has_own_surface
+                {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if !Self::is_writable_object_key(&nodes.borrow().properties, &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                Self::object_set_entry(&mut nodes.borrow_mut().properties, key, value);
+                Ok(())
+            }
             Value::Map(map) => {
                 let key = self.property_key_to_storage_key(key_value);
                 let has_own_surface = {

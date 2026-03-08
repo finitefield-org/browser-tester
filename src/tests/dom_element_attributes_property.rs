@@ -128,3 +128,51 @@ fn element_attributes_own_keys_and_descriptors_track_live_entries_work() -> Resu
     )?;
     Ok(())
 }
+
+#[test]
+fn element_attributes_expando_assignment_and_explicit_prototype_mutation_work() -> Result<()> {
+    let html = r#"
+        <p id='paragraph' class='green' contenteditable>Sample Paragraph</p>
+        <pre id='result'></pre>
+        <script>
+          const paragraph = document.getElementById('paragraph');
+          const attrs = paragraph.attributes;
+          attrs.marker = 'own';
+
+          const proto = {
+            7: 'proto-index',
+            protoOnly: 'proto',
+            pick() {
+              return this[7];
+            }
+          };
+
+          const sameAttrs = paragraph.attributes;
+          Object.setPrototypeOf(attrs, proto);
+          const child = Object.create(attrs);
+
+          document.getElementById('result').textContent = [
+            String(sameAttrs === attrs),
+            sameAttrs.marker,
+            String(Object.getPrototypeOf(attrs) === proto),
+            attrs[0].name,
+            attrs[7],
+            attrs.protoOnly,
+            String(attrs.pick() === 'proto-index'),
+            child[0].name,
+            child[7],
+            child.marker,
+            String('7' in attrs),
+            String('marker' in child),
+            String(typeof attrs.item === 'undefined')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|own|true|class|proto-index|proto|true|class|proto-index|own|true|true|true",
+    )?;
+    Ok(())
+}

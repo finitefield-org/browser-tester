@@ -392,6 +392,7 @@ impl Harness {
     ) -> bool {
         if Self::object_get_entry(entries, key).is_some()
             || Self::has_object_accessor_property(entries, key)
+            || self.object_synthesized_own_property_exists(entries, key)
             || Self::string_wrapper_builtin_has_own_property(entries, key)
             || (self.callable_own_surface_value(value, key).is_some()
                 && !Self::is_builtin_object_property_deleted(entries, key))
@@ -412,6 +413,7 @@ impl Harness {
                     let object_ref = object.borrow();
                     if Self::object_get_entry(&object_ref, key).is_some()
                         || Self::has_object_accessor_property(&object_ref, key)
+                        || self.object_synthesized_own_property_exists(&object_ref, key)
                         || Self::string_wrapper_builtin_has_own_property(&object_ref, key)
                         || (self
                             .callable_own_surface_value(&object_value, key)
@@ -449,24 +451,30 @@ impl Harness {
         let key = self.property_key_to_storage_key(left);
         let has_property = match right {
             Value::NodeList(nodes) => {
-                if key == "length" {
+                let has_own_surface = {
+                    let nodes_ref = nodes.borrow();
+                    Self::object_get_entry(&nodes_ref.properties, &key).is_some()
+                        || Self::has_object_accessor_property(&nodes_ref.properties, &key)
+                };
+                if key == "length"
+                    || (key == "value" && Self::node_list_is_radio_node_list(nodes))
+                    || has_own_surface
+                {
                     true
                 } else {
                     let has_own_index = self
                         .value_as_index(left)
                         .is_some_and(|index| index < self.node_list_len(nodes));
+                    let has_named_property = self
+                        .html_collection_named_property_value(nodes, &key)
+                        .is_some();
                     has_own_index
-                        || Self::object_get_entry(
+                        || has_named_property
+                        || self.object_has_property_in_chain(
+                            right,
                             &nodes.borrow().properties,
-                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                            &key,
                         )
-                        .is_some_and(|_| {
-                            self.object_has_property_in_chain(
-                                right,
-                                &nodes.borrow().properties,
-                                &key,
-                            )
-                        })
                 }
             }
             Value::Array(values) => {

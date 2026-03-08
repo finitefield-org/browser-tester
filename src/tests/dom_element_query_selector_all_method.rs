@@ -94,6 +94,67 @@ fn element_query_selector_all_returns_static_not_live_node_list() -> Result<()> 
 }
 
 #[test]
+fn query_selector_all_reread_returns_fresh_static_wrappers_after_shadowing_work() -> Result<()> {
+    let html = r#"
+        <div id='box'>
+          <p class='item'>A</p>
+          <p class='item'>B</p>
+        </div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const first = document.querySelectorAll('.item');
+            Object.defineProperty(first, 'length', {
+              get() { return 99; },
+              configurable: true
+            });
+            Object.defineProperty(first, '0', {
+              value: 'shadow',
+              enumerable: true,
+              configurable: true
+            });
+
+            const second = document.querySelectorAll('.item');
+            const before = [
+              String(first === second),
+              first.length,
+              second.length,
+              first[0],
+              second[0].textContent
+            ].join(':');
+
+            delete first.length;
+            delete first[0];
+
+            const p = document.createElement('p');
+            p.className = 'item';
+            p.textContent = 'C';
+            box.appendChild(p);
+
+            const third = document.querySelectorAll('.item');
+            const after = [
+              first.length,
+              first[0].textContent,
+              second.length,
+              second[0].textContent,
+              third.length,
+              third[2].textContent
+            ].join(':');
+
+            document.getElementById('result').textContent = [before, after].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "false:99:2:shadow:A|2:A:2:A:3:C")?;
+    Ok(())
+}
+
+#[test]
 fn element_query_selector_all_throws_syntax_error_for_invalid_selector() -> Result<()> {
     let html = r#"
         <div id='box'><p>A</p></div>

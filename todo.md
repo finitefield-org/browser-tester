@@ -1056,13 +1056,203 @@
 
 ## Next Task (P1.76: DOM collection expando-assignment and explicit prototype-mutation residual sweep)
 
-- [ ] Audit residual host collection mutation gaps
-  - cover `DOMTokenList`, `NamedNodeMap`, `NodeList`, and adjacent collection wrappers where expando assignment, custom prototype objects, or inherited custom methods may still diverge from ordinary object behavior
+- [x] Completed P1.76: DOM collection expando-assignment and explicit prototype-mutation residual sweep
+  - cached live `DOMStringMap` wrappers by owner node so repeated `element.dataset` reads reuse the same object and preserve expando state across explicit prototype mutation just like `classList` and `attributes`
+  - taught direct and inherited property lookup for `DOMStringMap`, `DOMTokenList`, and `NamedNodeMap` to fall through to explicit prototype objects for missing synthesized keys while still keeping live indexed/named/value surfaces authoritative when present
+  - allowed `NodeList`/`HTMLCollection`-like live lists to accept non-index expando assignment and explicit prototype overrides without turning indexed items or `length` into writable data properties
+  - added regressions for `dataset`, `classList`, `attributes`, and live `children` collections so expando reads, inherited custom methods, `Object.create(...)`, and `in` semantics stay aligned after `Object.setPrototypeOf(...)`
 
-- [ ] Align explicit prototype mutation with host collection method lookup
-  - ensure `Object.setPrototypeOf(...)`, expando reads/writes, and inherited custom methods interact cleanly with synthesized indexed/named properties and built-in collection surfaces
+- [x] Verify
+  - `cargo test --lib class_list_expando_assignment_and_explicit_prototype_mutation_work -- --nocapture`
+  - `cargo test --lib dataset_expando_assignment_and_explicit_prototype_mutation_work -- --nocapture`
+  - `cargo test --lib element_attributes_expando_assignment_and_explicit_prototype_mutation_work -- --nocapture`
+  - `cargo test --lib live_children_node_list_expando_assignment_and_explicit_prototype_mutation_work -- --nocapture`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib dom_named_node_map`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2336 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.77: DOM collection defineProperty/delete and live-wrapper descriptor residual sweep)
+
+- [x] Completed P1.77: DOM collection defineProperty/delete and live-wrapper descriptor residual sweep
+  - added `Object.defineProperty(...)` support for live `NodeList` wrappers so explicit own data/accessor properties can shadow synthesized indexed items and `length` without breaking live collection identity
+  - taught `delete` and `in` on `DOMStringMap` and `NodeList` to respect explicit own shadow properties first, revealing live synthesized keys again after shadow deletion instead of deleting underlying `data-*` state or losing indexed parity
+  - updated the `NodeList` `length` fast path to honor explicit own getter/value overrides before falling back to synthesized live length, keeping bare-identifier reads aligned with generic object-property lookup
+  - added regressions for dataset shadow/delete flows and live `children` descriptor shadowing so repeated wrapper reads, `Object.hasOwn(...)`, `Object.getOwnPropertyDescriptor(...)`, `delete`, and `in` stay aligned across cached live wrappers
+
+- [x] Verify
+  - `cargo test --lib dataset_define_property_delete_and_live_wrapper_identity_work -- --nocapture`
+  - `cargo test --lib live_children_node_list_define_property_delete_and_in_parity_work -- --nocapture`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib dom_named_node_map`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2338 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.78: DOM collection fast-path breadth and remaining named/indexed shadow parity sweep)
+
+- [x] Completed P1.78: DOM collection fast-path breadth and remaining named/indexed shadow parity sweep
+  - routed direct `element.dataset.foo` reads through the cached live `DOMStringMap` wrapper so named fast paths now honor explicit own overrides, deleted markers, prototype fallback, and live `data-*` updates instead of bypassing wrapper state
+  - routed direct `element.classList.length` and `element.children.length` reads through the cached live wrapper objects so `length` fast paths respect explicit own getter/value shadowing before falling back to synthesized live lengths
+  - added regressions for direct dataset dot/bracket access, classList indexed/length shadowing, and live `children` indexed/length shadowing so repeated direct reads stay aligned with wrapper-based property access after define/delete flows and live DOM mutations
+
+- [x] Verify
+  - `cargo test --lib dataset_direct_fast_path_respects_live_wrapper_shadow_and_proto_work -- --nocapture`
+  - `cargo test --lib direct_dom_collection_fast_paths_respect_live_wrapper_shadowing_work -- --nocapture`
+  - `cargo test --lib dom_element_attributes_property`
+  - `cargo test --lib dom_named_node_map`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2340 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.79: document-backed collection fast-path and wrapper-identity residual sweep)
+
+- [x] Completed P1.79: document-backed collection fast-path and wrapper-identity residual sweep
+  - routed `document.forms`, `images`, `links`, and `scripts` through cached live wrappers in both parser-specialized fast paths and generic document property lookup so direct `length`/indexed/property reads preserve wrapper identity, explicit own overrides, and deleted markers
+  - added dedicated live query-selector-backed node-list refresh support so document-backed collections stay live while repeated `querySelectorAll(...)` reads still return fresh static wrappers that do not leak prior expando shadow state across rereads or DOM mutation
+  - added regressions covering document-backed collection identity/shadowing/live update behavior plus static-vs-live query wrapper parity for object-copy, own-key, and descriptor surfaces
+
+- [x] Verify
+  - `cargo test --lib document_backed_collections_are_live_cached_and_shadow_aware_work -- --nocapture`
+  - `cargo test --lib query_selector_all_reread_returns_fresh_static_wrappers_after_shadowing_work -- --nocapture`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib dom_element_query_selector_all_method`
+  - `cargo test --lib dom_link_element`
+  - `cargo test --lib dom_script_element`
+  - `cargo test --lib dom_area_element`
+  - `cargo test --lib window_forms_trace`
+  - `cargo fmt`
+  - `cargo test --lib` (`2342 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.80: document collection named-property and live HTMLCollection residual sweep)
+
+- [x] Completed P1.80: document collection named-property and live HTMLCollection residual sweep
+  - introduced an explicit HTMLCollection-like collection kind for live `children`, `getElementsByClassName`, `getElementsByTagName`, `getElementsByTagNameNS`, and document-backed `forms`/`images`/`links`/`scripts` wrappers so named properties and `namedItem(...)` are only exposed on live HTMLCollection surfaces, not on static `querySelectorAll(...)` node lists
+  - aligned named-property visibility with builtin collisions, prototype fallback, expando shadowing, `delete`, `Object.hasOwn(...)`, `in`, descriptor introspection, `Reflect.ownKeys(...)`, and object-copy/spread surfaces so id/name-backed properties stay live while explicit own overrides still win
+  - updated existing wrapper-parity regressions and added dedicated coverage for document-backed named properties plus live descendant HTMLCollection named access after mutation
+
+- [x] Verify
+  - `cargo test --lib document_backed_collections_expose_named_properties_and_hide_builtin_collisions_work -- --nocapture`
+  - `cargo test --lib live_html_collection_named_properties_and_builtin_collisions_work -- --nocapture`
+  - `cargo test --lib document_backed_collections_are_live_cached_and_shadow_aware_work -- --nocapture`
+  - `cargo test --lib live_children_node_list_define_property_delete_and_in_parity_work -- --nocapture`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo test --lib dom_element_get_elements_by_tag_name_method`
+  - `cargo test --lib dom_element_get_elements_by_class_name_method`
+  - `cargo test --lib dom_element_children_property`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2344 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.81: HTMLCollection prototype/tag surface and static NodeList contrast sweep)
+
+- [x] Completed P1.81: HTMLCollection prototype/tag surface and static NodeList contrast sweep
+  - split cached default constructor/prototype/tag surfaces for static `NodeList` wrappers versus live HTMLCollection-like collections so `Object.prototype.toString`, `constructor`, `constructor.prototype`, and inherited callable identity no longer collapse both families into the same runtime shape
+  - routed `item(...)`, `namedItem(...)`, iterator access, and prototype-path method reads through stable receiver-aware prototype objects so raw getter identity, inherited lookup, and incompatible receiver behavior match the intended static-vs-live distinction
+  - tightened `in`/prototype traversal for collection wrappers so HTMLCollection named properties and static NodeList inherited methods are observed through the correct default prototype chain without reintroducing direct fast-path masquerading
+
+- [x] Verify
+  - `cargo test --lib static_node_list_default_prototype_is_stable_work -- --nocapture`
+  - `cargo test --lib node_list_explicit_prototype_override_controls_inherited_lookup_work -- --nocapture`
+  - `cargo test --lib live_children_node_list_expando_assignment_and_explicit_prototype_mutation_work -- --nocapture`
+  - `cargo test --lib node_list_reflective_surface_and_object_copy_work -- --nocapture`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib dom_element_query_selector_all_method`
+  - `cargo fmt`
+  - `cargo test --lib` (`2344 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.82: HTMLCollection constructor exposure breadth and specialized collection residual sweep)
+
+- [x] Completed P1.82: HTMLCollection constructor exposure breadth and specialized collection residual sweep
+  - exposed stable `NodeList`, `HTMLCollection`, `HTMLFormControlsCollection`, and `HTMLOptionsCollection` constructors on env/window paths and split their default prototype chains so static lists and specialized live collections report the correct constructor, tag, and inherited HTMLCollection surface
+  - upgraded `form.elements`, `select.options`, `select.selectedOptions`, and `datalist.options` to cached live wrappers with specialized collection kinds, stable identity, and browser-like stringification while preserving live refresh through generic property lookup
+  - aligned DOM property parsing with the specialized wrapper path so collection properties fall back to the generic object/property machinery instead of failing parser-side when accessed through direct DOM member expressions
+
+- [x] Verify
+  - `cargo test --lib dom_collection_constructors_are_exposed_and_specialized_prototypes_chain_work -- --nocapture`
+  - `cargo test --lib form_elements_is_live_cached_and_specialized_collection_surface_work -- --nocapture`
+  - `cargo test --lib select_options_and_selected_options_are_live_cached_specialized_collections_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2347 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.83: specialized collection readonly/index shadowing and constructor call-surface residual sweep)
+
+- [x] Completed P1.83: specialized collection readonly/index shadowing and constructor call-surface residual sweep
+  - fixed synthesized `NodeList` / HTMLCollection-like property descriptors so live collection `length`, indexed entries, and named properties expose readonly-but-configurable flags that match the assignment fast-path and survive `Object.defineProperty(...)` shadow/delete round-trips
+  - verified `HTMLFormControlsCollection` and `HTMLOptionsCollection` inherit the shared HTMLCollection callable surface through raw getter, bracket access, extracted call, and incompatible-receiver paths while keeping constructor illegal-call behavior stable
+  - added focused regressions for `form.elements` and `select.options` shadowing so explicit own overrides on `0`, `length`, and named properties delete cleanly and reveal the live synthesized collection surface again
+
+- [x] Verify
+  - `cargo test --lib form_elements_define_property_delete_and_shadow_parity_work -- --nocapture`
+  - `cargo test --lib select_options_define_property_delete_and_shadow_parity_work -- --nocapture`
+  - `cargo test --lib specialized_collection_constructors_share_html_collection_callable_surface_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2350 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.84: specialized collection named-collision breadth and selectedOptions/html-collection contrast sweep)
+
+- [x] Completed P1.84: specialized collection named-collision breadth and selectedOptions/html-collection contrast sweep
+  - confirmed `HTMLFormControlsCollection` and `HTMLOptionsCollection` already preserve builtin callable visibility when control names collide with `item`, `namedItem`, `length`, `constructor`, iterator helpers, and other builtin collection keys, then locked that behavior with focused regression coverage
+  - verified `selectedOptions` and `datalist.options` continue to use shared `HTMLCollection` constructor/tag semantics, stable wrapper identity, and live `namedItem(...)` updates without leaking colliding names into reflective own-key surfaces
+  - added dedicated collision regressions for `form.elements`, `select.selectedOptions`, and `datalist.options` so specialized-versus-shared collection behavior stays explicit even when names overlap builtin members
+
+- [x] Verify
+  - `cargo test --lib form_elements_named_property_collisions_keep_builtin_surface_visible_work -- --nocapture`
+  - `cargo test --lib selected_options_and_datalist_options_keep_html_collection_collision_rules_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_select_element`
+  - `cargo test --lib dom_datalist_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2352 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.85: specialized collection multi-match namedItem and RadioNodeList residual sweep)
+
+- [x] Completed P1.85: specialized collection multi-match namedItem and RadioNodeList residual sweep
+  - upgraded `HTMLFormControlsCollection` multi-match named lookups so `form.elements[name]` and `namedItem(...)` return stable live `RadioNodeList` wrappers when multiple controls share the same `name`/`id`, while preserving wrapper identity, ordering, liveness, illegal-constructor behavior, and grouped `value` semantics for radio groups
+  - exposed `RadioNodeList` on env/window paths with the correct constructor/prototype chain and wired grouped form-control wrappers through the shared live collection cache so specialized `form.elements[...]` parsing falls back to generic property access for named/dynamic lookups instead of collapsing back to single-element fast paths
+  - confirmed `selectedOptions`, `options`, and other specialized/shared live collections keep their existing single-element or `HTMLCollection` behavior and do not accidentally adopt grouped-return `RadioNodeList` semantics
+
+- [x] Verify
+  - `cargo test --lib form_elements_multi_match_named_lookup_returns_live_radio_node_lists_work -- --nocapture`
+  - `cargo test --lib selected_options_and_options_duplicate_names_do_not_switch_to_radio_node_lists_work -- --nocapture`
+  - `cargo test --lib form_elements_index_supports_expression -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_select_element`
+  - `cargo test --lib dom_datalist_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2354 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.86: RadioNodeList reflective surface and grouped form-control descriptor parity sweep)
+
+- [ ] Audit `RadioNodeList` reflective/object-copy behavior
+  - verify `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.getOwnPropertyDescriptor(...)`, `Object.assign(...)`, object spread, and prototype/introspection paths match browser behavior for grouped form-control results
+
+- [ ] Tighten grouped form-control shadowing and indexed-property parity
+  - confirm grouped `form.elements[name]` wrappers handle expando assignment, `Object.defineProperty(...)`, `delete`, indexed access, `item(...)`, and named collisions without regressing live updates or shared collection fast paths
 
 - [ ] Verify
-  - targeted regressions for host collection expando/prototype-mutation parity
-  - related DOM collection and language suites
+  - targeted regressions for `RadioNodeList` reflective surface and grouped shadow/delete parity
+  - related form/select collection suites
   - `cargo test --lib`

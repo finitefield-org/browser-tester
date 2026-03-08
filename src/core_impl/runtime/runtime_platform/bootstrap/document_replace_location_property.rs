@@ -23,9 +23,18 @@ impl Harness {
         self.listeners = ListenerStore::default();
         self.dom_runtime.node_event_handler_props.clear();
         self.dom_runtime.node_expando_props.clear();
+        self.dom_runtime.live_dom_string_maps.clear();
         self.dom_runtime.live_child_nodes_lists.clear();
         self.dom_runtime.live_children_lists.clear();
+        self.dom_runtime.live_form_elements_lists.clear();
+        self.dom_runtime.live_select_options_lists.clear();
+        self.dom_runtime.live_selected_options_lists.clear();
+        self.dom_runtime.live_datalist_options_lists.clear();
         self.dom_runtime.live_named_node_maps.clear();
+        self.dom_runtime.live_document_forms_list = None;
+        self.dom_runtime.live_document_images_list = None;
+        self.dom_runtime.live_document_links_list = None;
+        self.dom_runtime.live_document_scripts_list = None;
         self.script_runtime.env.clear();
         self.scheduler.task_queue.clear();
         self.scheduler.microtask_queue.clear();

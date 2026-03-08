@@ -122,16 +122,6 @@ fn parse_border_width_side_from_shorthand(value: &str, side: BorderSide) -> Opti
 }
 
 impl Dom {
-    pub(crate) fn dataset_get(&self, node_id: NodeId, key: &str) -> Result<Option<String>> {
-        if self.element(node_id).is_none() {
-            return Err(Error::ScriptRuntime(
-                "dataset target is not an element".into(),
-            ));
-        }
-        let name = dataset_key_to_attr_name(key);
-        Ok(self.attr(node_id, &name))
-    }
-
     pub(crate) fn dataset_set(&mut self, node_id: NodeId, key: &str, value: &str) -> Result<()> {
         let name = dataset_key_to_attr_name(key);
         self.set_attr(node_id, &name, value)
