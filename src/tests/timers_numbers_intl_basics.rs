@@ -764,6 +764,43 @@ fn date_instance_methods_and_set_time_work() -> Result<()> {
 }
 
 #[test]
+fn date_string_hint_and_raw_getter_coercion_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date(0);
+            const proto = Object.getPrototypeOf(date);
+            const toStringFn = date['toString'];
+            const valueOfFn = date['valueOf'];
+
+            document.getElementById('result').textContent = [
+              String(String(date) === date['toString']()),
+              String(String.prototype.includes.call(date, '1970')),
+              String(RegExp.prototype[Symbol.search].call(/1970/, date) === 0),
+              String(toStringFn === proto['toString']),
+              String(valueOfFn === proto['valueOf']),
+              String(toStringFn.call(date) === date.toISOString()),
+              String(valueOfFn.call(date) === 0),
+              String(toStringFn.name === 'toString'),
+              String(valueOfFn.length === 0),
+              String(Function.prototype.toString.call(toStringFn) === toStringFn.toString())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn date_instance_method_member_call_supports_constructor_expression_target() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -2135,6 +2172,471 @@ fn intl_locale_properties_and_methods_work() -> Result<()> {
             "#result",
             "en:Latn:US:gregory:upper:phonebk:latn:true:undefined:0|gregory|default,emoji|h12,h23|latn|rtl|America/New_York,America/Los_Angeles|7:1:6/7|zh-Hans-CN:zh|Intl.Locale|true|en-US-u-hc-h12",
         )?;
+    Ok(())
+}
+
+#[test]
+fn intl_locale_raw_getter_and_call_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const locale = new Intl.Locale('en-US', { hourCycle: 'h12' });
+            const maximizeTarget = new Intl.Locale('zh');
+            const toStringFn = locale['toString'];
+            const getCalendarsFn = locale['getCalendars'];
+            const maximizeFn = maximizeTarget['maximize'];
+
+            document.getElementById('result').textContent = [
+              String(toStringFn === Intl.Locale.prototype.toString),
+              String(getCalendarsFn === Intl.Locale.prototype.getCalendars),
+              String(maximizeFn === Intl.Locale.prototype.maximize),
+              String(toStringFn.name === 'toString'),
+              String(toStringFn.length === 0),
+              String(Function.prototype.toString.call(toStringFn) === toStringFn.toString()),
+              toStringFn.call(locale),
+              getCalendarsFn.call(locale).join(','),
+              maximizeFn.call(maximizeTarget).baseName
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|en-US-u-hc-h12|gregory|zh-Hans-CN",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_formatter_prototype_methods_and_bound_format_metadata_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const date = new Date(Date.UTC(2012, 11, 20, 3, 0, 0));
+            const dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' });
+            const nf = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+            const list = new Intl.ListFormat('en', { style: 'short', type: 'conjunction' });
+            const duration = new Intl.DurationFormat('en', { style: 'short' });
+
+            const dtfToParts = dtf['formatToParts'];
+            const dtfRange = dtf['formatRange'];
+            const nfResolved = nf['resolvedOptions'];
+            const listToParts = list['formatToParts'];
+            const durationToParts = duration['formatToParts'];
+
+            const dtfPartsDirect = dtf['formatToParts'](date);
+            const dtfPartsViaCall = dtfToParts.call(dtf, date);
+            const dtfPartsJson = JSON.stringify(dtfPartsViaCall);
+            const dtfPartsOk =
+              JSON.stringify(dtfPartsDirect) === dtfPartsJson &&
+              dtfPartsJson.includes('"type":"month"') &&
+              dtfPartsJson.includes('"type":"day"') &&
+              dtfPartsJson.includes('"type":"year"');
+
+            const nfRangePartsJson = JSON.stringify(nf['formatRangeToParts'](1, 2));
+            const listPartsJson = JSON.stringify(list['formatToParts'](['Motorcycle', 'Bus', 'Car']));
+            const durationParts = duration['formatToParts']({ hours: 1, minutes: 2, seconds: 3 });
+            const durationPartsOk = durationParts.length > 0;
+
+            const options = nfResolved.call(nf);
+
+            document.getElementById('result').textContent = [
+              String(dtfToParts === Intl.DateTimeFormat.prototype.formatToParts),
+              String(dtfRange === Intl.DateTimeFormat.prototype.formatRange),
+              String(nfResolved === Intl.NumberFormat.prototype.resolvedOptions),
+              String(listToParts === Intl.ListFormat.prototype.formatToParts),
+              String(durationToParts === Intl.DurationFormat.prototype.formatToParts),
+              String(dtfPartsOk),
+              String(dtfRange.call(dtf, date, date).includes('2012')),
+              options.style + ':' + options.currency,
+              String(nfRangePartsJson.includes('"source":"startRange"') && nfRangePartsJson.includes('"source":"endRange"')),
+              String(listPartsJson.includes('"type":"element"') && listPartsJson.includes('"type":"literal"')),
+              String(durationPartsOk),
+              String(dtf.format.name === 'format'),
+              String(nf.format.name === 'format'),
+              String(Function.prototype.toString.call(dtfToParts) === dtfToParts.toString()),
+              String(Function.prototype.toString.call(nf.format) === nf.format.toString())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|currency:EUR|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_bound_format_getter_accessor_identity_and_receiver_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const dtf = new Intl.DateTimeFormat('en-US', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              timeZone: 'UTC'
+            });
+            const nf = new Intl.NumberFormat('en-US');
+            const date = new Date(Date.UTC(2020, 11, 20, 3, 0, 0));
+            const dtfFormat1 = dtf.format;
+            const dtfFormat2 = dtf['format'];
+            const nfFormat1 = nf.format;
+            const nfFormat2 = nf['format'];
+
+            let dtfErr = '';
+            try {
+              ({ __proto__: Intl.DateTimeFormat.prototype }).format;
+            } catch (e) {
+              dtfErr = String(e);
+            }
+
+            let nfErr = '';
+            try {
+              ({ __proto__: Intl.NumberFormat.prototype })['format'];
+            } catch (e) {
+              nfErr = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              String(dtfFormat1 === dtfFormat2 && dtfFormat1 === dtf.format),
+              String(nfFormat1 === nfFormat2 && nfFormat1 === nf.format),
+              String(!Object.prototype.hasOwnProperty.call(dtf, 'format')),
+              String(!Object.prototype.hasOwnProperty.call(nf, 'format')),
+              dtfFormat1(date),
+              nfFormat1(1234.5),
+              dtfErr,
+              nfErr,
+              String(dtfFormat1.name === 'format' && dtfFormat1.length === 1),
+              String(Function.prototype.toString.call(nfFormat1) === nfFormat1.toString())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|12/20/2020|1,234.5|Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance|Intl.NumberFormat method requires an Intl.NumberFormat instance|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_date_time_format_accessor_assignment_noop_and_enumeration_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const dtf = new Intl.DateTimeFormat('en-US', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              timeZone: 'UTC'
+            });
+            const nativeDtf = dtf.format;
+            let dtfBeforeForIn = '';
+            for (const key in dtf) dtfBeforeForIn += key;
+
+            dtf.format = (value) => 'dtf:' + value.getUTCFullYear();
+
+            const dtfAfterAssign = dtf.format;
+            let dtfAfterForIn = '';
+            for (const key in dtf) dtfAfterForIn += key;
+
+            delete dtf.format;
+
+            let dtfDeleteForIn = '';
+            for (const key in dtf) dtfDeleteForIn += key;
+
+            document.getElementById('result').textContent = [
+              String('format' in dtf),
+              String(!Object.prototype.hasOwnProperty.call(dtf, 'format')),
+              String(Object.keys(dtf).length === 0),
+              String(Object.keys({ ...dtf }).length === 0),
+              String(dtfBeforeForIn === ''),
+              String(dtfAfterAssign === nativeDtf),
+              String(dtf.format === nativeDtf),
+              dtf.format(new Date(Date.UTC(2020, 11, 20, 3, 0, 0))),
+              String(delete dtf.format),
+              String(dtf.format === nativeDtf),
+              dtf.format(new Date(Date.UTC(2020, 11, 20, 3, 0, 0))),
+              String(!Object.prototype.hasOwnProperty.call(dtf, 'format')),
+              String(Object.keys(dtf).length === 0),
+              String(Object.keys({ ...dtf }).length === 0),
+              String(dtfAfterForIn === ''),
+              dtfDeleteForIn,
+              JSON.stringify(dtf)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|12/20/2020|true|true|12/20/2020|true|true|true|true||{}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_accessor_assignment_noop_and_enumeration_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nf = new Intl.NumberFormat('en-US');
+            const nativeNf = nf.format;
+            let nfBeforeForIn = '';
+            for (const key in nf) nfBeforeForIn += key;
+
+            nf.format = (...args) => 'nf:' + args.length + ':' + args[0];
+
+            const nfAfterAssign = nf.format;
+            let nfAfterForIn = '';
+            for (const key in nf) nfAfterForIn += key;
+
+            delete nf.format;
+
+            let nfDeleteForIn = '';
+            for (const key in nf) nfDeleteForIn += key;
+
+            document.getElementById('result').textContent = [
+              String('format' in nf),
+              String(!Object.prototype.hasOwnProperty.call(nf, 'format')),
+              String(Object.keys(nf).length === 0),
+              String(Object.keys({ ...nf }).length === 0),
+              String(nfBeforeForIn === ''),
+              String(nfAfterAssign === nativeNf),
+              String(nf['format'] === nf.format),
+              String(nf.format === nativeNf),
+              nf.format(12),
+              nf['format'](12),
+              String(delete nf.format),
+              String(nf.format === nativeNf),
+              nf.format(1234.5),
+              String(!Object.prototype.hasOwnProperty.call(nf, 'format')),
+              String(Object.keys(nf).length === 0),
+              String(Object.keys({ ...nf }).length === 0),
+              String(nfAfterForIn === ''),
+              nfDeleteForIn,
+              JSON.stringify(nf)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|12|12|true|true|1,234.5|true|true|true|true||{}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_descriptor_define_property_and_reflect_set_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const nf = new Intl.NumberFormat('en-US');
+          window.nf = nf;
+          const nativeFormat = nf.format;
+          const protoDesc1 =
+            Object.getOwnPropertyDescriptor(Intl.NumberFormat.prototype, 'format');
+          const protoDesc2 =
+            window.Object.getOwnPropertyDescriptor(window.Intl.NumberFormat.prototype, 'format');
+          const ownBefore = Object.getOwnPropertyDescriptor(window.nf, 'format');
+          const reflectBefore = Reflect.set(window.nf, 'format', (value) => 'bad:' + value);
+          const afterReflectBefore = window.nf.format;
+          const override1 = (value) => 'own:' + value;
+          const override2 = (value) => 'set:' + value;
+          const defined = Object.defineProperty(window.nf, 'format', {
+            value: override1,
+            enumerable: true
+          });
+          const ownAfterDefine = Object.getOwnPropertyDescriptor(window.nf, 'format');
+          let keysAfterDefine = '';
+          for (const key in window.nf) keysAfterDefine += key;
+          const reflectAfter = Reflect.set(window.nf, 'format', override2);
+          const ownAfterReflect = Object.getOwnPropertyDescriptor(window.nf, 'format');
+          delete window.nf.format;
+          const ownAfterDelete = Object.getOwnPropertyDescriptor(window.nf, 'format');
+          let keysAfterDelete = '';
+          for (const key in window.nf) keysAfterDelete += key;
+
+          document.getElementById('result').textContent = [
+            String(ownBefore === undefined),
+            String(protoDesc1.get === protoDesc2.get),
+            String(protoDesc1.set === undefined),
+            String(protoDesc1.enumerable === false && protoDesc1.configurable === true),
+            Object.keys(protoDesc1).join(','),
+            String(reflectBefore === false),
+            String(afterReflectBefore === nativeFormat),
+            String(defined === window.nf),
+            keysAfterDefine,
+            String(
+              ownAfterDefine.value === override1 &&
+              ownAfterDefine.enumerable === true &&
+              ownAfterDefine.writable === false &&
+              ownAfterDefine.configurable === false
+            ),
+            String(reflectAfter === false),
+            String(
+              ownAfterReflect.value === override1 &&
+              ownAfterReflect.enumerable === true &&
+              ownAfterReflect.writable === false &&
+              ownAfterReflect.configurable === false
+            ),
+            String(delete window.nf.format === false),
+            String(ownAfterDelete.value === override1),
+            keysAfterDelete,
+            window.nf.format(1234.5)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|get,set,enumerable,configurable|true|true|true|format|true|true|true|true|true|format|own:1234.5",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_number_format_main_realm_define_property_override_lookup_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nf = new Intl.NumberFormat('en-US');
+            window.nf = nf;
+            const nativeFormat = nf.format;
+            const override1 = (value) => 'own:' + value;
+            const override2 = (value) => 'set:' + value;
+
+            Object.defineProperty(nf, 'format', {
+              value: override1,
+              enumerable: true
+            });
+
+            const ownCall = nf.format(12);
+            const pathCall = window.nf.format(12);
+            const bracketCall = nf['format'](12);
+            const extracted = nf.format;
+            const extractedCall = extracted(12);
+
+            const reflectAfter = Reflect.set(window.nf, 'format', override2);
+            const reflectCall = nf.format(13);
+            const reflectPathCall = window.nf['format'](13);
+
+            delete window.nf.format;
+
+            document.getElementById('result').textContent = [
+              String(ownCall === 'own:12'),
+              String(pathCall === 'own:12'),
+              String(bracketCall === 'own:12'),
+              String(extracted === override1),
+              String(extractedCall === 'own:12'),
+              String(reflectAfter === false),
+              String(reflectCall === 'own:13'),
+              String(reflectPathCall === 'own:13'),
+              String(delete window.nf.format === false),
+              String(nf.format !== nativeFormat),
+              nf.format(1234.5)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|own:1234.5",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_and_reflect_alias_surface_work_in_main_realm() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const nf = new Intl.NumberFormat('en-US');
+            const symbol = Symbol('s');
+            const obj = { a: 1 };
+            obj[symbol] = 7;
+
+            const getDesc = window.Object['getOwnPropertyDescriptor'];
+            const define = Object.defineProperty;
+            const keys = window.Object.keys;
+            const values = Object['values'];
+            const entries = window.Object.entries;
+            const hasOwn = Object.hasOwn;
+            const getSymbols = Object.getOwnPropertySymbols;
+            const getPrototypeOf = window.Object.getPrototypeOf;
+            const freeze = Object.freeze;
+            const set = window.Reflect['set'];
+
+            define(nf, 'format', { value: (value) => 'alias:' + value, enumerable: true });
+            define(obj, 'b', { value: 2, enumerable: true });
+            const reflectResult = set(obj, 'c', 3);
+            const formatDesc = getDesc(nf, 'format');
+            const symbolKeys = getSymbols(obj);
+
+            document.getElementById('result').textContent = [
+              String(window.Object.getOwnPropertyDescriptor === Object.getOwnPropertyDescriptor),
+              String(window.Reflect.set === Reflect.set),
+              String(Object.getOwnPropertyDescriptor.name === 'getOwnPropertyDescriptor'),
+              String(Object.defineProperty.length === 3),
+              String(Reflect.set.length === 3),
+              String(formatDesc.value(12) === 'alias:12'),
+              nf.format(12),
+              keys(obj).join(','),
+              values(obj).join(','),
+              entries(obj).map((pair) => pair.join('=')).join(','),
+              String(hasOwn(obj, 'b') && hasOwn(obj, 'c') && !hasOwn(obj, 'z')),
+              String(symbolKeys.length === 1 && symbolKeys[0] === symbol),
+              String(getPrototypeOf(obj) === Object.prototype),
+              String(freeze(obj) === obj),
+              String(reflectResult === true),
+              String(Function.prototype.toString.call(Object.getOwnPropertyDescriptor) === Object.getOwnPropertyDescriptor.toString()),
+              String(Object.keys(Reflect).length === 0)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|alias:12|a,b,c|1,2,3|a=1,b=2,c=3|true|true|true|true|true|true|true",
+    )?;
     Ok(())
 }
 

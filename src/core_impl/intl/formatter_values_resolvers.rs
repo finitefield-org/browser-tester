@@ -7,22 +7,21 @@ impl Harness {
         options: IntlListOptions,
     ) -> Value {
         let format = self.new_intl_list_format_callable(locale.clone(), options.clone());
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::ListFormat.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_list_options_to_value(&options),
-            ),
-            ("format".to_string(), format),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("ListFormat"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "ListFormat",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::ListFormat.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_list_options_to_value(&options),
+                ),
+                ("format".to_string(), format),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_plural_rules_value(
@@ -30,21 +29,20 @@ impl Harness {
         locale: String,
         options: IntlPluralRulesOptions,
     ) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::PluralRules.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_plural_rules_options_to_value(&options),
-            ),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("PluralRules"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "PluralRules",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::PluralRules.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_plural_rules_options_to_value(&options),
+                ),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_relative_time_formatter_value(
@@ -52,25 +50,24 @@ impl Harness {
         locale: String,
         options: IntlRelativeTimeOptions,
     ) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(
-                    IntlFormatterKind::RelativeTimeFormat
-                        .storage_name()
-                        .to_string(),
+        self.new_intl_instance_value(
+            "RelativeTimeFormat",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(
+                        IntlFormatterKind::RelativeTimeFormat
+                            .storage_name()
+                            .to_string(),
+                    ),
                 ),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_relative_time_options_to_value(&options),
-            ),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("RelativeTimeFormat"),
-            ),
-        ])
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_relative_time_options_to_value(&options),
+                ),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_segmenter_segments_iterator_callable(&self, segments: Value) -> Value {
@@ -122,93 +119,91 @@ impl Harness {
         locale: String,
         options: IntlSegmenterOptions,
     ) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::Segmenter.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_segmenter_options_to_value(&options),
-            ),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("Segmenter"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "Segmenter",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::Segmenter.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_segmenter_options_to_value(&options),
+                ),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_locale_value(&self, data: IntlLocaleData) -> Value {
         let base_name = Self::intl_locale_data_base_name(&data);
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_LOCALE_DATA_KEY.to_string(),
-                Self::intl_locale_data_to_internal_value(&data),
-            ),
-            ("baseName".to_string(), Value::String(base_name)),
-            ("language".to_string(), Value::String(data.language.clone())),
-            (
-                "script".to_string(),
-                data.script
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "region".to_string(),
-                data.region
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "variants".to_string(),
-                Self::new_array_value(
-                    data.variants
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect::<Vec<_>>(),
+        self.new_intl_instance_value(
+            "Locale",
+            vec![
+                (
+                    INTERNAL_INTL_LOCALE_DATA_KEY.to_string(),
+                    Self::intl_locale_data_to_internal_value(&data),
                 ),
-            ),
-            (
-                "calendar".to_string(),
-                data.calendar
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "caseFirst".to_string(),
-                data.case_first
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "collation".to_string(),
-                data.collation
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "hourCycle".to_string(),
-                data.hour_cycle
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "numberingSystem".to_string(),
-                data.numbering_system
-                    .as_ref()
-                    .map_or(Value::Undefined, |value| Value::String(value.clone())),
-            ),
-            (
-                "numeric".to_string(),
-                data.numeric.map_or(Value::Undefined, Value::Bool),
-            ),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("Locale"),
-            ),
-        ])
+                ("baseName".to_string(), Value::String(base_name)),
+                ("language".to_string(), Value::String(data.language.clone())),
+                (
+                    "script".to_string(),
+                    data.script
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "region".to_string(),
+                    data.region
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "variants".to_string(),
+                    Self::new_array_value(
+                        data.variants
+                            .iter()
+                            .cloned()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                (
+                    "calendar".to_string(),
+                    data.calendar
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "caseFirst".to_string(),
+                    data.case_first
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "collation".to_string(),
+                    data.collation
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "hourCycle".to_string(),
+                    data.hour_cycle
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "numberingSystem".to_string(),
+                    data.numbering_system
+                        .as_ref()
+                        .map_or(Value::Undefined, |value| Value::String(value.clone())),
+                ),
+                (
+                    "numeric".to_string(),
+                    data.numeric.map_or(Value::Undefined, Value::Bool),
+                ),
+            ],
+        )
     }
 
     pub(crate) fn intl_number_format_options_to_value(options: &IntlNumberFormatOptions) -> Value {
@@ -278,22 +273,45 @@ impl Harness {
         options: IntlNumberFormatOptions,
     ) -> Value {
         let format = self.new_intl_number_format_callable(locale.clone(), options.clone());
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::NumberFormat.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_number_format_options_to_value(&options),
-            ),
-            ("format".to_string(), format),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("NumberFormat"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "NumberFormat",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::NumberFormat.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_number_format_options_to_value(&options),
+                ),
+                (INTERNAL_INTL_BOUND_FORMAT_KEY.to_string(), format),
+            ],
+        )
+    }
+
+    pub(crate) fn intl_bound_number_format_callable_from_receiver(
+        &mut self,
+        receiver: &Value,
+    ) -> Result<Value> {
+        let (locale, options) = self.resolve_intl_number_format_options(receiver)?;
+        let Value::Object(entries) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "Intl.NumberFormat method requires an Intl.NumberFormat instance".into(),
+            ));
+        };
+        if let Some(value) =
+            Self::object_get_entry(&entries.borrow(), INTERNAL_INTL_BOUND_FORMAT_KEY)
+        {
+            return Ok(value);
+        }
+        let format = self.new_intl_number_format_callable(locale, options);
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            INTERNAL_INTL_BOUND_FORMAT_KEY.to_string(),
+            format.clone(),
+        );
+        Ok(format)
     }
 
     pub(crate) fn intl_number_resolved_options_value(

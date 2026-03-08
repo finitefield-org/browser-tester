@@ -21,6 +21,7 @@ pub(crate) trait ObjectEntryLookup {
 
 pub(crate) trait ObjectEntryMut {
     fn set_entry(&mut self, key: String, value: Value);
+    fn delete_entry(&mut self, key: &str) -> bool;
 }
 
 impl ObjectEntryLookup for [(String, Value)] {
@@ -62,16 +63,32 @@ impl ObjectEntryMut for Vec<(String, Value)> {
             self.push((key, value));
         }
     }
+
+    fn delete_entry(&mut self, key: &str) -> bool {
+        let Some(index) = self.iter().position(|(name, _)| name == key) else {
+            return false;
+        };
+        self.remove(index);
+        true
+    }
 }
 
 impl ObjectEntryMut for ObjectValue {
     fn set_entry(&mut self, key: String, value: Value) {
         ObjectValue::set_entry(self, key, value);
     }
+
+    fn delete_entry(&mut self, key: &str) -> bool {
+        ObjectValue::delete_entry(self, key)
+    }
 }
 
 impl ObjectEntryMut for std::cell::RefMut<'_, ObjectValue> {
     fn set_entry(&mut self, key: String, value: Value) {
         ObjectValue::set_entry(&mut *self, key, value);
+    }
+
+    fn delete_entry(&mut self, key: &str) -> bool {
+        ObjectValue::delete_entry(&mut *self, key)
     }
 }

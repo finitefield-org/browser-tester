@@ -40,7 +40,47 @@ fn canvas_rendering_context_2d_exposes_core_defaults() -> Result<()> {
     let h = Harness::from_html(html)?;
     h.assert_text(
         "#result",
-        "true:#000000:#000000:1:butt:miter:10:10px sans-serif:start:alphabetic:inherit:1:source-over:true:low:none:true:false:0:function:function:[object Object]",
+        "true:#000000:#000000:1:butt:miter:10:10px sans-serif:start:alphabetic:inherit:1:source-over:true:low:none:true:false:0:function:function:[object CanvasRenderingContext2D]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn canvas_rendering_context_2d_tostring_bracket_call_and_raw_getter_parity_work() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas' width='100' height='80'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const ctx = document.getElementById('canvas').getContext('2d');
+            const toStringFn = ctx['toString'];
+            let bad = 'none';
+            try {
+              toStringFn.call({});
+            } catch (e) {
+              bad = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              ctx.toString(),
+              ctx['toString'](),
+              String(ctx),
+              toStringFn.call(ctx),
+              String(toStringFn.name === 'toString'),
+              String(toStringFn.length === 0),
+              String(Function.prototype.toString.call(toStringFn) === toStringFn.toString()),
+              String(bad.includes('CanvasRenderingContext2D method called on incompatible receiver'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object CanvasRenderingContext2D]|[object CanvasRenderingContext2D]|[object CanvasRenderingContext2D]|[object CanvasRenderingContext2D]|true|true|true|true",
     )?;
     Ok(())
 }

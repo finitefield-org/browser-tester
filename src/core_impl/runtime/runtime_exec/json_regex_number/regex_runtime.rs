@@ -91,26 +91,23 @@ impl Harness {
         }))))
     }
 
-    pub(crate) fn new_regex_from_values(pattern: &Value, flags: Option<&Value>) -> Result<Value> {
+    pub(crate) fn new_regex_from_values(
+        &mut self,
+        pattern: &Value,
+        flags: Option<&Value>,
+    ) -> Result<Value> {
         let pattern_text = match pattern {
             Value::RegExp(value) => value.borrow().source.clone(),
-            _ => pattern.as_string(),
+            _ => self.coerce_to_string_for_tostring(pattern)?,
         };
         let flags_text = if let Some(flags) = flags {
-            flags.as_string()
+            self.coerce_to_string_for_tostring(flags)?
         } else if let Value::RegExp(value) = pattern {
             value.borrow().flags.clone()
         } else {
             String::new()
         };
         Self::new_regex_value(pattern_text, flags_text)
-    }
-
-    pub(crate) fn resolve_regex_from_value(value: &Value) -> Result<Rc<RefCell<RegexValue>>> {
-        match value {
-            Value::RegExp(regex) => Ok(regex.clone()),
-            _ => Err(Error::ScriptRuntime("value is not a RegExp".into())),
-        }
     }
 
     pub(crate) fn map_regex_runtime_error(err: RegexError) -> Error {

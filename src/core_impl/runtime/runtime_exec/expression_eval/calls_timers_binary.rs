@@ -377,6 +377,18 @@ impl Harness {
         match value {
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if let Some(mut keys) = Self::string_wrapper_own_string_keys(&entries, true) {
+                    keys.extend(
+                        entries
+                            .iter()
+                            .filter(|(key, _)| {
+                                Self::is_symbol_storage_key(key)
+                                    && !Self::is_non_enumerable_object_key(&*entries, key)
+                            })
+                            .map(|(key, _)| key.clone()),
+                    );
+                    return keys;
+                }
                 entries
                     .iter()
                     .filter(|(key, _)| {
@@ -431,15 +443,7 @@ impl Harness {
             | Value::RegExp(_)
             | Value::Node(_)
             | Value::UrlConstructor => Ok(target),
-            Value::String(text) => Ok(Self::new_string_wrapper_value(text)),
-            Value::Symbol(symbol) => Ok(Self::new_object_value(vec![(
-                INTERNAL_SYMBOL_WRAPPER_KEY.to_string(),
-                Value::Number(symbol.id as i64),
-            )])),
-            primitive => Ok(Self::new_object_value(vec![(
-                "value".to_string(),
-                Value::String(primitive.as_string()),
-            )])),
+            primitive => Ok(Self::box_primitive_value(primitive)),
         }
     }
 
@@ -479,7 +483,7 @@ impl Harness {
         })
     }
 
-    fn eval_object_assign_static_call(
+    pub(crate) fn eval_object_assign_static_call(
         &mut self,
         args: &[Value],
         event: &EventState,
@@ -923,7 +927,7 @@ impl Harness {
 
                     if let Value::String(text) = &receiver {
                         if let Some(value) =
-                            self.eval_string_member_call(text, member, &evaluated_args)?
+                            self.eval_string_member_call(text, member, &evaluated_args, event)?
                         {
                             return Ok(value);
                         }
@@ -970,9 +974,16 @@ impl Harness {
                     }
 
                     if let Value::Map(map) = &receiver {
-                        let map_member_override = {
+                        let (map_member_override, has_explicit_prototype) = {
                             let map_ref = map.borrow();
-                            Self::object_get_entry(&map_ref.properties, member)
+                            (
+                                Self::object_get_entry(&map_ref.properties, member),
+                                Self::object_get_entry(
+                                    &map_ref.properties,
+                                    INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                )
+                                .is_some(),
+                            )
                         };
                         if let Some(callee) = map_member_override {
                             return self
@@ -994,20 +1005,29 @@ impl Harness {
                                     other => other,
                                 });
                         }
-                        if let Some(value) = self.eval_map_member_call_from_values(
-                            map,
-                            member,
-                            &evaluated_args,
-                            event,
-                        )? {
-                            return Ok(value);
+                        if !has_explicit_prototype {
+                            if let Some(value) = self.eval_map_member_call_from_values(
+                                map,
+                                member,
+                                &evaluated_args,
+                                event,
+                            )? {
+                                return Ok(value);
+                            }
                         }
                     }
 
                     if let Value::Set(set) = &receiver {
-                        let set_member_override = {
+                        let (set_member_override, has_explicit_prototype) = {
                             let set_ref = set.borrow();
-                            Self::object_get_entry(&set_ref.properties, member)
+                            (
+                                Self::object_get_entry(&set_ref.properties, member),
+                                Self::object_get_entry(
+                                    &set_ref.properties,
+                                    INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                )
+                                .is_some(),
+                            )
                         };
                         if let Some(callee) = set_member_override {
                             return self
@@ -1029,20 +1049,29 @@ impl Harness {
                                     other => other,
                                 });
                         }
-                        if let Some(value) = self.eval_set_member_call_from_values(
-                            set,
-                            member,
-                            &evaluated_args,
-                            event,
-                        )? {
-                            return Ok(value);
+                        if !has_explicit_prototype {
+                            if let Some(value) = self.eval_set_member_call_from_values(
+                                set,
+                                member,
+                                &evaluated_args,
+                                event,
+                            )? {
+                                return Ok(value);
+                            }
                         }
                     }
 
                     if let Value::WeakMap(weak_map) = &receiver {
-                        let weak_map_member_override = {
+                        let (weak_map_member_override, has_explicit_prototype) = {
                             let weak_map_ref = weak_map.borrow();
-                            Self::object_get_entry(&weak_map_ref.properties, member)
+                            (
+                                Self::object_get_entry(&weak_map_ref.properties, member),
+                                Self::object_get_entry(
+                                    &weak_map_ref.properties,
+                                    INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                )
+                                .is_some(),
+                            )
                         };
                         if let Some(callee) = weak_map_member_override {
                             return self
@@ -1064,20 +1093,29 @@ impl Harness {
                                     other => other,
                                 });
                         }
-                        if let Some(value) = self.eval_weak_map_member_call_from_values(
-                            weak_map,
-                            member,
-                            &evaluated_args,
-                            event,
-                        )? {
-                            return Ok(value);
+                        if !has_explicit_prototype {
+                            if let Some(value) = self.eval_weak_map_member_call_from_values(
+                                weak_map,
+                                member,
+                                &evaluated_args,
+                                event,
+                            )? {
+                                return Ok(value);
+                            }
                         }
                     }
 
                     if let Value::WeakSet(weak_set) = &receiver {
-                        let weak_set_member_override = {
+                        let (weak_set_member_override, has_explicit_prototype) = {
                             let weak_set_ref = weak_set.borrow();
-                            Self::object_get_entry(&weak_set_ref.properties, member)
+                            (
+                                Self::object_get_entry(&weak_set_ref.properties, member),
+                                Self::object_get_entry(
+                                    &weak_set_ref.properties,
+                                    INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                )
+                                .is_some(),
+                            )
                         };
                         if let Some(callee) = weak_set_member_override {
                             return self
@@ -1099,12 +1137,14 @@ impl Harness {
                                     other => other,
                                 });
                         }
-                        if let Some(value) = self.eval_weak_set_member_call_from_values(
-                            weak_set,
-                            member,
-                            &evaluated_args,
-                        )? {
-                            return Ok(value);
+                        if !has_explicit_prototype {
+                            if let Some(value) = self.eval_weak_set_member_call_from_values(
+                                weak_set,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
                         }
                     }
 

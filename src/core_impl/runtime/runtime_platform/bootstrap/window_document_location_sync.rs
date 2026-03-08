@@ -240,6 +240,7 @@ impl Harness {
             "URLSearchParams",
             "ArrayBuffer",
             "Promise",
+            "Reflect",
             "Map",
             "WeakMap",
             "Set",
@@ -315,6 +316,7 @@ impl Harness {
         bigint_constructor: &Value,
         symbol_constructor: &Value,
         object_constructor: &Value,
+        reflect_object: &Value,
         event_target_constructor: &Value,
         event_constructor: &Value,
         custom_event_constructor: &Value,
@@ -394,6 +396,7 @@ impl Harness {
             bigint_constructor,
             symbol_constructor,
             object_constructor,
+            reflect_object,
         );
         let function_family_constructor_bindings = self.function_family_constructor_bindings();
         let mut extras = Vec::new();

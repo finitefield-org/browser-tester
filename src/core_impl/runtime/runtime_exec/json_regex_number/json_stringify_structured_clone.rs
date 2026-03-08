@@ -369,6 +369,7 @@ impl Harness {
                     buffer: cloned_buffer,
                     byte_offset: source.byte_offset,
                     fixed_length: source.fixed_length,
+                    properties: source.properties.clone(),
                 }));
                 state.typed_arrays.insert(source_id, cloned.clone());
                 Ok(Value::TypedArray(cloned))

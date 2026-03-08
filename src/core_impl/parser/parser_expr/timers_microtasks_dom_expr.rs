@@ -161,6 +161,45 @@ pub(crate) fn is_non_dom_var_target(target: &DomQuery) -> bool {
     }
 }
 
+fn is_known_non_dom_global_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Object"
+            | "Reflect"
+            | "Math"
+            | "JSON"
+            | "Date"
+            | "RegExp"
+            | "Array"
+            | "ArrayBuffer"
+            | "Blob"
+            | "Promise"
+            | "Map"
+            | "WeakMap"
+            | "Set"
+            | "WeakSet"
+            | "URL"
+            | "URLSearchParams"
+            | "String"
+            | "Number"
+            | "BigInt"
+            | "Symbol"
+            | "Function"
+            | "GeneratorFunction"
+            | "AsyncGeneratorFunction"
+            | "Intl"
+    )
+}
+
+fn dom_access_uses_known_non_dom_global(target: &DomQuery) -> bool {
+    match target {
+        DomQuery::Var(name) => is_known_non_dom_global_name(name),
+        DomQuery::VarPath { base, .. } => is_known_non_dom_global_name(base),
+        DomQuery::Index { target, .. } => dom_access_uses_known_non_dom_global(target),
+        _ => false,
+    }
+}
+
 fn parse_dom_property_segment(cursor: &mut Cursor) -> Result<Option<String>> {
     cursor.skip_ws();
     if cursor.consume_byte(b'.') {
@@ -205,6 +244,9 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         && head == "target"
         && nested.is_none()
     {
+        return Ok(None);
+    }
+    if dom_access_uses_known_non_dom_global(&target) {
         return Ok(None);
     }
 

@@ -245,6 +245,17 @@ impl Harness {
         }
     }
 
+    fn number_instance_receiver_value(&self, value: &Value) -> Option<Value> {
+        match value {
+            Value::Number(_) | Value::Float(_) => Some(value.clone()),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Self::number_wrapper_value_from_object(&entries)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn eval_number_instance_method(
         &mut self,
         method: NumberInstanceMethod,
@@ -260,7 +271,16 @@ impl Harness {
             args_value.push(self.eval_expr(arg, env, event_param, event)?);
         }
 
-        if let Value::BigInt(bigint) = &value {
+        self.eval_number_instance_method_from_values(method, &value, &args_value)
+    }
+
+    pub(crate) fn eval_number_instance_method_from_values(
+        &mut self,
+        method: NumberInstanceMethod,
+        value: &Value,
+        args_value: &[Value],
+    ) -> Result<Value> {
+        if let Value::BigInt(bigint) = value {
             return match method {
                 NumberInstanceMethod::ToLocaleString => Ok(Value::String(bigint.to_string())),
                 NumberInstanceMethod::ToString => {
@@ -286,7 +306,7 @@ impl Harness {
             };
         }
 
-        if let Value::Symbol(symbol) = &value {
+        if let Value::Symbol(symbol) = value {
             return match method {
                 NumberInstanceMethod::ValueOf => Ok(Value::Symbol(symbol.clone())),
                 NumberInstanceMethod::ToString | NumberInstanceMethod::ToLocaleString => {
@@ -306,7 +326,7 @@ impl Harness {
         }
 
         if matches!(method, NumberInstanceMethod::ToString)
-            && let Value::Object(entries) = &value
+            && let Value::Object(entries) = value
         {
             let entries = entries.borrow();
             if Self::is_url_object(&entries) || Self::is_url_search_params_object(&entries) {
@@ -314,7 +334,11 @@ impl Harness {
             }
         }
 
-        let numeric = Self::coerce_number_for_number_constructor(&value);
+        let numeric_receiver = self.number_instance_receiver_value(&value);
+        let numeric = numeric_receiver
+            .as_ref()
+            .map(Self::coerce_number_for_number_constructor)
+            .unwrap_or_else(|| Self::coerce_number_for_number_constructor(&value));
 
         match method {
             NumberInstanceMethod::ToExponential => {
@@ -335,11 +359,14 @@ impl Harness {
                 )))
             }
             NumberInstanceMethod::ToFixed => {
-                let numeric = Self::number_primitive_value(&value).ok_or_else(|| {
-                    Error::ScriptRuntime(
-                        "TypeError: Number.prototype.toFixed requires a Number receiver".into(),
-                    )
-                })?;
+                let numeric = numeric_receiver
+                    .as_ref()
+                    .map(Self::coerce_number_for_number_constructor)
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(
+                            "TypeError: Number.prototype.toFixed requires a Number receiver".into(),
+                        )
+                    })?;
                 let fraction_digits = if let Some(arg) = args_value.first() {
                     let fraction_digits = Self::value_to_i64(arg);
                     if !(0..=100).contains(&fraction_digits) {

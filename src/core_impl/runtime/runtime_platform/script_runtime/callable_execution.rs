@@ -269,9 +269,10 @@ impl Harness {
         Ok((kind, method))
     }
 
-    fn incompatible_receiver_error(family: &str) -> Error {
+    pub(crate) fn incompatible_receiver_error(family: &str) -> Error {
         let label = match family {
             "array" => "Array",
+            "date" => "Date",
             "map" => "Map",
             "node_list" => "NodeList",
             "weak_map" => "WeakMap",
@@ -285,6 +286,23 @@ impl Harness {
             "bigint" => "BigInt",
             "symbol" => "Symbol",
             "regexp" => "RegExp",
+            "intl_collator" => "Intl.Collator",
+            "intl_date_time_format" => "Intl.DateTimeFormat",
+            "intl_display_names" => "Intl.DisplayNames",
+            "intl_duration_format" => "Intl.DurationFormat",
+            "intl_list_format" => "Intl.ListFormat",
+            "intl_locale" => "Intl.Locale",
+            "intl_number_format" => "Intl.NumberFormat",
+            "intl_plural_rules" => "Intl.PluralRules",
+            "intl_relative_time_format" => "Intl.RelativeTimeFormat",
+            "intl_segmenter" => "Intl.Segmenter",
+            "object" => "Object",
+            "document" => "Document",
+            "parsed_document" => "Document",
+            "dom_parser" => "DOMParser",
+            "tree_walker" => "TreeWalker",
+            "range" => "Range",
+            "selection" => "Selection",
             "url" => "URL",
             "url_search_params" => "URLSearchParams",
             "storage" => "Storage",
@@ -292,9 +310,33 @@ impl Harness {
             "blob" => "Blob",
             "array_buffer" => "ArrayBuffer",
             "promise" => "Promise",
+            "canvas_2d_context" => "CanvasRenderingContext2D",
             _ => "builtin method",
         };
         Error::ScriptRuntime(format!("{label} method called on incompatible receiver"))
+    }
+
+    pub(crate) fn coerce_string_method_receiver(&mut self, receiver: &Value) -> Result<String> {
+        match receiver {
+            Value::Null | Value::Undefined => Err(Self::incompatible_receiver_error("string")),
+            Value::Symbol(_) => Err(Error::ScriptRuntime(
+                "Cannot convert a Symbol value to a string".into(),
+            )),
+            Value::Object(object) => {
+                let entries = object.borrow();
+                if let Some(value) = Self::string_wrapper_value_from_object(&entries) {
+                    return Ok(value);
+                }
+                if Self::symbol_wrapper_id_from_object(&entries).is_some() {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot convert a Symbol value to a string".into(),
+                    ));
+                }
+                drop(entries);
+                self.coerce_to_string_for_tostring(receiver)
+            }
+            _ => self.coerce_to_string_for_tostring(receiver),
+        }
     }
 
     fn execute_receiver_builtin_callable(
@@ -314,6 +356,15 @@ impl Harness {
                 self.eval_array_member_call(&values, &member, args, event)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!("unsupported Array method: {member}"))
+                    })
+            }
+            "date" => {
+                let Value::Date(value) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_date_member_call(&value, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Date method: {member}"))
                     })
             }
             "map" => {
@@ -389,22 +440,22 @@ impl Harness {
                 }
             }
             "string" => {
-                let text = match receiver {
-                    Value::String(text) => text,
-                    Value::Object(object) => {
-                        let entries = object.borrow();
-                        if Self::is_url_object(&entries) || Self::is_location_object(&entries) {
-                            return Err(Self::incompatible_receiver_error(&family));
+                let text = match member.as_str() {
+                    "toString" | "valueOf" => match receiver {
+                        Value::String(text) => text,
+                        Value::Object(object) => {
+                            let entries = object.borrow();
+                            Self::string_wrapper_value_from_object(&entries)
+                                .ok_or_else(|| Self::incompatible_receiver_error(&family))?
                         }
-                        Self::string_wrapper_value_from_object(&entries)
-                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?
-                    }
-                    _ => return Err(Self::incompatible_receiver_error(&family)),
+                        _ => return Err(Self::incompatible_receiver_error(&family)),
+                    },
+                    _ => self.coerce_string_method_receiver(&receiver)?,
                 };
                 match member.as_str() {
                     "toString" | "valueOf" => Ok(Value::String(text)),
                     _ => self
-                        .eval_string_member_call(&text, &member, args)?
+                        .eval_string_member_call(&text, &member, args, event)?
                         .ok_or_else(|| {
                             Error::ScriptRuntime(format!("unsupported String method: {member}"))
                         }),
@@ -429,8 +480,14 @@ impl Harness {
                     })
             }
             "boolean" => {
-                let Value::Bool(value) = receiver else {
-                    return Err(Self::incompatible_receiver_error(&family));
+                let value = match receiver {
+                    Value::Bool(value) => value,
+                    Value::Object(object) => {
+                        let entries = object.borrow();
+                        Self::boolean_wrapper_value_from_object(&entries)
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?
+                    }
+                    _ => return Err(Self::incompatible_receiver_error(&family)),
                 };
                 match member.as_str() {
                     "toString" => Ok(Value::String(if value {
@@ -445,43 +502,37 @@ impl Harness {
                 }
             }
             "number" => {
-                if !matches!(receiver, Value::Number(_) | Value::Float(_)) {
-                    return Err(Self::incompatible_receiver_error(&family));
+                match receiver {
+                    Value::Number(_) | Value::Float(_) => {}
+                    Value::Object(ref object) => {
+                        let entries = object.borrow();
+                        Self::number_wrapper_value_from_object(&entries)
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?;
+                    }
+                    _ => return Err(Self::incompatible_receiver_error(&family)),
                 }
-                match member.as_str() {
-                    "toLocaleString" => {
-                        let numeric = Self::coerce_number_for_number_constructor(&receiver);
-                        let locale = self.resolve_number_to_locale_string_locale(args.first())?;
-                        let options =
-                            self.intl_number_format_options_from_value(&locale, args.get(1))?;
-                        Ok(Value::String(self.intl_format_number_with_options(
-                            numeric, &locale, &options,
-                        )))
-                    }
-                    "toString" => {
-                        let radix = if let Some(arg) = args.first() {
-                            let radix = Self::value_to_i64(arg);
-                            if !(2..=36).contains(&radix) {
-                                return Err(Error::ScriptRuntime(
-                                    "toString radix must be between 2 and 36".into(),
-                                ));
-                            }
-                            radix as u32
-                        } else {
-                            10
-                        };
-                        let numeric = Self::coerce_number_for_number_constructor(&receiver);
-                        Ok(Value::String(Self::number_to_string_radix(numeric, radix)))
-                    }
-                    "valueOf" => Ok(receiver),
+                let method = match member.as_str() {
+                    "toExponential" => NumberInstanceMethod::ToExponential,
+                    "toFixed" => NumberInstanceMethod::ToFixed,
+                    "toLocaleString" => NumberInstanceMethod::ToLocaleString,
+                    "toPrecision" => NumberInstanceMethod::ToPrecision,
+                    "toString" => NumberInstanceMethod::ToString,
+                    "valueOf" => NumberInstanceMethod::ValueOf,
                     _ => Err(Error::ScriptRuntime(format!(
                         "unsupported Number method: {member}"
-                    ))),
-                }
+                    )))?,
+                };
+                self.eval_number_instance_method_from_values(method, &receiver, args)
             }
             "bigint" => {
-                let Value::BigInt(value) = receiver else {
-                    return Err(Self::incompatible_receiver_error(&family));
+                let value = match receiver {
+                    Value::BigInt(value) => value,
+                    Value::Object(object) => {
+                        let entries = object.borrow();
+                        Self::bigint_wrapper_value_from_object(&entries)
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?
+                    }
+                    _ => return Err(Self::incompatible_receiver_error(&family)),
                 };
                 match member.as_str() {
                     "toLocaleString" => Ok(Value::String(value.to_string())),
@@ -506,8 +557,21 @@ impl Harness {
                 }
             }
             "symbol" => {
-                let Value::Symbol(symbol) = receiver else {
-                    return Err(Self::incompatible_receiver_error(&family));
+                let symbol = match receiver {
+                    Value::Symbol(symbol) => symbol,
+                    Value::Object(object) => {
+                        let entries = object.borrow();
+                        let symbol_id = Self::symbol_wrapper_id_from_object(&entries)
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?;
+                        self.symbol_runtime
+                            .symbols_by_id
+                            .get(&symbol_id)
+                            .cloned()
+                            .ok_or_else(|| Self::incompatible_receiver_error(&family))?
+                    }
+                    _ => {
+                        return Err(Self::incompatible_receiver_error(&family));
+                    }
                 };
                 match member.as_str() {
                     "toString" => {
@@ -525,12 +589,424 @@ impl Harness {
                 }
             }
             "regexp" => {
-                let Value::RegExp(regex) = receiver else {
+                if let Value::RegExp(regex) = receiver {
+                    if let Some(value) =
+                        Self::regexp_instance_property_value(&regex.borrow(), &member)
+                    {
+                        return Ok(value);
+                    }
+                    return self
+                        .eval_regexp_member_call_from_values(&regex, &member, args, event)?
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unsupported RegExp method: {member}"))
+                        });
+                }
+                let Value::Object(entries) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
                 };
-                self.eval_regexp_member_call_from_values(&regex, &member, args)?
+                if !Self::is_regexp_prototype_object(&entries.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                if let Some(value) = Self::regexp_default_property_value(&member) {
+                    return Ok(value);
+                }
+                match member.as_str() {
+                    "toString" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "RegExp.toString does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Value::String("/(?:)/".to_string()))
+                    }
+                    _ => Err(Self::incompatible_receiver_error(&family)),
+                }
+            }
+            "intl_collator" => {
+                let (locale, case_first, sensitivity) = self
+                    .resolve_intl_collator_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "resolvedOptions" => Ok(Self::new_object_value(vec![
+                        ("locale".into(), Value::String(locale)),
+                        ("usage".into(), Value::String("sort".to_string())),
+                        ("sensitivity".into(), Value::String(sensitivity)),
+                        ("ignorePunctuation".into(), Value::Bool(false)),
+                        ("collation".into(), Value::String("default".to_string())),
+                        ("numeric".into(), Value::Bool(false)),
+                        ("caseFirst".into(), Value::String(case_first)),
+                    ])),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.Collator method: {member}"
+                    ))),
+                }
+            }
+            "intl_date_time_format" => {
+                let (locale, options) = self
+                    .resolve_intl_date_time_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "formatToParts" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let timestamp_ms = if matches!(value, Value::Undefined) {
+                            self.scheduler.now_ms
+                        } else {
+                            self.coerce_intl_date_time_timestamp_ms(&value)?
+                        };
+                        let parts =
+                            self.intl_format_date_time_to_parts(timestamp_ms, &locale, &options);
+                        Ok(self.intl_date_time_parts_to_value(&parts, None))
+                    }
+                    "formatRange" => {
+                        let start = args.first().cloned().unwrap_or(Value::Undefined);
+                        let end = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let start_ms = self.coerce_date_timestamp_ms(&start);
+                        let end_ms = self.coerce_date_timestamp_ms(&end);
+                        Ok(Value::String(self.intl_format_date_time_range(
+                            start_ms, end_ms, &locale, &options,
+                        )))
+                    }
+                    "formatRangeToParts" => {
+                        let start = args.first().cloned().unwrap_or(Value::Undefined);
+                        let end = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let start_ms = self.coerce_date_timestamp_ms(&start);
+                        let end_ms = self.coerce_date_timestamp_ms(&end);
+                        let (parts, sources) = self.intl_format_date_time_range_to_parts(
+                            start_ms, end_ms, &locale, &options,
+                        );
+                        Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_date_time_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.DateTimeFormat method: {member}"
+                    ))),
+                }
+            }
+            "intl_display_names" => {
+                let (locale, options) = self
+                    .resolve_intl_display_names_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "of" => {
+                        let code = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        self.intl_display_names_of(&locale, &options, &code)
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_display_names_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.DisplayNames method: {member}"
+                    ))),
+                }
+            }
+            "intl_duration_format" => {
+                let (locale, options) = self
+                    .resolve_intl_duration_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "formatToParts" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let parts =
+                            self.intl_format_duration_to_parts(&locale, &options, &value)?;
+                        Ok(self.intl_date_time_parts_to_value(&parts, None))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_duration_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.DurationFormat method: {member}"
+                    ))),
+                }
+            }
+            "intl_list_format" => {
+                let (locale, options) = self
+                    .resolve_intl_list_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "formatToParts" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let parts = self.intl_format_list_to_parts(&locale, &options, &value)?;
+                        Ok(self.intl_date_time_parts_to_value(&parts, None))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_list_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.ListFormat method: {member}"
+                    ))),
+                }
+            }
+            "intl_locale" => {
+                let data = self
+                    .resolve_intl_locale_data(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "getCalendars" => Ok(Self::new_array_value(
+                        self.intl_locale_get_calendars(&data)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    "getCollations" => Ok(Self::new_array_value(
+                        self.intl_locale_get_collations(&data)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    "getHourCycles" => Ok(Self::new_array_value(
+                        self.intl_locale_get_hour_cycles(&data)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    "getNumberingSystems" => Ok(Self::new_array_value(
+                        self.intl_locale_get_numbering_systems(&data)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    "getTextInfo" => Ok(self.intl_locale_get_text_info(&data)),
+                    "getTimeZones" => Ok(Self::new_array_value(
+                        self.intl_locale_get_time_zones(&data)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )),
+                    "getWeekInfo" => Ok(self.intl_locale_get_week_info(&data)),
+                    "maximize" => {
+                        Ok(self.new_intl_locale_value(self.intl_locale_maximize_data(&data)))
+                    }
+                    "minimize" => {
+                        Ok(self.new_intl_locale_value(self.intl_locale_minimize_data(&data)))
+                    }
+                    "toString" => Ok(Value::String(Self::intl_locale_data_to_string(&data))),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.Locale method: {member}"
+                    ))),
+                }
+            }
+            "intl_number_format" => {
+                let (locale, options) = self
+                    .resolve_intl_number_format_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "formatToParts" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let parts =
+                            self.intl_number_format_value_to_parts(&value, &locale, &options);
+                        Ok(self.intl_date_time_parts_to_value(&parts, None))
+                    }
+                    "formatRange" => {
+                        let start = args.first().cloned().unwrap_or(Value::Undefined);
+                        let end = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(self.intl_format_number_range(
+                            Self::coerce_number_for_global(&start),
+                            Self::coerce_number_for_global(&end),
+                            &locale,
+                            &options,
+                        )))
+                    }
+                    "formatRangeToParts" => {
+                        let start = args.first().cloned().unwrap_or(Value::Undefined);
+                        let end = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let (parts, sources) = self.intl_format_number_range_to_parts(
+                            Self::coerce_number_for_global(&start),
+                            Self::coerce_number_for_global(&end),
+                            &locale,
+                            &options,
+                        );
+                        Ok(self.intl_date_time_parts_to_value(&parts, Some(&sources)))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_number_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.NumberFormat method: {member}"
+                    ))),
+                }
+            }
+            "intl_plural_rules" => {
+                let (locale, options) = self
+                    .resolve_intl_plural_rules_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "select" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(
+                            self.intl_plural_rules_select(&locale, &options, &value),
+                        ))
+                    }
+                    "selectRange" => {
+                        let start = args.first().cloned().unwrap_or(Value::Undefined);
+                        let end = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(self.intl_plural_rules_select_range(
+                            &locale, &options, &start, &end,
+                        )))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_plural_rules_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.PluralRules method: {member}"
+                    ))),
+                }
+            }
+            "intl_relative_time_format" => {
+                let (locale, options) = self
+                    .resolve_intl_relative_time_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "format" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let unit = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        Ok(Value::String(self.intl_format_relative_time(
+                            &locale, &options, &value, &unit,
+                        )?))
+                    }
+                    "formatToParts" => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let unit = args.get(1).cloned().unwrap_or(Value::Undefined);
+                        let parts = self
+                            .intl_format_relative_time_to_parts(&locale, &options, &value, &unit)?;
+                        Ok(self.intl_relative_time_parts_to_value(&parts))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_relative_time_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.RelativeTimeFormat method: {member}"
+                    ))),
+                }
+            }
+            "intl_segmenter" => {
+                let (locale, options) = self
+                    .resolve_intl_segmenter_options(&receiver)
+                    .map_err(|_| Self::incompatible_receiver_error(&family))?;
+                match member.as_str() {
+                    "segment" => {
+                        let input = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        let segments = self.intl_segment_input(&locale, &options, &input);
+                        Ok(self.new_intl_segments_value(segments))
+                    }
+                    "resolvedOptions" => {
+                        Ok(self.intl_segmenter_resolved_options_value(locale, &options))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Intl.Segmenter method: {member}"
+                    ))),
+                }
+            }
+            "object" => match member.as_str() {
+                "hasOwnProperty" => {
+                    let key = args.first().cloned().unwrap_or(Value::Undefined);
+                    self.object_prototype_has_own_property_value(&receiver, &key)
+                }
+                "isPrototypeOf" => {
+                    let value = args.first().cloned().unwrap_or(Value::Undefined);
+                    self.object_prototype_is_prototype_of_value(&receiver, &value)
+                }
+                "propertyIsEnumerable" => {
+                    let key = args.first().cloned().unwrap_or(Value::Undefined);
+                    self.object_prototype_property_is_enumerable_value(&receiver, &key)
+                }
+                "toString" => self.object_prototype_to_string_value(&receiver),
+                "valueOf" => self.object_prototype_value_of_value(&receiver),
+                _ => Err(Error::ScriptRuntime(format!(
+                    "unsupported Object method: {member}"
+                ))),
+            },
+            "document" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !matches!(
+                    Self::object_get_entry(&object.borrow(), INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_document_member_call(&member, args, event)?
                     .ok_or_else(|| {
-                        Error::ScriptRuntime(format!("unsupported RegExp method: {member}"))
+                        Error::ScriptRuntime(format!("unsupported Document method: {member}"))
+                    })
+            }
+            "parsed_document" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !matches!(
+                    Self::object_get_entry(&object.borrow(), INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_parsed_document_member_call(&object, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Document method: {member}"))
+                    })
+            }
+            "dom_parser" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !matches!(
+                    Self::object_get_entry(&object.borrow(), INTERNAL_DOM_PARSER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_dom_parser_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported DOMParser method: {member}"))
+                    })
+            }
+            "tree_walker" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !matches!(
+                    Self::object_get_entry(&object.borrow(), INTERNAL_TREE_WALKER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_tree_walker_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported TreeWalker method: {member}"))
+                    })
+            }
+            "range" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_range_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_range_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Range method: {member}"))
+                    })
+            }
+            "selection" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_selection_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_selection_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Selection method: {member}"))
                     })
             }
             "blob" => {
@@ -607,6 +1083,20 @@ impl Harness {
                         Error::ScriptRuntime(format!("unsupported FormData method: {member}"))
                     })
             }
+            "canvas_2d_context" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::is_canvas_2d_context_object(&object.borrow()) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_canvas_2d_context_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!(
+                            "unsupported CanvasRenderingContext2D method: {member}"
+                        ))
+                    })
+            }
             _ => Err(Error::ScriptRuntime(
                 "builtin method has invalid internal state".into(),
             )),
@@ -665,6 +1155,12 @@ impl Harness {
             .get("Object")
             .cloned()
             .unwrap_or_else(Self::new_object_constructor_value);
+        let reflect_object = self
+            .script_runtime
+            .env
+            .get("Reflect")
+            .cloned()
+            .unwrap_or_else(|| self.new_reflect_object_value());
         let mut bindings = Self::shared_core_constructor_bindings(
             &Value::StringConstructor,
             &boolean_constructor,
@@ -672,8 +1168,12 @@ impl Harness {
             &bigint_constructor,
             &Value::SymbolConstructor,
             &object_constructor,
+            &reflect_object,
         );
         bindings.extend(self.function_family_constructor_bindings());
+        if let Some(intl) = self.script_runtime.env.get("Intl").cloned() {
+            bindings.push(("Intl".to_string(), intl));
+        }
         bindings
     }
 
@@ -951,7 +1451,7 @@ impl Harness {
         Ok(self.new_url_search_params_value(pairs, None))
     }
 
-    fn construct_regexp_from_values(&self, args: &[Value]) -> Result<Value> {
+    fn construct_regexp_from_values(&mut self, args: &[Value]) -> Result<Value> {
         if args.len() > 2 {
             return Err(Error::ScriptRuntime(
                 "RegExp supports up to two arguments".into(),
@@ -962,7 +1462,7 @@ impl Harness {
             .cloned()
             .unwrap_or_else(|| Value::String(String::new()));
         let flags = args.get(1);
-        Self::new_regex_from_values(&pattern, flags)
+        self.new_regex_from_values(&pattern, flags)
     }
 
     fn construct_array_buffer_from_values(&mut self, args: &[Value]) -> Result<Value> {
@@ -2611,8 +3111,7 @@ impl Harness {
             Value::StringConstructor => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
                 Ok(Self::new_string_wrapper_value(
-                    self.callable_source_text(&value)
-                        .unwrap_or_else(|| value.as_string()),
+                    self.coerce_to_string_for_string_constructor(&value)?,
                 ))
             }
             Value::BlobConstructor => self.construct_blob_from_values(args),
@@ -2692,6 +3191,60 @@ impl Harness {
                         caller_env,
                     );
                 }
+                match Self::callable_kind_from_value(other) {
+                    Some("boolean_constructor") => {
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        return Ok(Self::new_boolean_wrapper_value(value.truthy()));
+                    }
+                    Some("number_constructor") => {
+                        let value = args.first().cloned().unwrap_or(Value::Number(0));
+                        return Ok(Self::new_number_wrapper_value(Self::number_value(
+                            Self::coerce_number_for_number_constructor(&value),
+                        )));
+                    }
+                    Some("bigint_constructor") => {
+                        return Err(Error::ScriptRuntime("BigInt is not a constructor".into()));
+                    }
+                    Some("object_constructor") => {
+                        if args.is_empty() || matches!(args[0], Value::Null | Value::Undefined) {
+                            return Ok(Self::new_object_value(Vec::new()));
+                        }
+                        return Ok(match &args[0] {
+                            Value::Object(_)
+                            | Value::Array(_)
+                            | Value::Date(_)
+                            | Value::Map(_)
+                            | Value::WeakMap(_)
+                            | Value::Set(_)
+                            | Value::WeakSet(_)
+                            | Value::Blob(_)
+                            | Value::ArrayBuffer(_)
+                            | Value::TypedArray(_)
+                            | Value::Promise(_)
+                            | Value::RegExp(_)
+                            | Value::Function(_)
+                            | Value::Node(_)
+                            | Value::NodeList(_)
+                            | Value::FormData(_)
+                            | Value::StringConstructor
+                            | Value::BlobConstructor
+                            | Value::UrlConstructor
+                            | Value::ArrayBufferConstructor
+                            | Value::PromiseConstructor
+                            | Value::MapConstructor
+                            | Value::WeakMapConstructor
+                            | Value::SetConstructor
+                            | Value::WeakSetConstructor
+                            | Value::UrlSearchParamsConstructor
+                            | Value::SymbolConstructor
+                            | Value::RegExpConstructor
+                            | Value::TypedArrayConstructor(_)
+                            | Value::PromiseCapability(_) => args[0].clone(),
+                            _ => Self::box_primitive_value(args[0].clone()),
+                        });
+                    }
+                    _ => {}
+                }
                 if self.is_callable_value(other) {
                     self.execute_callable_value_with_this_and_env(
                         other, args, event, caller_env, this_arg,
@@ -2743,8 +3296,7 @@ impl Harness {
             Value::StringConstructor => {
                 let value = args.first().cloned().unwrap_or(Value::Undefined);
                 Ok(Value::String(
-                    self.callable_source_text(&value)
-                        .unwrap_or_else(|| value.as_string()),
+                    self.coerce_to_string_for_string_constructor(&value)?,
                 ))
             }
             Value::RegExpConstructor => self.construct_regexp_from_values(args),
@@ -2841,6 +3393,36 @@ impl Harness {
                     }
                     "receiver_builtin_method" => {
                         self.execute_receiver_builtin_callable(callable, args, event, this_arg)
+                    }
+                    "intl_collator_get_compare" => {
+                        self.intl_bound_compare_callable_from_receiver(
+                            this_arg.as_ref().ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "Intl.Collator.compare requires an Intl.Collator instance"
+                                        .into(),
+                                )
+                            })?,
+                        )
+                    }
+                    "intl_date_time_format_get_format" => {
+                        self.intl_bound_date_time_format_callable_from_receiver(
+                            this_arg.as_ref().ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance"
+                                        .into(),
+                                )
+                            })?,
+                        )
+                    }
+                    "intl_number_format_get_format" => {
+                        self.intl_bound_number_format_callable_from_receiver(
+                            this_arg.as_ref().ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "Intl.NumberFormat method requires an Intl.NumberFormat instance"
+                                        .into(),
+                                )
+                            })?,
+                        )
                     }
                     "intl_collator_compare" => {
                         let (locale, case_first, sensitivity) =
@@ -3128,7 +3710,39 @@ impl Harness {
                         if args.is_empty() || matches!(args[0], Value::Null | Value::Undefined) {
                             Ok(Self::new_object_value(Vec::new()))
                         } else {
-                            Ok(args[0].clone())
+                            Ok(match &args[0] {
+                                Value::Object(_)
+                                | Value::Array(_)
+                                | Value::Date(_)
+                                | Value::Map(_)
+                                | Value::WeakMap(_)
+                                | Value::Set(_)
+                                | Value::WeakSet(_)
+                                | Value::Blob(_)
+                                | Value::ArrayBuffer(_)
+                                | Value::TypedArray(_)
+                                | Value::Promise(_)
+                                | Value::RegExp(_)
+                                | Value::Function(_)
+                                | Value::Node(_)
+                                | Value::NodeList(_)
+                                | Value::FormData(_)
+                                | Value::StringConstructor
+                                | Value::BlobConstructor
+                                | Value::UrlConstructor
+                                | Value::ArrayBufferConstructor
+                                | Value::PromiseConstructor
+                                | Value::MapConstructor
+                                | Value::WeakMapConstructor
+                                | Value::SetConstructor
+                                | Value::WeakSetConstructor
+                                | Value::UrlSearchParamsConstructor
+                                | Value::SymbolConstructor
+                                | Value::RegExpConstructor
+                                | Value::TypedArrayConstructor(_)
+                                | Value::PromiseCapability(_) => args[0].clone(),
+                                _ => Self::box_primitive_value(args[0].clone()),
+                            })
                         }
                     }
                     "event_target_constructor" => {
@@ -4300,6 +4914,105 @@ impl Harness {
                     "string_static_raw" => {
                         self.eval_string_static_method_from_values(StringStaticMethod::Raw, args)
                     }
+                    "object_static_method" => match Self::static_method_name(callable)?.as_str() {
+                        "assign" => self.eval_object_assign_static_call(args, event),
+                        "getOwnPropertyDescriptor" => {
+                            if args.len() != 2 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.getOwnPropertyDescriptor requires exactly two arguments"
+                                        .into(),
+                                ));
+                            }
+                            let key = self.property_key_to_storage_key(&args[1]);
+                            self.object_get_own_property_descriptor_value(&args[0], &key)
+                        }
+                        "defineProperty" => {
+                            if args.len() != 3 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.defineProperty requires exactly three arguments"
+                                        .into(),
+                                ));
+                            }
+                            let key = self.property_key_to_storage_key(&args[1]);
+                            self.object_define_property_value(&args[0], &key, &args[2])
+                        }
+                        "getOwnPropertyNames" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.getOwnPropertyNames requires exactly one argument"
+                                        .into(),
+                                ));
+                            }
+                            self.object_get_own_property_names_value(&args[0])
+                        }
+                        "getOwnPropertySymbols" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.getOwnPropertySymbols requires exactly one argument"
+                                        .into(),
+                                ));
+                            }
+                            self.object_get_own_property_symbols_value(&args[0])
+                        }
+                        "keys" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.keys requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_keys_value(&args[0])
+                        }
+                        "values" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.values requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_values_value(&args[0])
+                        }
+                        "entries" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.entries requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_entries_value(&args[0])
+                        }
+                        "hasOwn" => {
+                            if args.len() != 2 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.hasOwn requires exactly two arguments".into(),
+                                ));
+                            }
+                            let key = self.property_key_to_storage_key(&args[1]);
+                            self.object_has_own_value(&args[0], &key)
+                        }
+                        "getPrototypeOf" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.getPrototypeOf requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_get_prototype_of_value(&args[0])
+                        }
+                        "setPrototypeOf" => {
+                            if args.len() != 2 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.setPrototypeOf requires exactly two arguments".into(),
+                                ));
+                            }
+                            self.object_set_prototype_of_value(&args[0], &args[1])
+                        }
+                        "freeze" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.freeze requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_freeze_value(&args[0])
+                        }
+                        _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+                    },
                     "number_static_method" => {
                         let method = match Self::static_method_name(callable)?.as_str() {
                             "isFinite" => NumberMethod::IsFinite,
@@ -4402,6 +5115,33 @@ impl Harness {
                         };
                         self.eval_typed_array_static_method_from_values(kind, method, args)
                     }
+                    "reflect_static_method" => match Self::static_method_name(callable)?.as_str() {
+                        "set" => {
+                            if args.len() != 3 && args.len() != 4 {
+                                return Err(Error::ScriptRuntime(
+                                    "Reflect.set requires three or four arguments".into(),
+                                ));
+                            }
+                            let receiver = args.get(3).cloned().unwrap_or_else(|| args[0].clone());
+                            let key = self.property_key_to_storage_key(&args[1]);
+                            Ok(Value::Bool(self.reflect_set_object_property_value(
+                                &args[0],
+                                &key,
+                                args[2].clone(),
+                                &receiver,
+                                event,
+                            )?))
+                        }
+                        "ownKeys" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Reflect.ownKeys requires exactly one argument".into(),
+                                ));
+                            }
+                            self.reflect_own_keys_value(&args[0])
+                        }
+                        _ => Err(Error::ScriptRuntime("callback is not a function".into())),
+                    },
                     "create_image_bitmap" => self.eval_create_image_bitmap_call(args),
                     _ => Err(Error::ScriptRuntime("callback is not a function".into())),
                 }

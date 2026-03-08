@@ -19,33 +19,57 @@ impl Harness {
                         .as_ref()
                         .map(|flags| self.eval_expr(flags, env, event_param, event))
                         .transpose()?;
-                    Self::new_regex_from_values(&pattern, flags.as_ref())
+                    self.new_regex_from_values(&pattern, flags.as_ref())
                 }
                 Expr::RegExpConstructor => Ok(Value::RegExpConstructor),
                 Expr::RegExpStaticMethod { method, args } => {
                     self.eval_regexp_static_method(*method, args, env, event_param, event)
                 }
                 Expr::RegexTest { regex, input } => {
-                    let regex = self.eval_expr(regex, env, event_param, event)?;
-                    let input = self.eval_expr(input, env, event_param, event)?.as_string();
-                    let regex = Self::resolve_regex_from_value(&regex)?;
-                    Ok(Value::Bool(Self::regex_test(&regex, &input)?))
+                    let receiver = self.eval_expr(regex, env, event_param, event)?;
+                    let input = self.eval_expr(input, env, event_param, event)?;
+                    let method = self.object_property_from_value(&receiver, "test")?;
+                    if !self.is_callable_value(&method) {
+                        return Err(Error::ScriptRuntime("'test' is not a function".into()));
+                    }
+                    self.execute_callable_value_with_this_and_env(
+                        &method,
+                        &[input],
+                        event,
+                        None,
+                        Some(receiver),
+                    )
                 }
                 Expr::RegexExec { regex, input } => {
-                    let regex = self.eval_expr(regex, env, event_param, event)?;
-                    let input = self.eval_expr(input, env, event_param, event)?.as_string();
-                    let regex = Self::resolve_regex_from_value(&regex)?;
-                    let Some(result) = Self::regex_exec(&regex, &input)? else {
-                        return Ok(Value::Null);
-                    };
-                    Ok(Self::regex_exec_result_to_value(result))
+                    let receiver = self.eval_expr(regex, env, event_param, event)?;
+                    let input = self.eval_expr(input, env, event_param, event)?;
+                    let method = self.object_property_from_value(&receiver, "exec")?;
+                    if !self.is_callable_value(&method) {
+                        return Err(Error::ScriptRuntime("'exec' is not a function".into()));
+                    }
+                    self.execute_callable_value_with_this_and_env(
+                        &method,
+                        &[input],
+                        event,
+                        None,
+                        Some(receiver),
+                    )
                 }
                 Expr::RegexToString { regex } => {
                     let value = self.eval_expr(regex, env, event_param, event)?;
-                    if let Ok(regex) = Self::resolve_regex_from_value(&value) {
-                        let regex = regex.borrow();
-                        Ok(Value::String(format!("/{}/{}", regex.source, regex.flags)))
-                    } else if let Ok(locale_data) = self.resolve_intl_locale_data(&value) {
+                    let method = self.object_property_from_value(&value, "toString");
+                    if let Ok(method) = method {
+                        if self.is_callable_value(&method) {
+                            return self.execute_callable_value_with_this_and_env(
+                                &method,
+                                &[],
+                                event,
+                                None,
+                                Some(value),
+                            );
+                        }
+                    }
+                    if let Ok(locale_data) = self.resolve_intl_locale_data(&value) {
                         Ok(Value::String(Self::intl_locale_data_to_string(
                             &locale_data,
                         )))
@@ -78,9 +102,7 @@ impl Harness {
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
                         .unwrap_or(Value::Undefined);
-                    let coerced = self
-                        .callable_source_text(&value)
-                        .unwrap_or_else(|| value.as_string());
+                    let coerced = self.coerce_to_string_for_string_constructor(&value)?;
                     if *called_with_new {
                         Ok(Self::new_string_wrapper_value(coerced))
                     } else {
@@ -91,15 +113,37 @@ impl Harness {
                     self.eval_string_static_method(*method, args, env, event_param, event)
                 }
                 Expr::StringConstructor => Ok(Value::StringConstructor),
-                Expr::NumberConstruct { value } => {
+                Expr::BooleanConstruct {
+                    value,
+                    called_with_new,
+                } => {
+                    let value = value
+                        .as_ref()
+                        .map(|value| self.eval_expr(value, env, event_param, event))
+                        .transpose()?
+                        .unwrap_or(Value::Undefined);
+                    if *called_with_new {
+                        Ok(Self::new_boolean_wrapper_value(value.truthy()))
+                    } else {
+                        Ok(Value::Bool(value.truthy()))
+                    }
+                }
+                Expr::NumberConstruct {
+                    value,
+                    called_with_new,
+                } => {
                     let value = value
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
                         .unwrap_or(Value::Number(0));
-                    Ok(Self::number_value(
-                        Self::coerce_number_for_number_constructor(&value),
-                    ))
+                    let numeric =
+                        Self::number_value(Self::coerce_number_for_number_constructor(&value));
+                    if *called_with_new {
+                        Ok(Self::new_number_wrapper_value(numeric))
+                    } else {
+                        Ok(numeric)
+                    }
                 }
                 Expr::NumberConst(constant) => match constant {
                     NumberConst::Epsilon => Ok(Value::Float(f64::EPSILON)),
@@ -187,16 +231,39 @@ impl Harness {
                     Ok(Value::Bool(matches!(value, Value::TypedArray(_))))
                 }
                 Expr::ArrayBufferDetached(target) => {
-                    let buffer = self.resolve_array_buffer_from_env(env, target)?;
-                    Ok(Value::Bool(buffer.borrow().detached))
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => Ok(Value::Bool(buffer.borrow().detached)),
+                        other => self.object_property_from_value(&other, "detached"),
+                    }
                 }
                 Expr::ArrayBufferMaxByteLength(target) => {
-                    let buffer = self.resolve_array_buffer_from_env(env, target)?;
-                    Ok(Value::Number(buffer.borrow().max_byte_length() as i64))
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => {
+                            Ok(Value::Number(buffer.borrow().max_byte_length() as i64))
+                        }
+                        other => self.object_property_from_value(&other, "maxByteLength"),
+                    }
                 }
                 Expr::ArrayBufferResizable(target) => {
-                    let buffer = self.resolve_array_buffer_from_env(env, target)?;
-                    Ok(Value::Bool(buffer.borrow().resizable()))
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => Ok(Value::Bool(buffer.borrow().resizable())),
+                        other => self.object_property_from_value(&other, "resizable"),
+                    }
                 }
                 Expr::ArrayBufferResize {
                     target,
@@ -204,43 +271,142 @@ impl Harness {
                 } => {
                     let new_byte_length =
                         self.eval_expr(new_byte_length, env, event_param, event)?;
-                    let new_byte_length = Self::value_to_i64(&new_byte_length);
-                    self.resize_array_buffer_in_env(env, target, new_byte_length)?;
-                    Ok(Value::Undefined)
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => {
+                            self.resize_array_buffer(
+                                &buffer,
+                                Self::value_to_i64(&new_byte_length),
+                            )?;
+                            Ok(Value::Undefined)
+                        }
+                        other => {
+                            let callee = self.object_property_from_value(&other, "resize")?;
+                            self.execute_callable_value_with_this_and_env(
+                                &callee,
+                                &[new_byte_length],
+                                event,
+                                Some(env),
+                                Some(other),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime("'resize' is not a function".into())
+                                }
+                                other => other,
+                            })
+                        }
+                    }
                 }
                 Expr::ArrayBufferSlice { target, start, end } => {
-                    let buffer = self.resolve_array_buffer_from_env(env, target)?;
-                    Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
-                    let source = buffer.borrow();
-                    let len = source.bytes.len();
-                    let start = if let Some(start) = start {
-                        let start = self.eval_expr(start, env, event_param, event)?;
-                        Self::normalize_slice_index(len, Self::value_to_i64(&start))
-                    } else {
-                        0
-                    };
-                    let end = if let Some(end) = end {
-                        let end = self.eval_expr(end, env, event_param, event)?;
-                        Self::normalize_slice_index(len, Self::value_to_i64(&end))
-                    } else {
-                        len
-                    };
-                    let end = end.max(start);
-                    let bytes = source.bytes[start..end].to_vec();
-                    Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
-                        ArrayBufferValue {
-                            bytes,
-                            max_byte_length: None,
-                            detached: false,
-                        },
-                    ))))
+                    let evaluated_start = start
+                        .as_ref()
+                        .map(|expr| self.eval_expr(expr, env, event_param, event))
+                        .transpose()?;
+                    let evaluated_end = end
+                        .as_ref()
+                        .map(|expr| self.eval_expr(expr, env, event_param, event))
+                        .transpose()?;
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => {
+                            Self::ensure_array_buffer_not_detached(&buffer, "slice")?;
+                            let source = buffer.borrow();
+                            let len = source.bytes.len();
+                            let start = evaluated_start
+                                .as_ref()
+                                .map(Self::value_to_i64)
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(0);
+                            let end = evaluated_end
+                                .as_ref()
+                                .map(Self::value_to_i64)
+                                .map(|value| Self::normalize_slice_index(len, value))
+                                .unwrap_or(len);
+                            let end = end.max(start);
+                            let bytes = source.bytes[start..end].to_vec();
+                            Ok(Value::ArrayBuffer(Rc::new(RefCell::new(
+                                ArrayBufferValue {
+                                    bytes,
+                                    max_byte_length: None,
+                                    detached: false,
+                                },
+                            ))))
+                        }
+                        other => {
+                            let mut args = Vec::new();
+                            if let Some(start) = evaluated_start {
+                                args.push(start);
+                            }
+                            if let Some(end) = evaluated_end {
+                                args.push(end);
+                            }
+                            let callee = self.object_property_from_value(&other, "slice")?;
+                            self.execute_callable_value_with_this_and_env(
+                                &callee,
+                                &args,
+                                event,
+                                Some(env),
+                                Some(other),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime("'slice' is not a function".into())
+                                }
+                                other => other,
+                            })
+                        }
+                    }
                 }
                 Expr::ArrayBufferTransfer {
                     target,
                     to_fixed_length,
                 } => {
-                    let buffer = self.resolve_array_buffer_from_env(env, target)?;
-                    self.transfer_array_buffer(&buffer, *to_fixed_length)
+                    let target_value = self
+                        .resolve_target_value_with_pending(env, target)
+                        .ok_or_else(|| {
+                            Error::ScriptRuntime(format!("unknown variable: {}", target))
+                        })?;
+                    match target_value {
+                        Value::ArrayBuffer(buffer) => {
+                            self.transfer_array_buffer(&buffer, *to_fixed_length)
+                        }
+                        other => {
+                            let member = if *to_fixed_length {
+                                "transferToFixedLength"
+                            } else {
+                                "transfer"
+                            };
+                            let callee = self.object_property_from_value(&other, member)?;
+                            self.execute_callable_value_with_this_and_env(
+                                &callee,
+                                &[],
+                                event,
+                                Some(env),
+                                Some(other),
+                            )
+                            .map_err(|err| match err {
+                                Error::ScriptRuntime(msg)
+                                    if msg == "callback is not a function" =>
+                                {
+                                    Error::ScriptRuntime(format!("'{}' is not a function", member))
+                                }
+                                other => other,
+                            })
+                        }
+                    }
                 }
                 Expr::TypedArrayConstructorRef(kind) => {
                     Ok(Value::TypedArrayConstructor(kind.clone()))

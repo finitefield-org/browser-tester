@@ -232,7 +232,10 @@ pub(crate) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
     if has_new && cursor.peek() != Some(b'(') {
         cursor.skip_ws();
         if cursor.eof() {
-            return Ok(Some(Expr::NumberConstruct { value: None }));
+            return Ok(Some(Expr::NumberConstruct {
+                value: None,
+                called_with_new: true,
+            }));
         }
         return Ok(None);
     }
@@ -263,7 +266,10 @@ pub(crate) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
         if !cursor.eof() {
             return Ok(None);
         }
-        return Ok(Some(Expr::NumberConstruct { value }));
+        return Ok(Some(Expr::NumberConstruct {
+            value,
+            called_with_new: has_new,
+        }));
     }
 
     if has_new {
@@ -343,6 +349,87 @@ pub(crate) fn parse_number_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(Expr::NumberConst(constant)))
+}
+
+pub(crate) fn parse_boolean_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    let mut called_with_new = false;
+    if cursor.consume_ascii("new") {
+        if let Some(next) = cursor.peek() {
+            if is_ident_char(next) {
+                return Ok(None);
+            }
+        }
+        called_with_new = true;
+        cursor.skip_ws();
+    }
+
+    if cursor.consume_ascii("window") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Boolean") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+
+    if called_with_new && cursor.peek() != Some(b'(') {
+        cursor.skip_ws();
+        if cursor.eof() {
+            return Ok(Some(Expr::BooleanConstruct {
+                value: None,
+                called_with_new: true,
+            }));
+        }
+        return Ok(None);
+    }
+
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    if args.len() > 1 {
+        return Err(Error::ScriptParse(
+            "Boolean supports zero or one argument".into(),
+        ));
+    }
+    let value = if let Some(arg) = args.first() {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            return Err(Error::ScriptParse(
+                "Boolean argument cannot be empty".into(),
+            ));
+        }
+        Some(Box::new(parse_expr(arg)?))
+    } else {
+        None
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+    Ok(Some(Expr::BooleanConstruct {
+        value,
+        called_with_new,
+    }))
 }
 
 pub(crate) fn parse_number_const_name(name: &str) -> Option<NumberConst> {

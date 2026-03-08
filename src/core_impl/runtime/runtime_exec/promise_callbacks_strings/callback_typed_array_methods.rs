@@ -416,10 +416,10 @@ impl Harness {
                             if start > len {
                                 start = len;
                             }
-                            let index =
-                                Self::string_index_of(value, &search.as_string(), start as usize)
-                                    .map(|idx| idx as i64)
-                                    .unwrap_or(-1);
+                            let search = self.coerce_to_string_for_tostring(&search)?;
+                            let index = Self::string_index_of(value, &search, start as usize)
+                                .map(|idx| idx as i64)
+                                .unwrap_or(-1);
                             Ok(Value::Number(index))
                         } else {
                             let mut from = if args.len() == 2 {
@@ -439,7 +439,7 @@ impl Harness {
                                 from = len;
                             }
                             let from = from as usize;
-                            let search = search.as_string();
+                            let search = self.coerce_to_string_for_tostring(&search)?;
                             if search.is_empty() {
                                 return Ok(Value::Number(from as i64));
                             }

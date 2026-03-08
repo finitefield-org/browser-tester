@@ -193,6 +193,18 @@ pub(crate) fn parse_typed_array_access_expr(src: &str) -> Result<Option<Expr>> {
     if !cursor.eof() {
         return Ok(None);
     }
+    if matches!(
+        method,
+        TypedArrayInstanceMethod::IndexOf | TypedArrayInstanceMethod::LastIndexOf
+    ) {
+        return Ok(Some(Expr::MemberCall {
+            target: Box::new(Expr::Var(target)),
+            member,
+            args: parsed,
+            optional: false,
+            optional_call: false,
+        }));
+    }
     Ok(Some(Expr::TypedArrayMethod {
         target,
         method,
@@ -317,7 +329,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
 
     let method = match member.as_str() {
         "get" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.get requires exactly one argument".into(),
                 ));
@@ -325,7 +340,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::Get
         }
         "has" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.has requires exactly one argument".into(),
                 ));
@@ -333,7 +351,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::Has
         }
         "delete" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.delete requires exactly one argument".into(),
                 ));
@@ -342,7 +363,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
         }
         "clear" => MapInstanceMethod::Clear,
         "forEach" => {
-            if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args.len() > 2 || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.forEach requires a callback and optional thisArg".into(),
                 ));
@@ -355,7 +379,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::ForEach
         }
         "getOrInsert" => {
-            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            if args.len() != 2 {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() || args[1].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.getOrInsert requires exactly two arguments".into(),
                 ));
@@ -363,7 +390,10 @@ pub(crate) fn parse_map_access_expr(src: &str) -> Result<Option<Expr>> {
             MapInstanceMethod::GetOrInsert
         }
         "getOrInsertComputed" => {
-            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+            if args.len() != 2 {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() || args[1].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Map.getOrInsertComputed requires exactly two arguments".into(),
                 ));
@@ -424,13 +454,19 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
 
     let method = match member.as_str() {
         "add" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Ok(None);
             }
             SetInstanceMethod::Add
         }
         "union" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.union requires exactly one argument".into(),
                 ));
@@ -438,7 +474,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Union
         }
         "intersection" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.intersection requires exactly one argument".into(),
                 ));
@@ -446,7 +485,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Intersection
         }
         "difference" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.difference requires exactly one argument".into(),
                 ));
@@ -454,7 +496,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::Difference
         }
         "symmetricDifference" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.symmetricDifference requires exactly one argument".into(),
                 ));
@@ -462,7 +507,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::SymmetricDifference
         }
         "isDisjointFrom" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isDisjointFrom requires exactly one argument".into(),
                 ));
@@ -470,7 +518,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::IsDisjointFrom
         }
         "isSubsetOf" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isSubsetOf requires exactly one argument".into(),
                 ));
@@ -478,7 +529,10 @@ pub(crate) fn parse_set_access_expr(src: &str) -> Result<Option<Expr>> {
             SetInstanceMethod::IsSubsetOf
         }
         "isSupersetOf" => {
-            if args.is_empty() || args[0].trim().is_empty() {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
                     "Set.isSupersetOf requires exactly one argument".into(),
                 ));

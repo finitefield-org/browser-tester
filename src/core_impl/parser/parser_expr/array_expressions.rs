@@ -454,15 +454,17 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "includes fromIndex cannot be empty".into(),
                 ));
             }
-            Expr::ArrayIncludes {
-                target,
-                search: Box::new(parse_expr(args[0].trim())?),
-                from_index: if args.len() == 2 {
-                    Some(Box::new(parse_expr(args[1].trim())?))
-                } else {
-                    None
-                },
+            let mut parsed_args = Vec::with_capacity(args.len());
+            for arg in args {
+                parsed_args.push(parse_expr(arg.trim())?);
             }
+            return Ok(Some(Expr::MemberCall {
+                target: Box::new(Expr::Var(target)),
+                member: method,
+                args: parsed_args,
+                optional: false,
+                optional_call: false,
+            }));
         }
         "slice" => {
             if args.len() > 2 {

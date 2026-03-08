@@ -301,13 +301,10 @@ impl Harness {
                     let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
                     match kind {
                         IntlFormatterKind::DateTimeFormat => {
-                            let (_, options) = self.resolve_intl_date_time_options(&formatter)?;
-                            Ok(self.new_intl_date_time_format_callable(locale, options))
+                            self.intl_bound_date_time_format_callable_from_receiver(&formatter)
                         }
                         IntlFormatterKind::NumberFormat => {
-                            let (locale, options) =
-                                self.resolve_intl_number_format_options(&formatter)?;
-                            Ok(self.new_intl_number_format_callable(locale, options))
+                            self.intl_bound_number_format_callable_from_receiver(&formatter)
                         }
                         IntlFormatterKind::DurationFormat => {
                             let (_, options) = self.resolve_intl_duration_options(&formatter)?;
@@ -354,9 +351,7 @@ impl Harness {
                 }
                 Expr::IntlCollatorCompareGetter { collator } => {
                     let collator = self.eval_expr(collator, env, event_param, event)?;
-                    let (locale, case_first, sensitivity) =
-                        self.resolve_intl_collator_options(&collator)?;
-                    Ok(self.new_intl_collator_compare_callable(locale, case_first, sensitivity))
+                    self.intl_bound_compare_callable_from_receiver(&collator)
                 }
                 Expr::IntlDateTimeFormatToParts { formatter, value } => {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;

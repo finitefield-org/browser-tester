@@ -47,6 +47,15 @@ fn parse_for_each_callback(src: &str) -> Result<(String, Option<String>, Vec<Stm
     core_impl::parse_for_each_callback(src)
 }
 
+#[cfg(test)]
+mod test_support {
+    use super::*;
+
+    pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
+        core_impl::test_support::parse_expr(src)
+    }
+}
+
 fn unescape_string(src: &str) -> String {
     core_impl::unescape_string(src)
 }

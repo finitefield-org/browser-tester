@@ -5933,6 +5933,68 @@ fn spread_syntax_in_object_literals_supports_merge_override_and_primitive_source
 }
 
 #[test]
+fn object_literal_accessor_overwrite_matrix_keeps_browser_semantics() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          window.setterLogA = [];
+          window.setterLogB = [];
+
+          const setterAfterData = {
+            get x() { return 1; },
+            x: 3,
+            set x(v) { window.setterLogA.push(String(v)); },
+          };
+          setterAfterData.x = 8;
+          const setterAfterDataDesc = Object.getOwnPropertyDescriptor(setterAfterData, 'x');
+
+          const setterAfterSpread = {
+            get x() { return 1; },
+            set x(v) { window.setterLogB.push('a' + String(v)); },
+            ...{ x: 3 },
+            set x(v) { window.setterLogB.push('b' + String(v)); },
+          };
+          setterAfterSpread.x = 9;
+          const setterAfterSpreadDesc = Object.getOwnPropertyDescriptor(setterAfterSpread, 'x');
+
+          const getterAfterSpread = {
+            get x() { return 1; },
+            set x(v) {},
+            ...{ x: 3 },
+            get x() { return 4; },
+          };
+          const getterAfterSpreadDesc = Object.getOwnPropertyDescriptor(getterAfterSpread, 'x');
+
+          document.getElementById('result').textContent = [
+            String(setterAfterData.x),
+            String(Boolean(setterAfterDataDesc.get)) + ':' +
+              String(Boolean(setterAfterDataDesc.set)) + ':' +
+              String('value' in setterAfterDataDesc),
+            window.setterLogA.join(','),
+            Object.keys(setterAfterData).join(','),
+            String(setterAfterSpread.x),
+            String(Boolean(setterAfterSpreadDesc.get)) + ':' +
+              String(Boolean(setterAfterSpreadDesc.set)) + ':' +
+              String('value' in setterAfterSpreadDesc),
+            window.setterLogB.join(','),
+            String(getterAfterSpread.x),
+            String(Boolean(getterAfterSpreadDesc.get)) + ':' +
+              String(Boolean(getterAfterSpreadDesc.set)) + ':' +
+              String('value' in getterAfterSpreadDesc),
+            Object.keys(getterAfterSpread).join(',')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "undefined|false:true:false|8|x|undefined|false:true:false|b9|4|true:false:false|x",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn spread_syntax_requires_iterables_in_array_literals_and_call_arguments() -> Result<()> {
     let html = r#"
         <button id='arr'>arr</button>
@@ -8747,5 +8809,171 @@ fn native_function_source_text_and_prototype_enumerability_work() -> Result<()> 
         "#result",
         "true|true|true|true|true|true|true|true|0|0|0|0|0|0|{}|{}|empty|empty|empty",
     )?;
+    Ok(())
+}
+
+#[test]
+fn object_prototype_raw_getter_metadata_and_incompatible_receiver_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const obj = {};
+          const toStringFn = Object.prototype['toString'];
+          const valueOfFn = Object.prototype['valueOf'];
+          const extracted = obj['toString'];
+          let bad = 'none';
+          try {
+            extracted();
+          } catch (e) {
+            bad = String(e);
+          }
+
+          document.getElementById('result').textContent = [
+            String(obj['toString'] === toStringFn),
+            String(obj['valueOf'] === valueOfFn),
+            String(toStringFn.name === 'toString'),
+            String(valueOfFn.length === 0),
+            String(Function.prototype.toString.call(toStringFn) === toStringFn.toString()),
+            String(toStringFn.call(obj) === '[object Object]'),
+            String(valueOfFn.call(obj) === obj),
+            String(bad.includes('Object method called on incompatible receiver'))
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|true|true|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn object_backed_constructor_descriptor_visibility_stays_hidden_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          function enumerableKeys(value) {
+            return Object.keys(value).join(',') || 'empty';
+          }
+
+          function spreadKeys(value) {
+            return Object.keys({ ...value }).join(',') || 'empty';
+          }
+
+          function forInKeys(value) {
+            let out = '';
+            for (const key in value) {
+              out += key + ',';
+            }
+            return out || 'empty';
+          }
+
+          document.getElementById('result').textContent = [
+            enumerableKeys(Event),
+            enumerableKeys(Event.prototype),
+            spreadKeys(Event),
+            spreadKeys(Event.prototype),
+            forInKeys(Event),
+            forInKeys(Event.prototype),
+            enumerableKeys(KeyboardEvent),
+            enumerableKeys(KeyboardEvent.prototype),
+            enumerableKeys(WheelEvent),
+            enumerableKeys(WheelEvent.prototype),
+            enumerableKeys(Document),
+            spreadKeys(Document),
+            forInKeys(Document),
+            JSON.stringify(Event.prototype),
+            JSON.stringify(KeyboardEvent.prototype),
+            String(Event.prototype.constructor === Event),
+            String(KeyboardEvent.prototype.constructor === KeyboardEvent),
+            String(WheelEvent.prototype.constructor === WheelEvent),
+            typeof Document.parseHTML,
+            typeof Document.parseHTMLUnsafe
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "empty|empty|empty|empty|empty|empty|empty|empty|empty|empty|empty|empty|empty|{}|{}|true|true|true|function|function",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn array_prototype_chain_reads_and_in_semantics_follow_explicit_mutation_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const arr = [1, 2, 3];
+          delete arr[1];
+
+          const proto = {
+            1: 20,
+            4: 40,
+            extra: 'proto',
+            sum() {
+              return this[0] + this[1] + this[2] + this[4];
+            }
+          };
+
+          Object.setPrototypeOf(arr, proto);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(arr) === proto),
+            String(arr[1] === 20),
+            String(arr[4] === 40),
+            arr.extra,
+            String(arr.sum() === 64),
+            String('1' in arr),
+            String('4' in arr),
+            String('sum' in arr),
+            String(typeof arr.push === 'undefined'),
+            String(arr.length === 3)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|proto|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn node_list_explicit_prototype_override_controls_inherited_lookup_work() -> Result<()> {
+    let html = r#"
+        <div id='only'></div>
+        <p id='result'></p>
+        <script>
+          const list = document.querySelectorAll('div');
+          const proto = {
+            1: 'fallback',
+            label: 'list',
+            pick() {
+              return this[1];
+            }
+          };
+
+          Object.setPrototypeOf(list, proto);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(list) === proto),
+            String(list[0].id === 'only'),
+            String(list[1] === 'fallback'),
+            list.label,
+            String(list.pick() === 'fallback'),
+            String('1' in list),
+            String('pick' in list),
+            String(typeof list.forEach === 'undefined'),
+            String(list.length === 1)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|true|list|true|true|true|true|true")?;
     Ok(())
 }

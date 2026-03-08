@@ -424,7 +424,10 @@ pub(crate) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     };
     if !matches!(
         method.as_str(),
-        "getOwnPropertySymbols"
+        "getOwnPropertyDescriptor"
+            | "defineProperty"
+            | "getOwnPropertyNames"
+            | "getOwnPropertySymbols"
             | "keys"
             | "values"
             | "entries"
@@ -435,6 +438,9 @@ pub(crate) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let raw_args = split_top_level_by_char(&args_src, b',');
@@ -445,6 +451,41 @@ pub(crate) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
     };
 
     let expr = match method.as_str() {
+        "getOwnPropertyDescriptor" => {
+            if args.len() != 2 || args[0].trim().is_empty() || args[1].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.getOwnPropertyDescriptor requires exactly two arguments".into(),
+                ));
+            }
+            Expr::ObjectGetOwnPropertyDescriptor {
+                object: Box::new(parse_expr(args[0].trim())?),
+                key: Box::new(parse_expr(args[1].trim())?),
+            }
+        }
+        "defineProperty" => {
+            if args.len() != 3
+                || args[0].trim().is_empty()
+                || args[1].trim().is_empty()
+                || args[2].trim().is_empty()
+            {
+                return Err(Error::ScriptParse(
+                    "Object.defineProperty requires exactly three arguments".into(),
+                ));
+            }
+            Expr::ObjectDefineProperty {
+                object: Box::new(parse_expr(args[0].trim())?),
+                key: Box::new(parse_expr(args[1].trim())?),
+                descriptor: Box::new(parse_expr(args[2].trim())?),
+            }
+        }
+        "getOwnPropertyNames" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Object.getOwnPropertyNames requires exactly one argument".into(),
+                ));
+            }
+            Expr::ObjectGetOwnPropertyNames(Box::new(parse_expr(args[0].trim())?))
+        }
         "getOwnPropertySymbols" => {
             if args.len() != 1 || args[0].trim().is_empty() {
                 return Err(Error::ScriptParse(
@@ -512,6 +553,98 @@ pub(crate) fn parse_object_static_expr(src: &str) -> Result<Option<Expr>> {
         return Ok(None);
     }
     Ok(Some(expr))
+}
+
+pub(crate) fn parse_reflect_static_expr(src: &str) -> Result<Option<Expr>> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.consume_ascii("window") || cursor.consume_ascii("self") {
+        cursor.skip_ws();
+        if !cursor.consume_byte(b'.') {
+            return Ok(None);
+        }
+        cursor.skip_ws();
+    }
+
+    if !cursor.consume_ascii("Reflect") {
+        return Ok(None);
+    }
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if !cursor.consume_byte(b'.') {
+        return Ok(None);
+    }
+    cursor.skip_ws();
+    let method = if cursor.consume_ascii("set") {
+        "set"
+    } else if cursor.consume_ascii("ownKeys") {
+        "ownKeys"
+    } else {
+        return Ok(None);
+    };
+    if let Some(next) = cursor.peek() {
+        if is_ident_char(next) {
+            return Ok(None);
+        }
+    }
+    cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
+
+    let args_src = cursor.read_balanced_block(b'(', b')')?;
+    let raw_args = split_top_level_by_char(&args_src, b',');
+    let args = if raw_args.len() == 1 && raw_args[0].trim().is_empty() {
+        Vec::new()
+    } else {
+        raw_args
+    };
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    match method {
+        "set" => {
+            if args.len() < 3 || args.len() > 4 {
+                return Err(Error::ScriptParse(
+                    "Reflect.set requires three or four arguments".into(),
+                ));
+            }
+            if args.iter().any(|arg| arg.trim().is_empty()) {
+                return Err(Error::ScriptParse(
+                    "Reflect.set arguments cannot be empty".into(),
+                ));
+            }
+
+            Ok(Some(Expr::ReflectSet {
+                target: Box::new(parse_expr(args[0].trim())?),
+                key: Box::new(parse_expr(args[1].trim())?),
+                value: Box::new(parse_expr(args[2].trim())?),
+                receiver: args
+                    .get(3)
+                    .map(|receiver| parse_expr(receiver.trim()))
+                    .transpose()?
+                    .map(Box::new),
+            }))
+        }
+        "ownKeys" => {
+            if args.len() != 1 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(
+                    "Reflect.ownKeys requires exactly one argument".into(),
+                ));
+            }
+            Ok(Some(Expr::ReflectOwnKeys(Box::new(parse_expr(
+                args[0].trim(),
+            )?))))
+        }
+        _ => Ok(None),
+    }
 }
 
 pub(crate) fn parse_object_prototype_has_own_property_call_expr(src: &str) -> Result<Option<Expr>> {

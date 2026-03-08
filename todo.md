@@ -168,21 +168,651 @@
 
 - [x] Confirmed no new mock was required (no README update)
 
-## Next Task (P1.32: callable string-coercion breadth and descriptor residual sweep)
+## Completed Task (P1.32: callable string-coercion breadth and descriptor residual sweep)
 
-- [ ] Expand callable string-coercion parity outside direct constructor paths
-  - audit remaining generic stringification/coercion sites so callable values reached through concatenation, template interpolation, and indirect coercion use the same native/user-defined source-text rules
-  - verify object-backed callables and bound wrappers stay aligned when coerced through shared utility paths instead of specialized constructor logic
+- [x] Expand callable string-coercion parity outside direct constructor paths
+  - shared callable-aware string coercion now covers array joins, string concatenation, `String.raw`, and string replacement callback results so variant-backed constructors, object-backed host callables, and bound functions use the same source-text path in indirect string contexts
+  - indirect coercion for callable values no longer falls back to raw `Value::as_string()` output such as `[object Object]` or constructor short names when the source-text path should be used instead
 
-- [ ] Close remaining descriptor gaps on constructor and prototype surfaces
-  - sweep object-backed constructors and prototype objects that still rely on ad hoc enumerable-property behavior, especially around static methods, `.prototype`, and inherited `constructor` exposure
-  - verify descriptor visibility stays stable for `Object.keys`, spread, `JSON.stringify`, and `for...in` after alias access and prototype repair
+- [x] Close remaining descriptor gaps on constructor and prototype surfaces
+  - object-backed constructor builders now hide own `.prototype` and prototype-side `constructor` consistently, and constructor surfaces with static methods or constants use the shared non-enumerable marker path instead of ad hoc public entries
+  - `Event`, `KeyboardEvent`, `WheelEvent`, `Document`, `TextEncoder`, `File`, and related object-backed constructors/prototypes now stay aligned for `Object.keys`, spread, `JSON.stringify`, and `for...in`
 
-- [ ] Verify
-  - targeted tests for indirect callable string coercion and remaining constructor/prototype descriptor visibility
-  - `cargo test --lib language_core_expressions`
+- [x] Verification completed
+  - `cargo test --lib callable_string_coercion_uses_source_text_across_indirect_string_contexts_work`
+  - `cargo test --lib object_backed_constructor_descriptor_visibility_stays_hidden_work`
   - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
   - `cargo test --lib generator_function_helpers`
   - `cargo test --lib async_generator_function_helpers`
   - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2229 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.33: object-backed callable naming and residual string-coercion sweep)
+
+- [x] Align object-backed callable naming and metadata surfaces
+  - object-backed host constructors and host callables now use shared callable naming/arity metadata so `.name`, `.length`, and native source text line up with variant-backed constructors and builtin callable surfaces
+  - host constructor aliases and static host callables stay stable across direct access, `window` aliases, and worker-exposed bindings instead of falling back to generic object formatting
+
+- [x] Extend callable-aware coercion across remaining string-search and argument paths
+  - callable-aware string coercion now covers remaining search/separator overlap paths, including array/typed-array parser fallbacks that land on string `includes`, `indexOf`, and `lastIndexOf`
+  - indirect string contexts no longer regress object-backed callables to raw `Value::as_string()` output when overlap dispatch or generic helpers route through string operations
+
+- [x] Verification completed
+  - `cargo test --lib callable_search_separator_and_padding_args_use_source_text_work`
+  - `cargo test --lib object_backed_host_callable_name_length_and_source_text_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2231 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.34: string prototype raw-getter breadth and overlap parser cleanup)
+
+- [x] Expand remaining string prototype raw getters through the callable surface cache
+  - added cached/raw getter coverage for `String.prototype.indexOf`, `lastIndexOf`, `padStart`, `padEnd`, and `repeat` so extracted/prototype `.call(...)`, `constructor.prototype`, and alias/property-path access share the same callable metadata and receiver behavior as direct calls
+  - extended generic string member-call execution so these helpers keep callable-aware coercion instead of falling back to plain stringification when host callables flow through search, padding, or repeat operations
+
+- [x] Reduce parser overlap reliance on runtime string fallbacks
+  - moved ambiguous bare-identifier `includes`, `indexOf`, and `lastIndexOf` parsing onto the shared `MemberCall` path so string/array/typed-array dispatch is resolved by the common member-call runtime instead of overlap-specific AST nodes
+  - removed the dead `ArrayIncludes` AST/runtime path after the parser cleanup, leaving one dispatch route for the remaining overlap cases
+
+- [x] Verification completed
+  - `cargo test --lib ambiguous_search_methods_parse_to_shared_member_calls_work`
+  - `cargo test --lib shared_member_call_search_dispatch_keeps_string_array_and_typed_array_behavior_work`
+  - `cargo test --lib callable_search_separator_and_padding_args_use_source_text_work`
+  - `cargo test --lib string_search_and_padding_raw_getter_metadata_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2234 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.35: string generic receiver coercion and remaining prototype surface sweep)
+
+- [x] Harden generic receiver coercion across the remaining string prototype helpers
+  - string receiver builtin calls now distinguish strict `toString` / `valueOf` receiver validation from generic string methods, so `search`, `match`, `matchAll`, `replace`, `replaceAll`, `localeCompare`, and the remaining string helpers accept non-nullish receivers through shared ToString-style coercion while still rejecting Symbol receivers
+  - the string-specialized AST paths now use the same receiver coercion helper, so callable receivers pick up native source text consistently instead of falling back to raw internal placeholders on direct string-method execution
+
+- [x] Finish the remaining string prototype property-surface breadth gaps
+  - cached string prototype/raw getter coverage now includes the remaining callable surface breadth such as `charAt`, `at`, `search`, `match`, `matchAll`, `replace`, `replaceAll`, `localeCompare`, `trim`, `toUpperCase`, `isWellFormed`, and `toWellFormed`
+  - shared string member-call execution now covers those methods for extracted/prototype/bracket paths, including regexp-sensitive behavior and callback-based replacement flows
+
+- [x] Verification completed
+  - `cargo test --lib string_generic_receiver_coercion_and_remaining_prototype_paths_work`
+  - `cargo test --lib string_search_and_padding_raw_getter_metadata_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2235 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.36: string argument ToString and regexp delegation parity sweep)
+
+- [x] Tighten string and regexp argument ToString semantics where JS requires errors
+  - routed string helper arguments that require ToString through the strict coercion helper so Symbol inputs now throw instead of silently stringifying across direct AST, shared member-call, raw getter, and extracted/prototype call paths
+  - aligned `RegExp` construction, `RegExp.escape`, `RegExp.prototype.exec/test`, string replacement callback results, and `String.raw` with the same Symbol-sensitive coercion behavior
+
+- [x] Deepen `Symbol.match*` delegation parity for string helpers
+  - added shared `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, and `Symbol.search` method lookup/call helpers so direct string AST paths and shared member-call execution both delegate through the pattern object when present
+  - preserved `String.prototype.matchAll` cloned-regexp `lastIndex` semantics by copying the original global regexp state onto the clone instead of resetting it to zero
+
+- [x] Verification completed
+  - `cargo test --lib string_argument_tostring_and_regexp_delegation_work`
+  - `cargo test --lib string_generic_receiver_coercion_and_remaining_prototype_paths_work`
+  - `cargo test --lib string_search_and_padding_raw_getter_metadata_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2236 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.37: string split delegation and ordinary-object ToString residual sweep)
+
+- [x] Finish `String.prototype.split` delegation and RegExp-like boundary parity
+  - added `Symbol.split` delegation across direct string AST execution and shared member-call execution, including correct forwarding of the `limit` argument to custom splitters
+  - aligned `includes`, `startsWith`, and `endsWith` with `@@match`-based RegExp-like detection so custom objects with truthy `Symbol.match` are rejected while real regexes with `Symbol.match = false` fall back to normal string coercion
+
+- [x] Deepen ordinary-object ToString parity in string-facing helpers
+  - upgraded strict string coercion to use `toString` then `valueOf` for ordinary objects, including proper `Cannot convert object to primitive value` failure when both callable paths stay non-primitive
+  - routed generic string receivers through the same strict coercion path so plain-object receivers and arguments now behave consistently across search, separator, split, and replacement flows
+
+- [x] Verification completed
+  - `cargo test --lib string_split_delegation_and_object_tostring_residuals_work`
+  - `cargo test --lib string_generic_receiver_coercion_and_remaining_prototype_paths_work`
+  - `cargo test --lib string_argument_tostring_and_regexp_delegation_work`
+  - `cargo test --lib shared_member_call_search_dispatch_keeps_string_array_and_typed_array_behavior_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2237 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.38: RegExp symbol-method surface and string coercion edge-case sweep)
+
+- [x] Expose and align RegExp symbol-method callable surface
+  - exposed `RegExp.prototype[Symbol.match]`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` through shared receiver-aware builtins so direct symbol access, extracted calls, and `Function.prototype.call` routes now share receiver validation, lastIndex handling, and result shapes
+  - preserved instance override precedence for symbol-keyed regexp methods so custom `regex[Symbol.replace] = fn` continues to work for both direct invocation and string delegation
+
+- [x] Deepen remaining string coercion edge cases
+  - verified regexp symbol methods now use the shared ToString path for omitted inputs and host-object inputs such as `URL`, instead of falling back to ad hoc placeholder behavior
+  - added raw-getter metadata coverage for RegExp symbol methods so `.name`, `.length`, and native source text stay aligned with the rest of the callable surface
+
+- [x] Verification completed
+  - `cargo test --lib regexp_symbol_method_property_paths_and_coercion_edge_cases_work`
+  - `cargo test --lib regexp_symbol_method_raw_getter_metadata_work`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2239 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.39: Date string-hint ToPrimitive and RegExp inheritance/identity residual sweep)
+
+- [x] Close remaining string-hint coercion gaps for object-like values
+  - unified `Date` and object-like string coercion across `String(...)`, `new String(...)`, fast-path `Expr::StringConstruct`, and direct `toString()` evaluation so string-hint ToPrimitive uses shared primitive-conversion logic instead of placeholder text
+  - preserved `String(Symbol(...))` descriptive-string behavior while still keeping Symbol rejection for string-method receiver coercion, and aligned canvas 2D context stringification with the same native object `toString` path
+
+- [x] Tighten RegExp instance/prototype parity
+  - routed direct regexp fast paths through instance/prototype property lookup so `exec`, `test`, and `toString` now respect own overrides, inherited `RegExp.prototype` fallback, and extracted-call parity
+  - aligned omitted-versus-`undefined` behavior for `RegExp.prototype.test()` and removed the now-unused direct regex resolver after the fast paths moved onto the shared callable/property route
+
+- [x] Verification completed
+  - `cargo test --lib date_string_hint_and_raw_getter_coercion_work`
+  - `cargo test --lib regexp_instance_lookup_respects_prototype_fallback_and_own_overrides_work`
+  - `cargo test --lib string_constructor_and_static_methods_work`
+  - `cargo test --lib canvas_rendering_context_2d_exposes_core_defaults`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib dom_canvas_rendering_context_2d`
+  - `cargo fmt`
+  - `cargo test --lib` (`2241 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.40: host-object toString/valueOf bracket-call and raw-getter parity sweep)
+
+- [x] Close remaining host-object `toString` / `valueOf` call-surface gaps
+  - replaced the remaining object-backed host `toString` placeholders on `Selection` and `CanvasRenderingContext2D` with receiver-aware native callables so dot-call, bracket-call, extracted-method, and `String(obj)` paths converge on the same host implementation
+  - routed receiver-builtin dispatch through the existing `Selection` and canvas member-call evaluators so incompatible-receiver errors, native callable metadata, and host-specific stringification stay aligned
+
+- [x] Expand host-object callable parity coverage
+  - added targeted tests for `Selection` and `CanvasRenderingContext2D` covering direct calls, bracket calls, extracted `Function.prototype.call`, string coercion, and raw-getter metadata
+  - updated the canvas 2D default surface expectation to the canonical host stringification text now returned by the shared callable path
+
+- [x] Verify
+  - `cargo test --lib selection_tostring_bracket_call_and_raw_getter_parity_work`
+  - `cargo test --lib canvas_rendering_context_2d_tostring_bracket_call_and_raw_getter_parity_work`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_canvas_rendering_context_2d`
+  - `cargo test --lib window_get_selection`
+  - `cargo fmt`
+  - `cargo test --lib` (`2243 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.41: Object.prototype default toString/valueOf receiver parity sweep)
+
+- [x] Close remaining default object-stringification gaps
+  - added receiver-aware `Object.prototype.toString` / `valueOf` builtins so ordinary objects, primitives, and object-backed host values now share the same direct-call, bracket-call, extracted-call, and string-coercion behavior
+  - restored `Intl.Locale` generic method/property access by attaching `Intl.Locale.prototype` to instances and exposing receiver-aware locale methods on the prototype, which brings ambiguous `toString()` calls back onto the locale-specific path instead of falling through to `[object Object]`
+
+- [x] Expand parity coverage
+  - added targeted tests for `Object.prototype.toString` / `valueOf` metadata, incompatible receivers, collection/host-object inheritance, and `Intl.Locale` raw-getter plus extracted-call paths
+  - kept `Symbol.toStringTag`-based object tagging aligned with the new default-object receiver surface
+
+- [x] Verify
+  - `cargo test --lib object_prototype_to_string_and_value_of_receiver_paths_work`
+  - `cargo test --lib object_prototype_raw_getter_metadata_and_incompatible_receiver_work`
+  - `cargo test --lib object_prototype_to_string_inherits_across_collections_and_host_tags_work`
+  - `cargo test --lib intl_locale_properties_and_methods_work`
+  - `cargo test --lib intl_locale_raw_getter_and_call_paths_work`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo fmt`
+  - `cargo test --lib` (`2247 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.42: Intl prototype generic getter and extracted-call parity sweep)
+
+- [x] Close remaining Intl prototype surface gaps
+  - attached shared `Intl.*.prototype` links to formatter instances and exposed receiver-aware prototype methods for the remaining `Intl.Collator`, `Intl.DateTimeFormat`, `Intl.DisplayNames`, `Intl.DurationFormat`, `Intl.ListFormat`, `Intl.NumberFormat`, `Intl.PluralRules`, `Intl.RelativeTimeFormat`, and `Intl.Segmenter` method surface
+  - aligned raw getters, bracket calls, extracted `Function.prototype.call`, inherited prototype dispatch, and incompatible-receiver failures so the generic property path no longer falls back to unrelated shared callable or `Object.prototype` behavior
+
+- [x] Expand Intl receiver-parity coverage
+  - added focused main-realm regressions for prototype-property identity, extracted-call parity, native metadata, and incompatible receivers across formatter and segmenter families
+  - added worker coverage for `Intl` namespace identity plus `DisplayNames` / `RelativeTimeFormat` / `Collator` raw getter execution, and fixed worker `self.Intl` to share the same namespace object as bare `Intl`
+
+- [x] Verify
+  - `cargo test --lib intl_formatter_prototype_methods_and_bound_format_metadata_work`
+  - `cargo test --lib intl_generic_prototype_getters_and_incompatible_receivers_work`
+  - `cargo test --lib worker_intl_prototype_raw_getters_and_receiver_parity_work`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2250 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.43: Intl bound getter accessor and callable identity sweep)
+
+- [x] Tighten remaining bound getter accessor parity
+  - moved `Intl.Collator.prototype.compare`, `Intl.DateTimeFormat.prototype.format`, and `Intl.NumberFormat.prototype.format` onto prototype getter accessors backed by cached internal bound callables instead of enumerable instance data properties
+  - aligned direct dot access, bracket access, parser-special getter paths, repeated access identity, and incompatible-receiver failures so accessor-backed callables now share the same stable callable object and metadata as their direct-call paths
+
+- [x] Expand coverage for Intl callable identity and worker breadth
+  - added focused main-realm regressions for `compare` / `format` identity stability, lack of own data properties, incompatible receivers, and native `name` / `length` / `toString()` parity
+  - added worker coverage for bound getter identity and hidden-surface parity, keeping `self.Intl` / bare `Intl` access aligned with the same accessor-backed callable behavior
+
+- [x] Verify
+  - `cargo test --lib intl_bound_format_getter_accessor_identity_and_receiver_parity_work`
+  - `cargo test --lib intl_collator_compare_getter_accessor_identity_and_receiver_parity_work`
+  - `cargo test --lib worker_intl_bound_getter_accessor_identity_work`
+  - `cargo test --lib issue_105_intl_number_format_format_method`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2253 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.44: Intl accessor assignment no-op and enumerable surface parity sweep)
+
+- [x] Tighten assignment semantics for Intl accessor-backed callables
+  - aligned `Intl.Collator.prototype.compare`, `Intl.DateTimeFormat.prototype.format`, and `Intl.NumberFormat.prototype.format` with getter-only browser behavior so instance assignment is a no-op, deletion leaves the prototype accessor path intact, and repeated access keeps returning the same cached bound callable
+  - verified direct dot access, bracket access, extracted-call paths, and worker/global entry points continue to use the native accessor-backed callable instead of leaking an assigned RHS through parser fast paths
+
+- [x] Expand enumerable-surface coverage for Intl accessors
+  - marked Intl instance/prototype `constructor` links as non-enumerable so `Object.keys`, spread, `for...in`, and `JSON.stringify` stay clean while accessor-backed `format` / `compare` remain inherited-only
+  - added parser and runtime regressions for `hasOwnProperty`, bracket access, `self.Intl` parity, and shared `ObjectGet` / `MemberCall` parsing around Intl accessor properties
+
+- [x] Verify
+  - `cargo test --lib intl_date_time_format_accessor_assignment_noop_and_enumeration_work`
+  - `cargo test --lib intl_number_format_accessor_assignment_noop_and_enumeration_work`
+  - `cargo test --lib intl_collator_compare_accessor_assignment_noop_and_enumeration_work`
+  - `cargo test --lib worker_intl_accessor_assignment_noop_and_enumeration_work`
+  - `cargo test --lib intl_accessor_member_get_and_call_parse_to_shared_paths_work`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo fmt`
+  - `cargo test --lib` (`2258 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.45: Intl accessor descriptor introspection and property-descriptor parity sweep)
+
+- [x] Audit Intl accessor descriptor introspection
+  - added dedicated parsing and evaluation for `Object.getOwnPropertyDescriptor(...)` so Intl prototype accessors expose stable accessor descriptors with `get` / `set` / `enumerable` / `configurable` shape and no hidden cache-slot leakage
+  - covered main realm and worker prototype-walk descriptor checks for `Intl.NumberFormat.prototype.format` and `Intl.Collator.prototype.compare`, including alias parity through `window.Object` and `self.Intl`
+
+- [x] Tighten property-definition and reflective-set parity
+  - added dedicated parsing and evaluation for `Object.defineProperty(...)` and `Reflect.set(...)`, including getter/setter-aware descriptor application, own-property shadow descriptors, inherited getter-only no-op behavior, and delete-based fallback to the prototype accessor path
+  - verified worker call paths honor explicitly defined own overrides for `format` / `compare`, while main-realm regression coverage now pins descriptor/overwrite/delete surfaces and inherited fallback behavior
+
+- [x] Verify
+  - `cargo test --lib intl_descriptor_and_reflect_static_calls_parse_work`
+  - `cargo test --lib descriptor_define_property_and_reflect_set_work`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo fmt`
+  - `cargo test --lib` (`2262 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.46: Intl main-realm own-override lookup and Reflect/Object surface breadth sweep)
+
+- [x] Tighten main-realm own-override lookup parity
+  - added direct main-realm regression coverage for `Intl.NumberFormat.prototype.format` and `Intl.Collator.prototype.compare` own overrides after `Object.defineProperty(...)`, `Reflect.set(...)`, bracket access, extracted-call reads, and delete-based fallback
+  - confirmed main-realm `format` / `compare` now stay aligned with worker behavior across bare variables and `window.*` object paths
+
+- [x] Broaden Reflect/Object descriptor API surface
+  - exposed `Reflect` as a real shared global object on main realm, `window`, and worker, and surfaced actual callable entries for supported `Object.*` static methods instead of relying only on dedicated parser fast paths
+  - fixed parser fallback so `Object.defineProperty`, `Object.entries`, `Reflect.set`, and similar property gets can be extracted or aliased without being misparsed as mandatory static calls
+
+- [x] Verify
+  - `cargo test --lib object_and_reflect_alias_surface_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2267 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.47: Object/Reflect object-like target breadth and function-array descriptor parity sweep)
+
+- [x] Extend Object/Reflect target coverage beyond plain objects
+  - broadened `Object.getOwnPropertyDescriptor(...)`, `Object.defineProperty(...)`, `Object.keys(...)`, `Object.values(...)`, `Object.entries(...)`, `Object.hasOwn(...)`, `Object.getOwnPropertySymbols(...)`, and `Reflect.set(...)` so arrays, functions, maps, sets, weak collections, and regex-backed values now follow the same object-like rules instead of failing as non-objects
+  - aligned array index / `length`, function `name` / `length`, callable-object surfaces, collection `size`, and regex builtins with descriptor, enumerability, reflective set, and deletion behavior expected by the generic `Object` / `Reflect` helpers
+
+- [x] Tighten function/object-like own-property parity
+  - made function public-name storage non-enumerable so `Object.keys(fn)` no longer leaks `name`, while `Object.hasOwn(...)` and `Object.getOwnPropertyDescriptor(...)` still report the builtin own property correctly
+  - added delete support for function public properties so custom data properties added through `Object.defineProperty(...)` or `Reflect.set(...)` behave like ordinary own properties on callable targets
+
+- [x] Verify
+  - `cargo test --lib object_and_reflect_support_array_function_and_collection_targets_work -- --nocapture`
+  - `cargo test --lib object_descriptor_and_reflect_work_on_callable_object_surfaces -- --nocapture`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2269 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.48: Object/Reflect own-key ordering and descriptor-attribute residual sweep)
+
+- [x] Deepen own-key and descriptor coverage
+  - surfaced `Object.getOwnPropertyNames(...)` and `Reflect.ownKeys(...)` through the parser, callable runtime, and generic property-get paths so extracted calls and alias access now stay on the same `Object` / `Reflect` execution surface
+  - aligned own-key ordering for arrays, functions, callable objects, collections, and symbol-backed values so integer-like string keys, builtin non-enumerable keys, custom string keys, and symbol keys serialize in the expected reflective order
+  - tightened builtin descriptor attributes for array `length`, function/callable `name` / `length` / `prototype`, collection `size`, and regex-backed own properties so `Object.getOwnPropertyDescriptor(...)`, `Object.hasOwn(...)`, and related helpers report stable browser-like flags
+
+- [x] Verify
+  - `cargo test --lib object_and_reflect_own_keys_and_descriptor_attributes_work -- --nocapture`
+  - `cargo test --lib intl_descriptor_and_reflect_static_calls_parse_work -- --nocapture`
+  - `cargo test --lib object_and_reflect_property_get_parse_falls_back_to_generic_paths_work -- --nocapture`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo fmt`
+  - `cargo test --lib` (`2270 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.49: Object/Reflect descriptor mutation and symbol-key residual sweep)
+
+- [x] Deepen descriptor-mutation parity
+  - persisted `writable` / `configurable` / `enumerable` metadata across `Object.defineProperty(...)` writes on plain objects, arrays, callable targets, collections, and regex-backed property bags so follow-up `Object.getOwnPropertyDescriptor(...)` reads reflect the mutated flags instead of builtin defaults
+  - aligned `Reflect.set(...)`, direct assignment, and `delete` with the stored descriptor metadata for array indices and `length`, function `name` / `length`, collection `size`, regex `lastIndex`, and entry-backed own properties so non-writable and non-configurable cases now stay browser-like after reflective mutation
+  - fixed property fast paths to honor overridden own descriptors before builtin virtual slots, including function `length`, collection `size`, and regex-backed properties
+
+- [x] Extend symbol-key and own-key residual coverage
+  - verified mixed string/symbol reflective ordering and descriptor persistence after mutation-heavy flows on arrays, callables, and collection-backed targets, including cases where builtin non-enumerable keys and custom symbol keys coexist
+
+- [x] Verify
+  - `cargo test --lib object_and_reflect_descriptor_mutation_and_symbol_key_residuals_work -- --nocapture`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2271 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.50: callable own-property delete semantics and property-fast-path residual sweep)
+
+- [x] Close callable own-property delete gaps
+  - added deleted-builtin markers so removing overridden callable `name` / `length`, collection `size`, and regexp builtin surfaces clears descriptor and own-key exposure while direct property reads fall back to the builtin value
+  - aligned `Object.getOwnPropertyDescriptor(...)`, `Object.hasOwn(...)`, own-key enumeration, `Reflect.set(...)`, direct assignment, and `delete` across callable objects, user functions, maps, sets, and regexp-backed values after explicit own overrides are removed
+
+- [x] Sweep property fast-path and parser residuals
+  - fixed property fast paths so function/callable `name` / `length`, collection `size`, and regexp builtin keys consult explicit own overrides first and deleted-builtin fallbacks second
+  - stopped DOM access parsing from consuming known non-DOM globals like `Object` and `Reflect`, so `delete Object.keys.name` now follows the generic object-path pipeline instead of the DOM fast path
+
+- [x] Verify
+  - `cargo test --lib object_and_reflect_property_get_parse_falls_back_to_generic_paths_work -- --nocapture`
+  - `cargo test --lib callable_delete_and_builtin_surface_residuals_work -- --nocapture`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo fmt`
+  - `cargo test --lib` (`2272 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.51: function prototype writable/configurable and regex own-surface parity sweep)
+
+- [x] Tighten function prototype descriptor parity
+  - aligned ordinary-function `prototype` writes so direct assignment and `Reflect.set(...)` preserve the builtin descriptor surface instead of creating enumerable/configurable ad hoc own properties, while `delete` now correctly stays `false`
+  - added dedicated `Object.defineProperty(...)` handling for ordinary-function `prototype` so omitted fields preserve the current value/flags, non-configurable invariants stay in place, and `new` keeps using the overridden prototype object for instance linkage
+
+- [x] Revisit regexp own-surface modeling
+  - reduced regexp instance builtin own keys to `lastIndex`, moving `source`, `flags`, and the boolean flag accessors onto `RegExp.prototype` via accessor descriptors so `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.hasOwn(...)`, and direct property reads now match browser structure
+  - fixed regexp delete/set parity so deleting inherited accessor properties is a no-op success, explicit own overrides can still be defined and deleted, and `RegExp.prototype` getters plus `toString()` work on the prototype object itself
+
+- [x] Verify
+  - `cargo test --lib function_prototype_descriptor_and_write_parity_work -- --nocapture`
+  - `cargo test --lib regexp_prototype_accessor_and_own_surface_parity_work -- --nocapture`
+  - `cargo test --lib callable_delete_and_builtin_surface_residuals_work -- --nocapture`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2274 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.52: generic accessor own-key synthesis and non-configurable redefine invariant sweep)
+
+- [x] Synthesize accessor-backed own keys more consistently
+  - synthesized public string and symbol own keys from getter/setter-backed storage entries so `Object.getOwnPropertyNames(...)`, `Object.keys(...)`, `Reflect.ownKeys(...)`, and descriptor introspection stay aligned even when there is no shadow data slot
+  - filtered internal builtin storage markers back out of reflective own-key enumeration so host internals do not leak through the new accessor-key synthesis
+
+- [x] Tighten non-configurable redefine invariants across builtin surfaces
+  - normalized `Object.defineProperty(...)` handling for generic objects, arrays, functions, regexp instances, and collection-like builtin surfaces so mixed accessor/data descriptors, forbidden flag flips, and non-writable value rewrites fail consistently
+  - preserved omitted descriptor fields on redefinition while keeping spec-default `false` flags for newly defined properties, which also fixes follow-up `Reflect.set(...)`, assignment, delete, and descriptor reads
+
+- [x] Verify
+  - `cargo test --lib accessor_only_own_key_synthesis_work -- --nocapture`
+  - `cargo test --lib non_configurable_redefine_invariant_sweep_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib timers_numbers_intl_basics`
+  - `cargo test --lib numeric_intl_dom_mutations`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions`
+  - `cargo test --lib` (`2276 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.53: defineProperty descriptor-object coercion and accessor-undefined parity sweep)
+
+- [x] Tighten descriptor-object coercion for reflective property mutation
+  - broadened `Object.defineProperty(...)` descriptor intake from plain objects to object-like descriptor values while preserving browser-like property access order across inherited descriptor fields
+  - normalized mixed accessor/data descriptor validation so getter/setter/value/writable conflicts fail consistently after the new coercion path
+
+- [x] Normalize explicit `undefined` accessor semantics
+  - distinguished omitted `get`/`set` from explicit `get: undefined` / `set: undefined` with dedicated internal markers so descriptor reads, own-key exposure, `Reflect.set(...)`, assignment, and delete stay aligned across generic objects and builtin-backed surfaces
+  - fixed object-literal overwrite and accessor-pair merge behavior so spread/data redefinitions clear stale accessor metadata without breaking duplicate-key insertion order or getter/setter pairing
+
+- [x] Verify
+  - `cargo test --lib define_property_descriptor_object_coercion_parity_work -- --nocapture`
+  - `cargo test --lib define_property_accessor_undefined_parity_work -- --nocapture`
+  - `cargo test --lib spread_syntax_in_object_literals_supports_merge_override_and_primitive_sources -- --nocapture`
+  - `cargo test --lib object_literal_property_access_and_methods_work -- --nocapture`
+  - `cargo test --lib operators_advanced_selectors`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo fmt`
+  - `cargo test --lib` (`2278 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.54: descriptor boxing and object-literal accessor overwrite residual sweep)
+
+- [x] Tighten boxed descriptor coercion paths
+  - taught `Object.defineProperty(...)` descriptor reads to work through real boxed `Boolean` / `Number` wrapper objects instead of ad hoc stringified placeholder objects, preserving browser-like inherited field lookup order for descriptor flags and accessors
+  - aligned `Object(...)`, `new Boolean(...)`, and `new Number(...)` boxing paths with runtime wrapper objects so prototype lookup, `valueOf()`, `toString()`, and constructor-backed descriptor use now share the same surface
+
+- [x] Sweep remaining object-literal accessor overwrite residuals
+  - centralized object-literal data/getter/setter writes so duplicate getter/setter/data/spread combinations preserve insertion order while clearing stale accessor metadata and keeping getter/setter pairing intact
+  - added dedicated overwrite coverage to ensure direct reads and reflective surfaces stay aligned after accessor-to-data and data-to-accessor transitions
+
+- [x] Verify
+  - `cargo test --lib define_property_boxed_descriptor_wrappers_work -- --nocapture`
+  - `cargo test --lib object_constructor_boxes_numbers_with_number_wrapper_surface_work -- --nocapture`
+  - `cargo test --lib object_literal_accessor_overwrite_matrix_keeps_browser_semantics -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib` (`2281 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.55: wrapper-object reflective surface and primitive-boxing residual sweep)
+
+- [x] Expand boxed primitive reflective parity
+  - synthesized string-wrapper exotic own keys and descriptors across `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.assign(...)`, and object spread so wrapper index properties and `length` show up in browser-like order while still merging custom own properties
+  - aligned boxed `Boolean`, `Number`, `BigInt`, and `Symbol` instances for `Object.getPrototypeOf(...)`, `Object.prototype.toString.call(...)`, constructor identity, and `valueOf()` so runtime wrapper objects expose the expected reflective surface
+
+- [x] Sweep primitive-boxing residual call and coercion paths
+  - taught fast-path `valueOf()` and receiver-builtin evaluation to unwrap non-string primitive wrappers instead of only string wrappers, fixing boxed symbol and numeric wrapper behavior through generic member access and extracted call paths
+  - routed reflective lookup and copy helpers through shared wrapper-aware key synthesis so exotic wrapper own properties are visible without bypassing explicit own overrides
+
+- [x] Verify
+  - `cargo test --lib string_wrapper_reflective_surface_and_copy_paths_work -- --nocapture`
+  - `cargo test --lib boxed_primitive_wrapper_tags_and_prototype_introspection_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2283 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.56: wrapper descriptor invariants and string-exotic override residual sweep)
+
+- [x] Tighten wrapper descriptor invariants
+  - treated string-wrapper index keys and `length` as real non-writable / non-configurable exotic own properties through direct assignment, `delete`, `Reflect.set(...)`, and `Object.defineProperty(...)`, including foreign-receiver `Reflect.set(...)` cases
+  - kept compatible descriptor redefinitions as no-ops while rejecting incompatible value and attribute changes with stable redefine errors instead of leaking synthetic overrides into wrapper storage
+
+- [x] Sweep string-exotic override and reflective residuals
+  - fixed string-wrapper numeric property reads so out-of-range indices fall through to explicit own properties and prototype lookup instead of returning hardcoded `undefined`, restoring browser-like access for custom numeric keys such as `"2"`
+  - aligned own-property descriptor reads with wrapper exotic semantics by preferring virtual string-wrapper descriptors over stale explicit entries, preventing reflective mismatches after failed override attempts
+
+- [x] Verify
+  - `cargo test --lib string_wrapper_descriptor_invariants_and_override_attempts_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2284 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.57: wrapper prototype mutation and string-exotic introspection residual sweep)
+
+- [x] Tighten wrapper prototype mutation parity
+  - exposed `Object.setPrototypeOf(...)` on the real `Object` callable surface and routed it through shared prototype mutation logic with cycle checks so wrapper objects and ordinary objects follow the same mutation rules
+  - taught wrapper-aware property lookup and the `in` operator to honor default wrapper prototype chains plus explicit prototype reassignment, restoring inherited method and numeric-key lookup without breaking string-exotic own properties
+
+- [x] Sweep string-exotic introspection residuals
+  - exposed receiver-aware `Object.prototype.hasOwnProperty`, `isPrototypeOf`, and `propertyIsEnumerable`, and routed the special `hasOwnProperty(...)` fast path through shared own-property logic so wrapper virtual keys such as `"0"` and `"length"` report browser-like results
+  - kept string-exotic own keys stable across custom and `null` prototype transitions so direct calls, extracted calls, reflective checks, and prototype-backed lookups stay aligned after mutation
+
+- [x] Verify
+  - `cargo test --lib wrapper_prototype_mutation_and_string_exotic_introspection_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2285 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.58: wrapper primitive-prototype method surface and Object static prototype-mutation breadth sweep)
+
+- [x] Expand wrapper primitive-prototype method parity
+  - linked boxed `Boolean`, `Number`, and `BigInt` prototype objects to the shared `Object.prototype` surface so inherited `Object.prototype` helpers remain available through custom prototype chains and extracted calls
+  - exposed `Number.prototype.toExponential`, `toFixed`, and `toPrecision` through raw getter, bracket, and extracted-call paths, keeping callable metadata and wrapper receiver validation aligned with parser-special number method execution
+
+- [x] Broaden `Object` static prototype-mutation coverage
+  - extended `Object.setPrototypeOf(...)` to ordinary functions, arrays, maps, sets, weak collections, regexps, and boxed wrapper objects while returning primitive targets unchanged for browser-like non-object behavior
+  - taught `Object.getPrototypeOf(...)` / prototype-backed lookup to honor explicit function prototype overrides, preserving inherited reads and `isPrototypeOf(...)` checks after callable prototype mutation and `null` transitions
+
+- [x] Verify
+  - `cargo test --lib wrapper_primitive_prototype_methods_survive_custom_prototype_chains_work -- --nocapture`
+  - `cargo test --lib object_static_prototype_mutation_covers_functions_primitives_and_regexp_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2287 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed Task (P1.59: variant-backed callable prototype mutation and array prototype-chain parity sweep)
+
+- [x] Extend variant-backed callable prototype mutation coverage
+  - added explicit hidden prototype storage for variant-backed constructor values so `Object.getPrototypeOf(...)` / `Object.setPrototypeOf(...)` now preserve custom prototype overrides for `String`, `Symbol`, `Map`, `Set`, `Promise`, `URL`, `RegExp`, `ArrayBuffer`, `Blob`, `URLSearchParams`, and typed-array constructors
+  - kept constructor own surface access stable while letting inherited reads follow the overridden prototype chain, and allowed object-like prototypes such as the abstract typed-array constructor to round-trip through `Object.setPrototypeOf(...)`
+
+- [x] Align array prototype-chain lookup after explicit mutation
+  - taught array property reads to fall through to explicit custom prototypes for holes, out-of-range numeric keys, inherited methods, and `in` checks instead of always stopping at built-in fast paths
+  - suppressed synthesized array builtin methods once an explicit prototype override is present so custom or `null` prototype chains control inherited lookup the same way they do for ordinary objects
+
+- [x] Verify
+  - `cargo test --lib variant_backed_callable_prototype_mutation_keeps_inherited_reads_work -- --nocapture`
+  - `cargo test --lib array_prototype_chain_reads_and_in_semantics_follow_explicit_mutation_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2289 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.60: object-like prototype target breadth and array-like inherited lookup residual sweep
+  - broadened `Object.setPrototypeOf(...)` / `Object.getPrototypeOf(...)` across arrays, functions, constructors, typed arrays, and `NodeList` by storing explicit prototype overrides on the relevant runtime values instead of only ordinary objects
+  - split prototype traversal into owner-aware and receiver-aware paths so inherited lookup through explicit prototype mutation keeps the original receiver while starting from the current object-like owner
+  - taught typed arrays and `NodeList` to honor explicit prototype reassignment for property reads and `in` without bypassing custom prototype chains, while keeping their built-in own index/length behavior intact
+  - fixed `NodeList` live-list borrow scope so default DOM mutation and selection flows still pass after prototype-aware lookup was added
+
+- [x] Verify
+  - targeted prototype-mutation and inherited-lookup regression tests
+  - `cargo fmt`
+  - `cargo test --lib collections_url_typed_arrays`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib` (`2296 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+- [x] Completed P1.61: receiver-aware prototype traversal for remaining object-like built-ins
+  - extended owner/receiver-aware lookup across remaining non-ordinary object-like values so collections, promises, regexps, blobs, array buffers, and related object-like built-ins no longer leak instance-only fast-path state through explicit prototype mutation
+  - taught parser-specialized `Map` / `Set` / `WeakMap` / `WeakSet` / promise / array-buffer member dispatch to fall back to generic receiver-aware lookup when an explicit prototype override or inherited callable must win, while still preserving legacy specialized behavior for placeholder-backed host surfaces such as `DataTransferItemList`
+  - suppressed placeholder-callable execution in the collection parser fast paths so reflected host-method surfaces continue to route into their specialized runtime implementations instead of being consumed by generic placeholder functions
+
+- [x] Verify
+  - `cargo test --lib collection_and_regexp_explicit_prototype_override_disables_builtin_fast_paths_work -- --nocapture`
+  - `cargo test --lib non_ordinary_prototype_traversal_preserves_receiver_and_hides_instance_state_work -- --nocapture`
+  - `cargo test --lib data_transfer_item_list_methods_are_noop_outside_dragstart -- --nocapture`
+  - `cargo test --lib data_transfer_item_list_add_rejects_non_file_single_argument -- --nocapture`
+  - `cargo test --lib data_transfer_item_list_add_file_appends_to_files_and_items -- --nocapture`
+  - `cargo test --lib data_transfer_item_list_add_replaces_string_item_without_reordering -- --nocapture`
+  - `cargo test --lib data_transfer_item_list_remove_can_remove_string_and_file_items -- --nocapture`
+  - `cargo test --lib dom_data_transfer_item_list`
+  - `cargo test --lib window_forms_trace`
+  - `cargo fmt`
+  - `cargo test --lib` (`2298 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.62: placeholder-backed host method dispatch and inherited callable residual sweep)
+
+- [ ] Audit placeholder-backed host method surfaces that still depend on parser-specialized dispatch
+  - ensure reflected placeholder callables on DOM and Web API objects consistently fall through to their specialized runtime implementations when reached through direct calls, extracted calls, or prototype mutation
+
+- [ ] Close remaining inherited-callable gaps across host objects
+  - align receiver validation and inherited method resolution for the remaining host objects whose method surfaces still mix placeholder properties, direct fast paths, and generic callable lookup
+
+- [ ] Verify
+  - targeted placeholder-dispatch and inherited-callable regression tests for host objects
+  - `cargo test --lib webapi_data_builtins`
+  - `cargo test --lib window_forms_trace`
+  - `cargo test --lib dom_navigation_dialog`
   - `cargo test --lib`

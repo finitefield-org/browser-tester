@@ -6,13 +6,28 @@ pub(crate) const INTERNAL_RETURN_SLOT: &str = "__bt_internal_return_value__";
 pub(crate) const INTERNAL_SYMBOL_KEY_PREFIX: &str = "\u{0}\u{0}bt_symbol_key:";
 pub(crate) const INTERNAL_SYMBOL_WRAPPER_KEY: &str = "\u{0}\u{0}bt_symbol_wrapper";
 pub(crate) const INTERNAL_STRING_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_string_wrapper_value";
+pub(crate) const INTERNAL_BOOLEAN_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_boolean_wrapper_value";
+pub(crate) const INTERNAL_NUMBER_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_number_wrapper_value";
+pub(crate) const INTERNAL_BIGINT_WRAPPER_VALUE_KEY: &str = "\u{0}\u{0}bt_bigint_wrapper_value";
 pub(crate) const INTERNAL_OBJECT_PROTOTYPE_KEY: &str = "\u{0}\u{0}bt_object:prototype";
 pub(crate) const INTERNAL_OBJECT_GETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:getter:";
 pub(crate) const INTERNAL_OBJECT_SETTER_KEY_PREFIX: &str = "\u{0}\u{0}bt_object:setter:";
+pub(crate) const INTERNAL_OBJECT_UNDEFINED_GETTER_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:getter_undefined:";
+pub(crate) const INTERNAL_OBJECT_UNDEFINED_SETTER_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:setter_undefined:";
 pub(crate) const INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY: &str =
     "\u{0}\u{0}bt_object:non_enumerable_constructor";
 pub(crate) const INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX: &str =
     "\u{0}\u{0}bt_object:non_enumerable:";
+pub(crate) const INTERNAL_NON_WRITABLE_PROPERTY_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:non_writable:";
+pub(crate) const INTERNAL_NON_CONFIGURABLE_PROPERTY_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:non_configurable:";
+pub(crate) const INTERNAL_DELETED_BUILTIN_PROPERTY_KEY_PREFIX: &str =
+    "\u{0}\u{0}bt_object:deleted_builtin:";
+pub(crate) const INTERNAL_REGEXP_PROTOTYPE_OBJECT_KEY: &str =
+    "\u{0}\u{0}bt_regexp:prototype_object";
 pub(crate) const INTERNAL_ARRAY_HOLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_array:hole:";
 pub(crate) const INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY: &str =
     "\u{0}\u{0}bt_arguments:param_bindings";
@@ -27,6 +42,8 @@ pub(crate) const INTERNAL_INTL_OPTIONS_KEY: &str = "\u{0}\u{0}bt_intl:options";
 pub(crate) const INTERNAL_INTL_LOCALE_DATA_KEY: &str = "\u{0}\u{0}bt_intl:localeData";
 pub(crate) const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
 pub(crate) const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
+pub(crate) const INTERNAL_INTL_BOUND_COMPARE_KEY: &str = "\u{0}\u{0}bt_intl:boundCompare";
+pub(crate) const INTERNAL_INTL_BOUND_FORMAT_KEY: &str = "\u{0}\u{0}bt_intl:boundFormat";
 pub(crate) const INTERNAL_INTL_SEGMENTS_KEY: &str = "\u{0}\u{0}bt_intl:segments";
 pub(crate) const INTERNAL_INTL_SEGMENT_INDEX_KEY: &str = "\u{0}\u{0}bt_intl:segmentIndex";
 pub(crate) const INTERNAL_CALLABLE_KEY_PREFIX: &str = "\u{0}\u{0}bt_callable:";

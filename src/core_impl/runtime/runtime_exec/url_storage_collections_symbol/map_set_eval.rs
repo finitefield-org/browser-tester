@@ -1,6 +1,59 @@
 use super::*;
 
 impl Harness {
+    fn is_builtin_placeholder_callable(value: &Value) -> bool {
+        matches!(value, Value::Function(function) if function.function_id == usize::MAX)
+    }
+
+    fn map_instance_method_name(method: MapInstanceMethod) -> &'static str {
+        match method {
+            MapInstanceMethod::Get => "get",
+            MapInstanceMethod::Has => "has",
+            MapInstanceMethod::Delete => "delete",
+            MapInstanceMethod::Clear => "clear",
+            MapInstanceMethod::ForEach => "forEach",
+            MapInstanceMethod::GetOrInsert => "getOrInsert",
+            MapInstanceMethod::GetOrInsertComputed => "getOrInsertComputed",
+        }
+    }
+
+    fn set_instance_method_name(method: SetInstanceMethod) -> &'static str {
+        match method {
+            SetInstanceMethod::Add => "add",
+            SetInstanceMethod::Union => "union",
+            SetInstanceMethod::Intersection => "intersection",
+            SetInstanceMethod::Difference => "difference",
+            SetInstanceMethod::SymmetricDifference => "symmetricDifference",
+            SetInstanceMethod::IsDisjointFrom => "isDisjointFrom",
+            SetInstanceMethod::IsSubsetOf => "isSubsetOf",
+            SetInstanceMethod::IsSupersetOf => "isSupersetOf",
+        }
+    }
+
+    fn execute_named_member_with_receiver(
+        &mut self,
+        callee: &Value,
+        target_value: &Value,
+        member: &str,
+        evaluated_args: &[Value],
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Value> {
+        self.execute_callable_value_with_this_and_env(
+            callee,
+            evaluated_args,
+            event,
+            Some(env),
+            Some(target_value.clone()),
+        )
+        .map_err(|err| match err {
+            Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                Error::ScriptRuntime(format!("'{}' is not a function", member))
+            }
+            other => other,
+        })
+    }
+
     pub(crate) fn eval_map_construct(
         &mut self,
         iterable: &Option<Box<Expr>>,
@@ -188,6 +241,61 @@ impl Harness {
             .iter()
             .map(|arg| self.eval_expr(arg, env, event_param, event))
             .collect::<Result<Vec<_>>>()?;
+        let member = Self::map_instance_method_name(method);
+
+        let supports_direct_dispatch = match target_value {
+            Value::Map(map) => {
+                let map_ref = map.borrow();
+                Self::object_get_entry(&map_ref.properties, member).is_none()
+                    && Self::object_get_entry(&map_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                        .is_none()
+            }
+            Value::WeakMap(weak_map) => {
+                let weak_map_ref = weak_map.borrow();
+                Self::object_get_entry(&weak_map_ref.properties, member).is_none()
+                    && Self::object_get_entry(
+                        &weak_map_ref.properties,
+                        INTERNAL_OBJECT_PROTOTYPE_KEY,
+                    )
+                    .is_none()
+            }
+            Value::Set(set) => {
+                let set_ref = set.borrow();
+                Self::object_get_entry(&set_ref.properties, member).is_none()
+                    && Self::object_get_entry(&set_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                        .is_none()
+            }
+            Value::WeakSet(weak_set) => {
+                let weak_set_ref = weak_set.borrow();
+                Self::object_get_entry(&weak_set_ref.properties, member).is_none()
+                    && Self::object_get_entry(
+                        &weak_set_ref.properties,
+                        INTERNAL_OBJECT_PROTOTYPE_KEY,
+                    )
+                    .is_none()
+            }
+            Value::FormData(_) => true,
+            Value::Object(entries) => {
+                let entries_ref = entries.borrow();
+                Self::is_cookie_store_object(&entries_ref) || Self::is_storage_object(&entries_ref)
+            }
+            _ => false,
+        };
+        if !supports_direct_dispatch {
+            let callee = self.object_property_from_value(target_value, member)?;
+            if !matches!(callee, Value::Undefined | Value::Null)
+                && !Self::is_builtin_placeholder_callable(&callee)
+            {
+                return self.execute_named_member_with_receiver(
+                    &callee,
+                    target_value,
+                    member,
+                    &evaluated_args,
+                    env,
+                    event,
+                );
+            }
+        }
 
         if let Value::Set(set) = target_value {
             let set = set.clone();
@@ -790,6 +898,41 @@ impl Harness {
             .iter()
             .map(|arg| self.eval_expr(arg, env, event_param, event))
             .collect::<Result<Vec<_>>>()?;
+        let member = Self::set_instance_method_name(method);
+
+        let supports_direct_dispatch = match target_value {
+            Value::Set(set) => {
+                let set_ref = set.borrow();
+                Self::object_get_entry(&set_ref.properties, member).is_none()
+                    && Self::object_get_entry(&set_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                        .is_none()
+            }
+            Value::WeakSet(weak_set) => {
+                let weak_set_ref = weak_set.borrow();
+                Self::object_get_entry(&weak_set_ref.properties, member).is_none()
+                    && Self::object_get_entry(
+                        &weak_set_ref.properties,
+                        INTERNAL_OBJECT_PROTOTYPE_KEY,
+                    )
+                    .is_none()
+            }
+            _ => false,
+        };
+        if !supports_direct_dispatch {
+            let callee = self.object_property_from_value(target_value, member)?;
+            if !matches!(callee, Value::Undefined | Value::Null)
+                && !Self::is_builtin_placeholder_callable(&callee)
+            {
+                return self.execute_named_member_with_receiver(
+                    &callee,
+                    target_value,
+                    member,
+                    &evaluated_args,
+                    env,
+                    event,
+                );
+            }
+        }
 
         if let Value::WeakSet(weak_set) = target_value {
             let weak_set = weak_set.clone();

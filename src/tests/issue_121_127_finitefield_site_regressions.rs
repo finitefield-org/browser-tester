@@ -1113,3 +1113,344 @@ fn worker_global_function_family_constructors_are_exposed_and_callable_work() ->
     )?;
     Ok(())
 }
+
+#[test]
+fn worker_intl_prototype_raw_getters_and_receiver_parity_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const display = new Intl.DisplayNames(['en'], { type: 'region' });
+            const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const of = display['of'];
+            const format = rtf['format'];
+            const resolved = collator['resolvedOptions'];
+            let bad = '';
+            try {
+              ({ alias: of }).alias('US');
+            } catch (e) {
+              bad = String(e);
+            }
+            postMessage([
+              String(self.Intl === Intl),
+              String(of === Intl.DisplayNames.prototype.of),
+              String(format === Intl.RelativeTimeFormat.prototype.format),
+              String(resolved === Intl.Collator.prototype.resolvedOptions),
+              display['of']('US'),
+              rtf['format'](-1, 'day'),
+              resolved.call(collator).caseFirst + ':' + resolved.call(collator).sensitivity,
+              bad
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|United States|yesterday|upper:base|Intl.DisplayNames method called on incompatible receiver",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_intl_bound_getter_accessor_identity_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const dtf = new Intl.DateTimeFormat('en-US', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              timeZone: 'UTC'
+            });
+            const nf = new Intl.NumberFormat('en-US');
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const dtfFormat1 = dtf.format;
+            const dtfFormat2 = dtf['format'];
+            const nfFormat1 = nf.format;
+            const nfFormat2 = nf['format'];
+            const compare1 = collator.compare;
+            const compare2 = collator['compare'];
+            let bad = '';
+            try {
+              ({ __proto__: Intl.NumberFormat.prototype }).format;
+            } catch (e) {
+              bad = String(e);
+            }
+            postMessage([
+              String(dtfFormat1 === dtfFormat2),
+              String(nfFormat1 === nfFormat2),
+              String(compare1 === compare2),
+              String(!Object.prototype.hasOwnProperty.call(dtf, 'format')),
+              String(!Object.prototype.hasOwnProperty.call(nf, 'format')),
+              String(!Object.prototype.hasOwnProperty.call(collator, 'compare')),
+              dtfFormat1(new Date(Date.UTC(2020, 11, 20, 3, 0, 0))),
+              nfFormat1(1234.5),
+              String(compare1('z', 'ä') < 0),
+              bad
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|true|true|12/20/2020|1,234.5|true|Intl.NumberFormat method requires an Intl.NumberFormat instance",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_intl_accessor_assignment_noop_and_enumeration_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const nf = new Intl.NumberFormat('en-US');
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const nativeFormat = nf.format;
+            const nativeCompare = collator.compare;
+            let nfBeforeForIn = '';
+            for (const key in nf) nfBeforeForIn += key;
+            let collatorBeforeForIn = '';
+            for (const key in collator) collatorBeforeForIn += key;
+
+            nf.format = (...args) => 'nf:' + args.length + ':' + args[0];
+            collator.compare = (...args) => 'cmp:' + args.length;
+
+            const formatAfterAssign = nf.format;
+            const compareAfterAssign = collator.compare;
+            const keysAfterOverride =
+              Object.keys(nf).join(',') + ':' + Object.keys(collator).join(',');
+            const spreadKeysAfterOverride =
+              Object.keys({ ...nf }).join(',') + ':' + Object.keys({ ...collator }).join(',');
+
+            delete nf.format;
+            delete collator.compare;
+
+            let nfAfterDeleteForIn = '';
+            for (const key in nf) nfAfterDeleteForIn += key;
+            let collatorAfterDeleteForIn = '';
+            for (const key in collator) collatorAfterDeleteForIn += key;
+
+            postMessage([
+              String(self.Intl === Intl),
+              String('format' in nf && 'compare' in collator),
+              String(nfBeforeForIn === '' && collatorBeforeForIn === ''),
+              String(formatAfterAssign === nativeFormat),
+              String(compareAfterAssign === nativeCompare),
+              keysAfterOverride,
+              spreadKeysAfterOverride,
+              String(!Object.prototype.hasOwnProperty.call(nf, 'format')),
+              String(!Object.prototype.hasOwnProperty.call(collator, 'compare')),
+              String(nf.format === nativeFormat),
+              String(collator.compare === nativeCompare),
+              String(nf['format'] === nf.format),
+              nf.format(1234.5),
+              String(collator.compare('z', 'ä') < 0),
+              String(nfAfterDeleteForIn === '' && collatorAfterDeleteForIn === ''),
+              JSON.stringify(nf) + ':' + JSON.stringify(collator)
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|true|:|:|true|true|true|true|true|1,234.5|true|true|{}:{}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_intl_descriptor_define_property_and_reflect_set_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const nf = new Intl.NumberFormat('en-US');
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const nfProtoA =
+              Object.getOwnPropertyDescriptor(self.Intl.NumberFormat.prototype, 'format');
+            const nfProtoB =
+              Object.getOwnPropertyDescriptor(Intl.NumberFormat.prototype, 'format');
+            const collatorProtoA =
+              Object.getOwnPropertyDescriptor(self.Intl.Collator.prototype, 'compare');
+            const collatorProtoB =
+              Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare');
+            const nfReflectBefore = Reflect.set(nf, 'format', () => 'bad');
+            const collatorReflectBefore = Reflect.set(collator, 'compare', () => 'bad');
+
+            Object.defineProperty(nf, 'format', {
+              value: (value) => 'wf:' + value,
+              enumerable: true
+            });
+            Object.defineProperty(collator, 'compare', {
+              value: (left, right) => 'wc:' + left + ':' + right,
+              enumerable: true
+            });
+
+            const shadowKeys =
+              Object.keys(nf).join(',') + ':' + Object.keys(collator).join(',');
+            const nfShadow = nf.format(12);
+            const collatorShadow = collator.compare('a', 'b');
+
+            delete nf.format;
+            delete collator.compare;
+
+            postMessage([
+              String(self.Intl === Intl),
+              String(nfProtoA.get === nfProtoB.get && collatorProtoA.get === collatorProtoB.get),
+              Object.keys(nfProtoA).join(',') + ':' + Object.keys(collatorProtoA).join(','),
+              String(nfReflectBefore === false && collatorReflectBefore === false),
+              shadowKeys,
+              nfShadow,
+              collatorShadow,
+              String(
+                Object.getOwnPropertyDescriptor(nf, 'format').writable === false &&
+                Object.getOwnPropertyDescriptor(collator, 'compare').writable === false
+              ),
+              nf.format(1234.5),
+              String(collator.compare('z', 'ä') === 'wc:z:ä')
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|get,set,enumerable,configurable:get,set,enumerable,configurable|true|format:compare|wf:12|wc:a:b|true|wf:1234.5|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_object_and_reflect_alias_surface_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const source = `
+          self.onmessage = () => {
+            const nf = new Intl.NumberFormat('en-US');
+            const symbol = Symbol('s');
+            const obj = { a: 1 };
+            obj[symbol] = 9;
+
+            const getDesc = self.Object.getOwnPropertyDescriptor;
+            const define = Object['defineProperty'];
+            const keys = self.Object.keys;
+            const entries = Object.entries;
+            const hasOwn = self.Object.hasOwn;
+            const getSymbols = Object.getOwnPropertySymbols;
+            const set = Reflect.set;
+
+            define(nf, 'format', { value: (value) => 'worker:' + value, enumerable: true });
+            define(obj, 'b', { value: 2, enumerable: true });
+            const reflectResult = set(obj, 'c', 3);
+            const formatDesc = getDesc(nf, 'format');
+            const symbolKeys = getSymbols(obj);
+
+            postMessage([
+              String(self.Object === Object),
+              String(self.Reflect === Reflect),
+              String(self.Object.getOwnPropertyDescriptor === Object.getOwnPropertyDescriptor),
+              String(self.Reflect.set === Reflect.set),
+              String(Object.getOwnPropertyDescriptor.name === 'getOwnPropertyDescriptor'),
+              String(Reflect.set.length === 3),
+              String(formatDesc.value(12) === 'worker:12'),
+              nf.format(12),
+              keys(obj).join(','),
+              entries(obj).map((pair) => pair.join('=')).join(','),
+              String(hasOwn(obj, 'b') && hasOwn(obj, 'c')),
+              String(symbolKeys.length === 1 && symbolKeys[0] === symbol),
+              String(reflectResult === true),
+              String(Function.prototype.toString.call(Reflect.set) === Reflect.set.toString())
+            ].join('|'));
+          };
+        `;
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const url = URL.createObjectURL(blob);
+        const worker = new Worker(url);
+        URL.revokeObjectURL(url);
+        worker.onmessage = (event) => {
+          document.getElementById('out').textContent = String(event.data || '');
+          worker.terminate();
+        };
+        worker.postMessage('run');
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.flush()?;
+    harness.assert_text(
+        "#out",
+        "true|true|true|true|true|true|true|worker:12|a,b,c|a=1,b=2,c=3|true|true|true|true",
+    )?;
+    Ok(())
+}

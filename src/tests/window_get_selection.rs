@@ -92,3 +92,49 @@ fn window_get_selection_property_is_read_only() -> Result<()> {
     h.assert_text("#result", "true:true:true")?;
     Ok(())
 }
+
+#[test]
+fn selection_tostring_bracket_call_and_raw_getter_parity_work() -> Result<()> {
+    let html = r#"
+        <p id='host'>Hello Brave New World</p>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const host = document.getElementById('host');
+            const text = host.firstChild;
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+
+            const range = document.createRange();
+            range.setStart(text, 6);
+            range.setEnd(text, 11);
+            selection.addRange(range);
+
+            const toStringFn = selection['toString'];
+            let bad = 'none';
+            try {
+              toStringFn.call({});
+            } catch (e) {
+              bad = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              selection.toString(),
+              selection['toString'](),
+              String(selection),
+              toStringFn.call(selection),
+              String(toStringFn.name === 'toString'),
+              String(toStringFn.length === 0),
+              String(Function.prototype.toString.call(toStringFn) === toStringFn.toString()),
+              String(bad.includes('Selection method called on incompatible receiver'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "Brave|Brave|Brave|Brave|true|true|true|true")?;
+    Ok(())
+}

@@ -351,15 +351,32 @@ impl Harness {
         event: &EventState,
     ) -> Result<Value> {
         let target = self.eval_expr(target, env, event_param, event)?;
-        let Value::Promise(promise) = target else {
-            return Err(Error::ScriptRuntime(
-                "Promise instance method target must be a Promise".into(),
-            ));
-        };
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             values.push(self.eval_expr(arg, env, event_param, event)?);
         }
+        let member = match method {
+            PromiseInstanceMethod::Then => "then",
+            PromiseInstanceMethod::Catch => "catch",
+            PromiseInstanceMethod::Finally => "finally",
+        };
+        let Value::Promise(promise) = target.clone() else {
+            let callee = self.object_property_from_value(&target, member)?;
+            return self
+                .execute_callable_value_with_this_and_env(
+                    &callee,
+                    &values,
+                    event,
+                    Some(env),
+                    Some(target),
+                )
+                .map_err(|err| match err {
+                    Error::ScriptRuntime(msg) if msg == "callback is not a function" => {
+                        Error::ScriptRuntime(format!("'{}' is not a function", member))
+                    }
+                    other => other,
+                });
+        };
         self.eval_promise_instance_method_from_values(&promise, method, &values)
     }
 

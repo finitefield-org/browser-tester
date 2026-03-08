@@ -22,10 +22,20 @@ pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
         };
 
         if method_name == "compare" {
+            let collator = parse_expr(base_src)?;
+            if !matches!(
+                &collator,
+                Expr::IntlFormatterConstruct {
+                    kind: IntlFormatterKind::Collator,
+                    ..
+                }
+            ) {
+                continue;
+            }
             cursor.skip_ws();
             if cursor.eof() {
                 return Ok(Some(Expr::IntlCollatorCompareGetter {
-                    collator: Box::new(parse_expr(base_src)?),
+                    collator: Box::new(collator),
                 }));
             }
             if cursor.peek() != Some(b'(') {
@@ -48,7 +58,7 @@ pub(crate) fn parse_intl_format_expr(src: &str) -> Result<Option<Expr>> {
                 ));
             }
             return Ok(Some(Expr::IntlCollatorCompare {
-                collator: Box::new(parse_expr(base_src)?),
+                collator: Box::new(collator),
                 left: Box::new(parse_expr(args[0].trim())?),
                 right: Box::new(parse_expr(args[1].trim())?),
             }));

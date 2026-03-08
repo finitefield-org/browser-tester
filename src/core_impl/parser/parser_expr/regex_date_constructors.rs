@@ -607,13 +607,18 @@ pub(crate) fn parse_regex_method_expr(src: &str) -> Result<Option<Expr>> {
     let args = split_top_level_by_char(&args_src, b',');
     let input = match method.as_str() {
         "test" => {
-            if args.len() != 1 || args[0].trim().is_empty() {
+            if args.len() != 1 {
                 return Err(Error::ScriptParse(format!(
-                    "RegExp.{} requires exactly one argument",
+                    "RegExp.{} requires zero or one argument",
                     method
                 )));
             }
-            Some(Box::new(parse_expr(args[0].trim())?))
+            let arg = args[0].trim();
+            if arg.is_empty() {
+                Some(Box::new(Expr::Undefined))
+            } else {
+                Some(Box::new(parse_expr(arg)?))
+            }
         }
         "exec" => {
             if args.len() != 1 {

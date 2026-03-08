@@ -971,6 +971,44 @@ fn weak_set_basic_methods_and_key_rules_work() -> Result<()> {
 }
 
 #[test]
+fn object_prototype_to_string_inherits_across_collections_and_host_tags_work() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas' width='10' height='10'></canvas>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const wm = new WeakMap();
+            const ws = new WeakSet();
+            const ctx = document.getElementById('canvas').getContext('2d');
+            const list = document.createElement('div').classList;
+            const toStringFn = Object.prototype.toString;
+            const valueOfFn = Object.prototype.valueOf;
+
+            document.getElementById('result').textContent = [
+              wm.toString(),
+              ws.toString(),
+              toStringFn.call(ctx),
+              toStringFn.call(list),
+              String(valueOfFn.call(ctx) === ctx),
+              String(valueOfFn.call(list) === list),
+              String(toStringFn.call(wm) === wm.toString()),
+              String(toStringFn.call(ws) === ws.toString())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "[object WeakMap]|[object WeakSet]|[object CanvasRenderingContext2D]|[object DOMTokenList]|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn weak_set_constructor_clone_and_error_cases_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -3715,6 +3753,736 @@ fn native_variant_backed_constructor_source_text_is_stable_across_paths_work() -
 }
 
 #[test]
+fn callable_string_coercion_uses_source_text_across_indirect_string_contexts_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          function plain() {}
+          const bound = plain.bind(null);
+
+          function describe(value) {
+            const expected = value.toString();
+            return [
+              String([value].join('') === expected),
+              String(''.concat(value) === expected),
+              String(String.raw({ raw: ['', ''] }, value) === expected),
+              String('x'.replace('x', () => value) === expected),
+              String('x'.replaceAll('x', () => value) === expected)
+            ].join(':');
+          }
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              describe(Map),
+              describe(URL),
+              describe(Event),
+              describe(Document.parseHTML),
+              describe(bound)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn callable_search_separator_and_padding_args_use_source_text_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const hostFetch = window['fetch'];
+            const leftText = hostFetch.toString();
+            const rightText = Event.toString();
+            const text = leftText + '|' + rightText;
+            const result = [
+              String(text.includes(hostFetch)),
+              String(text.startsWith(hostFetch)),
+              String(text.endsWith(Event)),
+              String(text.indexOf(hostFetch) === 0),
+              String(text.lastIndexOf(Event) === leftText.length + 1),
+              String(String.prototype.indexOf.call(text, hostFetch) === 0),
+              String(String.prototype.lastIndexOf.call(text, Event) === leftText.length + 1),
+              String(text.constructor.prototype.indexOf.call(text, hostFetch) === 0),
+              String(text.constructor.prototype.lastIndexOf.call(text, Event) === leftText.length + 1),
+              String(text.indexOf(hostFetch) === text.indexOf(hostFetch.toString())),
+              String(text.indexOf(hostFetch) === text.indexOf(String(hostFetch))),
+              String(text.lastIndexOf(Event) === text.lastIndexOf(Event.toString())),
+              String(text.split(hostFetch).join('~') === `~|${rightText}`),
+              String('x'.padStart(rightText.length + 1, Event) === rightText + 'x'),
+              String('x'.padEnd(leftText.length + 1, hostFetch) === 'x' + leftText),
+              String(String.prototype.padStart.call('x', rightText.length + 1, Event) === rightText + 'x'),
+              String(text.constructor.prototype.padEnd.call('x', leftText.length + 1, hostFetch) === 'x' + leftText),
+              String(String.prototype.repeat.call('ab', 2) === 'abab'),
+              String(String.prototype.includes.call(text, hostFetch)),
+              String(String.prototype.split.call(text, Event).length === 2)
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_generic_receiver_coercion_and_remaining_prototype_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const hostFetch = window['fetch'];
+            const callableText = hostFetch.toString();
+            const url = new URL('https://example.com/path?q=1');
+            const expectedMatches = Array.from(callableText.matchAll(/function|fetch/g))
+              .map((entry) => `${entry[0]}@${entry.index}`)
+              .join(',');
+
+            let symbolError = '';
+            try {
+              String.prototype.search.call(Symbol('id'), 'id');
+            } catch (err) {
+              symbolError = String(err && err.message ? err.message : err);
+            }
+
+            let nonGlobalMatchAll = '';
+            try {
+              String.prototype.matchAll.call('aba', /a/);
+            } catch (err) {
+              nonGlobalMatchAll = String(err && err.message ? err.message : err);
+            }
+
+            const result = [
+              String(String.prototype.includes.call(255, '5')),
+              String(String.prototype.startsWith.call(url, 'https://')),
+              String(String.prototype.search.call(hostFetch, 'fetch') === callableText.search('fetch')),
+              String(String.prototype.match.call(hostFetch, /fetch/)[0] === 'fetch'),
+              String(
+                String.prototype.replace.call(hostFetch, 'fetch', 'FETCH') ===
+                  callableText.replace('fetch', 'FETCH')
+              ),
+              String(
+                String.prototype.replaceAll.call(hostFetch, 'f', 'F') ===
+                  callableText.replaceAll('f', 'F')
+              ),
+              String(String.prototype.localeCompare.call(hostFetch, hostFetch) === 0),
+              String(
+                Array.from(String.prototype.matchAll.call(hostFetch, /function|fetch/g))
+                  .map((entry) => `${entry[0]}@${entry.index}`)
+                  .join(',') === expectedMatches
+              ),
+              String('x'.constructor.prototype.match.call(hostFetch, /fetch/)[0] === 'fetch'),
+              String(
+                Array.from('x'.constructor.prototype.matchAll.call(hostFetch, /function|fetch/g))
+                  .map((entry) => `${entry[0]}@${entry.index}`)
+                  .join(',') === expectedMatches
+              ),
+              String(String.prototype.trim.call(' x ') === 'x'),
+              String(String.prototype.toUpperCase.call('ab') === 'AB'),
+              String(String.prototype.toWellFormed.call('\uD800') === '\uFFFD'),
+              String(String.prototype.isWellFormed.call('\uD800') === false),
+              symbolError,
+              nonGlobalMatchAll
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|Cannot convert a Symbol value to a string|String.prototype.matchAll called with a non-global RegExp argument",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_argument_tostring_and_regexp_delegation_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            let includesSymbol = '';
+            try {
+              'x'.includes(Symbol('s'));
+            } catch (err) {
+              includesSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let concatSymbol = '';
+            try {
+              String.prototype.concat.call('', Symbol('s'));
+            } catch (err) {
+              concatSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let replacePatternSymbol = '';
+            try {
+              'x'.replace(Symbol('s'), 'y');
+            } catch (err) {
+              replacePatternSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let replaceReplacementSymbol = '';
+            try {
+              'x'.replace('x', Symbol('s'));
+            } catch (err) {
+              replaceReplacementSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let regexExecSymbol = '';
+            try {
+              RegExp.prototype.exec.call(/x/, Symbol('s'));
+            } catch (err) {
+              regexExecSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let regexFlagsSymbol = '';
+            try {
+              new RegExp('x', Symbol('g'));
+            } catch (err) {
+              regexFlagsSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let rawSymbol = '';
+            try {
+              String.raw({ raw: [Symbol('s')] });
+            } catch (err) {
+              rawSymbol = String(err && err.message ? err.message : err);
+            }
+
+            let searchOk = false;
+            const searchPattern = {
+              [Symbol.search](value) {
+                searchOk = this === searchPattern && value === 'abc';
+                return value.length;
+              }
+            };
+
+            let matchOk = false;
+            const matchPattern = {
+              [Symbol.match](value) {
+                matchOk = this === matchPattern && value === 'abc';
+                return ['ok', value];
+              }
+            };
+
+            let replaceOk = false;
+            const replacePattern = {
+              [Symbol.replace](value, replacement) {
+                replaceOk = this === replacePattern && value === 'abc' && replacement === 'z';
+                return value + ':' + replacement;
+              }
+            };
+
+            let replaceAllOk = false;
+            const replaceAllPattern = {
+              [Symbol.replace](value, replacement) {
+                replaceAllOk = this === replaceAllPattern && value === 'abc' && replacement === 'z';
+                return value + ':' + replacement + ':all';
+              }
+            };
+
+            let matchAllOk = false;
+            const matchAllPattern = {
+              [Symbol.matchAll](value) {
+                matchAllOk = this === matchAllPattern && value === 'abc';
+                return [['m', value.length]][Symbol.iterator]();
+              }
+            };
+
+            const regex = /a/g;
+            regex.lastIndex = 1;
+            const matchAllIndexes = Array.from('aba'.matchAll(regex))
+              .map((entry) => entry.index)
+              .join(',');
+
+            const result = [
+              includesSymbol,
+              concatSymbol,
+              replacePatternSymbol,
+              replaceReplacementSymbol,
+              regexExecSymbol,
+              regexFlagsSymbol,
+              rawSymbol,
+              String('abc'.search(searchPattern) === 3),
+              String(searchOk),
+              String('abc'.match(matchPattern).join('|') === 'ok|abc'),
+              String(matchOk),
+              String('abc'.replace(replacePattern, 'z') === 'abc:z'),
+              String(replaceOk),
+              String(String.prototype.replaceAll.call('abc', replaceAllPattern, 'z') === 'abc:z:all'),
+              String(replaceAllOk),
+              String(Array.from(String.prototype.matchAll.call('abc', matchAllPattern)).map((entry) => entry.join(':')).join(',') === 'm:3'),
+              String(matchAllOk),
+              String(matchAllIndexes === '2'),
+              String(regex.lastIndex === 1)
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|Cannot convert a Symbol value to a string|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_split_delegation_and_object_tostring_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const splitCalls = [];
+            const splitter = {
+              [Symbol.split](value, limit) {
+                splitCalls.push(`${value}:${String(limit)}:${arguments.length}`);
+                return ['via', value, String(limit)];
+              }
+            };
+
+            const regex = /a/;
+            regex[Symbol.match] = false;
+
+            const regexpLike = {
+              [Symbol.match]: true,
+              toString() {
+                return 'a';
+              }
+            };
+
+            const toStringFirst = {
+              toString() {
+                return 'bc';
+              },
+              valueOf() {
+                return 'ignored';
+              }
+            };
+
+            const valueOfFallback = {
+              toString() {
+                return {};
+              },
+              valueOf() {
+                return 'bc';
+              }
+            };
+
+            const badPrimitive = {
+              toString() {
+                return {};
+              },
+              valueOf() {
+                return {};
+              }
+            };
+
+            let regexpLikeError = '';
+            try {
+              'ba'.includes(regexpLike);
+            } catch (err) {
+              regexpLikeError = String(err && err.message ? err.message : err);
+            }
+
+            let primitiveError = '';
+            try {
+              'abc'.includes(badPrimitive);
+            } catch (err) {
+              primitiveError = String(err && err.message ? err.message : err);
+            }
+
+            const result = [
+              String('abc'.split(splitter).join('|') === 'via|abc|undefined'),
+              String(String.prototype.split.call('abc', splitter, 2).join('|') === 'via|abc|2'),
+              splitCalls.join(','),
+              String('ba'.includes(regex) === false),
+              String('ba'.startsWith(regex) === false),
+              String('ba'.endsWith(regex) === false),
+              regexpLikeError,
+              String('abc'.includes(toStringFirst)),
+              String('abc'.split(valueOfFallback).join('|') === 'a|'),
+              primitiveError,
+              String(String.prototype.includes.call({ toString() { return 'abc'; } }, 'b')),
+              String(String.prototype.replace.call('abc', valueOfFallback, '-') === 'a-')
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|abc:undefined:2,abc:2:2|true|true|true|First argument to String.prototype.includes must not be a regular expression|true|true|Cannot convert object to primitive value|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn regexp_symbol_method_property_paths_and_coercion_edge_cases_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const search = RegExp.prototype[Symbol.search];
+            const match = RegExp.prototype[Symbol.match];
+            const matchAll = RegExp.prototype[Symbol.matchAll];
+            const replace = RegExp.prototype[Symbol.replace];
+            const split = RegExp.prototype[Symbol.split];
+
+            const overridden = /a/g;
+            let overrideOk = false;
+            overridden[Symbol.replace] = function(value, replacement) {
+              overrideOk = this === overridden && value === 'aba' && replacement === 'x';
+              return `${value}:${replacement}:override`;
+            };
+
+            let incompatible = '';
+            try {
+              search.call({}, 'aba');
+            } catch (err) {
+              incompatible = String(err && err.message ? err.message : err);
+            }
+
+            let nonGlobalMatchAll = '';
+            try {
+              Array.from((/a/)[Symbol.matchAll]('aba'));
+            } catch (err) {
+              nonGlobalMatchAll = String(err && err.message ? err.message : err);
+            }
+
+            const regex = /a/g;
+            regex.lastIndex = 1;
+            const hostUrl = new URL('https://example.com/a');
+
+            const result = [
+              String(match.call(/a/g, 'aba').join('|') === 'a|a'),
+              String(Function.prototype.call.call(search, /a/, 'ba') === 1),
+              String(replace.call(/a/g, 'aba', 'x') === 'xbx'),
+              String(split.call(/,/, 'a,b,c', 2).join('|') === 'a|b'),
+              String(Array.from(matchAll.call(regex, 'aba')).map((entry) => `${entry[0]}:${entry.index}`).join(',') === 'a:2'),
+              String(regex.lastIndex === 1),
+              String(search.call(/example/, hostUrl) === 8),
+              String((/defined/)[Symbol.search]() === 2),
+              String(overridden[Symbol.replace]('aba', 'x') === 'aba:x:override'),
+              String('aba'.replace(overridden, 'x') === 'aba:x:override'),
+              String(overrideOk),
+              incompatible,
+              nonGlobalMatchAll
+            ].join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|RegExp method called on incompatible receiver|String.prototype.matchAll called with a non-global RegExp argument",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn regexp_instance_lookup_respects_prototype_fallback_and_own_overrides_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const omitted = /undefined/.test() && /undefined/.test(undefined);
+            const omittedViaCall = RegExp.prototype.test.call(/undefined/) &&
+              RegExp.prototype.test.call(/undefined/, undefined);
+
+            const re = /a/;
+            const other = /a/;
+
+            RegExp.prototype.exec = function(value) {
+              return ['proto-exec', value, String(this === other)];
+            };
+            RegExp.prototype.toString = function() {
+              return `proto-string:${this.source}`;
+            };
+            RegExp.prototype[Symbol.search] = function(value) {
+              return this === other && value === 'ba' ? 12 : -1;
+            };
+
+            re.exec = function(value) {
+              return ['own-exec', value, String(this === re)];
+            };
+            re.toString = function() {
+              return `own-string:${this.source}`;
+            };
+            re[Symbol.search] = function(value) {
+              return this === re && value === 'ba' ? 34 : -1;
+            };
+
+            const otherExec = other['exec'];
+            const otherSearch = other[Symbol.search];
+
+            document.getElementById('result').textContent = [
+              String(omitted),
+              String(omittedViaCall),
+              String(other.exec('ba').join('|') === 'proto-exec|ba|true'),
+              String(other['toString']() === 'proto-string:a'),
+              String(otherExec.call(other, 'ba').join('|') === 'proto-exec|ba|true'),
+              String(otherSearch.call(other, 'ba') === 12),
+              String('ba'.search(other) === 12),
+              String(re.exec('ba').join('|') === 'own-exec|ba|true'),
+              String(re.toString() === 'own-string:a'),
+              String(re[Symbol.search]('ba') === 34),
+              String('ba'.search(re) === 34)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn shared_member_call_search_dispatch_keeps_string_array_and_typed_array_behavior_work()
+-> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const text = 'bananas';
+            const values = ['ba', 'na', 'nas'];
+            const typed = new Uint8Array([1, 2, 1, 2]);
+            document.getElementById('result').textContent = [
+              String(text.includes('na')),
+              String(text.indexOf('na') === 2),
+              String(text.lastIndexOf('na') === 4),
+              String(values.includes('na')),
+              String(typed.indexOf(2) === 1),
+              String(typed.lastIndexOf(1) === 2)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|true|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn ambiguous_search_methods_parse_to_shared_member_calls_work() -> Result<()> {
+    let includes = test_support::parse_expr("text.includes('na')")?;
+    assert!(
+        matches!(
+            includes,
+            Expr::MemberCall {
+                member,
+                optional: false,
+                optional_call: false,
+                ..
+            } if member == "includes"
+        ),
+        "expected string includes on bare identifier to parse as shared member call",
+    );
+
+    let index_of = test_support::parse_expr("typed.indexOf(2)")?;
+    assert!(
+        matches!(
+            index_of,
+            Expr::MemberCall {
+                member,
+                optional: false,
+                optional_call: false,
+                ..
+            } if member == "indexOf"
+        ),
+        "expected indexOf overlap to parse as shared member call",
+    );
+
+    let last_index_of = test_support::parse_expr("typed.lastIndexOf(2)")?;
+    assert!(
+        matches!(
+            last_index_of,
+            Expr::MemberCall {
+                member,
+                optional: false,
+                optional_call: false,
+                ..
+            } if member == "lastIndexOf"
+        ),
+        "expected lastIndexOf overlap to parse as shared member call",
+    );
+
+    let literal_index_of = test_support::parse_expr("'bananas'.indexOf('na')")?;
+    assert!(
+        matches!(literal_index_of, Expr::StringIndexOf { .. }),
+        "expected literal string indexOf to keep dedicated string AST",
+    );
+    Ok(())
+}
+
+#[test]
+fn intl_accessor_member_get_and_call_parse_to_shared_paths_work() -> Result<()> {
+    let format_get = test_support::parse_expr("nf.format")?;
+    assert!(
+        matches!(
+            format_get,
+            Expr::ObjectGet { key, .. } if key == "format"
+        ),
+        "expected bare identifier intl format getter to parse as shared object get",
+    );
+
+    let format_call = test_support::parse_expr("nf.format(12)")?;
+    assert!(
+        matches!(
+            format_call,
+            Expr::MemberCall {
+                member,
+                optional: false,
+                optional_call: false,
+                ..
+            } if member == "format"
+        ),
+        "expected bare identifier intl format call to parse as shared member call",
+    );
+
+    let compare_get = test_support::parse_expr("collator.compare")?;
+    assert!(
+        matches!(
+            compare_get,
+            Expr::ObjectGet { key, .. } if key == "compare"
+        ),
+        "expected bare identifier intl compare getter to parse as shared object get",
+    );
+    Ok(())
+}
+
+#[test]
+fn intl_descriptor_and_reflect_static_calls_parse_work() -> Result<()> {
+    let get_descriptor = test_support::parse_expr("Object.getOwnPropertyDescriptor(nf, 'format')")?;
+    assert!(
+        matches!(get_descriptor, Expr::ObjectGetOwnPropertyDescriptor { .. }),
+        "expected Object.getOwnPropertyDescriptor to parse as dedicated AST",
+    );
+
+    let define_property = test_support::parse_expr(
+        "Object.defineProperty(nf, 'format', { value: override, enumerable: true })",
+    )?;
+    assert!(
+        matches!(define_property, Expr::ObjectDefineProperty { .. }),
+        "expected Object.defineProperty to parse as dedicated AST",
+    );
+
+    let reflect_set = test_support::parse_expr("Reflect.set(nf, 'format', override)")?;
+    assert!(
+        matches!(reflect_set, Expr::ReflectSet { receiver: None, .. }),
+        "expected Reflect.set to parse as dedicated AST",
+    );
+
+    let get_names = test_support::parse_expr("Object.getOwnPropertyNames(nf)")?;
+    assert!(
+        matches!(get_names, Expr::ObjectGetOwnPropertyNames(_)),
+        "expected Object.getOwnPropertyNames to parse as dedicated AST",
+    );
+
+    let own_keys = test_support::parse_expr("Reflect.ownKeys(nf)")?;
+    assert!(
+        matches!(own_keys, Expr::ReflectOwnKeys(_)),
+        "expected Reflect.ownKeys to parse as dedicated AST",
+    );
+    Ok(())
+}
+
+#[test]
+fn object_and_reflect_property_get_parse_falls_back_to_generic_paths_work() -> Result<()> {
+    let define_property = test_support::parse_expr("Object.defineProperty")?;
+    assert!(
+        matches!(define_property, Expr::ObjectGet { key, .. } if key == "defineProperty"),
+        "expected Object.defineProperty property get to avoid static-call AST",
+    );
+
+    let entries = test_support::parse_expr("Object.entries")?;
+    assert!(
+        matches!(entries, Expr::ObjectGet { key, .. } if key == "entries"),
+        "expected Object.entries property get to avoid static-call AST",
+    );
+
+    let reflect_set = test_support::parse_expr("Reflect.set")?;
+    assert!(
+        matches!(reflect_set, Expr::ObjectGet { key, .. } if key == "set"),
+        "expected Reflect.set property get to avoid static-call AST",
+    );
+
+    let get_names = test_support::parse_expr("Object.getOwnPropertyNames")?;
+    assert!(
+        matches!(get_names, Expr::ObjectGet { key, .. } if key == "getOwnPropertyNames"),
+        "expected Object.getOwnPropertyNames property get to avoid static-call AST",
+    );
+
+    let own_keys = test_support::parse_expr("Reflect.ownKeys")?;
+    assert!(
+        matches!(own_keys, Expr::ObjectGet { key, .. } if key == "ownKeys"),
+        "expected Reflect.ownKeys property get to avoid static-call AST",
+    );
+
+    let delete_callable_name = test_support::parse_expr("delete Object.keys.name")?;
+    assert!(
+        matches!(
+            delete_callable_name,
+            Expr::Delete(ref inner)
+                if matches!(
+                    inner.as_ref(),
+                    Expr::ObjectPathGet { target, path }
+                        if target == "Object"
+                            && path == &vec!["keys".to_string(), "name".to_string()]
+                )
+        ),
+        "expected delete Object.keys.name to keep the generic object-path AST, got {delete_callable_name:?}",
+    );
+    Ok(())
+}
+
+#[test]
 fn builtin_instanceof_and_object_get_prototype_of_parity_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -3798,5 +4566,86 @@ fn builtin_instanceof_and_object_get_prototype_of_parity_work() -> Result<()> {
         "#result",
         "map:true:true:true|set:true:true:true|params:true:true:true|url:true:true:true|buffer:true:true:true|blob:true:true:true|promise:true:true:true|regexp:true:true:true|typed:true:true:true:true",
     )?;
+    Ok(())
+}
+
+#[test]
+fn variant_backed_callable_prototype_mutation_keeps_inherited_reads_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const stringProto = { marker: 'string' };
+          const urlProto = { marker: 'url' };
+          const typedProto = { marker: 'typed' };
+          const originalStringProto = Object.getPrototypeOf(String);
+          const originalUrlProto = Object.getPrototypeOf(URL);
+          const originalTypedProto = Object.getPrototypeOf(Int8Array);
+
+          Object.setPrototypeOf(String, stringProto);
+          Object.setPrototypeOf(URL, urlProto);
+          Object.setPrototypeOf(Int8Array, typedProto);
+
+          const view = Int8Array.of(1, 2);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(String) === stringProto),
+            String(String.marker === 'string'),
+            String(String.fromCharCode(65, 66) === 'AB'),
+            String(Object.getPrototypeOf(URL) === urlProto),
+            String(URL.marker === 'url'),
+            String(typeof URL.canParse === 'function'),
+            String(Object.getPrototypeOf(Int8Array) === typedProto),
+            String(Int8Array.marker === 'typed'),
+            String(view.length === 2 && view[0] === 1 && view[1] === 2),
+            String(Object.setPrototypeOf(String, originalStringProto) === String),
+            String(Object.setPrototypeOf(URL, originalUrlProto) === URL),
+            String(Object.setPrototypeOf(Int8Array, originalTypedProto) === Int8Array),
+            String(Object.getPrototypeOf(String) === originalStringProto),
+            String(Object.getPrototypeOf(URL) === originalUrlProto),
+            String(Object.getPrototypeOf(Int8Array) === originalTypedProto)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn typed_array_explicit_prototype_override_controls_inherited_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const view = Int8Array.of(1, 2);
+          const proto = {
+            2: 9,
+            label: 'typed',
+            read() {
+              return this[2];
+            }
+          };
+
+          Object.setPrototypeOf(view, proto);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(view) === proto),
+            String(view[0] === 1 && view[1] === 2),
+            String(view[2] === 9),
+            view.label,
+            String(view.read() === 9),
+            String('2' in view),
+            String('read' in view),
+            String(typeof view.slice === 'undefined'),
+            String(view.length === 2)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|true|typed|true|true|true|true|true")?;
     Ok(())
 }

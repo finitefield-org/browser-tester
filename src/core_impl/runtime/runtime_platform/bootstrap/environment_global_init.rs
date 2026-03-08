@@ -247,9 +247,107 @@ impl Harness {
                 );
                 Self::object_set_entry(
                     &mut prototype,
+                    Self::object_non_enumerable_storage_key("constructor"),
+                    Value::Bool(true),
+                );
+                Self::object_set_entry(
+                    &mut prototype,
                     to_string_tag_key.clone(),
                     Value::String(tag_name.to_string()),
                 );
+                let receiver_builtin_methods: Option<(&str, &[&str])> = match constructor_name {
+                    "Collator" => Some(("intl_collator", &["resolvedOptions"])),
+                    "DateTimeFormat" => Some((
+                        "intl_date_time_format",
+                        &[
+                            "formatToParts",
+                            "formatRange",
+                            "formatRangeToParts",
+                            "resolvedOptions",
+                        ],
+                    )),
+                    "DisplayNames" => Some(("intl_display_names", &["of", "resolvedOptions"])),
+                    "DurationFormat" => Some((
+                        "intl_duration_format",
+                        &["formatToParts", "resolvedOptions"],
+                    )),
+                    "ListFormat" => {
+                        Some(("intl_list_format", &["formatToParts", "resolvedOptions"]))
+                    }
+                    "Locale" => Some((
+                        "intl_locale",
+                        &[
+                            "getCalendars",
+                            "getCollations",
+                            "getHourCycles",
+                            "getNumberingSystems",
+                            "getTextInfo",
+                            "getTimeZones",
+                            "getWeekInfo",
+                            "maximize",
+                            "minimize",
+                            "toString",
+                        ],
+                    )),
+                    "NumberFormat" => Some((
+                        "intl_number_format",
+                        &[
+                            "formatToParts",
+                            "formatRange",
+                            "formatRangeToParts",
+                            "resolvedOptions",
+                        ],
+                    )),
+                    "PluralRules" => Some((
+                        "intl_plural_rules",
+                        &["select", "selectRange", "resolvedOptions"],
+                    )),
+                    "RelativeTimeFormat" => Some((
+                        "intl_relative_time_format",
+                        &["format", "formatToParts", "resolvedOptions"],
+                    )),
+                    "Segmenter" => Some(("intl_segmenter", &["segment", "resolvedOptions"])),
+                    _ => None,
+                };
+                if let Some((family, methods)) = receiver_builtin_methods {
+                    for method in methods {
+                        Self::object_set_entry(
+                            &mut prototype,
+                            (*method).to_string(),
+                            Self::new_receiver_builtin_callable(family, method),
+                        );
+                        Self::object_set_entry(
+                            &mut prototype,
+                            Self::object_non_enumerable_storage_key(method),
+                            Value::Bool(true),
+                        );
+                    }
+                }
+                let bound_getter_accessors: Vec<(&str, Value)> = match constructor_name {
+                    "Collator" => {
+                        vec![("compare", Self::new_intl_collator_compare_getter_callable())]
+                    }
+                    "DateTimeFormat" => {
+                        vec![("format", Self::new_intl_date_time_format_getter_callable())]
+                    }
+                    "NumberFormat" => {
+                        vec![("format", Self::new_intl_number_format_getter_callable())]
+                    }
+                    _ => Vec::new(),
+                };
+                for (property, getter) in bound_getter_accessors {
+                    Self::object_set_entry(&mut prototype, property.to_string(), Value::Undefined);
+                    Self::object_set_entry(
+                        &mut prototype,
+                        Self::object_getter_storage_key(property),
+                        getter,
+                    );
+                    Self::object_set_entry(
+                        &mut prototype,
+                        Self::object_non_enumerable_storage_key(property),
+                        Value::Bool(true),
+                    );
+                }
             }
         }
         let string_constructor = Value::StringConstructor;
@@ -258,6 +356,7 @@ impl Harness {
         let bigint_constructor = Self::new_bigint_constructor_callable();
         let symbol_constructor = Value::SymbolConstructor;
         let object_constructor = Self::new_object_constructor_value();
+        let reflect_object = self.new_reflect_object_value();
         let event_target_constructor = Self::new_event_target_constructor_value();
         let event_constructor = Self::new_event_constructor_value();
         let custom_event_constructor = Self::new_custom_event_constructor_value();
@@ -324,6 +423,7 @@ impl Harness {
             &bigint_constructor,
             &symbol_constructor,
             &object_constructor,
+            &reflect_object,
         );
         let audio_constructor = Self::new_audio_constructor_value();
         let element_constructor = Self::new_builtin_placeholder_function();
@@ -399,6 +499,7 @@ impl Harness {
             &bigint_constructor,
             &symbol_constructor,
             &object_constructor,
+            &reflect_object,
             &event_target_constructor,
             &event_constructor,
             &custom_event_constructor,
@@ -492,6 +593,11 @@ impl Harness {
                 &mut window_entries,
                 "Object".to_string(),
                 object_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Reflect".to_string(),
+                reflect_object.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,

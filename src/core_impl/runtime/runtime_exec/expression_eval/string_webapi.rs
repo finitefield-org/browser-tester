@@ -11,7 +11,8 @@ impl Harness {
         let result = (|| -> Result<Value> {
             match expr {
                 Expr::StringCharAt { value, index } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let len = value.chars().count();
                     let index = index
                         .as_ref()
@@ -30,7 +31,8 @@ impl Harness {
                     }
                 }
                 Expr::StringCharCodeAt { value, index } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let chars = value.chars().collect::<Vec<_>>();
                     let len = chars.len();
                     let index = index
@@ -50,7 +52,8 @@ impl Harness {
                     }
                 }
                 Expr::StringCodePointAt { value, index } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let chars = value.chars().collect::<Vec<_>>();
                     let len = chars.len();
                     let index = index
@@ -88,7 +91,8 @@ impl Harness {
                     }
                 }
                 Expr::StringAt { value, index } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let len = value.chars().count() as i64;
                     let index = index
                         .as_ref()
@@ -108,15 +112,17 @@ impl Harness {
                     }
                 }
                 Expr::StringConcat { value, args } => {
-                    let mut out = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let base = self.eval_expr(value, env, event_param, event)?;
+                    let mut out = self.coerce_string_method_receiver(&base)?;
                     for arg in args {
                         let value = self.eval_expr(arg, env, event_param, event)?;
-                        out.push_str(&value.as_string());
+                        out.push_str(&self.coerce_to_string_for_tostring(&value)?);
                     }
                     Ok(Value::String(out))
                 }
                 Expr::StringTrim { value, mode } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let value = match mode {
                         StringTrimMode::Both => value.trim().to_string(),
                         StringTrimMode::Start => value.trim_start().to_string(),
@@ -125,11 +131,13 @@ impl Harness {
                     Ok(Value::String(value))
                 }
                 Expr::StringToUpperCase(value) => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     Ok(Value::String(value.to_uppercase()))
                 }
                 Expr::StringToLowerCase(value) => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     Ok(Value::String(value.to_lowercase()))
                 }
                 Expr::StringIncludes {
@@ -179,14 +187,14 @@ impl Harness {
                         }
                         return Ok(Value::Bool(false));
                     }
-                    let value = value.as_string();
-                    if matches!(search, Value::RegExp(_)) {
+                    let value = self.coerce_string_method_receiver(&value)?;
+                    if self.is_regexp_like_for_string_prefix_search(&search)? {
                         return Err(Error::ScriptRuntime(
                         "First argument to String.prototype.includes must not be a regular expression"
                             .into(),
                     ));
                     }
-                    let search = search.as_string();
+                    let search = self.coerce_to_string_for_tostring(&search)?;
                     let len = value.chars().count() as i64;
                     let mut position = position
                         .as_ref()
@@ -206,15 +214,16 @@ impl Harness {
                     search,
                     position,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let search = self.eval_expr(search, env, event_param, event)?;
-                    if matches!(search, Value::RegExp(_)) {
+                    if self.is_regexp_like_for_string_prefix_search(&search)? {
                         return Err(Error::ScriptRuntime(
                         "First argument to String.prototype.startsWith must not be a regular expression"
                             .into(),
                     ));
                     }
-                    let search = search.as_string();
+                    let search = self.coerce_to_string_for_tostring(&search)?;
                     let len = value.chars().count() as i64;
                     let mut position = position
                         .as_ref()
@@ -234,15 +243,16 @@ impl Harness {
                     search,
                     length,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let search = self.eval_expr(search, env, event_param, event)?;
-                    if matches!(search, Value::RegExp(_)) {
+                    if self.is_regexp_like_for_string_prefix_search(&search)? {
                         return Err(Error::ScriptRuntime(
                         "First argument to String.prototype.endsWith must not be a regular expression"
                             .into(),
                     ));
                     }
-                    let search = search.as_string();
+                    let search = self.coerce_to_string_for_tostring(&search)?;
                     let len = value.chars().count();
                     let end = length
                         .as_ref()
@@ -355,7 +365,7 @@ impl Harness {
                             ))
                         }
                         other => {
-                            let text = other.as_string();
+                            let text = self.coerce_string_method_receiver(&other)?;
                             let len = text.chars().count();
                             let start = start
                                 .as_ref()
@@ -377,7 +387,8 @@ impl Harness {
                     }
                 }
                 Expr::StringSubstring { value, start, end } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let len = value.chars().count();
                     let start = start
                         .as_ref()
@@ -419,95 +430,148 @@ impl Harness {
                             return Ok(value);
                         }
                     }
-                    self.eval_string_match(&target_value.as_string(), pattern)
+                    let text = self.coerce_string_method_receiver(&target_value)?;
+                    if let Some(result) = self.call_string_symbol_method(
+                        &pattern,
+                        SymbolStaticProperty::Match,
+                        &text,
+                        &[],
+                        event,
+                    )? {
+                        return Ok(result);
+                    }
+                    self.eval_string_match(&text, pattern)
                 }
                 Expr::StringSplit {
                     value,
                     separator,
                     limit,
                 } => {
-                    let text = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let text = self.eval_expr(value, env, event_param, event)?;
+                    let text = self.coerce_string_method_receiver(&text)?;
                     let separator = separator
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?;
-                    let limit = limit
+                    let limit_value = limit
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
-                        .map(|value| Self::value_to_i64(&value));
+                        .unwrap_or(Value::Undefined);
+                    if let Some(separator_value) = &separator {
+                        if !matches!(separator_value, Value::Undefined) {
+                            if let Some(result) = self.call_string_symbol_method(
+                                separator_value,
+                                SymbolStaticProperty::Split,
+                                &text,
+                                std::slice::from_ref(&limit_value),
+                                event,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
+                    }
+                    let limit = if matches!(limit_value, Value::Undefined) {
+                        None
+                    } else {
+                        Some(Self::value_to_i64(&limit_value))
+                    };
                     let parts = match separator {
                         None => Self::split_string(&text, None, limit),
                         Some(Value::RegExp(regex)) => {
                             Self::split_string_with_regex(&text, &regex, limit)?
                         }
-                        Some(value) => Self::split_string(&text, Some(value.as_string()), limit),
+                        Some(value) => Self::split_string(
+                            &text,
+                            Some(self.coerce_to_string_for_tostring(&value)?),
+                            limit,
+                        ),
                     };
                     Ok(Self::new_array_value(parts))
                 }
                 Expr::StringReplace { value, from, to } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let to = self.eval_expr(to, env, event_param, event)?;
                     let from = self.eval_expr(from, env, event_param, event)?;
+                    if let Some(result) = self.call_string_symbol_method(
+                        &from,
+                        SymbolStaticProperty::Replace,
+                        &value,
+                        std::slice::from_ref(&to),
+                        event,
+                    )? {
+                        return Ok(result);
+                    }
                     let replaced = if self.is_callable_value(&to) {
                         match from {
                             Value::RegExp(regex) => {
                                 self.replace_string_with_regex_callback(&value, &regex, &to, event)?
                             }
                             other => {
-                                let from = other.as_string();
+                                let from = self.coerce_to_string_for_tostring(&other)?;
                                 self.replace_string_with_string_callback(
                                     &value, &from, &to, false, event,
                                 )?
                             }
                         }
                     } else {
-                        let replacement = to.as_string();
+                        let replacement = self.coerce_to_string_for_tostring(&to)?;
                         match from {
                             Value::RegExp(regex) => {
                                 Self::replace_string_with_regex(&value, &regex, &replacement)?
                             }
-                            other => value.replacen(&other.as_string(), &replacement, 1),
+                            other => value.replacen(
+                                &self.coerce_to_string_for_tostring(&other)?,
+                                &replacement,
+                                1,
+                            ),
                         }
                     };
                     Ok(Value::String(replaced))
                 }
                 Expr::StringReplaceAll { value, from, to } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let to = self.eval_expr(to, env, event_param, event)?;
                     let from = self.eval_expr(from, env, event_param, event)?;
+                    if let Value::RegExp(regex) = &from {
+                        if !regex.borrow().global {
+                            return Err(Error::ScriptRuntime(
+                                "String.prototype.replaceAll called with a non-global RegExp argument"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    if let Some(result) = self.call_string_symbol_method(
+                        &from,
+                        SymbolStaticProperty::Replace,
+                        &value,
+                        std::slice::from_ref(&to),
+                        event,
+                    )? {
+                        return Ok(result);
+                    }
                     let replaced = if self.is_callable_value(&to) {
                         match from {
                             Value::RegExp(regex) => {
-                                if !regex.borrow().global {
-                                    return Err(Error::ScriptRuntime(
-                                    "String.prototype.replaceAll called with a non-global RegExp argument"
-                                        .into(),
-                                ));
-                                }
                                 self.replace_string_with_regex_callback(&value, &regex, &to, event)?
                             }
                             other => {
-                                let from = other.as_string();
+                                let from = self.coerce_to_string_for_tostring(&other)?;
                                 self.replace_string_with_string_callback(
                                     &value, &from, &to, true, event,
                                 )?
                             }
                         }
                     } else {
-                        let replacement = to.as_string();
+                        let replacement = self.coerce_to_string_for_tostring(&to)?;
                         match from {
                             Value::RegExp(regex) => {
-                                if !regex.borrow().global {
-                                    return Err(Error::ScriptRuntime(
-                                    "String.prototype.replaceAll called with a non-global RegExp argument"
-                                        .into(),
-                                ));
-                                }
                                 Self::replace_string_with_regex(&value, &regex, &replacement)?
                             }
                             other => {
-                                let from = other.as_string();
+                                let from = self.coerce_to_string_for_tostring(&other)?;
                                 if from.is_empty() {
                                     let mut out = String::new();
                                     for ch in value.chars() {
@@ -529,8 +593,10 @@ impl Harness {
                     search,
                     position,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
+                    let search = self.eval_expr(search, env, event_param, event)?;
+                    let search = self.coerce_to_string_for_tostring(&search)?;
                     let len = value.chars().count() as i64;
                     let mut position = position
                         .as_ref()
@@ -553,8 +619,10 @@ impl Harness {
                     search,
                     position,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let search = self.eval_expr(search, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
+                    let search = self.eval_expr(search, env, event_param, event)?;
+                    let search = self.coerce_to_string_for_tostring(&search)?;
                     let len = value.chars().count() as i64;
                     let position = position
                         .as_ref()
@@ -574,12 +642,22 @@ impl Harness {
                     Ok(Value::Number(found.map(|idx| idx as i64).unwrap_or(-1)))
                 }
                 Expr::StringSearch { value, pattern } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let pattern = self.eval_expr(pattern, env, event_param, event)?;
+                    if let Some(result) = self.call_string_symbol_method(
+                        &pattern,
+                        SymbolStaticProperty::Search,
+                        &value,
+                        &[],
+                        event,
+                    )? {
+                        return Ok(result);
+                    }
                     let regex = if let Value::RegExp(regex) = pattern {
                         regex
                     } else {
-                        let built = Self::new_regex_from_values(&pattern, None)?;
+                        let built = self.new_regex_from_values(&pattern, None)?;
                         let Value::RegExp(regex) = built else {
                             unreachable!("RegExp constructor must return a RegExp");
                         };
@@ -593,7 +671,8 @@ impl Harness {
                     Ok(Value::Number(idx.unwrap_or(-1)))
                 }
                 Expr::StringRepeat { value, count } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let count = self.eval_expr(count, env, event_param, event)?;
                     let count = Self::value_to_i64(&count);
                     if count < 0 {
@@ -613,7 +692,8 @@ impl Harness {
                     target_length,
                     pad,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let target_length = self.eval_expr(target_length, env, event_param, event)?;
                     let target_length = Self::value_to_i64(&target_length).max(0) as usize;
                     let current_len = value.chars().count();
@@ -624,7 +704,8 @@ impl Harness {
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
-                        .map(|value| value.as_string())
+                        .map(|value| self.coerce_to_string_for_tostring(&value))
+                        .transpose()?
                         .unwrap_or_else(|| " ".to_string());
                     if pad.is_empty() {
                         return Ok(Value::String(value));
@@ -642,7 +723,8 @@ impl Harness {
                     target_length,
                     pad,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     let target_length = self.eval_expr(target_length, env, event_param, event)?;
                     let target_length = Self::value_to_i64(&target_length).max(0) as usize;
                     let current_len = value.chars().count();
@@ -653,7 +735,8 @@ impl Harness {
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
-                        .map(|value| value.as_string())
+                        .map(|value| self.coerce_to_string_for_tostring(&value))
+                        .transpose()?
                         .unwrap_or_else(|| " ".to_string());
                     if pad.is_empty() {
                         return Ok(Value::String(value));
@@ -672,10 +755,10 @@ impl Harness {
                     locales,
                     options,
                 } => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
-                    let compare = self
-                        .eval_expr(compare, env, event_param, event)?
-                        .as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
+                    let compare = self.eval_expr(compare, env, event_param, event)?;
+                    let compare = self.coerce_to_string_for_tostring(&compare)?;
                     let locale = locales
                         .as_ref()
                         .map(|locales| self.eval_expr(locales, env, event_param, event))
@@ -711,22 +794,51 @@ impl Harness {
                     )))
                 }
                 Expr::StringIsWellFormed(value) => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     Ok(Value::Bool(string_is_well_formed_utf16(&value)))
                 }
                 Expr::StringToWellFormed(value) => {
-                    let value = self.eval_expr(value, env, event_param, event)?.as_string();
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let value = self.coerce_string_method_receiver(&value)?;
                     Ok(Value::String(string_to_well_formed_utf16(&value)))
                 }
                 Expr::StringValueOf(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     match value {
                         Value::Object(entries) => {
-                            let entries_ref = entries.borrow();
-                            if let Some(value) =
-                                Self::string_wrapper_value_from_object(&entries_ref)
-                            {
+                            let (
+                                string_value,
+                                boolean_value,
+                                number_value,
+                                bigint_value,
+                                symbol_id,
+                            ) = {
+                                let entries_ref = entries.borrow();
+                                (
+                                    Self::string_wrapper_value_from_object(&entries_ref),
+                                    Self::boolean_wrapper_value_from_object(&entries_ref),
+                                    Self::number_wrapper_value_from_object(&entries_ref),
+                                    Self::bigint_wrapper_value_from_object(&entries_ref),
+                                    Self::symbol_wrapper_id_from_object(&entries_ref),
+                                )
+                            };
+                            if let Some(value) = string_value {
                                 Ok(Value::String(value))
+                            } else if let Some(value) = boolean_value {
+                                Ok(Value::Bool(value))
+                            } else if let Some(value) = number_value {
+                                Ok(value)
+                            } else if let Some(value) = bigint_value {
+                                Ok(Value::BigInt(value))
+                            } else if let Some(symbol_id) = symbol_id {
+                                Ok(self
+                                    .symbol_runtime
+                                    .symbols_by_id
+                                    .get(&symbol_id)
+                                    .cloned()
+                                    .map(Value::Symbol)
+                                    .unwrap_or(Value::Object(entries.clone())))
                             } else {
                                 Ok(Value::Object(entries.clone()))
                             }
@@ -758,7 +870,9 @@ impl Harness {
                             return Ok(Value::String(serialize_url_search_params_pairs(&pairs)));
                         }
                     }
-                    Ok(Value::String(value.as_string()))
+                    Ok(Value::String(
+                        self.coerce_to_string_for_string_constructor(&value)?,
+                    ))
                 }
                 Expr::StructuredClone { value, options } => {
                     let value = self.eval_expr(value, env, event_param, event)?;

@@ -173,6 +173,91 @@ fn selection_direction_extend_collapse_and_set_position_work() -> Result<()> {
 }
 
 #[test]
+fn document_range_and_selection_placeholder_methods_support_extracted_and_inherited_calls_work(
+) -> Result<()> {
+    let html = r#"
+        <div id='host'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const host = document.getElementById('host');
+            const text = document.createTextNode('ABCDE');
+            host.replaceChildren(text);
+
+            const getById = document.getElementById;
+            const range = document.createRange();
+            const setStart = range.setStart;
+            const setEnd = range.setEnd;
+            setStart.call(range, text, 1);
+            setEnd.call(range, text, 4);
+
+            const selection = document.getSelection();
+            selection.removeAllRanges();
+            const addRange = selection.addRange;
+            addRange.call(selection, range);
+            const getRangeAt = selection.getRangeAt;
+            const selectedRange = getRangeAt.call(selection, 0);
+
+            const documentReceiverError = (() => {
+              const inheritor = Object.create(document);
+              try {
+                inheritor.getElementById('host');
+                return false;
+              } catch (e) {
+                return String(e).includes('Document method called on incompatible receiver');
+              }
+            })();
+
+            const rangeReceiverError = (() => {
+              const inheritor = Object.create(range);
+              try {
+                inheritor.setStart(text, 0);
+                return false;
+              } catch (e) {
+                return String(e).includes('Range method called on incompatible receiver');
+              }
+            })();
+
+            const selectionReceiverError = (() => {
+              const inheritor = Object.create(selection);
+              try {
+                inheritor.addRange(range);
+                return false;
+              } catch (e) {
+                return String(e).includes('Selection method called on incompatible receiver');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              getById.name,
+              getById.length,
+              getById.call(document, 'host').id,
+              setStart.name,
+              setStart.length,
+              selectedRange.startOffset,
+              selectedRange.endOffset,
+              addRange.name,
+              addRange.length,
+              selection.toString(),
+              documentReceiverError,
+              rangeReceiverError,
+              selectionReceiverError
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "getElementById|1|host|setStart|2|1|4|addRange|1|BCD|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn selection_select_all_children_delete_from_document_and_empty() -> Result<()> {
     let html = r#"
         <div id='box'><span>ab</span><span>cd</span></div>

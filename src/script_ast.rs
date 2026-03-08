@@ -164,8 +164,13 @@ pub(crate) enum Expr {
         args: Vec<Expr>,
     },
     StringConstructor,
+    BooleanConstruct {
+        value: Option<Box<Expr>>,
+        called_with_new: bool,
+    },
     NumberConstruct {
         value: Option<Box<Expr>>,
+        called_with_new: bool,
     },
     NumberConst(NumberConst),
     NumberMethod {
@@ -356,6 +361,16 @@ pub(crate) enum Expr {
         target: String,
         path: Vec<String>,
     },
+    ObjectGetOwnPropertyDescriptor {
+        object: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ObjectDefineProperty {
+        object: Box<Expr>,
+        key: Box<Expr>,
+        descriptor: Box<Expr>,
+    },
+    ObjectGetOwnPropertyNames(Box<Expr>),
     ObjectGetOwnPropertySymbols(Box<Expr>),
     ObjectKeys(Box<Expr>),
     ObjectValues(Box<Expr>),
@@ -366,6 +381,13 @@ pub(crate) enum Expr {
     },
     ObjectGetPrototypeOf(Box<Expr>),
     ObjectFreeze(Box<Expr>),
+    ReflectSet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+        receiver: Option<Box<Expr>>,
+    },
+    ReflectOwnKeys(Box<Expr>),
     ObjectHasOwnProperty {
         target: String,
         key: Box<Expr>,
@@ -427,11 +449,6 @@ pub(crate) enum Expr {
     ArrayEvery {
         target: String,
         callback: ScriptHandler,
-    },
-    ArrayIncludes {
-        target: String,
-        search: Box<Expr>,
-        from_index: Option<Box<Expr>>,
     },
     ArraySlice {
         target: String,

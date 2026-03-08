@@ -389,7 +389,11 @@ impl Harness {
                     ],
                     event,
                 )?;
-                return Ok(format!("{}{}", replacement.as_string(), value));
+                return Ok(format!(
+                    "{}{}",
+                    self.coerce_to_string_for_tostring(&replacement)?,
+                    value
+                ));
             }
 
             let mut out = String::new();
@@ -405,7 +409,7 @@ impl Harness {
                     ],
                     event,
                 )?;
-                out.push_str(&replacement.as_string());
+                out.push_str(&self.coerce_to_string_for_tostring(&replacement)?);
                 out.push(*ch);
                 utf16_offset += ch.len_utf16();
             }
@@ -418,7 +422,7 @@ impl Harness {
                 ],
                 event,
             )?;
-            out.push_str(&replacement.as_string());
+            out.push_str(&self.coerce_to_string_for_tostring(&replacement)?);
             return Ok(out);
         }
 
@@ -436,7 +440,7 @@ impl Harness {
                     ],
                     event,
                 )?;
-                out.push_str(&replacement.as_string());
+                out.push_str(&self.coerce_to_string_for_tostring(&replacement)?);
                 out.push_str(&value[end..]);
                 Ok(out)
             } else {
@@ -458,7 +462,7 @@ impl Harness {
                     ],
                     event,
                 )?;
-                out.push_str(&replacement.as_string());
+                out.push_str(&self.coerce_to_string_for_tostring(&replacement)?);
                 cursor = end;
             }
             out.push_str(&value[cursor..]);
@@ -504,7 +508,7 @@ impl Harness {
             args.push(Self::new_object_value(entries));
         }
         let replacement = self.execute_callback_value(callback, &args, event)?;
-        Ok(replacement.as_string())
+        Ok(self.coerce_to_string_for_tostring(&replacement)?)
     }
 
     fn expand_regex_replacement_from_exec(

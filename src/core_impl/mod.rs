@@ -17,6 +17,15 @@ pub(super) fn parse_for_each_callback(src: &str) -> Result<(String, Option<Strin
     parser::api::parse_for_each_callback(src)
 }
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
+        super::parser::api::parse_expr(src)
+    }
+}
+
 pub(super) fn unescape_string(src: &str) -> String {
     html::unescape_string(src)
 }

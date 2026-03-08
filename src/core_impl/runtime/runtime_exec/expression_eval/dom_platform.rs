@@ -1941,7 +1941,15 @@ impl Harness {
             | "createAttribute"
             | "createDocumentFragment"
             | "createRange"
-            | "append" => Some(Self::new_builtin_placeholder_function()),
+            | "append" => {
+                if let Some(value) = Self::object_get_entry(entries, key)
+                    && !Self::is_builtin_placeholder_value(&value)
+                {
+                    Some(value)
+                } else {
+                    Self::parsed_document_receiver_builtin_method(key)
+                }
+            }
             _ => None,
         })
     }
@@ -1958,7 +1966,15 @@ impl Harness {
             return None;
         }
         match key {
-            "parseFromString" => Some(Self::new_builtin_placeholder_function()),
+            "parseFromString" => {
+                if let Some(value) = Self::object_get_entry(entries, key)
+                    && !Self::is_builtin_placeholder_value(&value)
+                {
+                    Some(value)
+                } else {
+                    Self::dom_parser_receiver_builtin_method(key)
+                }
+            }
             _ => None,
         }
     }
@@ -2015,7 +2031,15 @@ impl Harness {
         }
         Ok(match key {
             "currentNode" => Some(self.tree_walker_current_node_from_entries(entries)),
-            "nextNode" => Some(Self::new_builtin_placeholder_function()),
+            "nextNode" => {
+                if let Some(value) = Self::object_get_entry(entries, key)
+                    && !Self::is_builtin_placeholder_value(&value)
+                {
+                    Some(value)
+                } else {
+                    Self::tree_walker_receiver_builtin_method(key)
+                }
+            }
             "root" => {
                 let traversal =
                     Self::object_get_entry(entries, INTERNAL_TREE_WALKER_TRAVERSAL_NODES_KEY);

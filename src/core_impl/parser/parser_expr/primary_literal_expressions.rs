@@ -83,6 +83,10 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
         return Ok(expr);
     }
 
+    if let Some(expr) = parse_boolean_expr(src)? {
+        return Ok(expr);
+    }
+
     if let Some(expr) = parse_math_expr(src)? {
         return Ok(expr);
     }
@@ -215,6 +219,10 @@ pub(crate) fn parse_primary(src: &str) -> Result<Expr> {
     }
 
     if let Some(expr) = parse_object_static_expr(src)? {
+        return Ok(expr);
+    }
+
+    if let Some(expr) = parse_reflect_static_expr(src)? {
         return Ok(expr);
     }
 

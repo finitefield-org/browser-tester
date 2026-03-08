@@ -67,28 +67,6 @@ impl Harness {
         }
     }
 
-    pub(crate) fn resolve_array_buffer_from_env(
-        &self,
-        env: &HashMap<String, Value>,
-        target: &str,
-    ) -> Result<Rc<RefCell<ArrayBufferValue>>> {
-        match self
-            .resolve_listener_capture_pending_value(target)
-            .flatten()
-            .or_else(|| env.get(target).cloned())
-        {
-            Some(Value::ArrayBuffer(buffer)) => Ok(buffer),
-            Some(_) => Err(Error::ScriptRuntime(format!(
-                "variable '{}' is not an ArrayBuffer",
-                target
-            ))),
-            None => Err(Error::ScriptRuntime(format!(
-                "unknown variable: {}",
-                target
-            ))),
-        }
-    }
-
     pub(crate) fn resolve_typed_array_from_env(
         &self,
         env: &HashMap<String, Value>,

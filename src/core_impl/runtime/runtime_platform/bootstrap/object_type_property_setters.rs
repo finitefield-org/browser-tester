@@ -174,6 +174,7 @@ impl Harness {
             | "Headers"
             | "URL"
             | "Object"
+            | "Reflect"
             | "Element"
             | "Audio"
             | "DataTransfer"
@@ -1381,6 +1382,7 @@ impl Harness {
         env: &mut HashMap<String, Value>,
         event: &EventState,
     ) -> Result<()> {
+        let reflect_set = target == "Reflect.set target";
         match container {
             Value::Object(object) => {
                 let key = self.property_key_to_storage_key(key_value);
@@ -1498,11 +1500,17 @@ impl Harness {
                     self.set_canvas_2d_context_property(object, &key, value)?;
                     return Ok(());
                 }
-                let (own_setter, own_getter, own_data, mut prototype) = {
+                if Self::string_wrapper_builtin_has_own_property(&object.borrow(), &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                let (own_setter, own_has_accessor, own_data, mut prototype) = {
                     let entries = object.borrow();
                     (
                         Self::object_setter_from_entries(&entries, &key),
-                        Self::object_getter_from_entries(&entries, &key).is_some(),
+                        Self::has_object_accessor_property(&entries, &key),
                         Self::object_get_entry(&entries, &key).is_some(),
                         Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
                     )
@@ -1520,16 +1528,34 @@ impl Harness {
                     )?;
                     return Ok(());
                 }
-                if own_getter {
+                if own_has_accessor {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if own_data && !Self::is_writable_object_key(&*object.borrow(), &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if !own_data
+                    && Self::callable_kind_from_value(&container).is_some()
+                    && Self::is_callable_own_surface_key(&key)
+                {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
                     return Ok(());
                 }
                 if !own_data {
                     while let Some(Value::Object(proto)) = prototype {
-                        let (setter, getter, next) = {
+                        let (setter, has_accessor, next) = {
                             let proto_ref = proto.borrow();
                             (
                                 Self::object_setter_from_entries(&proto_ref, &key),
-                                Self::object_getter_from_entries(&proto_ref, &key).is_some(),
+                                Self::has_object_accessor_property(&proto_ref, &key),
                                 Self::object_get_entry(&proto_ref, INTERNAL_OBJECT_PROTOTYPE_KEY),
                             )
                         };
@@ -1548,7 +1574,10 @@ impl Harness {
                             )?;
                             return Ok(());
                         }
-                        if getter {
+                        if has_accessor {
+                            if reflect_set {
+                                return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                            }
                             return Ok(());
                         }
                         prototype = next;
@@ -1559,7 +1588,7 @@ impl Harness {
             }
             Value::Function(function) => {
                 let key = self.property_key_to_storage_key(key_value);
-                let (own_setter, own_getter, own_data) = {
+                let (own_setter, own_getter, own_data, writable) = {
                     if let Some(entries) = self
                         .script_runtime
                         .function_public_properties
@@ -1567,11 +1596,12 @@ impl Harness {
                     {
                         (
                             Self::object_setter_from_entries(entries, &key),
-                            Self::object_getter_from_entries(entries, &key).is_some(),
+                            Self::has_object_accessor_property(entries, &key),
                             Self::object_get_entry(entries, &key).is_some(),
+                            Self::is_writable_object_key(entries, &key),
                         )
                     } else {
-                        (None, false, false)
+                        (None, false, false, true)
                     }
                 };
                 if let Some(setter) = own_setter {
@@ -1588,6 +1618,21 @@ impl Harness {
                     return Ok(());
                 }
                 if own_getter {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if own_data && !writable {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if !own_data && Self::is_callable_own_surface_key(&key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
                     return Ok(());
                 }
                 if !own_data {
@@ -1602,7 +1647,7 @@ impl Harness {
                                 {
                                     (
                                         Self::object_setter_from_entries(entries, &key),
-                                        Self::object_getter_from_entries(entries, &key).is_some(),
+                                        Self::has_object_accessor_property(entries, &key),
                                         proto_function.class_super_constructor.clone(),
                                     )
                                 } else {
@@ -1624,6 +1669,11 @@ impl Harness {
                                     return Ok(());
                                 }
                                 if getter {
+                                    if reflect_set {
+                                        return Err(Error::ScriptRuntime(
+                                            "Reflect.set failed".into(),
+                                        ));
+                                    }
                                     return Ok(());
                                 }
                                 prototype = next;
@@ -1633,8 +1683,7 @@ impl Harness {
                                     let proto_ref = proto_object.borrow();
                                     (
                                         Self::object_setter_from_entries(&proto_ref, &key),
-                                        Self::object_getter_from_entries(&proto_ref, &key)
-                                            .is_some(),
+                                        Self::has_object_accessor_property(&proto_ref, &key),
                                         Self::object_get_entry(
                                             &proto_ref,
                                             INTERNAL_OBJECT_PROTOTYPE_KEY,
@@ -1657,6 +1706,11 @@ impl Harness {
                                     return Ok(());
                                 }
                                 if getter {
+                                    if reflect_set {
+                                        return Err(Error::ScriptRuntime(
+                                            "Reflect.set failed".into(),
+                                        ));
+                                    }
                                     return Ok(());
                                 }
                                 prototype = next;
@@ -1670,7 +1724,11 @@ impl Harness {
                     .function_public_properties
                     .entry(function.function_id)
                     .or_default();
-                Self::object_set_entry(entries, key, value);
+                if Self::is_function_builtin_prototype_key(function, &key) {
+                    Self::set_function_builtin_prototype_property(entries, value, true);
+                } else {
+                    Self::object_set_entry(entries, key, value);
+                }
                 Ok(())
             }
             Value::UrlConstructor => {
@@ -1680,6 +1738,15 @@ impl Harness {
             }
             Value::Array(array_values) => {
                 if let Some(index) = self.value_as_index(key_value) {
+                    if !Self::is_writable_object_key(
+                        &array_values.borrow().properties,
+                        &index.to_string(),
+                    ) {
+                        if reflect_set {
+                            return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                        }
+                        return Ok(());
+                    }
                     let value_for_sync = value.clone();
                     {
                         let mut elements = array_values.borrow_mut();
@@ -1699,6 +1766,12 @@ impl Harness {
                 }
                 let key = self.property_key_to_storage_key(key_value);
                 if key == "length" {
+                    if !Self::is_writable_object_key(&array_values.borrow().properties, &key) {
+                        if reflect_set {
+                            return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                        }
+                        return Ok(());
+                    }
                     let mut values = array_values.borrow_mut();
                     let next = Self::value_to_i64(&value);
                     let next = if next <= 0 { 0usize } else { next as usize };
@@ -1720,31 +1793,100 @@ impl Harness {
             }
             Value::Map(map) => {
                 let key = self.property_key_to_storage_key(key_value);
+                let has_own_surface = {
+                    let map_ref = map.borrow();
+                    Self::object_get_entry(&map_ref.properties, &key).is_some()
+                        || Self::has_object_accessor_property(&map_ref.properties, &key)
+                };
+                if key == "size" && !has_own_surface {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if !Self::is_writable_object_key(&map.borrow().properties, &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
                 Self::object_set_entry(&mut map.borrow_mut().properties, key, value);
                 Ok(())
             }
             Value::WeakMap(weak_map) => {
                 let key = self.property_key_to_storage_key(key_value);
+                if !Self::is_writable_object_key(&weak_map.borrow().properties, &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
                 Self::object_set_entry(&mut weak_map.borrow_mut().properties, key, value);
                 Ok(())
             }
             Value::Set(set) => {
                 let key = self.property_key_to_storage_key(key_value);
+                let has_own_surface = {
+                    let set_ref = set.borrow();
+                    Self::object_get_entry(&set_ref.properties, &key).is_some()
+                        || Self::has_object_accessor_property(&set_ref.properties, &key)
+                };
+                if key == "size" && !has_own_surface {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if !Self::is_writable_object_key(&set.borrow().properties, &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
                 Self::object_set_entry(&mut set.borrow_mut().properties, key, value);
                 Ok(())
             }
             Value::WeakSet(weak_set) => {
                 let key = self.property_key_to_storage_key(key_value);
+                if !Self::is_writable_object_key(&weak_set.borrow().properties, &key) {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
                 Self::object_set_entry(&mut weak_set.borrow_mut().properties, key, value);
                 Ok(())
             }
             Value::RegExp(regex) => {
                 let key = self.property_key_to_storage_key(key_value);
                 if key == "lastIndex" {
+                    if !Self::is_writable_object_key(&regex.borrow().properties, &key) {
+                        if reflect_set {
+                            return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                        }
+                        return Ok(());
+                    }
                     let mut regex = regex.borrow_mut();
                     let next = Self::value_to_i64(&value);
                     regex.last_index = if next <= 0 { 0 } else { next as usize };
                 } else {
+                    let has_own_surface = {
+                        let regex_ref = regex.borrow();
+                        Self::object_get_entry(&regex_ref.properties, &key).is_some()
+                            || Self::has_object_accessor_property(&regex_ref.properties, &key)
+                    };
+                    if Self::is_regexp_builtin_own_key(&key) && !has_own_surface {
+                        if reflect_set {
+                            return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                        }
+                        return Ok(());
+                    }
+                    if !Self::is_writable_object_key(&regex.borrow().properties, &key) {
+                        if reflect_set {
+                            return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                        }
+                        return Ok(());
+                    }
                     Self::object_set_entry(&mut regex.borrow_mut().properties, key, value);
                 }
                 Ok(())
@@ -1779,7 +1921,7 @@ impl Harness {
                         let entries = object.borrow();
                         (
                             Self::object_setter_from_entries(&entries, &key),
-                            Self::object_getter_from_entries(&entries, &key).is_some(),
+                            Self::has_object_accessor_property(&entries, &key),
                             Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
                         )
                     };
@@ -1812,7 +1954,7 @@ impl Harness {
                         {
                             (
                                 Self::object_setter_from_entries(entries, &key),
-                                Self::object_getter_from_entries(entries, &key).is_some(),
+                                Self::has_object_accessor_property(entries, &key),
                                 function.class_super_constructor.clone(),
                             )
                         } else {

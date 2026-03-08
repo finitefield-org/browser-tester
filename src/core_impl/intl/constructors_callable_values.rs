@@ -308,6 +308,26 @@ impl Harness {
             .unwrap_or_else(Self::new_builtin_placeholder_function)
     }
 
+    pub(crate) fn new_intl_instance_value(
+        &self,
+        constructor_name: &str,
+        mut entries: Vec<(String, Value)>,
+    ) -> Value {
+        let constructor = self.intl_constructor_value(constructor_name);
+        entries.push(("constructor".to_string(), constructor.clone()));
+        if let Value::Function(constructor_fn) = &constructor {
+            entries.push((
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Object(constructor_fn.prototype_object.clone()),
+            ));
+        }
+        let value = Self::new_object_value(entries);
+        if let Value::Object(object) = &value {
+            Self::mark_property_non_enumerable(object, "constructor");
+        }
+        value
+    }
+
     pub(crate) fn intl_collator_options_from_value(
         &self,
         options: Option<&Value>,
@@ -393,26 +413,25 @@ impl Harness {
             case_first.clone(),
             sensitivity.clone(),
         );
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::Collator.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_CASE_FIRST_KEY.to_string(),
-                Value::String(case_first),
-            ),
-            (
-                INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
-                Value::String(sensitivity),
-            ),
-            ("compare".to_string(), compare),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("Collator"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "Collator",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::Collator.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_CASE_FIRST_KEY.to_string(),
+                    Value::String(case_first),
+                ),
+                (
+                    INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
+                    Value::String(sensitivity),
+                ),
+                (INTERNAL_INTL_BOUND_COMPARE_KEY.to_string(), compare),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_date_time_format_callable(
@@ -443,22 +462,69 @@ impl Harness {
         options: IntlDateTimeOptions,
     ) -> Value {
         let format = self.new_intl_date_time_format_callable(locale.clone(), options.clone());
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::DateTimeFormat.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_date_time_options_to_value(&options),
-            ),
-            ("format".to_string(), format),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("DateTimeFormat"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "DateTimeFormat",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::DateTimeFormat.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_date_time_options_to_value(&options),
+                ),
+                (INTERNAL_INTL_BOUND_FORMAT_KEY.to_string(), format),
+            ],
+        )
+    }
+
+    pub(crate) fn intl_bound_compare_callable_from_receiver(
+        &mut self,
+        receiver: &Value,
+    ) -> Result<Value> {
+        let (locale, case_first, sensitivity) = self.resolve_intl_collator_options(receiver)?;
+        let Value::Object(entries) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "Intl.Collator.compare requires an Intl.Collator instance".into(),
+            ));
+        };
+        if let Some(value) =
+            Self::object_get_entry(&entries.borrow(), INTERNAL_INTL_BOUND_COMPARE_KEY)
+        {
+            return Ok(value);
+        }
+        let compare = self.new_intl_collator_compare_callable(locale, case_first, sensitivity);
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            INTERNAL_INTL_BOUND_COMPARE_KEY.to_string(),
+            compare.clone(),
+        );
+        Ok(compare)
+    }
+
+    pub(crate) fn intl_bound_date_time_format_callable_from_receiver(
+        &mut self,
+        receiver: &Value,
+    ) -> Result<Value> {
+        let (locale, options) = self.resolve_intl_date_time_options(receiver)?;
+        let Value::Object(entries) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "Intl.DateTimeFormat method requires an Intl.DateTimeFormat instance".into(),
+            ));
+        };
+        if let Some(value) =
+            Self::object_get_entry(&entries.borrow(), INTERNAL_INTL_BOUND_FORMAT_KEY)
+        {
+            return Ok(value);
+        }
+        let format = self.new_intl_date_time_format_callable(locale, options);
+        Self::object_set_entry(
+            &mut entries.borrow_mut(),
+            INTERNAL_INTL_BOUND_FORMAT_KEY.to_string(),
+            format.clone(),
+        );
+        Ok(format)
     }
 
     pub(crate) fn new_intl_display_names_value(
@@ -466,21 +532,20 @@ impl Harness {
         locale: String,
         options: IntlDisplayNamesOptions,
     ) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::DisplayNames.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_display_names_options_to_value(&options),
-            ),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("DisplayNames"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "DisplayNames",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::DisplayNames.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_display_names_options_to_value(&options),
+                ),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_duration_format_callable(
@@ -511,22 +576,21 @@ impl Harness {
         options: IntlDurationOptions,
     ) -> Value {
         let format = self.new_intl_duration_format_callable(locale.clone(), options.clone());
-        Self::new_object_value(vec![
-            (
-                INTERNAL_INTL_KIND_KEY.to_string(),
-                Value::String(IntlFormatterKind::DurationFormat.storage_name().to_string()),
-            ),
-            (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
-            (
-                INTERNAL_INTL_OPTIONS_KEY.to_string(),
-                Self::intl_duration_options_to_value(&options),
-            ),
-            ("format".to_string(), format),
-            (
-                "constructor".to_string(),
-                self.intl_constructor_value("DurationFormat"),
-            ),
-        ])
+        self.new_intl_instance_value(
+            "DurationFormat",
+            vec![
+                (
+                    INTERNAL_INTL_KIND_KEY.to_string(),
+                    Value::String(IntlFormatterKind::DurationFormat.storage_name().to_string()),
+                ),
+                (INTERNAL_INTL_LOCALE_KEY.to_string(), Value::String(locale)),
+                (
+                    INTERNAL_INTL_OPTIONS_KEY.to_string(),
+                    Self::intl_duration_options_to_value(&options),
+                ),
+                ("format".to_string(), format),
+            ],
+        )
     }
 
     pub(crate) fn new_intl_list_format_callable(

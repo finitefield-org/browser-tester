@@ -7,6 +7,9 @@ impl Harness {
                 Err(Error::ScriptRuntime("value is not an object".into()))
             }
             Value::Object(entries) => {
+                if Self::string_wrapper_builtin_has_own_property(&entries.borrow(), key) {
+                    return Ok(false);
+                }
                 let owner = {
                     let entries_ref = entries.borrow();
                     if !Self::is_symbol_storage_key(key)
@@ -20,11 +23,25 @@ impl Harness {
                 if let Some(owner) = owner {
                     self.dom.dataset_delete(owner, key)?;
                 }
-                Self::delete_object_property_entries(&mut entries.borrow_mut(), key);
+                if !Self::is_configurable_object_key(&*entries.borrow(), key) {
+                    return Ok(false);
+                }
+                let delete_builtin_surface = Self::is_callable_own_surface_key(key);
+                let mut entries = entries.borrow_mut();
+                Self::delete_object_property_entries(&mut entries, key);
+                if delete_builtin_surface {
+                    Self::mark_builtin_object_property_deleted(&mut entries, key);
+                }
                 Ok(true)
             }
             Value::Array(array) => {
+                if key == "length" {
+                    return Ok(false);
+                }
                 if let Ok(index) = key.parse::<usize>() {
+                    if !Self::is_configurable_object_key(&array.borrow().properties, key) {
+                        return Ok(false);
+                    }
                     let has_index = {
                         let mut values = array.borrow_mut();
                         let has_index = index < values.len();
@@ -38,27 +55,97 @@ impl Harness {
                     }
                     return Ok(true);
                 }
+                if !Self::is_configurable_object_key(&array.borrow().properties, key) {
+                    return Ok(false);
+                }
                 Self::delete_object_property_entries(&mut array.borrow_mut().properties, key);
                 Ok(true)
             }
             Value::Map(map) => {
-                Self::delete_object_property_entries(&mut map.borrow_mut().properties, key);
+                if !Self::is_configurable_object_key(&map.borrow().properties, key) {
+                    return Ok(false);
+                }
+                let delete_builtin_surface = key == "size";
+                let mut map = map.borrow_mut();
+                Self::delete_object_property_entries(&mut map.properties, key);
+                if delete_builtin_surface {
+                    Self::mark_builtin_object_property_deleted(&mut map.properties, key);
+                }
                 Ok(true)
             }
             Value::WeakMap(weak_map) => {
+                if !Self::is_configurable_object_key(&weak_map.borrow().properties, key) {
+                    return Ok(false);
+                }
                 Self::delete_object_property_entries(&mut weak_map.borrow_mut().properties, key);
                 Ok(true)
             }
             Value::Set(set) => {
-                Self::delete_object_property_entries(&mut set.borrow_mut().properties, key);
+                if !Self::is_configurable_object_key(&set.borrow().properties, key) {
+                    return Ok(false);
+                }
+                let delete_builtin_surface = key == "size";
+                let mut set = set.borrow_mut();
+                Self::delete_object_property_entries(&mut set.properties, key);
+                if delete_builtin_surface {
+                    Self::mark_builtin_object_property_deleted(&mut set.properties, key);
+                }
                 Ok(true)
             }
             Value::WeakSet(weak_set) => {
+                if !Self::is_configurable_object_key(&weak_set.borrow().properties, key) {
+                    return Ok(false);
+                }
                 Self::delete_object_property_entries(&mut weak_set.borrow_mut().properties, key);
                 Ok(true)
             }
             Value::RegExp(regex) => {
-                Self::delete_object_property_entries(&mut regex.borrow_mut().properties, key);
+                if key == "lastIndex" {
+                    return Ok(false);
+                }
+                let has_own_surface = {
+                    let regex_ref = regex.borrow();
+                    Self::object_get_entry(&regex_ref.properties, key).is_some()
+                        || Self::has_object_accessor_property(&regex_ref.properties, key)
+                };
+                if !has_own_surface {
+                    return Ok(true);
+                }
+                if !Self::is_configurable_object_key(&regex.borrow().properties, key) {
+                    return Ok(false);
+                }
+                let mut regex = regex.borrow_mut();
+                Self::delete_object_property_entries(&mut regex.properties, key);
+                Ok(true)
+            }
+            Value::Function(function) => {
+                let delete_builtin_surface = Self::is_callable_own_surface_key(key);
+                if Self::is_function_builtin_prototype_key(function, key) {
+                    return Ok(false);
+                }
+                if let Some(entries) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get_mut(&function.function_id)
+                {
+                    if !Self::is_configurable_object_key(entries, key) {
+                        return Ok(false);
+                    }
+                    Self::delete_object_property_entries(entries, key);
+                    if delete_builtin_surface {
+                        Self::mark_builtin_object_property_deleted(entries, key);
+                    }
+                    return Ok(true);
+                }
+                if delete_builtin_surface {
+                    let entries = self
+                        .script_runtime
+                        .function_public_properties
+                        .entry(function.function_id)
+                        .or_default();
+                    Self::mark_builtin_object_property_deleted(entries, key);
+                    return Ok(true);
+                }
                 Ok(true)
             }
             Value::Node(node) => {
@@ -278,6 +365,18 @@ impl Harness {
                     let index_value = self.eval_expr(index, env, event_param, event)?;
                     let key = self.property_key_to_storage_key(&index_value);
                     let deleted = self.delete_property_from_value(&value, &key)?;
+                    Ok(Value::Bool(deleted))
+                }
+                Expr::ArrayLength(target) => {
+                    if target == "super" {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot delete super property".into(),
+                        ));
+                    }
+                    let value = env.get(target).cloned().ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unknown variable: {}", target))
+                    })?;
+                    let deleted = self.delete_property_from_value(&value, "length")?;
                     Ok(Value::Bool(deleted))
                 }
                 Expr::ObjectPathGet { target, path } => {

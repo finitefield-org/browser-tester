@@ -48,6 +48,7 @@ impl Harness {
             buffer,
             byte_offset: 0,
             fixed_length: Some(bytes.len()),
+            properties: ObjectValue::default(),
         })))
     }
 
@@ -370,6 +371,60 @@ impl Harness {
                     .collect::<Vec<_>>()
                     .join(&separator);
                 Ok(Some(Value::String(joined)))
+            }
+            "indexOf" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray indexOf methods require one or two arguments".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let snapshot = self.typed_array_snapshot(array)?;
+                let len = snapshot.len() as i64;
+                let from = args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                let mut from = if from < 0 { (len + from).max(0) } else { from };
+                if from > len {
+                    from = len;
+                }
+                for (index, value) in snapshot.iter().enumerate().skip(from as usize) {
+                    if self.strict_equal(value, &args[0]) {
+                        return Ok(Some(Value::Number(index as i64)));
+                    }
+                }
+                Ok(Some(Value::Number(-1)))
+            }
+            "lastIndexOf" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray indexOf methods require one or two arguments".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let snapshot = self.typed_array_snapshot(array)?;
+                let len = snapshot.len() as i64;
+                let from = args.get(1).map(Self::value_to_i64).unwrap_or(len - 1);
+                let from = if from < 0 {
+                    (len + from).max(-1)
+                } else {
+                    from.min(len - 1)
+                };
+                if from < 0 {
+                    return Ok(Some(Value::Number(-1)));
+                }
+                for index in (0..=from as usize).rev() {
+                    if self.strict_equal(&snapshot[index], &args[0]) {
+                        return Ok(Some(Value::Number(index as i64)));
+                    }
+                }
+                Ok(Some(Value::Number(-1)))
             }
             "slice" => {
                 if args.len() > 2 {

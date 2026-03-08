@@ -1,6 +1,2134 @@
 use super::*;
+use std::collections::HashSet;
+
+enum NormalizedOwnPropertyDescriptor {
+    Data {
+        value: Value,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    },
+    Accessor {
+        get: Value,
+        set: Value,
+        enumerable: bool,
+        configurable: bool,
+    },
+}
 
 impl Harness {
+    fn own_property_integer_key(key: &str) -> Option<u64> {
+        if key.is_empty() || !key.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let value = key.parse::<u64>().ok()?;
+        (value.to_string() == key).then_some(value)
+    }
+
+    fn own_data_property_descriptor_with_attrs(
+        value: Value,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Value {
+        Self::new_object_value(vec![
+            ("value".to_string(), value),
+            ("writable".to_string(), Value::Bool(writable)),
+            ("enumerable".to_string(), Value::Bool(enumerable)),
+            ("configurable".to_string(), Value::Bool(configurable)),
+        ])
+    }
+
+    fn own_property_descriptor_object_from_entries(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> Option<Value> {
+        let getter = Self::object_getter_from_entries(entries, key);
+        let setter = Self::object_setter_from_entries(entries, key);
+        let has_getter = Self::has_object_getter_property(entries, key);
+        let has_setter = Self::has_object_setter_property(entries, key);
+        let data = Self::object_get_entry(entries, key);
+        if !has_getter && !has_setter && data.is_none() {
+            return None;
+        }
+
+        let mut descriptor = Vec::new();
+        if has_getter || has_setter {
+            descriptor.push(("get".to_string(), getter.unwrap_or(Value::Undefined)));
+            descriptor.push(("set".to_string(), setter.unwrap_or(Value::Undefined)));
+        } else {
+            descriptor.push(("value".to_string(), data.unwrap_or(Value::Undefined)));
+            descriptor.push((
+                "writable".to_string(),
+                Value::Bool(Self::is_writable_object_key(entries, key)),
+            ));
+        }
+        descriptor.push((
+            "enumerable".to_string(),
+            Value::Bool(Self::is_enumerable_object_key(entries, key)),
+        ));
+        descriptor.push((
+            "configurable".to_string(),
+            Value::Bool(Self::is_configurable_object_key(entries, key)),
+        ));
+        Some(Self::new_object_value(descriptor))
+    }
+
+    fn descriptor_is_object_like_value(value: &Value) -> bool {
+        !matches!(
+            value,
+            Value::String(_)
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::Float(_)
+                | Value::BigInt(_)
+                | Value::Symbol(_)
+                | Value::Null
+                | Value::Undefined
+        )
+    }
+
+    fn descriptor_has_property(&mut self, descriptor: &Value, key: &str) -> Result<bool> {
+        if !Self::descriptor_is_object_like_value(descriptor) {
+            return Ok(false);
+        }
+        match self.object_has_own_value(descriptor, key) {
+            Ok(value) => {
+                if value.truthy() {
+                    return Ok(true);
+                }
+            }
+            Err(_) => {
+                return Ok(!matches!(
+                    self.object_property_from_value(descriptor, key)?,
+                    Value::Undefined
+                ));
+            }
+        }
+
+        let mut prototype = self.value_internal_prototype_value(descriptor);
+        while let Some(Value::Object(object)) = prototype {
+            let proto_value = Value::Object(object.clone());
+            if self.object_has_own_value(&proto_value, key)?.truthy() {
+                return Ok(true);
+            }
+            prototype = {
+                let object_ref = object.borrow();
+                Self::object_get_entry(&*object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            };
+        }
+        Ok(false)
+    }
+
+    fn descriptor_value_field(&mut self, descriptor: &Value, key: &str) -> Result<Option<Value>> {
+        if !self.descriptor_has_property(descriptor, key)? {
+            return Ok(None);
+        }
+        Ok(Some(self.object_property_from_value(descriptor, key)?))
+    }
+
+    fn descriptor_bool_field(&mut self, descriptor: &Value, key: &str) -> Result<Option<bool>> {
+        Ok(self
+            .descriptor_value_field(descriptor, key)?
+            .map(|value| value.truthy()))
+    }
+
+    fn descriptor_is_accessor_descriptor(&mut self, descriptor: &Value) -> Result<bool> {
+        Ok(self.descriptor_has_property(descriptor, "get")?
+            || self.descriptor_has_property(descriptor, "set")?)
+    }
+
+    fn redefine_property_error(key: &str) -> Error {
+        Error::ScriptRuntime(format!("Cannot redefine property: {key}"))
+    }
+
+    fn accessor_property_key_from_storage_key(key: &str) -> Option<&str> {
+        key.strip_prefix(INTERNAL_OBJECT_GETTER_KEY_PREFIX)
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_SETTER_KEY_PREFIX))
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_UNDEFINED_GETTER_KEY_PREFIX))
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_UNDEFINED_SETTER_KEY_PREFIX))
+    }
+
+    fn normalize_property_descriptor(
+        &mut self,
+        current_descriptor: Option<&Value>,
+        key: &str,
+        descriptor: &Value,
+    ) -> Result<NormalizedOwnPropertyDescriptor> {
+        let enumerable = self.descriptor_bool_field(descriptor, "enumerable")?;
+        let configurable = self.descriptor_bool_field(descriptor, "configurable")?;
+        let value = self.descriptor_value_field(descriptor, "value")?;
+        let writable = self.descriptor_bool_field(descriptor, "writable")?;
+        let get = self.descriptor_value_field(descriptor, "get")?;
+        let set = self.descriptor_value_field(descriptor, "set")?;
+
+        let requested_accessor = get.is_some() || set.is_some();
+        let requested_data = value.is_some() || writable.is_some();
+        if requested_accessor && requested_data {
+            return Err(Error::ScriptRuntime(
+                "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"
+                    .into(),
+            ));
+        }
+
+        if let Some(getter) = get.as_ref() {
+            if !matches!(getter, Value::Undefined) && !self.is_callable_value(getter) {
+                return Err(Error::ScriptRuntime(
+                    "Object.defineProperty getter must be callable or undefined".into(),
+                ));
+            }
+        }
+        if let Some(setter) = set.as_ref() {
+            if !matches!(setter, Value::Undefined) && !self.is_callable_value(setter) {
+                return Err(Error::ScriptRuntime(
+                    "Object.defineProperty setter must be callable or undefined".into(),
+                ));
+            }
+        }
+
+        let Some(current_descriptor) = current_descriptor else {
+            return Ok(if requested_accessor {
+                NormalizedOwnPropertyDescriptor::Accessor {
+                    get: get.unwrap_or(Value::Undefined),
+                    set: set.unwrap_or(Value::Undefined),
+                    enumerable: enumerable.unwrap_or(false),
+                    configurable: configurable.unwrap_or(false),
+                }
+            } else {
+                NormalizedOwnPropertyDescriptor::Data {
+                    value: value.unwrap_or(Value::Undefined),
+                    writable: writable.unwrap_or(false),
+                    enumerable: enumerable.unwrap_or(false),
+                    configurable: configurable.unwrap_or(false),
+                }
+            });
+        };
+
+        let current_is_accessor = self.descriptor_is_accessor_descriptor(current_descriptor)?;
+        let current_enumerable = self
+            .object_property_from_value(current_descriptor, "enumerable")?
+            .truthy();
+        let current_configurable = self
+            .object_property_from_value(current_descriptor, "configurable")?
+            .truthy();
+
+        if !current_configurable {
+            if configurable == Some(true) {
+                return Err(Self::redefine_property_error(key));
+            }
+            if enumerable.is_some_and(|next| next != current_enumerable) {
+                return Err(Self::redefine_property_error(key));
+            }
+            if (requested_accessor && !current_is_accessor)
+                || (requested_data && current_is_accessor)
+            {
+                return Err(Self::redefine_property_error(key));
+            }
+        }
+
+        let target_is_accessor = if requested_accessor {
+            true
+        } else if requested_data {
+            false
+        } else {
+            current_is_accessor
+        };
+
+        if target_is_accessor {
+            let current_get = if current_is_accessor {
+                self.object_property_from_value(current_descriptor, "get")?
+            } else {
+                Value::Undefined
+            };
+            let current_set = if current_is_accessor {
+                self.object_property_from_value(current_descriptor, "set")?
+            } else {
+                Value::Undefined
+            };
+            let next_get = get.clone().unwrap_or_else(|| {
+                if requested_accessor && !current_is_accessor {
+                    Value::Undefined
+                } else {
+                    current_get.clone()
+                }
+            });
+            let next_set = set.clone().unwrap_or_else(|| {
+                if requested_accessor && !current_is_accessor {
+                    Value::Undefined
+                } else {
+                    current_set.clone()
+                }
+            });
+            if !current_configurable && current_is_accessor {
+                if get
+                    .as_ref()
+                    .is_some_and(|_| !self.strict_equal(&next_get, &current_get))
+                {
+                    return Err(Self::redefine_property_error(key));
+                }
+                if set
+                    .as_ref()
+                    .is_some_and(|_| !self.strict_equal(&next_set, &current_set))
+                {
+                    return Err(Self::redefine_property_error(key));
+                }
+            }
+            return Ok(NormalizedOwnPropertyDescriptor::Accessor {
+                get: next_get,
+                set: next_set,
+                enumerable: enumerable.unwrap_or(current_enumerable),
+                configurable: configurable.unwrap_or(current_configurable),
+            });
+        }
+
+        let current_value = if current_is_accessor {
+            Value::Undefined
+        } else {
+            self.object_property_from_value(current_descriptor, "value")?
+        };
+        let current_writable = if current_is_accessor {
+            false
+        } else {
+            self.object_property_from_value(current_descriptor, "writable")?
+                .truthy()
+        };
+        let next_value = value.clone().unwrap_or_else(|| {
+            if requested_data && current_is_accessor {
+                Value::Undefined
+            } else {
+                current_value.clone()
+            }
+        });
+        let next_writable = writable.unwrap_or_else(|| {
+            if requested_data && current_is_accessor {
+                false
+            } else {
+                current_writable
+            }
+        });
+
+        if !current_configurable && !current_is_accessor && !current_writable {
+            if writable == Some(true) {
+                return Err(Self::redefine_property_error(key));
+            }
+            if value
+                .as_ref()
+                .is_some_and(|_| !self.strict_equal(&next_value, &current_value))
+            {
+                return Err(Self::redefine_property_error(key));
+            }
+        }
+
+        Ok(NormalizedOwnPropertyDescriptor::Data {
+            value: next_value,
+            writable: next_writable,
+            enumerable: enumerable.unwrap_or(current_enumerable),
+            configurable: configurable.unwrap_or(current_configurable),
+        })
+    }
+
+    fn set_object_property_flags(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) {
+        if !enumerable {
+            Self::object_set_entry(
+                entries,
+                Self::object_non_enumerable_storage_key(key),
+                Value::Bool(true),
+            );
+        }
+        if !writable {
+            Self::object_set_entry(
+                entries,
+                Self::object_non_writable_storage_key(key),
+                Value::Bool(true),
+            );
+        }
+        if !configurable {
+            Self::object_set_entry(
+                entries,
+                Self::object_non_configurable_storage_key(key),
+                Value::Bool(true),
+            );
+        }
+    }
+
+    fn array_index_is_enumerable(array: &ArrayValue, index: usize) -> bool {
+        Self::is_enumerable_object_key(&array.properties, &index.to_string())
+    }
+
+    fn array_index_is_writable(array: &ArrayValue, index: usize) -> bool {
+        Self::is_writable_object_key(&array.properties, &index.to_string())
+    }
+
+    fn array_index_is_configurable(array: &ArrayValue, index: usize) -> bool {
+        Self::is_configurable_object_key(&array.properties, &index.to_string())
+    }
+
+    fn ordered_visible_string_keys_split(entries: &ObjectValue) -> (Vec<String>, Vec<String>) {
+        let mut integer_keys: Vec<(u64, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, _) in entries.iter() {
+            if let Some(accessor_key) = Self::accessor_property_key_from_storage_key(key) {
+                if Self::is_symbol_storage_key(accessor_key)
+                    || !seen.insert(accessor_key.to_string())
+                {
+                    continue;
+                }
+                if let Some(index) = Self::own_property_integer_key(accessor_key) {
+                    integer_keys.push((index, accessor_key.to_string()));
+                } else {
+                    string_keys.push(accessor_key.to_string());
+                }
+                continue;
+            }
+            if Self::is_internal_object_key(key) {
+                continue;
+            }
+            if !seen.insert(key.to_string()) {
+                continue;
+            }
+            if let Some(index) = Self::own_property_integer_key(key) {
+                integer_keys.push((index, key.to_string()));
+            } else {
+                string_keys.push(key.to_string());
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        (
+            integer_keys.into_iter().map(|(_, key)| key).collect(),
+            string_keys,
+        )
+    }
+
+    fn ordered_visible_string_keys(entries: &ObjectValue) -> Vec<String> {
+        let (integer_keys, string_keys) = Self::ordered_visible_string_keys_split(entries);
+        let mut out = Vec::with_capacity(integer_keys.len() + string_keys.len());
+        out.extend(integer_keys);
+        out.extend(string_keys);
+        out
+    }
+
+    fn ordered_enumerable_string_keys(entries: &ObjectValue) -> Vec<String> {
+        let mut integer_keys: Vec<(u64, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, _) in entries.iter() {
+            if let Some(accessor_key) = Self::accessor_property_key_from_storage_key(key) {
+                if Self::is_symbol_storage_key(accessor_key)
+                    || !Self::is_enumerable_object_key(entries, accessor_key)
+                    || !seen.insert(accessor_key.to_string())
+                {
+                    continue;
+                }
+                if let Some(index) = Self::own_property_integer_key(accessor_key) {
+                    integer_keys.push((index, accessor_key.to_string()));
+                } else {
+                    string_keys.push(accessor_key.to_string());
+                }
+                continue;
+            }
+            if !Self::is_enumerable_object_key(entries, key) || !seen.insert(key.to_string()) {
+                continue;
+            }
+            if let Some(index) = Self::own_property_integer_key(key) {
+                integer_keys.push((index, key.to_string()));
+            } else {
+                string_keys.push(key.to_string());
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = Vec::with_capacity(integer_keys.len() + string_keys.len());
+        out.extend(integer_keys.into_iter().map(|(_, key)| key));
+        out.extend(string_keys);
+        out
+    }
+
+    fn merge_builtin_string_keys(
+        integer_keys: Vec<String>,
+        string_keys: Vec<String>,
+        builtin_keys: &[&str],
+    ) -> Vec<String> {
+        let mut out =
+            Vec::with_capacity(integer_keys.len() + string_keys.len() + builtin_keys.len());
+        out.extend(integer_keys);
+        out.extend(builtin_keys.iter().map(|key| key.to_string()));
+        out.extend(
+            string_keys
+                .into_iter()
+                .filter(|key| !builtin_keys.contains(&key.as_str())),
+        );
+        out
+    }
+
+    pub(crate) fn string_wrapper_own_string_keys(
+        entries: &ObjectValue,
+        enumerable_only: bool,
+    ) -> Option<Vec<String>> {
+        let text = Self::string_wrapper_value_from_object(entries)?;
+        let mut integer_keys = text
+            .chars()
+            .enumerate()
+            .map(|(index, _)| (index as u64, index.to_string()))
+            .collect::<Vec<_>>();
+        let property_keys = if enumerable_only {
+            Self::ordered_enumerable_string_keys(entries)
+        } else {
+            Self::ordered_visible_string_keys(entries)
+        };
+        for key in &property_keys {
+            if let Some(index) = Self::own_property_integer_key(&key) {
+                if !integer_keys.iter().any(|(existing, _)| *existing == index) {
+                    integer_keys.push((index, key.clone()));
+                }
+            }
+        }
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut out = integer_keys
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect::<Vec<_>>();
+        if !enumerable_only {
+            out.push("length".to_string());
+        }
+        out.extend(property_keys.into_iter().filter(|key| {
+            Self::own_property_integer_key(key).is_none() && (enumerable_only || key != "length")
+        }));
+        Some(out)
+    }
+
+    pub(crate) fn string_wrapper_builtin_has_own_property(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        let Some(text) = Self::string_wrapper_value_from_object(entries) else {
+            return false;
+        };
+        if key == "length" {
+            return true;
+        }
+        Self::own_property_integer_key(key)
+            .is_some_and(|index| (index as usize) < text.chars().count())
+    }
+
+    pub(crate) fn string_wrapper_builtin_descriptor_value(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        let text = Self::string_wrapper_value_from_object(entries)?;
+        if key == "length" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(text.chars().count() as i64),
+                false,
+                false,
+                false,
+            ));
+        }
+        let index = Self::own_property_integer_key(key)? as usize;
+        let ch = text.chars().nth(index)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            Value::String(ch.to_string()),
+            false,
+            true,
+            false,
+        ))
+    }
+
+    fn visible_builtin_string_keys<'a>(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        builtin_keys: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<&'a str> {
+        builtin_keys
+            .into_iter()
+            .filter(|key| !Self::is_builtin_object_property_deleted(entries, key))
+            .collect()
+    }
+
+    pub(crate) fn callable_own_surface_value(
+        &mut self,
+        object: &Value,
+        key: &str,
+    ) -> Option<Value> {
+        match key {
+            "name" | "length" => self.callable_function_surface_value(object, key),
+            _ => None,
+        }
+    }
+
+    fn function_builtin_own_property_value(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+    ) -> Option<Value> {
+        match key {
+            "name" | "length" => Some(self.function_own_property_value(function, key, false)),
+            "prototype" if !function.is_arrow && !function.is_method => {
+                Some(self.function_own_property_value(function, key, false))
+            }
+            _ => None,
+        }
+        .filter(|value| !matches!(value, Value::Undefined))
+    }
+
+    fn function_builtin_own_string_keys(function: &Rc<FunctionValue>) -> Vec<&'static str> {
+        let mut keys = vec!["length", "name"];
+        if !function.is_arrow && !function.is_method {
+            keys.push("prototype");
+        }
+        keys
+    }
+
+    fn regexp_builtin_own_string_keys() -> [&'static str; 1] {
+        ["lastIndex"]
+    }
+
+    fn regexp_builtin_descriptor_value(&self, regex: &RegexValue, key: &str) -> Option<Value> {
+        match key {
+            "lastIndex" => Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(regex.last_index as i64),
+                Self::is_writable_object_key(&regex.properties, "lastIndex"),
+                false,
+                false,
+            )),
+            _ => None,
+        }
+    }
+
+    fn collection_property_symbol_values(&self, entries: &ObjectValue) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, _) in entries.iter() {
+            if let Some(symbol_id) = Self::symbol_id_from_storage_key(key).or_else(|| {
+                Self::accessor_property_key_from_storage_key(key)
+                    .and_then(Self::symbol_id_from_storage_key)
+            }) {
+                if !seen.insert(symbol_id) {
+                    continue;
+                }
+                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
+                    out.push(Value::Symbol(symbol.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn apply_normalized_descriptor_to_object_entries(
+        entries: &mut ObjectValue,
+        key: &str,
+        descriptor: NormalizedOwnPropertyDescriptor,
+    ) {
+        Self::delete_object_property_entries(entries, key);
+        match descriptor {
+            NormalizedOwnPropertyDescriptor::Data {
+                value,
+                writable,
+                enumerable,
+                configurable,
+            } => {
+                Self::object_set_entry(entries, key.to_string(), value);
+                Self::set_object_property_flags(entries, key, writable, enumerable, configurable);
+            }
+            NormalizedOwnPropertyDescriptor::Accessor {
+                get,
+                set,
+                enumerable,
+                configurable,
+            } => {
+                if !matches!(get, Value::Undefined) {
+                    Self::object_set_entry(entries, Self::object_getter_storage_key(key), get);
+                } else {
+                    Self::object_set_entry(
+                        entries,
+                        Self::object_undefined_getter_storage_key(key),
+                        Value::Bool(true),
+                    );
+                }
+                if !matches!(set, Value::Undefined) {
+                    Self::object_set_entry(entries, Self::object_setter_storage_key(key), set);
+                } else {
+                    Self::object_set_entry(
+                        entries,
+                        Self::object_undefined_setter_storage_key(key),
+                        Value::Bool(true),
+                    );
+                }
+                Self::set_object_property_flags(entries, key, true, enumerable, configurable);
+            }
+        }
+    }
+
+    fn define_object_literal_data_entry(
+        entries: &mut Vec<(String, Value)>,
+        key: String,
+        value: Value,
+    ) {
+        Self::delete_object_property_auxiliary_entries(entries, &key);
+        Self::object_set_entry(entries, key, value);
+    }
+
+    fn define_object_literal_getter_entry(
+        entries: &mut Vec<(String, Value)>,
+        key: String,
+        getter: Value,
+    ) {
+        Self::delete_object_getter_entries(entries, &key);
+        let getter_key = Self::object_getter_storage_key(&key);
+        Self::object_set_entry(entries, getter_key, getter);
+        Self::object_set_entry(entries, key, Value::Undefined);
+    }
+
+    fn define_object_literal_setter_entry(
+        entries: &mut Vec<(String, Value)>,
+        key: String,
+        setter: Value,
+    ) {
+        Self::delete_object_setter_entries(entries, &key);
+        let setter_key = Self::object_setter_storage_key(&key);
+        Self::object_set_entry(entries, setter_key, setter);
+        Self::object_set_entry(entries, key, Value::Undefined);
+    }
+
+    fn callable_object_surface_descriptor_value(
+        &mut self,
+        object: &Value,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::callable_kind_from_value(object).is_none() {
+            return None;
+        }
+        if Self::object_get_entry(entries, key).is_some()
+            || Self::has_object_accessor_property(entries, key)
+            || Self::is_builtin_object_property_deleted(entries, key)
+        {
+            return None;
+        }
+        let value = self.callable_own_surface_value(object, key)?;
+        Some(Self::own_data_property_descriptor_with_attrs(
+            value, false, false, true,
+        ))
+    }
+
+    fn function_own_property_descriptor_value(
+        &mut self,
+        function: &Rc<FunctionValue>,
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(entries) = self
+            .script_runtime
+            .function_public_properties
+            .get(&function.function_id)
+        {
+            if let Some(descriptor) =
+                Self::own_property_descriptor_object_from_entries(entries, key)
+            {
+                return Some(descriptor);
+            }
+            if Self::is_builtin_object_property_deleted(entries, key) {
+                return None;
+            }
+        }
+
+        match key {
+            "name" | "length" => {
+                return self
+                    .function_builtin_own_property_value(function, key)
+                    .map(|value| {
+                        Self::own_data_property_descriptor_with_attrs(value, false, false, true)
+                    });
+            }
+            "prototype" if !function.is_arrow && !function.is_method => {
+                return self
+                    .function_builtin_own_property_value(function, key)
+                    .map(|value| {
+                        Self::own_data_property_descriptor_with_attrs(value, true, false, false)
+                    });
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn array_own_property_descriptor_value(
+        &mut self,
+        array: &Rc<RefCell<ArrayValue>>,
+        key: &str,
+    ) -> Option<Value> {
+        let array_ref = array.borrow();
+        if let Some(descriptor) =
+            Self::own_property_descriptor_object_from_entries(&array_ref.properties, key)
+        {
+            return Some(descriptor);
+        }
+        if key == "length" {
+            return Some(Self::own_data_property_descriptor_with_attrs(
+                Value::Number(array_ref.len() as i64),
+                Self::is_writable_object_key(&array_ref.properties, "length"),
+                false,
+                false,
+            ));
+        }
+        if let Ok(index) = key.parse::<usize>() {
+            if index < array_ref.len() && !Self::array_index_is_hole(&array_ref, index) {
+                return Some(Self::own_data_property_descriptor_with_attrs(
+                    array_ref[index].clone(),
+                    Self::array_index_is_writable(&array_ref, index),
+                    Self::array_index_is_enumerable(&array_ref, index),
+                    Self::array_index_is_configurable(&array_ref, index),
+                ));
+            }
+            return None;
+        }
+        None
+    }
+
+    fn collection_own_property_descriptor_value(
+        &mut self,
+        entries: &ObjectValue,
+        builtin_descriptor: Option<Value>,
+        key: &str,
+    ) -> Option<Value> {
+        if let Some(descriptor) = Self::own_property_descriptor_object_from_entries(entries, key) {
+            return Some(descriptor);
+        }
+        if Self::is_builtin_object_property_deleted(entries, key) {
+            return None;
+        }
+        builtin_descriptor
+    }
+
+    fn object_like_enumerable_keys(&self, object: &Value) -> Result<Vec<String>> {
+        match object {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Ok(Self::string_wrapper_own_string_keys(&entries, true)
+                    .unwrap_or_else(|| Self::ordered_enumerable_string_keys(&entries)))
+            }
+            Value::Array(array) => {
+                let array_ref = array.borrow();
+                let mut keys = array_ref
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, _)| {
+                        (!Self::array_index_is_hole(&array_ref, index)
+                            && Self::array_index_is_enumerable(&array_ref, index))
+                        .then(|| index.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                keys.extend(Self::ordered_enumerable_string_keys(&array_ref.properties));
+                Ok(keys)
+            }
+            Value::Function(function) => Ok(self
+                .script_runtime
+                .function_public_properties
+                .get(&function.function_id)
+                .map(Self::ordered_enumerable_string_keys)
+                .unwrap_or_default()),
+            Value::Map(map) => Ok(Self::ordered_enumerable_string_keys(
+                &map.borrow().properties,
+            )),
+            Value::WeakMap(map) => Ok(Self::ordered_enumerable_string_keys(
+                &map.borrow().properties,
+            )),
+            Value::Set(set) => Ok(Self::ordered_enumerable_string_keys(
+                &set.borrow().properties,
+            )),
+            Value::WeakSet(set) => Ok(Self::ordered_enumerable_string_keys(
+                &set.borrow().properties,
+            )),
+            Value::RegExp(regex) => Ok(Self::ordered_enumerable_string_keys(
+                &regex.borrow().properties,
+            )),
+            _ => Err(Error::ScriptRuntime(
+                "Object.keys argument must be an object".into(),
+            )),
+        }
+    }
+
+    fn object_like_own_string_keys(&self, object: &Value) -> Result<Vec<String>> {
+        match object {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(keys) = Self::string_wrapper_own_string_keys(&entries, false) {
+                    return Ok(keys);
+                }
+                let (integer_keys, string_keys) = Self::ordered_visible_string_keys_split(&entries);
+                Ok(if Self::callable_kind_from_value(object).is_some() {
+                    let builtin_keys =
+                        Self::visible_builtin_string_keys(&entries, ["length", "name"]);
+                    Self::merge_builtin_string_keys(integer_keys, string_keys, &builtin_keys)
+                } else {
+                    Self::ordered_visible_string_keys(&entries)
+                })
+            }
+            Value::Array(array) => {
+                let array_ref = array.borrow();
+                let mut integer_keys: Vec<(u64, String)> = array_ref
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, _)| {
+                        (!Self::array_index_is_hole(&array_ref, index))
+                            .then(|| (index as u64, index.to_string()))
+                    })
+                    .collect();
+                let (property_integer_keys, property_string_keys) =
+                    Self::ordered_visible_string_keys_split(&array_ref.properties);
+                for key in property_integer_keys {
+                    if let Some(index) = Self::own_property_integer_key(&key) {
+                        if !integer_keys.iter().any(|(existing, _)| *existing == index) {
+                            integer_keys.push((index, key));
+                        }
+                    }
+                }
+                integer_keys.sort_by_key(|(index, _)| *index);
+                let mut out = integer_keys
+                    .into_iter()
+                    .map(|(_, key)| key)
+                    .collect::<Vec<_>>();
+                out.push("length".to_string());
+                out.extend(
+                    property_string_keys
+                        .into_iter()
+                        .filter(|key| key != "length"),
+                );
+                Ok(out)
+            }
+            Value::Function(function) => {
+                let (integer_keys, string_keys, builtin_keys) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    .map(|entries| {
+                        let (integer_keys, string_keys) =
+                            Self::ordered_visible_string_keys_split(entries);
+                        (
+                            integer_keys,
+                            string_keys,
+                            Self::visible_builtin_string_keys(
+                                entries,
+                                Self::function_builtin_own_string_keys(function),
+                            ),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            Vec::new(),
+                            Vec::new(),
+                            Self::function_builtin_own_string_keys(function),
+                        )
+                    });
+                Ok(Self::merge_builtin_string_keys(
+                    integer_keys,
+                    string_keys,
+                    &builtin_keys,
+                ))
+            }
+            Value::Map(map) => {
+                let map = map.borrow();
+                let (integer_keys, string_keys) =
+                    Self::ordered_visible_string_keys_split(&map.properties);
+                let builtin_keys = Self::visible_builtin_string_keys(&map.properties, ["size"]);
+                Ok(Self::merge_builtin_string_keys(
+                    integer_keys,
+                    string_keys,
+                    &builtin_keys,
+                ))
+            }
+            Value::WeakMap(map) => Ok(Self::ordered_visible_string_keys(&map.borrow().properties)),
+            Value::Set(set) => {
+                let set = set.borrow();
+                let (integer_keys, string_keys) =
+                    Self::ordered_visible_string_keys_split(&set.properties);
+                let builtin_keys = Self::visible_builtin_string_keys(&set.properties, ["size"]);
+                Ok(Self::merge_builtin_string_keys(
+                    integer_keys,
+                    string_keys,
+                    &builtin_keys,
+                ))
+            }
+            Value::WeakSet(set) => Ok(Self::ordered_visible_string_keys(&set.borrow().properties)),
+            Value::RegExp(regex) => {
+                let regex = regex.borrow();
+                let (integer_keys, string_keys) =
+                    Self::ordered_visible_string_keys_split(&regex.properties);
+                let builtin_keys = Self::visible_builtin_string_keys(
+                    &regex.properties,
+                    Self::regexp_builtin_own_string_keys(),
+                );
+                Ok(Self::merge_builtin_string_keys(
+                    integer_keys,
+                    string_keys,
+                    &builtin_keys,
+                ))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Object.getOwnPropertyNames argument must be an object".into(),
+            )),
+        }
+    }
+
+    fn object_like_own_symbol_values(&self, object: &Value) -> Result<Vec<Value>> {
+        match object {
+            Value::Object(entries) => Ok(self.collection_property_symbol_values(&entries.borrow())),
+            Value::Array(array) => {
+                Ok(self.collection_property_symbol_values(&array.borrow().properties))
+            }
+            Value::Function(function) => Ok(self
+                .script_runtime
+                .function_public_properties
+                .get(&function.function_id)
+                .map(|entries| self.collection_property_symbol_values(entries))
+                .unwrap_or_default()),
+            Value::Map(map) => Ok(self.collection_property_symbol_values(&map.borrow().properties)),
+            Value::WeakMap(map) => {
+                Ok(self.collection_property_symbol_values(&map.borrow().properties))
+            }
+            Value::Set(set) => Ok(self.collection_property_symbol_values(&set.borrow().properties)),
+            Value::WeakSet(set) => {
+                Ok(self.collection_property_symbol_values(&set.borrow().properties))
+            }
+            Value::RegExp(regex) => {
+                Ok(self.collection_property_symbol_values(&regex.borrow().properties))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Reflect.ownKeys target must be an object".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn object_get_own_property_names_value(&self, object: &Value) -> Result<Value> {
+        Ok(Self::new_array_value(
+            self.object_like_own_string_keys(object)?
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ))
+    }
+
+    pub(crate) fn reflect_own_keys_value(&self, object: &Value) -> Result<Value> {
+        let mut keys = self
+            .object_like_own_string_keys(object)?
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        keys.extend(self.object_like_own_symbol_values(object)?);
+        Ok(Self::new_array_value(keys))
+    }
+
+    pub(crate) fn object_get_own_property_descriptor_value(
+        &mut self,
+        object: &Value,
+        key: &str,
+    ) -> Result<Value> {
+        match object {
+            Value::Object(entries) => Ok({
+                let entries = entries.borrow();
+                Self::string_wrapper_builtin_descriptor_value(&entries, key)
+                    .or_else(|| Self::own_property_descriptor_object_from_entries(&*entries, key))
+                    .or_else(|| {
+                        self.callable_object_surface_descriptor_value(object, &entries, key)
+                    })
+                    .unwrap_or(Value::Undefined)
+            }),
+            Value::Array(array) => Ok(self
+                .array_own_property_descriptor_value(array, key)
+                .unwrap_or(Value::Undefined)),
+            Value::Function(function) => Ok(self
+                .function_own_property_descriptor_value(function, key)
+                .unwrap_or(Value::Undefined)),
+            Value::Map(map) => Ok({
+                let map = map.borrow();
+                self.collection_own_property_descriptor_value(
+                    &map.properties,
+                    (key == "size").then(|| {
+                        Self::own_data_property_descriptor_with_attrs(
+                            Value::Number(map.entries.len() as i64),
+                            false,
+                            false,
+                            true,
+                        )
+                    }),
+                    key,
+                )
+                .unwrap_or(Value::Undefined)
+            }),
+            Value::WeakMap(map) => Ok({
+                let map = map.borrow();
+                self.collection_own_property_descriptor_value(&map.properties, None, key)
+                    .unwrap_or(Value::Undefined)
+            }),
+            Value::Set(set) => Ok({
+                let set = set.borrow();
+                self.collection_own_property_descriptor_value(
+                    &set.properties,
+                    (key == "size").then(|| {
+                        Self::own_data_property_descriptor_with_attrs(
+                            Value::Number(set.values.len() as i64),
+                            false,
+                            false,
+                            true,
+                        )
+                    }),
+                    key,
+                )
+                .unwrap_or(Value::Undefined)
+            }),
+            Value::WeakSet(set) => Ok({
+                let set = set.borrow();
+                self.collection_own_property_descriptor_value(&set.properties, None, key)
+                    .unwrap_or(Value::Undefined)
+            }),
+            Value::RegExp(regex) => Ok({
+                let regex = regex.borrow();
+                self.collection_own_property_descriptor_value(
+                    &regex.properties,
+                    self.regexp_builtin_descriptor_value(&regex, key),
+                    key,
+                )
+                .unwrap_or(Value::Undefined)
+            }),
+            _ => Err(Error::ScriptRuntime(
+                "Object.getOwnPropertyDescriptor argument must be an object".into(),
+            )),
+        }
+    }
+
+    fn define_property_on_object_entries(
+        &mut self,
+        entries: &mut ObjectValue,
+        key: &str,
+        descriptor: &Value,
+    ) -> Result<()> {
+        let current_descriptor = Self::own_property_descriptor_object_from_entries(entries, key);
+        let normalized =
+            self.normalize_property_descriptor(current_descriptor.as_ref(), key, descriptor)?;
+        Self::apply_normalized_descriptor_to_object_entries(entries, key, normalized);
+        Ok(())
+    }
+
+    pub(crate) fn object_define_property_value(
+        &mut self,
+        object: &Value,
+        key: &str,
+        descriptor: &Value,
+    ) -> Result<Value> {
+        if !Self::descriptor_is_object_like_value(descriptor) {
+            return Err(Error::ScriptRuntime(
+                "Object.defineProperty descriptor must be an object".into(),
+            ));
+        }
+
+        match object {
+            Value::Object(entries) => {
+                let current_descriptor = {
+                    let entries_ref = entries.borrow();
+                    Self::string_wrapper_builtin_descriptor_value(&entries_ref, key)
+                };
+                if let Some(current_descriptor) = current_descriptor {
+                    self.normalize_property_descriptor(Some(&current_descriptor), key, descriptor)?;
+                    Self::delete_object_property_entries(&mut entries.borrow_mut(), key);
+                    return Ok(object.clone());
+                }
+                self.define_property_on_object_entries(&mut entries.borrow_mut(), key, descriptor)?;
+                Ok(object.clone())
+            }
+            Value::Array(array) => {
+                let current_descriptor = self.array_own_property_descriptor_value(array, key);
+                if key == "length" {
+                    let normalized = self.normalize_property_descriptor(
+                        current_descriptor.as_ref(),
+                        key,
+                        descriptor,
+                    )?;
+                    let NormalizedOwnPropertyDescriptor::Data {
+                        value, writable, ..
+                    } = normalized
+                    else {
+                        return Err(Self::redefine_property_error(key));
+                    };
+                    let mut values = array.borrow_mut();
+                    Self::delete_object_property_entries(&mut values.properties, key);
+                    let next = Self::value_to_i64(&value);
+                    let next = if next <= 0 { 0usize } else { next as usize };
+                    if next < values.len() {
+                        values.truncate(next);
+                    } else if next > values.len() {
+                        values.resize(next, Value::Undefined);
+                    }
+                    Self::set_object_property_flags(
+                        &mut values.properties,
+                        key,
+                        writable,
+                        false,
+                        false,
+                    );
+                    return Ok(object.clone());
+                }
+                if let Ok(index) = key.parse::<usize>() {
+                    if !self.descriptor_is_accessor_descriptor(descriptor)? {
+                        let normalized = self.normalize_property_descriptor(
+                            current_descriptor.as_ref(),
+                            key,
+                            descriptor,
+                        )?;
+                        let NormalizedOwnPropertyDescriptor::Data {
+                            value,
+                            writable,
+                            enumerable,
+                            configurable,
+                        } = normalized
+                        else {
+                            unreachable!();
+                        };
+                        let mut values = array.borrow_mut();
+                        Self::delete_object_property_entries(&mut values.properties, key);
+                        if index >= values.len() {
+                            values.resize(index + 1, Value::Undefined);
+                        }
+                        values[index] = value;
+                        Self::set_object_property_flags(
+                            &mut values.properties,
+                            key,
+                            writable,
+                            enumerable,
+                            configurable,
+                        );
+                        drop(values);
+                        Self::clear_array_hole(array, index);
+                        return Ok(object.clone());
+                    }
+                    if current_descriptor.is_some() {
+                        self.normalize_property_descriptor(
+                            current_descriptor.as_ref(),
+                            key,
+                            descriptor,
+                        )?;
+                    }
+                }
+                self.define_property_on_object_entries(
+                    &mut array.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            Value::Function(function) => {
+                if Self::is_function_builtin_prototype_key(function, key) {
+                    let current_descriptor = self
+                        .function_own_property_descriptor_value(function, key)
+                        .unwrap_or_else(|| {
+                            Self::own_data_property_descriptor_with_attrs(
+                                Value::Object(function.prototype_object.clone()),
+                                true,
+                                false,
+                                false,
+                            )
+                        });
+                    let normalized = self.normalize_property_descriptor(
+                        Some(&current_descriptor),
+                        key,
+                        descriptor,
+                    )?;
+                    let NormalizedOwnPropertyDescriptor::Data {
+                        value, writable, ..
+                    } = normalized
+                    else {
+                        return Err(Self::redefine_property_error(key));
+                    };
+
+                    let entries = self
+                        .script_runtime
+                        .function_public_properties
+                        .entry(function.function_id)
+                        .or_default();
+                    Self::set_function_builtin_prototype_property(entries, value, writable);
+                    return Ok(object.clone());
+                }
+
+                let mut entries = self
+                    .script_runtime
+                    .function_public_properties
+                    .remove(&function.function_id)
+                    .unwrap_or_default();
+                self.define_property_on_object_entries(&mut entries, key, descriptor)?;
+                self.script_runtime
+                    .function_public_properties
+                    .insert(function.function_id, entries);
+                Ok(object.clone())
+            }
+            Value::Map(map) => {
+                self.define_property_on_object_entries(
+                    &mut map.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            Value::WeakMap(map) => {
+                self.define_property_on_object_entries(
+                    &mut map.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            Value::Set(set) => {
+                self.define_property_on_object_entries(
+                    &mut set.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            Value::WeakSet(set) => {
+                self.define_property_on_object_entries(
+                    &mut set.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            Value::RegExp(regex) => {
+                if key == "lastIndex" {
+                    let current_descriptor = {
+                        let regex_ref = regex.borrow();
+                        self.regexp_builtin_descriptor_value(&regex_ref, key)
+                            .unwrap_or_else(|| {
+                                Self::own_data_property_descriptor_with_attrs(
+                                    Value::Number(regex_ref.last_index as i64),
+                                    true,
+                                    false,
+                                    false,
+                                )
+                            })
+                    };
+                    let normalized = self.normalize_property_descriptor(
+                        Some(&current_descriptor),
+                        key,
+                        descriptor,
+                    )?;
+                    let NormalizedOwnPropertyDescriptor::Data {
+                        value, writable, ..
+                    } = normalized
+                    else {
+                        return Err(Self::redefine_property_error(key));
+                    };
+                    let mut regex_ref = regex.borrow_mut();
+                    Self::delete_object_property_entries(&mut regex_ref.properties, key);
+                    let next = Self::value_to_i64(&value);
+                    regex_ref.last_index = if next <= 0 { 0 } else { next as usize };
+                    Self::set_object_property_flags(
+                        &mut regex_ref.properties,
+                        key,
+                        writable,
+                        false,
+                        false,
+                    );
+                    return Ok(object.clone());
+                }
+                self.define_property_on_object_entries(
+                    &mut regex.borrow_mut().properties,
+                    key,
+                    descriptor,
+                )?;
+                Ok(object.clone())
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Object.defineProperty target must be an object".into(),
+            )),
+        }
+    }
+
+    fn reflect_set_on_receiver_object(
+        &mut self,
+        receiver: &Value,
+        key: &str,
+        value: Value,
+    ) -> Result<bool> {
+        match receiver {
+            Value::Object(entries) => {
+                if Self::string_wrapper_builtin_has_own_property(&entries.borrow(), key) {
+                    return Ok(false);
+                }
+                let (setter, has_accessor, own_data, writable) = {
+                    let entries_ref = entries.borrow();
+                    (
+                        Self::object_setter_from_entries(&*entries_ref, key),
+                        Self::has_object_accessor_property(&*entries_ref, key),
+                        Self::object_get_entry(&*entries_ref, key).is_some(),
+                        Self::is_writable_object_key(&*entries_ref, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor {
+                    return Ok(false);
+                }
+                if own_data && !writable {
+                    return Ok(false);
+                }
+                if !own_data
+                    && Self::callable_kind_from_value(receiver).is_some()
+                    && Self::is_callable_own_surface_key(key)
+                {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut entries.borrow_mut(), key.to_string(), value);
+                Ok(true)
+            }
+            Value::Array(array) => {
+                if key == "length" {
+                    if !Self::is_writable_object_key(&array.borrow().properties, key) {
+                        return Ok(false);
+                    }
+                    let mut values = array.borrow_mut();
+                    let next = Self::value_to_i64(&value);
+                    let next = if next <= 0 { 0usize } else { next as usize };
+                    if next < values.len() {
+                        values.truncate(next);
+                    } else if next > values.len() {
+                        values.resize(next, Value::Undefined);
+                    }
+                    return Ok(true);
+                }
+                if let Ok(index) = key.parse::<usize>() {
+                    let key_string = index.to_string();
+                    let (setter, has_accessor, own_data, writable) = {
+                        let values = array.borrow();
+                        (
+                            Self::object_setter_from_entries(&values.properties, &key_string),
+                            Self::has_object_accessor_property(&values.properties, &key_string),
+                            Self::object_get_entry(&values.properties, &key_string).is_some(),
+                            Self::is_writable_object_key(&values.properties, &key_string),
+                        )
+                    };
+                    if let Some(setter) = setter {
+                        if !self.is_callable_value(&setter) {
+                            return Err(Error::ScriptRuntime(
+                                "object setter is not callable".into(),
+                            ));
+                        }
+                        let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                        self.execute_callable_value_with_this_and_env(
+                            &setter,
+                            &[value],
+                            &event,
+                            None,
+                            Some(receiver.clone()),
+                        )?;
+                        return Ok(true);
+                    }
+                    if has_accessor {
+                        return Ok(false);
+                    }
+                    if own_data && !writable {
+                        return Ok(false);
+                    }
+                    {
+                        let mut values = array.borrow_mut();
+                        if index >= values.len() {
+                            values.resize(index + 1, Value::Undefined);
+                        }
+                        values[index] = value;
+                    }
+                    Self::clear_array_hole(array, index);
+                    return Ok(true);
+                }
+                let (setter, has_accessor, own_data, writable) = {
+                    let values = array.borrow();
+                    (
+                        Self::object_setter_from_entries(&values.properties, key),
+                        Self::has_object_accessor_property(&values.properties, key),
+                        Self::object_get_entry(&values.properties, key).is_some(),
+                        Self::is_writable_object_key(&values.properties, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor {
+                    return Ok(false);
+                }
+                if own_data && !writable {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut array.borrow_mut().properties, key.to_string(), value);
+                Ok(true)
+            }
+            Value::Function(function) => {
+                let (setter, has_accessor, own_data, writable) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    .map(|entries| {
+                        (
+                            Self::object_setter_from_entries(entries, key),
+                            Self::has_object_accessor_property(entries, key),
+                            Self::object_get_entry(entries, key).is_some(),
+                            Self::is_writable_object_key(entries, key),
+                        )
+                    })
+                    .unwrap_or((None, false, false, true));
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor {
+                    return Ok(false);
+                }
+                if own_data && !writable {
+                    return Ok(false);
+                }
+                if !own_data && Self::is_callable_own_surface_key(key) {
+                    return Ok(false);
+                }
+                let entries = self
+                    .script_runtime
+                    .function_public_properties
+                    .entry(function.function_id)
+                    .or_default();
+                if Self::is_function_builtin_prototype_key(function, key) {
+                    Self::set_function_builtin_prototype_property(entries, value, true);
+                } else {
+                    Self::object_set_entry(entries, key.to_string(), value);
+                }
+                Ok(true)
+            }
+            Value::Map(map) => {
+                let (setter, has_accessor, own_data, writable) = {
+                    let map_ref = map.borrow();
+                    (
+                        Self::object_setter_from_entries(&map_ref.properties, key),
+                        Self::has_object_accessor_property(&map_ref.properties, key),
+                        Self::object_get_entry(&map_ref.properties, key).is_some(),
+                        Self::is_writable_object_key(&map_ref.properties, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor || (own_data && !writable) {
+                    return Ok(false);
+                }
+                if !own_data && key == "size" {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut map.borrow_mut().properties, key.to_string(), value);
+                Ok(true)
+            }
+            Value::WeakMap(map) => {
+                let (setter, has_accessor, own_data, writable) = {
+                    let map_ref = map.borrow();
+                    (
+                        Self::object_setter_from_entries(&map_ref.properties, key),
+                        Self::has_object_accessor_property(&map_ref.properties, key),
+                        Self::object_get_entry(&map_ref.properties, key).is_some(),
+                        Self::is_writable_object_key(&map_ref.properties, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor || (own_data && !writable) {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut map.borrow_mut().properties, key.to_string(), value);
+                Ok(true)
+            }
+            Value::Set(set) => {
+                let (setter, has_accessor, own_data, writable) = {
+                    let set_ref = set.borrow();
+                    (
+                        Self::object_setter_from_entries(&set_ref.properties, key),
+                        Self::has_object_accessor_property(&set_ref.properties, key),
+                        Self::object_get_entry(&set_ref.properties, key).is_some(),
+                        Self::is_writable_object_key(&set_ref.properties, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor || (own_data && !writable) {
+                    return Ok(false);
+                }
+                if !own_data && key == "size" {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut set.borrow_mut().properties, key.to_string(), value);
+                Ok(true)
+            }
+            Value::WeakSet(set) => {
+                let (setter, has_accessor, own_data, writable) = {
+                    let set_ref = set.borrow();
+                    (
+                        Self::object_setter_from_entries(&set_ref.properties, key),
+                        Self::has_object_accessor_property(&set_ref.properties, key),
+                        Self::object_get_entry(&set_ref.properties, key).is_some(),
+                        Self::is_writable_object_key(&set_ref.properties, key),
+                    )
+                };
+                if let Some(setter) = setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        &event,
+                        None,
+                        Some(receiver.clone()),
+                    )?;
+                    return Ok(true);
+                }
+                if has_accessor || (own_data && !writable) {
+                    return Ok(false);
+                }
+                Self::object_set_entry(&mut set.borrow_mut().properties, key.to_string(), value);
+                Ok(true)
+            }
+            Value::RegExp(regex) => {
+                if key == "lastIndex" {
+                    if !Self::is_writable_object_key(&regex.borrow().properties, key) {
+                        return Ok(false);
+                    }
+                    let mut regex_ref = regex.borrow_mut();
+                    let next = Self::value_to_i64(&value);
+                    regex_ref.last_index = if next <= 0 { 0 } else { next as usize };
+                } else {
+                    let (setter, has_accessor, own_data, writable) = {
+                        let regex_ref = regex.borrow();
+                        (
+                            Self::object_setter_from_entries(&regex_ref.properties, key),
+                            Self::has_object_accessor_property(&regex_ref.properties, key),
+                            Self::object_get_entry(&regex_ref.properties, key).is_some(),
+                            Self::is_writable_object_key(&regex_ref.properties, key),
+                        )
+                    };
+                    if let Some(setter) = setter {
+                        if !self.is_callable_value(&setter) {
+                            return Err(Error::ScriptRuntime(
+                                "object setter is not callable".into(),
+                            ));
+                        }
+                        let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+                        self.execute_callable_value_with_this_and_env(
+                            &setter,
+                            &[value],
+                            &event,
+                            None,
+                            Some(receiver.clone()),
+                        )?;
+                        return Ok(true);
+                    }
+                    if has_accessor || (own_data && !writable) {
+                        return Ok(false);
+                    }
+                    if !own_data && Self::is_regexp_builtin_own_key(key) {
+                        return Ok(false);
+                    }
+                    Self::object_set_entry(
+                        &mut regex.borrow_mut().properties,
+                        key.to_string(),
+                        value,
+                    );
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) fn reflect_set_object_property_value(
+        &mut self,
+        target: &Value,
+        key: &str,
+        value: Value,
+        receiver: &Value,
+        event: &EventState,
+    ) -> Result<bool> {
+        let Value::Object(object) = target else {
+            let mut assign_env = HashMap::new();
+            let key_value = if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
+                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
+                    Value::Symbol(symbol.clone())
+                } else {
+                    Value::String(key.to_string())
+                }
+            } else {
+                Value::String(key.to_string())
+            };
+            let ok = self
+                .set_object_assignment_property(
+                    receiver,
+                    &key_value,
+                    value,
+                    "Reflect.set target",
+                    &mut assign_env,
+                    event,
+                )
+                .is_ok();
+            return Ok(ok);
+        };
+
+        let (own_setter, own_has_accessor, own_data, own_builtin, mut prototype) = {
+            let entries = object.borrow();
+            (
+                Self::object_setter_from_entries(&*entries, key),
+                Self::has_object_accessor_property(&*entries, key),
+                Self::object_get_entry(&*entries, key).is_some(),
+                Self::string_wrapper_builtin_has_own_property(&entries, key),
+                Self::object_get_entry(&*entries, INTERNAL_OBJECT_PROTOTYPE_KEY),
+            )
+        };
+
+        if let Some(setter) = own_setter {
+            if !self.is_callable_value(&setter) {
+                return Err(Error::ScriptRuntime("object setter is not callable".into()));
+            }
+            self.execute_callable_value_with_this_and_env(
+                &setter,
+                &[value],
+                event,
+                None,
+                Some(receiver.clone()),
+            )?;
+            return Ok(true);
+        }
+        if own_has_accessor {
+            return Ok(false);
+        }
+        if own_builtin {
+            return Ok(false);
+        }
+        if own_data {
+            return self.reflect_set_on_receiver_object(receiver, key, value);
+        }
+
+        while let Some(Value::Object(proto)) = prototype {
+            let (setter, has_accessor, next) = {
+                let proto_ref = proto.borrow();
+                (
+                    Self::object_setter_from_entries(&*proto_ref, key),
+                    Self::has_object_accessor_property(&*proto_ref, key),
+                    Self::object_get_entry(&*proto_ref, INTERNAL_OBJECT_PROTOTYPE_KEY),
+                )
+            };
+            if let Some(setter) = setter {
+                if !self.is_callable_value(&setter) {
+                    return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                }
+                self.execute_callable_value_with_this_and_env(
+                    &setter,
+                    &[value],
+                    event,
+                    None,
+                    Some(receiver.clone()),
+                )?;
+                return Ok(true);
+            }
+            if has_accessor {
+                return Ok(false);
+            }
+            prototype = next;
+        }
+
+        self.reflect_set_on_receiver_object(receiver, key, value)
+    }
+
+    pub(crate) fn object_get_own_property_symbols_value(
+        &mut self,
+        object: &Value,
+    ) -> Result<Value> {
+        match self.object_like_own_symbol_values(object) {
+            Ok(symbols) => Ok(Self::new_array_value(symbols)),
+            Err(_) => Err(Error::ScriptRuntime(
+                "Object.getOwnPropertySymbols argument must be an object".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn object_keys_value(&mut self, object: &Value) -> Result<Value> {
+        let keys = self
+            .object_like_enumerable_keys(object)?
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        Ok(Self::new_array_value(keys))
+    }
+
+    pub(crate) fn object_values_value(&mut self, object: &Value) -> Result<Value> {
+        let keys = self.object_like_enumerable_keys(object)?;
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
+            values.push(self.object_property_from_value(object, &key)?);
+        }
+        Ok(Self::new_array_value(values))
+    }
+
+    pub(crate) fn object_entries_value(&mut self, object: &Value) -> Result<Value> {
+        let keys = self.object_like_enumerable_keys(object)?;
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
+            let value = self.object_property_from_value(object, &key)?;
+            values.push(Self::new_array_value(vec![Value::String(key), value]));
+        }
+        Ok(Self::new_array_value(values))
+    }
+
+    pub(crate) fn object_has_own_value(&mut self, object: &Value, key: &str) -> Result<Value> {
+        match object {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Ok(Value::Bool(
+                    Self::object_get_entry(&*entries, key).is_some()
+                        || Self::has_object_accessor_property(&*entries, key)
+                        || Self::string_wrapper_builtin_has_own_property(&entries, key)
+                        || (self.callable_own_surface_value(object, key).is_some()
+                            && !Self::is_builtin_object_property_deleted(&*entries, key)),
+                ))
+            }
+            Value::Array(array) => {
+                let array_ref = array.borrow();
+                let has = if key == "length" {
+                    true
+                } else if let Ok(index) = key.parse::<usize>() {
+                    index < array_ref.len() && !Self::array_index_is_hole(&array_ref, index)
+                } else {
+                    Self::object_get_entry(&array_ref.properties, key).is_some()
+                        || Self::has_object_accessor_property(&array_ref.properties, key)
+                };
+                Ok(Value::Bool(has))
+            }
+            Value::Function(function) => Ok(Value::Bool(
+                self.script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    .is_some_and(|entries| {
+                        Self::object_get_entry(entries, key).is_some()
+                            || Self::has_object_accessor_property(entries, key)
+                    })
+                    || self
+                        .function_builtin_own_property_value(function, key)
+                        .is_some()
+                        && !self
+                            .script_runtime
+                            .function_public_properties
+                            .get(&function.function_id)
+                            .is_some_and(|entries| {
+                                Self::is_builtin_object_property_deleted(entries, key)
+                            }),
+            )),
+            Value::Map(map) => {
+                let map = map.borrow();
+                Ok(Value::Bool(
+                    (key == "size"
+                        && !Self::is_builtin_object_property_deleted(&map.properties, key))
+                        || Self::object_get_entry(&map.properties, key).is_some()
+                        || Self::has_object_accessor_property(&map.properties, key),
+                ))
+            }
+            Value::WeakMap(map) => {
+                let map = map.borrow();
+                Ok(Value::Bool(
+                    Self::object_get_entry(&map.properties, key).is_some()
+                        || Self::has_object_accessor_property(&map.properties, key),
+                ))
+            }
+            Value::Set(set) => {
+                let set = set.borrow();
+                Ok(Value::Bool(
+                    (key == "size"
+                        && !Self::is_builtin_object_property_deleted(&set.properties, key))
+                        || Self::object_get_entry(&set.properties, key).is_some()
+                        || Self::has_object_accessor_property(&set.properties, key),
+                ))
+            }
+            Value::WeakSet(set) => {
+                let set = set.borrow();
+                Ok(Value::Bool(
+                    Self::object_get_entry(&set.properties, key).is_some()
+                        || Self::has_object_accessor_property(&set.properties, key),
+                ))
+            }
+            Value::RegExp(regex) => {
+                let regex = regex.borrow();
+                Ok(Value::Bool(
+                    key == "lastIndex"
+                        || Self::object_get_entry(&regex.properties, key).is_some()
+                        || Self::has_object_accessor_property(&regex.properties, key),
+                ))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Object.hasOwn first argument must be an object".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn object_get_prototype_of_value(&mut self, value: &Value) -> Result<Value> {
+        if let Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) = value {
+            if let Some(prototype) = self.variant_callable_internal_prototype_value(value) {
+                return Ok(prototype);
+            }
+            return Ok(Value::TypedArrayConstructor(
+                TypedArrayConstructorKind::Abstract,
+            ));
+        }
+        Ok(self
+            .value_internal_prototype_value(value)
+            .unwrap_or_else(|| Value::Object(Rc::new(RefCell::new(ObjectValue::default())))))
+    }
+
+    fn object_set_prototype_would_cycle(&mut self, target: &Value, prototype: &Value) -> bool {
+        let mut current = Some(prototype.clone());
+        let mut hops = 0usize;
+        while let Some(value) = current {
+            if self.strict_equal(target, &value) {
+                return true;
+            }
+            hops += 1;
+            if hops > 256 {
+                break;
+            }
+            current = self.value_internal_prototype_value(&value);
+        }
+        false
+    }
+
+    fn set_object_like_internal_prototype(
+        &mut self,
+        target: &Value,
+        prototype: Value,
+    ) -> Result<()> {
+        match target {
+            Value::Object(entries) => {
+                Self::object_set_entry(
+                    &mut entries.borrow_mut(),
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::Function(function) => {
+                let entries = self
+                    .script_runtime
+                    .function_public_properties
+                    .entry(function.function_id)
+                    .or_default();
+                Self::object_set_entry(
+                    entries,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::Array(values) => {
+                Self::object_set_entry(
+                    &mut values.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::Map(map) => {
+                Self::object_set_entry(
+                    &mut map.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::WeakMap(map) => {
+                Self::object_set_entry(
+                    &mut map.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::Set(set) => {
+                Self::object_set_entry(
+                    &mut set.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::WeakSet(set) => {
+                Self::object_set_entry(
+                    &mut set.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::RegExp(regex) => {
+                Self::object_set_entry(
+                    &mut regex.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::TypedArray(values) => {
+                Self::object_set_entry(
+                    &mut values.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::NodeList(nodes) => {
+                Self::object_set_entry(
+                    &mut nodes.borrow_mut().properties,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            Value::UrlConstructor => {
+                Self::object_set_entry(
+                    &mut self.browser_apis.url_constructor_properties.borrow_mut(),
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            _ if Self::variant_callable_public_storage_key(target).is_some() => {
+                let storage_key = Self::variant_callable_public_storage_key(target)
+                    .expect("checked variant callable storage key");
+                let entries = self
+                    .script_runtime
+                    .variant_callable_public_properties
+                    .entry(storage_key)
+                    .or_default();
+                Self::object_set_entry(
+                    entries,
+                    INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                    prototype,
+                );
+                Ok(())
+            }
+            _ => Err(Error::ScriptRuntime(
+                "Object.setPrototypeOf target must be an object".into(),
+            )),
+        }
+    }
+
+    pub(crate) fn object_set_prototype_of_value(
+        &mut self,
+        target: &Value,
+        prototype: &Value,
+    ) -> Result<Value> {
+        if !matches!(prototype, Value::Null) && Self::is_primitive_value(prototype) {
+            return Err(Error::ScriptRuntime(
+                "Object.setPrototypeOf prototype must be an object or null".into(),
+            ));
+        }
+
+        if matches!(target, Value::Null | Value::Undefined) {
+            return Err(Error::ScriptRuntime(
+                "Object.setPrototypeOf target must be an object".into(),
+            ));
+        }
+        if Self::is_primitive_value(target) {
+            return Ok(target.clone());
+        }
+
+        if self.object_set_prototype_would_cycle(target, prototype) {
+            return Err(Error::ScriptRuntime("Cyclic __proto__ value".into()));
+        }
+        self.set_object_like_internal_prototype(target, prototype.clone())?;
+        Ok(target.clone())
+    }
+
+    pub(crate) fn object_freeze_value(&mut self, value: &Value) -> Result<Value> {
+        match value {
+            Value::TypedArray(array) => {
+                if array.borrow().observed_length() > 0 {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot freeze array buffer views with elements".into(),
+                    ));
+                }
+                Ok(Value::TypedArray(array.clone()))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
     pub(crate) fn resolve_target_value_with_pending(
         &self,
         env: &HashMap<String, Value>,
@@ -61,14 +2189,7 @@ impl Harness {
                         Value::TypedArray(array) => Ok(Value::TypedArray(array)),
                         Value::Promise(promise) => Ok(Value::Promise(promise)),
                         Value::RegExp(regex) => Ok(Value::RegExp(regex)),
-                        Value::Symbol(symbol) => Ok(Self::new_object_value(vec![(
-                            INTERNAL_SYMBOL_WRAPPER_KEY.to_string(),
-                            Value::Number(symbol.id as i64),
-                        )])),
-                        primitive => Ok(Self::new_object_value(vec![(
-                            "value".into(),
-                            Value::String(primitive.as_string()),
-                        )])),
+                        primitive => Ok(Self::box_primitive_value(primitive)),
                     }
                 }
                 Expr::ObjectLiteral(entries) => {
@@ -117,7 +2238,11 @@ impl Harness {
                                     _ => self.eval_expr(value, env, event_param, event)?,
                                 };
 
-                                Self::object_set_entry(&mut object_entries, key, value);
+                                Self::define_object_literal_data_entry(
+                                    &mut object_entries,
+                                    key,
+                                    value,
+                                );
                             }
                             ObjectLiteralEntry::ProtoSetter(expr) => {
                                 let value = self.eval_expr(expr, env, event_param, event)?;
@@ -146,9 +2271,11 @@ impl Harness {
                                     false,
                                     true,
                                 );
-                                let getter_key = Self::object_getter_storage_key(&key);
-                                Self::object_set_entry(&mut object_entries, getter_key, getter);
-                                Self::object_set_entry(&mut object_entries, key, Value::Undefined);
+                                Self::define_object_literal_getter_entry(
+                                    &mut object_entries,
+                                    key,
+                                    getter,
+                                );
                             }
                             ObjectLiteralEntry::Setter(key, handler) => {
                                 let key = match key {
@@ -167,9 +2294,11 @@ impl Harness {
                                     false,
                                     true,
                                 );
-                                let setter_key = Self::object_setter_storage_key(&key);
-                                Self::object_set_entry(&mut object_entries, setter_key, setter);
-                                Self::object_set_entry(&mut object_entries, key, Value::Undefined);
+                                Self::define_object_literal_setter_entry(
+                                    &mut object_entries,
+                                    key,
+                                    setter,
+                                );
                             }
                             ObjectLiteralEntry::Spread(expr) => {
                                 let spread_value = self.eval_expr(expr, env, event_param, event)?;
@@ -177,36 +2306,33 @@ impl Harness {
                                     Value::Null | Value::Undefined => {}
                                     Value::Object(entries) => {
                                         let source = Value::Object(entries.clone());
-                                        let keys = {
-                                            let entries = entries.borrow();
-                                            entries
-                                                .iter()
-                                                .filter(|(key, _)| {
-                                                    Self::is_enumerable_object_key(&*entries, key)
-                                                })
-                                                .map(|(key, _)| key.clone())
-                                                .collect::<Vec<_>>()
-                                        };
+                                        let keys = self.object_like_enumerable_keys(&source)?;
                                         for key in keys {
                                             let value =
                                                 self.object_property_from_value(&source, &key)?;
-                                            Self::object_set_entry(&mut object_entries, key, value);
+                                            Self::define_object_literal_data_entry(
+                                                &mut object_entries,
+                                                key,
+                                                value,
+                                            );
                                         }
                                     }
                                     Value::Array(values) => {
                                         for (index, value) in values.borrow().iter().enumerate() {
-                                            Self::object_set_entry(
+                                            let key = index.to_string();
+                                            Self::define_object_literal_data_entry(
                                                 &mut object_entries,
-                                                index.to_string(),
+                                                key,
                                                 value.clone(),
                                             );
                                         }
                                     }
                                     Value::String(text) => {
                                         for (index, ch) in text.chars().enumerate() {
-                                            Self::object_set_entry(
+                                            let key = index.to_string();
+                                            Self::define_object_literal_data_entry(
                                                 &mut object_entries,
-                                                index.to_string(),
+                                                key,
                                                 Value::String(ch.to_string()),
                                             );
                                         }
@@ -279,146 +2405,83 @@ impl Harness {
                 }
                 Expr::ObjectGetOwnPropertySymbols(object) => {
                     let object = self.eval_expr(object, env, event_param, event)?;
-                    match object {
-                        Value::Object(entries) => {
-                            let mut out = Vec::new();
-                            for (key, _) in entries.borrow().iter() {
-                                if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
-                                    if let Some(symbol) =
-                                        self.symbol_runtime.symbols_by_id.get(&symbol_id)
-                                    {
-                                        out.push(Value::Symbol(symbol.clone()));
-                                    }
-                                }
-                            }
-                            Ok(Self::new_array_value(out))
-                        }
-                        _ => Err(Error::ScriptRuntime(
-                            "Object.getOwnPropertySymbols argument must be an object".into(),
-                        )),
-                    }
+                    self.object_get_own_property_symbols_value(&object)
+                }
+                Expr::ObjectGetOwnPropertyDescriptor { object, key } => {
+                    let object = self.eval_expr(object, env, event_param, event)?;
+                    let key = self.eval_expr(key, env, event_param, event)?;
+                    let key = self.property_key_to_storage_key(&key);
+                    self.object_get_own_property_descriptor_value(&object, &key)
+                }
+                Expr::ObjectDefineProperty {
+                    object,
+                    key,
+                    descriptor,
+                } => {
+                    let object = self.eval_expr(object, env, event_param, event)?;
+                    let key = self.eval_expr(key, env, event_param, event)?;
+                    let key = self.property_key_to_storage_key(&key);
+                    let descriptor = self.eval_expr(descriptor, env, event_param, event)?;
+                    self.object_define_property_value(&object, &key, &descriptor)
+                }
+                Expr::ObjectGetOwnPropertyNames(object) => {
+                    let object = self.eval_expr(object, env, event_param, event)?;
+                    self.object_get_own_property_names_value(&object)
                 }
                 Expr::ObjectKeys(object) => {
                     let object = self.eval_expr(object, env, event_param, event)?;
-                    match object {
-                        Value::Object(entries) => {
-                            let keys = {
-                                let entries = entries.borrow();
-                                entries
-                                    .iter()
-                                    .filter(|(key, _)| {
-                                        Self::is_enumerable_object_key(&*entries, key)
-                                    })
-                                    .map(|(key, _)| Value::String(key.clone()))
-                                    .collect::<Vec<_>>()
-                            };
-                            Ok(Self::new_array_value(keys))
-                        }
-                        _ => Err(Error::ScriptRuntime(
-                            "Object.keys argument must be an object".into(),
-                        )),
-                    }
+                    self.object_keys_value(&object)
                 }
                 Expr::ObjectValues(object) => {
                     let object = self.eval_expr(object, env, event_param, event)?;
-                    match object {
-                        Value::Object(entries) => {
-                            let source = Value::Object(entries.clone());
-                            let keys = {
-                                let entries = entries.borrow();
-                                entries
-                                    .iter()
-                                    .filter(|(key, _)| {
-                                        Self::is_enumerable_object_key(&*entries, key)
-                                    })
-                                    .map(|(key, _)| key.clone())
-                                    .collect::<Vec<_>>()
-                            };
-                            let mut values = Vec::with_capacity(keys.len());
-                            for key in keys {
-                                values.push(self.object_property_from_value(&source, &key)?);
-                            }
-                            Ok(Self::new_array_value(values))
-                        }
-                        _ => Err(Error::ScriptRuntime(
-                            "Object.values argument must be an object".into(),
-                        )),
-                    }
+                    self.object_values_value(&object)
                 }
                 Expr::ObjectEntries(object) => {
                     let object = self.eval_expr(object, env, event_param, event)?;
-                    match object {
-                        Value::Object(entries) => {
-                            let source = Value::Object(entries.clone());
-                            let keys = {
-                                let entries = entries.borrow();
-                                entries
-                                    .iter()
-                                    .filter(|(key, _)| {
-                                        Self::is_enumerable_object_key(&*entries, key)
-                                    })
-                                    .map(|(key, _)| key.clone())
-                                    .collect::<Vec<_>>()
-                            };
-                            let mut values = Vec::with_capacity(keys.len());
-                            for key in keys {
-                                let value = self.object_property_from_value(&source, &key)?;
-                                values.push(Self::new_array_value(vec![Value::String(key), value]));
-                            }
-                            Ok(Self::new_array_value(values))
-                        }
-                        _ => Err(Error::ScriptRuntime(
-                            "Object.entries argument must be an object".into(),
-                        )),
-                    }
+                    self.object_entries_value(&object)
                 }
                 Expr::ObjectHasOwn { object, key } => {
                     let object = self.eval_expr(object, env, event_param, event)?;
                     let key = self.eval_expr(key, env, event_param, event)?;
                     let key = self.property_key_to_storage_key(&key);
-                    match object {
-                        Value::Object(entries) => Ok(Value::Bool(
-                            Self::object_get_entry(&entries.borrow(), &key).is_some(),
-                        )),
-                        _ => Err(Error::ScriptRuntime(
-                            "Object.hasOwn first argument must be an object".into(),
-                        )),
-                    }
+                    self.object_has_own_value(&object, &key)
                 }
                 Expr::ObjectGetPrototypeOf(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    match value {
-                        Value::TypedArrayConstructor(TypedArrayConstructorKind::Concrete(_)) => Ok(
-                            Value::TypedArrayConstructor(TypedArrayConstructorKind::Abstract),
-                        ),
-                        _ => Ok(self
-                            .value_internal_prototype_value(&value)
-                            .unwrap_or_else(|| {
-                                Value::Object(Rc::new(RefCell::new(ObjectValue::default())))
-                            })),
-                    }
+                    self.object_get_prototype_of_value(&value)
                 }
                 Expr::ObjectFreeze(value) => {
                     let value = self.eval_expr(value, env, event_param, event)?;
-                    match value {
-                        Value::TypedArray(array) => {
-                            if array.borrow().observed_length() > 0 {
-                                return Err(Error::ScriptRuntime(
-                                    "Cannot freeze array buffer views with elements".into(),
-                                ));
-                            }
-                            Ok(Value::TypedArray(array))
-                        }
-                        other => Ok(other),
-                    }
+                    self.object_freeze_value(&value)
+                }
+                Expr::ReflectSet {
+                    target,
+                    key,
+                    value,
+                    receiver,
+                } => {
+                    let target = self.eval_expr(target, env, event_param, event)?;
+                    let key = self.eval_expr(key, env, event_param, event)?;
+                    let key = self.property_key_to_storage_key(&key);
+                    let value = self.eval_expr(value, env, event_param, event)?;
+                    let receiver = receiver
+                        .as_ref()
+                        .map(|receiver| self.eval_expr(receiver, env, event_param, event))
+                        .transpose()?
+                        .unwrap_or_else(|| target.clone());
+                    Ok(Value::Bool(self.reflect_set_object_property_value(
+                        &target, &key, value, &receiver, event,
+                    )?))
+                }
+                Expr::ReflectOwnKeys(object) => {
+                    let object = self.eval_expr(object, env, event_param, event)?;
+                    self.reflect_own_keys_value(&object)
                 }
                 Expr::ObjectHasOwnProperty { target, key } => {
                     let key = self.eval_expr(key, env, event_param, event)?;
                     let key = self.property_key_to_storage_key(&key);
                     match self.resolve_target_value_with_pending(env, target) {
-                        Some(Value::Object(entries)) => Ok(Value::Bool(
-                            Self::object_get_entry(&entries.borrow(), &key).is_some(),
-                        )),
+                        Some(value @ Value::Object(_)) => self.object_has_own_value(&value, &key),
                         Some(_) => Err(Error::ScriptRuntime(format!(
                             "variable '{}' is not an object",
                             target
@@ -492,6 +2555,26 @@ impl Harness {
                     }
                     Some(Value::String(value)) => Ok(Value::Number(value.chars().count() as i64)),
                     Some(Value::Function(function)) => {
+                        let function_value = Value::Function(function.clone());
+                        if let Some(custom) = self
+                            .function_public_property_from_entries_with_receiver(
+                                &function,
+                                "length",
+                                &function_value,
+                            )?
+                        {
+                            return Ok(custom);
+                        }
+                        if self
+                            .script_runtime
+                            .function_public_properties
+                            .get(&function.function_id)
+                            .is_some_and(|entries| {
+                                Self::is_builtin_object_property_deleted(entries, "length")
+                            })
+                        {
+                            return Ok(Value::Number(0));
+                        }
                         let mut length = 0_i64;
                         for param in &function.handler.params {
                             if param.is_rest || param.default.is_some() {
@@ -1005,79 +3088,6 @@ impl Harness {
                         ))),
                     }
                 }
-                Expr::ArrayIncludes {
-                    target,
-                    search,
-                    from_index,
-                } => {
-                    let search = self.eval_expr(search, env, event_param, event)?;
-                    match self.resolve_target_value_with_pending(env, target) {
-                        Some(Value::Array(values)) => {
-                            let values = values.borrow();
-                            let len = values.len() as i64;
-                            let mut start = from_index
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?
-                                .map(|value| Self::value_to_i64(&value))
-                                .unwrap_or(0);
-                            if start < 0 {
-                                start = (len + start).max(0);
-                            }
-                            let start = start.min(len) as usize;
-                            for value in values.iter().skip(start) {
-                                if self.strict_equal(value, &search) {
-                                    return Ok(Value::Bool(true));
-                                }
-                            }
-                            Ok(Value::Bool(false))
-                        }
-                        Some(Value::TypedArray(values)) => {
-                            let values_vec = self.typed_array_snapshot(&values)?;
-                            let len = values_vec.len() as i64;
-                            let mut start = from_index
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?
-                                .map(|value| Self::value_to_i64(&value))
-                                .unwrap_or(0);
-                            if start < 0 {
-                                start = (len + start).max(0);
-                            }
-                            let start = start.min(len) as usize;
-                            for value in values_vec.iter().skip(start) {
-                                if self.strict_equal(value, &search) {
-                                    return Ok(Value::Bool(true));
-                                }
-                            }
-                            Ok(Value::Bool(false))
-                        }
-                        Some(Value::String(value)) => {
-                            let search = search.as_string();
-                            let len = value.chars().count() as i64;
-                            let mut start = from_index
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?
-                                .map(|value| Self::value_to_i64(&value))
-                                .unwrap_or(0);
-                            if start < 0 {
-                                start = (len + start).max(0);
-                            }
-                            let start = start.min(len) as usize;
-                            let start_byte = Self::char_index_to_byte(&value, start);
-                            Ok(Value::Bool(value[start_byte..].contains(&search)))
-                        }
-                        Some(_) => Err(Error::ScriptRuntime(format!(
-                            "variable '{}' is not an array",
-                            target
-                        ))),
-                        None => Err(Error::ScriptRuntime(format!(
-                            "unknown variable: {}",
-                            target
-                        ))),
-                    }
-                }
                 Expr::ArraySlice { target, start, end } => {
                     match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Array(values)) => {
@@ -1237,7 +3247,7 @@ impl Harness {
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
                         .transpose()?
-                        .map(|value| value.as_string())
+                        .map(|value| self.coerce_to_string_for_string_context(&value))
                         .unwrap_or_else(|| ",".to_string());
                     let values = match self.resolve_target_value_with_pending(env, target) {
                         Some(Value::Array(values)) => values.borrow().clone(),
@@ -1263,7 +3273,7 @@ impl Harness {
                         if matches!(value, Value::Null | Value::Undefined) {
                             continue;
                         }
-                        out.push_str(&value.as_string());
+                        out.push_str(&self.coerce_to_string_for_string_context(value));
                     }
                     Ok(Value::String(out))
                 }

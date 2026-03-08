@@ -384,23 +384,62 @@ impl Harness {
         }
     }
 
-    fn object_has_property_in_chain(entries: &ObjectValue, key: &str) -> bool {
-        if Self::object_get_entry(entries, key).is_some() {
+    fn object_has_property_in_chain(
+        &mut self,
+        value: &Value,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> bool {
+        if Self::object_get_entry(entries, key).is_some()
+            || Self::has_object_accessor_property(entries, key)
+            || Self::string_wrapper_builtin_has_own_property(entries, key)
+            || (self.callable_own_surface_value(value, key).is_some()
+                && !Self::is_builtin_object_property_deleted(entries, key))
+        {
             return true;
         }
 
-        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY);
-        while let Some(Value::Object(object)) = prototype {
-            let object_ref = object.borrow();
-            if Self::object_get_entry(&object_ref, key).is_some() {
-                return true;
+        let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            .or_else(|| self.value_internal_prototype_value(value));
+        let mut hops = 0usize;
+        while let Some(current) = prototype {
+            if matches!(current, Value::Null | Value::Undefined) {
+                break;
             }
-            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+            match &current {
+                Value::Object(object) => {
+                    let object_value = Value::Object(object.clone());
+                    let object_ref = object.borrow();
+                    if Self::object_get_entry(&object_ref, key).is_some()
+                        || Self::has_object_accessor_property(&object_ref, key)
+                        || Self::string_wrapper_builtin_has_own_property(&object_ref, key)
+                        || (self
+                            .callable_own_surface_value(&object_value, key)
+                            .is_some()
+                            && !Self::is_builtin_object_property_deleted(&object_ref, key))
+                    {
+                        return true;
+                    }
+                }
+                _ => {
+                    if self
+                        .object_property_from_value(&current, key)
+                        .is_ok_and(|value| !matches!(value, Value::Undefined))
+                    {
+                        return true;
+                    }
+                }
+            }
+            hops += 1;
+            if hops > 256 {
+                break;
+            }
+            prototype = self.value_internal_prototype_value(&current);
         }
         false
     }
 
-    pub(crate) fn value_in(&self, left: &Value, right: &Value) -> Result<bool> {
+    pub(crate) fn value_in(&mut self, left: &Value, right: &Value) -> Result<bool> {
         if Self::is_primitive_value(right) {
             return Err(Error::ScriptRuntime(
                 "right-hand side of in must be an object".into(),
@@ -413,8 +452,21 @@ impl Harness {
                 if key == "length" {
                     true
                 } else {
-                    self.value_as_index(left)
-                        .is_some_and(|index| index < self.node_list_len(nodes))
+                    let has_own_index = self
+                        .value_as_index(left)
+                        .is_some_and(|index| index < self.node_list_len(nodes));
+                    has_own_index
+                        || Self::object_get_entry(
+                            &nodes.borrow().properties,
+                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                        )
+                        .is_some_and(|_| {
+                            self.object_has_property_in_chain(
+                                right,
+                                &nodes.borrow().properties,
+                                &key,
+                            )
+                        })
                 }
             }
             Value::Array(values) => {
@@ -422,17 +474,35 @@ impl Harness {
                 if key == "length" || Self::object_get_entry(&values.properties, &key).is_some() {
                     true
                 } else {
-                    self.value_as_index(left).is_some_and(|index| {
+                    let has_own_index = self.value_as_index(left).is_some_and(|index| {
                         index < values.len() && !Self::array_index_is_hole(&values, index)
-                    })
+                    });
+                    has_own_index
+                        || Self::object_get_entry(&values.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                            .is_some_and(|_| {
+                                self.object_has_property_in_chain(right, &values.properties, &key)
+                            })
                 }
             }
             Value::TypedArray(values) => {
                 if key == "length" {
                     true
                 } else {
-                    self.value_as_index(left)
-                        .is_some_and(|index| index < values.borrow().observed_length())
+                    let has_own_index = self
+                        .value_as_index(left)
+                        .is_some_and(|index| index < values.borrow().observed_length());
+                    has_own_index
+                        || Self::object_get_entry(
+                            &values.borrow().properties,
+                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                        )
+                        .is_some_and(|_| {
+                            self.object_has_property_in_chain(
+                                right,
+                                &values.borrow().properties,
+                                &key,
+                            )
+                        })
                 }
             }
             Value::Object(entries) => {
@@ -449,7 +519,7 @@ impl Harness {
                         return Ok(true);
                     }
                 }
-                Self::object_has_property_in_chain(&entries, &key)
+                self.object_has_property_in_chain(right, &entries, &key)
             }
             Value::FormData(entries) => entries.borrow().iter().any(|(name, _)| name == &key),
             _ => false,
@@ -675,12 +745,16 @@ impl Harness {
         expected: &Rc<RefCell<ObjectValue>>,
     ) -> bool {
         let mut prototype = self.value_internal_prototype_value(left);
-        while let Some(Value::Object(current)) = prototype {
-            if Rc::ptr_eq(&current, expected) {
+        while let Some(current) = prototype {
+            if matches!(current, Value::Null | Value::Undefined) {
+                break;
+            }
+            if let Value::Object(object) = &current
+                && Rc::ptr_eq(object, expected)
+            {
                 return true;
             }
-            let current_ref = current.borrow();
-            prototype = Self::object_get_entry(&current_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+            prototype = self.value_internal_prototype_value(&current);
         }
         false
     }

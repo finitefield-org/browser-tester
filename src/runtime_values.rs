@@ -109,6 +109,7 @@ pub(crate) struct TypedArrayValue {
     pub(crate) buffer: Rc<RefCell<ArrayBufferValue>>,
     pub(crate) byte_offset: usize,
     pub(crate) fixed_length: Option<usize>,
+    pub(crate) properties: ObjectValue,
 }
 
 impl TypedArrayValue {
@@ -312,10 +313,11 @@ pub(crate) enum LiveNodeListSource {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NodeListValue {
     pub(crate) nodes: Vec<NodeId>,
     pub(crate) live_source: Option<LiveNodeListSource>,
+    pub(crate) properties: ObjectValue,
 }
 
 impl NodeListValue {
@@ -323,6 +325,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: None,
+            properties: ObjectValue::default(),
         }
     }
 
@@ -330,6 +333,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::ChildNodes { parent }),
+            properties: ObjectValue::default(),
         }
     }
 
@@ -337,6 +341,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::ChildElements { parent }),
+            properties: ObjectValue::default(),
         }
     }
 
@@ -348,6 +353,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::DescendantsByClassNames { root, class_names }),
+            properties: ObjectValue::default(),
         }
     }
 
@@ -355,6 +361,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::DescendantsByName { root, name }),
+            properties: ObjectValue::default(),
         }
     }
 
@@ -366,6 +373,7 @@ impl NodeListValue {
         Self {
             nodes,
             live_source: Some(LiveNodeListSource::DescendantsByTagName { root, tag_name }),
+            properties: ObjectValue::default(),
         }
     }
 
@@ -382,6 +390,7 @@ impl NodeListValue {
                 namespace_uri,
                 local_name,
             }),
+            properties: ObjectValue::default(),
         }
     }
 }
@@ -685,6 +694,26 @@ impl Value {
                     entries.get_entry(INTERNAL_STRING_WRAPPER_VALUE_KEY)
                 {
                     return value;
+                }
+                if let Some(Value::Bool(value)) =
+                    entries.get_entry(INTERNAL_BOOLEAN_WRAPPER_VALUE_KEY)
+                {
+                    return if value { "true".into() } else { "false".into() };
+                }
+                if let Some(Value::Number(value)) =
+                    entries.get_entry(INTERNAL_NUMBER_WRAPPER_VALUE_KEY)
+                {
+                    return value.to_string();
+                }
+                if let Some(Value::Float(value)) =
+                    entries.get_entry(INTERNAL_NUMBER_WRAPPER_VALUE_KEY)
+                {
+                    return format_float(value);
+                }
+                if let Some(Value::BigInt(value)) =
+                    entries.get_entry(INTERNAL_BIGINT_WRAPPER_VALUE_KEY)
+                {
+                    return value.to_string();
                 }
                 let is_url = matches!(
                     entries.get_entry(INTERNAL_URL_OBJECT_KEY),

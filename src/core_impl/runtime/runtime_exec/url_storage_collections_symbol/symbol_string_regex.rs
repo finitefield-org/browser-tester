@@ -31,9 +31,16 @@ impl Harness {
 
     pub(crate) fn is_internal_object_key(key: &str) -> bool {
         Self::is_symbol_storage_key(key)
+            || key.starts_with("\u{0}\u{0}bt_")
             || key.starts_with(INTERNAL_OBJECT_GETTER_KEY_PREFIX)
             || key.starts_with(INTERNAL_OBJECT_SETTER_KEY_PREFIX)
+            || key.starts_with(INTERNAL_OBJECT_UNDEFINED_GETTER_KEY_PREFIX)
+            || key.starts_with(INTERNAL_OBJECT_UNDEFINED_SETTER_KEY_PREFIX)
             || key.starts_with(INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX)
+            || key.starts_with(INTERNAL_NON_WRITABLE_PROPERTY_KEY_PREFIX)
+            || key.starts_with(INTERNAL_NON_CONFIGURABLE_PROPERTY_KEY_PREFIX)
+            || key.starts_with(INTERNAL_DELETED_BUILTIN_PROPERTY_KEY_PREFIX)
+            || key == INTERNAL_REGEXP_PROTOTYPE_OBJECT_KEY
             || key.starts_with(INTERNAL_ARRAY_HOLE_KEY_PREFIX)
             || key == INTERNAL_OBJECT_PROTOTYPE_KEY
             || key == INTERNAL_NON_ENUMERABLE_CONSTRUCTOR_KEY
@@ -41,6 +48,9 @@ impl Harness {
             || key == INTERNAL_CLASS_SUPER_CONSTRUCTOR_KEY
             || key == INTERNAL_SYMBOL_WRAPPER_KEY
             || key == INTERNAL_STRING_WRAPPER_VALUE_KEY
+            || key == INTERNAL_BOOLEAN_WRAPPER_VALUE_KEY
+            || key == INTERNAL_NUMBER_WRAPPER_VALUE_KEY
+            || key == INTERNAL_BIGINT_WRAPPER_VALUE_KEY
             || key.starts_with(INTERNAL_INTL_KEY_PREFIX)
             || key.starts_with(INTERNAL_CALLABLE_KEY_PREFIX)
             || key.starts_with(INTERNAL_WORKER_KEY_PREFIX)
@@ -93,6 +103,30 @@ impl Harness {
     pub(crate) fn string_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<String> {
         match Self::object_get_entry(entries, INTERNAL_STRING_WRAPPER_VALUE_KEY) {
             Some(Value::String(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn boolean_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<bool> {
+        match Self::object_get_entry(entries, INTERNAL_BOOLEAN_WRAPPER_VALUE_KEY) {
+            Some(Value::Bool(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn number_wrapper_value_from_object(entries: &[(String, Value)]) -> Option<Value> {
+        match Self::object_get_entry(entries, INTERNAL_NUMBER_WRAPPER_VALUE_KEY) {
+            Some(Value::Number(value)) => Some(Value::Number(value)),
+            Some(Value::Float(value)) => Some(Value::Float(value)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn bigint_wrapper_value_from_object(
+        entries: &[(String, Value)],
+    ) -> Option<JsBigInt> {
+        match Self::object_get_entry(entries, INTERNAL_BIGINT_WRAPPER_VALUE_KEY) {
+            Some(Value::BigInt(value)) => Some(value),
             _ => None,
         }
     }
@@ -303,14 +337,14 @@ impl Harness {
                 let substitutions = evaluated_args
                     .iter()
                     .skip(1)
-                    .map(Value::as_string)
-                    .collect::<Vec<_>>();
+                    .map(|value| self.coerce_to_string_for_tostring(value))
+                    .collect::<Result<Vec<_>>>()?;
                 if raw_segments.is_empty() {
                     return Ok(Value::String(String::new()));
                 }
                 let mut out = String::new();
                 for (idx, segment) in raw_segments.iter().enumerate() {
-                    out.push_str(&segment.as_string());
+                    out.push_str(&self.coerce_to_string_for_tostring(segment)?);
                     if let Some(substitution) = substitutions.get(idx) {
                         out.push_str(substitution);
                     }
@@ -356,10 +390,83 @@ impl Harness {
                     ));
                 }
                 Ok(Value::String(
-                    regex_escape(&args[0].as_string()).into_owned(),
+                    regex_escape(&self.coerce_to_string_for_tostring(&args[0])?).into_owned(),
                 ))
             }
         }
+    }
+
+    pub(crate) fn get_method_by_symbol_property(
+        &mut self,
+        value: &Value,
+        property: SymbolStaticProperty,
+    ) -> Result<Option<Value>> {
+        if matches!(value, Value::Null | Value::Undefined) {
+            return Ok(None);
+        }
+        let symbol = self.eval_symbol_static_property(property);
+        let key = self.property_key_to_storage_key(&symbol);
+        let method = self.object_property_from_value(value, &key)?;
+        if matches!(method, Value::Undefined | Value::Null) {
+            return Ok(None);
+        }
+        if !self.is_callable_value(&method) {
+            return Err(Error::ScriptRuntime(format!(
+                "{} is not callable",
+                Self::symbol_static_property_name(property)
+            )));
+        }
+        Ok(Some(method))
+    }
+
+    pub(crate) fn value_by_symbol_property(
+        &mut self,
+        value: &Value,
+        property: SymbolStaticProperty,
+    ) -> Result<Value> {
+        if matches!(value, Value::Null | Value::Undefined) {
+            return Ok(Value::Undefined);
+        }
+        let symbol = self.eval_symbol_static_property(property);
+        let key = self.property_key_to_storage_key(&symbol);
+        self.object_property_from_value(value, &key)
+    }
+
+    pub(crate) fn call_string_symbol_method(
+        &mut self,
+        pattern: &Value,
+        property: SymbolStaticProperty,
+        input: &str,
+        extra_args: &[Value],
+        event: &EventState,
+    ) -> Result<Option<Value>> {
+        let Some(method) = self.get_method_by_symbol_property(pattern, property)? else {
+            return Ok(None);
+        };
+        let mut args = Vec::with_capacity(1 + extra_args.len());
+        args.push(Value::String(input.to_string()));
+        args.extend_from_slice(extra_args);
+        Ok(Some(self.execute_callable_value_with_this_and_env(
+            &method,
+            &args,
+            event,
+            None,
+            Some(pattern.clone()),
+        )?))
+    }
+
+    pub(crate) fn is_regexp_like_for_string_prefix_search(
+        &mut self,
+        value: &Value,
+    ) -> Result<bool> {
+        if !matches!(value, Value::Object(_) | Value::RegExp(_)) {
+            return Ok(false);
+        }
+        let match_value = self.value_by_symbol_property(value, SymbolStaticProperty::Match)?;
+        if !matches!(match_value, Value::Undefined) {
+            return Ok(match_value.truthy());
+        }
+        Ok(matches!(value, Value::RegExp(_)))
     }
 
     pub(crate) fn eval_regexp_member_call_from_values(
@@ -367,18 +474,19 @@ impl Harness {
         regex: &Rc<RefCell<RegexValue>>,
         member: &str,
         args: &[Value],
+        event: &EventState,
     ) -> Result<Option<Value>> {
         match member {
             "test" => {
-                if args.len() != 1 {
+                if args.len() > 1 {
                     return Err(Error::ScriptRuntime(
-                        "RegExp.test requires exactly one argument".into(),
+                        "RegExp.test requires zero or one argument".into(),
                     ));
                 }
-                Ok(Some(Value::Bool(Self::regex_test(
-                    regex,
-                    &args[0].as_string(),
-                )?)))
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                Ok(Some(Value::Bool(Self::regex_test(regex, &input)?)))
             }
             "exec" => {
                 if args.len() > 1 {
@@ -386,11 +494,9 @@ impl Harness {
                         "RegExp.exec requires zero or one argument".into(),
                     ));
                 }
-                let input = args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Value::Undefined)
-                    .as_string();
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
                 let Some(result) = Self::regex_exec(regex, &input)? else {
                     return Ok(Some(Value::Null));
                 };
@@ -408,6 +514,118 @@ impl Harness {
                     regex.source, regex.flags
                 ))))
             }
+            "match" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp[Symbol.match] supports at most one argument".into(),
+                    ));
+                }
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                Ok(Some(
+                    self.eval_string_match(&input, Value::RegExp(regex.clone()))?,
+                ))
+            }
+            "matchAll" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp[Symbol.matchAll] supports at most one argument".into(),
+                    ));
+                }
+                if !regex.borrow().global {
+                    return Err(Error::ScriptRuntime(
+                        "String.prototype.matchAll called with a non-global RegExp argument".into(),
+                    ));
+                }
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                let regex = {
+                    let regex_ref = regex.borrow();
+                    let source = Value::String(regex_ref.source.clone());
+                    let flags = Value::String(regex_ref.flags.clone());
+                    let last_index = regex_ref.last_index;
+                    drop(regex_ref);
+                    let cloned = self.new_regex_from_values(&source, Some(&flags))?;
+                    let Value::RegExp(regex) = cloned else {
+                        unreachable!("RegExp constructor must return a RegExp");
+                    };
+                    regex.borrow_mut().last_index = last_index;
+                    regex
+                };
+                let mut matches = Vec::new();
+                loop {
+                    let Some(result) = Self::regex_exec(&regex, &input)? else {
+                        break;
+                    };
+                    matches.push(Self::regex_exec_result_to_value(result.clone()));
+                    if result.full_match_start_byte == result.full_match_end_byte {
+                        let mut regex = regex.borrow_mut();
+                        let unicode = regex.unicode || regex.unicode_sets;
+                        regex.last_index =
+                            Self::advance_string_index_utf16(&input, regex.last_index, unicode);
+                    }
+                }
+                Ok(Some(self.new_iterator_value(matches)))
+            }
+            "replace" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp[Symbol.replace] supports up to two arguments".into(),
+                    ));
+                }
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                let replacement = args.get(1).cloned().unwrap_or(Value::Undefined);
+                let replaced = if self.is_callable_value(&replacement) {
+                    self.replace_string_with_regex_callback(&input, regex, &replacement, event)?
+                } else {
+                    Self::replace_string_with_regex(
+                        &input,
+                        regex,
+                        &self.coerce_to_string_for_tostring(&replacement)?,
+                    )?
+                };
+                Ok(Some(Value::String(replaced)))
+            }
+            "search" => {
+                if args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp[Symbol.search] supports at most one argument".into(),
+                    ));
+                }
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                let previous_last_index = regex.borrow().last_index;
+                regex.borrow_mut().last_index = 0;
+                let result = Self::regex_exec(regex, &input)?;
+                regex.borrow_mut().last_index = previous_last_index;
+                Ok(Some(Value::Number(
+                    result
+                        .map(|match_result| match_result.index as i64)
+                        .unwrap_or(-1),
+                )))
+            }
+            "split" => {
+                if args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "RegExp[Symbol.split] supports up to two arguments".into(),
+                    ));
+                }
+                let input = self.coerce_to_string_for_tostring(
+                    &args.first().cloned().unwrap_or(Value::Undefined),
+                )?;
+                let limit = match args.get(1) {
+                    None | Some(Value::Undefined) => None,
+                    Some(value) => Some(Self::value_to_i64(value)),
+                };
+                Ok(Some(Self::new_array_value(Self::split_string_with_regex(
+                    &input, regex, limit,
+                )?)))
+            }
             _ => Ok(None),
         }
     }
@@ -416,7 +634,7 @@ impl Harness {
         let regex = if let Value::RegExp(regex) = pattern {
             regex
         } else {
-            let compiled = Self::new_regex_from_values(&pattern, None)?;
+            let compiled = self.new_regex_from_values(&pattern, None)?;
             match compiled {
                 Value::RegExp(regex) => regex,
                 _ => unreachable!("RegExp constructor must return a RegExp"),

@@ -312,6 +312,311 @@ fn intl_collator_locales_sensitivity_and_static_methods_work() -> Result<()> {
 }
 
 #[test]
+fn intl_generic_prototype_getters_and_incompatible_receivers_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const display = new Intl.DisplayNames(['en'], { type: 'region' });
+            const plural = new Intl.PluralRules('en-US', { type: 'ordinal' });
+            const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+            const segmenter = new Intl.Segmenter('ja-JP', { granularity: 'word' });
+            const collator = new Intl.Collator('sv', { caseFirst: 'upper', sensitivity: 'base' });
+
+            const ofFn = display['of'];
+            const select = plural['select'];
+            const selectRange = plural['selectRange'];
+            const format = rtf['format'];
+            const formatToParts = rtf['formatToParts'];
+            const segment = segmenter['segment'];
+            const collatorResolved = collator['resolvedOptions'];
+
+            display.aliasOf = ofFn;
+            plural.aliasSelect = select;
+            plural.aliasSelectRange = selectRange;
+            rtf.aliasFormat = format;
+            rtf.aliasFormatToParts = formatToParts;
+            segmenter.aliasSegment = segment;
+            collator.aliasResolvedOptions = collatorResolved;
+
+            const displayValue = display['of']('US');
+            const rangeValue = plural.aliasSelectRange(1, 2);
+            const relativeValue = rtf['format'](-1, 'day');
+            const rtfPartsDirect = rtf['formatToParts'](10, 'seconds');
+            const rtfPartsViaAlias = rtf.aliasFormatToParts(10, 'seconds');
+            const rtfPartsJson = JSON.stringify(rtfPartsViaAlias);
+            const segmentDirect = segmenter['segment']('吾輩は猫である。');
+            const segmentViaAlias = segmenter.aliasSegment('吾輩は猫である。');
+            const collatorOptions = collator.aliasResolvedOptions();
+
+            let err = '';
+            try {
+              ({ aliasOf: ofFn }).aliasOf('US');
+            } catch (e) {
+              err = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              String(ofFn === Intl.DisplayNames.prototype.of),
+              String(select === Intl.PluralRules.prototype.select),
+              String(format === Intl.RelativeTimeFormat.prototype.format),
+              String(segment === Intl.Segmenter.prototype.segment),
+              String(collatorResolved === Intl.Collator.prototype.resolvedOptions),
+              String(displayValue === display.aliasOf('US')) + ':' + displayValue,
+              plural.aliasSelect(21),
+              rangeValue,
+              relativeValue,
+              String(JSON.stringify(rtfPartsDirect) === rtfPartsJson && rtfPartsJson.length > 0),
+              String(segmentDirect[0].segment === segmentViaAlias[0].segment) + ':' + segmentViaAlias[0].segment,
+              collatorOptions.caseFirst + ':' + collatorOptions.sensitivity,
+              err,
+              String(collator.compare.name === 'compare'),
+              String(Function.prototype.toString.call(collator.compare) === collator.compare.toString())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true:United States|one|other|yesterday|true|true:吾輩|upper:base|Intl.DisplayNames method called on incompatible receiver|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_collator_compare_getter_accessor_identity_and_receiver_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const compare1 = collator.compare;
+            const compare2 = collator['compare'];
+
+            let bad = '';
+            try {
+              ({ __proto__: Intl.Collator.prototype }).compare;
+            } catch (e) {
+              bad = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              String(compare1 === compare2 && compare1 === collator.compare),
+              String(!Object.prototype.hasOwnProperty.call(collator, 'compare')),
+              String(compare1('z', 'ä') < 0),
+              String(compare1.name === 'compare' && compare1.length === 2),
+              bad,
+              String(Function.prototype.toString.call(compare1) === compare1.toString()),
+              collator.resolvedOptions().caseFirst + ':' + collator.resolvedOptions().sensitivity
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|Intl.Collator.compare requires an Intl.Collator instance|true|upper:base",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_collator_compare_accessor_assignment_noop_and_enumeration_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            const nativeCompare = collator.compare;
+            let beforeForIn = '';
+            for (const key in collator) beforeForIn += key;
+
+            collator.compare = (...args) => 'ovr:' + args.length;
+            const compareAfterAssign = collator.compare;
+            let afterForIn = '';
+            for (const key in collator) afterForIn += key;
+
+            delete collator.compare;
+
+            let deleteForIn = '';
+            for (const key in collator) deleteForIn += key;
+
+            document.getElementById('result').textContent = [
+              String('compare' in collator),
+              String(!Object.prototype.hasOwnProperty.call(collator, 'compare')),
+              String(Object.keys(collator).length === 0),
+              String(Object.keys({ ...collator }).length === 0),
+              String(beforeForIn === ''),
+              String(compareAfterAssign === nativeCompare),
+              String(collator.compare === nativeCompare),
+              String(collator.compare('z', 'ä') < 0),
+              String(collator['compare']('z', 'ä') < 0),
+              String(delete collator.compare),
+              String(collator.compare === nativeCompare),
+              String(collator.compare('z', 'ä') < 0),
+              String(!Object.prototype.hasOwnProperty.call(collator, 'compare')),
+              String(Object.keys(collator).length === 0),
+              String(Object.keys({ ...collator }).length === 0),
+              String(afterForIn === ''),
+              String(deleteForIn === ''),
+              JSON.stringify(collator)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|{}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_collator_descriptor_define_property_and_reflect_set_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const collator = new Intl.Collator('sv', {
+            caseFirst: 'upper',
+            sensitivity: 'base'
+          });
+          window.collator = collator;
+          const nativeCompare = collator.compare;
+          const protoDesc =
+            Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare');
+          const ownBefore = Object.getOwnPropertyDescriptor(window.collator, 'compare');
+          const reflectBefore =
+            Reflect.set(window.collator, 'compare', (left, right) => 'bad:' + left + ':' + right);
+          const override1 = (left, right) => 'own:' + left + ':' + right;
+          const override2 = (left, right) => 'set:' + left + ':' + right;
+          Object.defineProperty(window.collator, 'compare', {
+            value: override1,
+            enumerable: true
+          });
+          const ownAfterDefine = Object.getOwnPropertyDescriptor(window.collator, 'compare');
+          let keysAfterDefine = '';
+          for (const key in window.collator) keysAfterDefine += key;
+          const reflectAfter = Reflect.set(window.collator, 'compare', override2);
+          const ownAfterReflect = Object.getOwnPropertyDescriptor(window.collator, 'compare');
+          delete window.collator.compare;
+          const ownAfterDelete = Object.getOwnPropertyDescriptor(window.collator, 'compare');
+          let keysAfterDelete = '';
+          for (const key in window.collator) keysAfterDelete += key;
+
+          document.getElementById('result').textContent = [
+            String(ownBefore === undefined),
+            String(protoDesc.get !== undefined && protoDesc.set === undefined),
+            String(protoDesc.enumerable === false && protoDesc.configurable === true),
+            Object.keys(protoDesc).join(','),
+            String(reflectBefore === false),
+            String(keysAfterDefine === 'compare'),
+            String(
+              ownAfterDefine.value === override1 &&
+              ownAfterDefine.enumerable === true &&
+              ownAfterDefine.writable === false &&
+              ownAfterDefine.configurable === false
+            ),
+            String(reflectAfter === false),
+            String(
+              ownAfterReflect.value === override1 &&
+              ownAfterReflect.enumerable === true &&
+              ownAfterReflect.writable === false &&
+              ownAfterReflect.configurable === false
+            ),
+            String(delete window.collator.compare === false),
+            String(ownAfterDelete.value === override1),
+            String(keysAfterDelete === 'compare'),
+            String(window.collator.compare('z', 'ä') === 'own:z:ä'),
+            JSON.stringify(window.collator)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|true|true|get,set,enumerable,configurable|true|true|true|true|true|true|true|true|true|{}",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn intl_collator_main_realm_define_property_override_lookup_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const collator = new Intl.Collator('sv', {
+              caseFirst: 'upper',
+              sensitivity: 'base'
+            });
+            window.collator = collator;
+            const nativeCompare = collator.compare;
+            const override1 = (left, right) => 'own:' + left + ':' + right;
+            const override2 = (left, right) => 'set:' + left + ':' + right;
+
+            Object.defineProperty(collator, 'compare', {
+              value: override1,
+              enumerable: true
+            });
+
+            const ownCall = collator.compare('a', 'b');
+            const pathCall = window.collator.compare('a', 'b');
+            const bracketCall = collator['compare']('a', 'b');
+            const extracted = collator.compare;
+            const extractedCall = extracted('a', 'b');
+
+            const reflectAfter = Reflect.set(window.collator, 'compare', override2);
+            const reflectCall = collator.compare('c', 'd');
+            const reflectPathCall = window.collator['compare']('c', 'd');
+
+            delete window.collator.compare;
+
+            document.getElementById('result').textContent = [
+              String(ownCall === 'own:a:b'),
+              String(pathCall === 'own:a:b'),
+              String(bracketCall === 'own:a:b'),
+              String(extracted === override1),
+              String(extractedCall === 'own:a:b'),
+              String(reflectAfter === false),
+              String(reflectCall === 'own:c:d'),
+              String(reflectPathCall === 'own:c:d'),
+              String(delete window.collator.compare === false),
+              String(collator.compare !== nativeCompare),
+              String(collator.compare('z', 'ä') === 'own:z:ä')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn bigint_literals_constructor_and_typeof_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

@@ -28,6 +28,7 @@ impl Harness {
             buffer,
             byte_offset: 0,
             fixed_length: Some(length),
+            properties: ObjectValue::default(),
         }))))
     }
 
@@ -77,6 +78,7 @@ impl Harness {
             buffer,
             byte_offset,
             fixed_length: length,
+            properties: ObjectValue::default(),
         }))))
     }
 
@@ -515,16 +517,6 @@ impl Harness {
                 detached: false,
             },
         ))))
-    }
-
-    pub(crate) fn resize_array_buffer_in_env(
-        &mut self,
-        env: &HashMap<String, Value>,
-        target: &str,
-        new_byte_length: i64,
-    ) -> Result<()> {
-        let buffer = self.resolve_array_buffer_from_env(env, target)?;
-        self.resize_array_buffer(&buffer, new_byte_length)
     }
 
     pub(crate) fn eval_typed_array_construct(

@@ -1934,6 +1934,25 @@ impl Harness {
         value[start_byte..end_byte].to_string()
     }
 
+    fn selection_text(&self, selection: &Rc<RefCell<ObjectValue>>) -> String {
+        let Some((start_container, start_offset, end_container, end_offset)) =
+            self.selection_normalized_boundaries(selection)
+        else {
+            return String::new();
+        };
+        let full = self.dom.text_content(self.dom.root);
+        let start = self
+            .selection_boundary_char_index(start_container, start_offset)
+            .unwrap_or(0);
+        let end = self
+            .selection_boundary_char_index(end_container, end_offset)
+            .unwrap_or(start);
+        let len = full.chars().count();
+        let start = start.min(len);
+        let end = end.min(len).max(start);
+        Self::selection_slice_text_by_char_index(&full, start, end)
+    }
+
     fn selection_node_boundary_char_indexes(&self, node: NodeId) -> Option<(usize, usize)> {
         if !self.dom.is_valid_node(node) {
             return None;
@@ -2653,24 +2672,7 @@ impl Harness {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime("toString takes no arguments".into()));
                 }
-                let Some((start_container, start_offset, end_container, end_offset)) =
-                    self.selection_normalized_boundaries(selection_object)
-                else {
-                    return Ok(Some(Value::String(String::new())));
-                };
-                let full = self.dom.text_content(self.dom.root);
-                let start = self
-                    .selection_boundary_char_index(start_container, start_offset)
-                    .unwrap_or(0);
-                let end = self
-                    .selection_boundary_char_index(end_container, end_offset)
-                    .unwrap_or(start);
-                let len = full.chars().count();
-                let start = start.min(len);
-                let end = end.min(len).max(start);
-                Ok(Some(Value::String(
-                    Self::selection_slice_text_by_char_index(&full, start, end),
-                )))
+                Ok(Some(Value::String(self.selection_text(selection_object))))
             }
             _ => Ok(None),
         }

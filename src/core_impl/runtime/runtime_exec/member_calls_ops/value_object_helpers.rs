@@ -1318,7 +1318,7 @@ impl Harness {
             ),
             (
                 "toString".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("selection", "toString"),
             ),
         ])
     }
@@ -1690,7 +1690,7 @@ impl Harness {
             ),
             (
                 "toString".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("canvas_2d_context", "toString"),
             ),
             (
                 "Symbol.toStringTag".to_string(),
@@ -1730,12 +1730,62 @@ impl Harness {
         );
     }
 
-    pub(crate) fn delete_object_property_entries(entries: &mut ObjectValue, key: &str) -> bool {
+    pub(crate) fn delete_object_getter_entries(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+    ) -> bool {
+        let getter_key = Self::object_getter_storage_key(key);
+        let mut deleted = entries.delete_entry(&getter_key);
+        let undefined_getter_key = Self::object_undefined_getter_storage_key(key);
+        deleted |= entries.delete_entry(&undefined_getter_key);
+        deleted
+    }
+
+    pub(crate) fn delete_object_setter_entries(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+    ) -> bool {
+        let setter_key = Self::object_setter_storage_key(key);
+        let mut deleted = entries.delete_entry(&setter_key);
+        let undefined_setter_key = Self::object_undefined_setter_storage_key(key);
+        deleted |= entries.delete_entry(&undefined_setter_key);
+        deleted
+    }
+
+    pub(crate) fn delete_object_property_auxiliary_entries(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+    ) -> bool {
+        let mut deleted = Self::delete_object_getter_entries(entries, key);
+        deleted |= Self::delete_object_setter_entries(entries, key);
+        let non_enumerable_key = Self::object_non_enumerable_storage_key(key);
+        deleted |= entries.delete_entry(&non_enumerable_key);
+        let non_writable_key = Self::object_non_writable_storage_key(key);
+        deleted |= entries.delete_entry(&non_writable_key);
+        let non_configurable_key = Self::object_non_configurable_storage_key(key);
+        deleted |= entries.delete_entry(&non_configurable_key);
+        deleted
+    }
+
+    pub(crate) fn delete_object_property_entries(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+    ) -> bool {
         let mut deleted = entries.delete_entry(key);
         let getter_key = Self::object_getter_storage_key(key);
         deleted |= entries.delete_entry(&getter_key);
         let setter_key = Self::object_setter_storage_key(key);
         deleted |= entries.delete_entry(&setter_key);
+        let undefined_getter_key = Self::object_undefined_getter_storage_key(key);
+        deleted |= entries.delete_entry(&undefined_getter_key);
+        let undefined_setter_key = Self::object_undefined_setter_storage_key(key);
+        deleted |= entries.delete_entry(&undefined_setter_key);
+        let non_enumerable_key = Self::object_non_enumerable_storage_key(key);
+        deleted |= entries.delete_entry(&non_enumerable_key);
+        let non_writable_key = Self::object_non_writable_storage_key(key);
+        deleted |= entries.delete_entry(&non_writable_key);
+        let non_configurable_key = Self::object_non_configurable_storage_key(key);
+        deleted |= entries.delete_entry(&non_configurable_key);
         deleted
     }
 
@@ -1986,6 +2036,34 @@ impl Harness {
         constructor
     }
 
+    fn new_object_backed_constructor_with_prototype(
+        callable_kind: &str,
+        extra_public_entries: Vec<(String, Value)>,
+    ) -> Value {
+        let prototype = Self::new_object_value(Vec::new());
+        let mut constructor_entries = vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String(callable_kind.to_string()),
+            ),
+            ("prototype".to_string(), prototype.clone()),
+        ];
+        constructor_entries.extend(extra_public_entries);
+        let constructor = Self::new_object_value(constructor_entries);
+        if let Value::Object(prototype_entries) = &prototype {
+            Self::object_set_entry(
+                &mut prototype_entries.borrow_mut(),
+                "constructor".to_string(),
+                constructor.clone(),
+            );
+            Self::mark_existing_public_properties_non_enumerable(prototype_entries);
+        }
+        if let Value::Object(constructor_entries) = &constructor {
+            Self::mark_existing_public_properties_non_enumerable(constructor_entries);
+        }
+        constructor
+    }
+
     pub(crate) fn shared_core_constructor_bindings(
         string_constructor: &Value,
         boolean_constructor: &Value,
@@ -1993,7 +2071,30 @@ impl Harness {
         bigint_constructor: &Value,
         symbol_constructor: &Value,
         object_constructor: &Value,
+        reflect_object: &Value,
     ) -> Vec<(String, Value)> {
+        let object_prototype = match object_constructor {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                Self::object_get_entry(&entries, "prototype")
+            }
+            _ => None,
+        };
+        if let Some(object_prototype) = object_prototype {
+            for constructor in [boolean_constructor, number_constructor, bigint_constructor] {
+                let Value::Object(entries) = constructor else {
+                    continue;
+                };
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype_entries)) = prototype {
+                    Self::set_internal_prototype(&prototype_entries, object_prototype.clone());
+                }
+            }
+        }
+
         let mut bindings = vec![
             ("String".to_string(), string_constructor.clone()),
             ("Boolean".to_string(), boolean_constructor.clone()),
@@ -2002,6 +2103,7 @@ impl Harness {
             ("Symbol".to_string(), symbol_constructor.clone()),
             ("RegExp".to_string(), Value::RegExpConstructor),
             ("Object".to_string(), object_constructor.clone()),
+            ("Reflect".to_string(), reflect_object.clone()),
             ("Blob".to_string(), Value::BlobConstructor),
             ("URL".to_string(), Value::UrlConstructor),
             (
@@ -2040,7 +2142,14 @@ impl Harness {
         let constructor = Self::new_receiver_builtin_constructor_object(
             Some("number_constructor"),
             "number",
-            &["toLocaleString", "toString", "valueOf"],
+            &[
+                "toExponential",
+                "toFixed",
+                "toLocaleString",
+                "toPrecision",
+                "toString",
+                "valueOf",
+            ],
         );
         let Value::Object(constructor_entries) = &constructor else {
             return constructor;
@@ -2113,7 +2222,28 @@ impl Harness {
     }
 
     pub(crate) fn new_object_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
+        let prototype = Self::new_object_value(vec![
+            (
+                "toString".to_string(),
+                Self::new_receiver_builtin_callable("object", "toString"),
+            ),
+            (
+                "valueOf".to_string(),
+                Self::new_receiver_builtin_callable("object", "valueOf"),
+            ),
+            (
+                "hasOwnProperty".to_string(),
+                Self::new_receiver_builtin_callable("object", "hasOwnProperty"),
+            ),
+            (
+                "isPrototypeOf".to_string(),
+                Self::new_receiver_builtin_callable("object", "isPrototypeOf"),
+            ),
+            (
+                "propertyIsEnumerable".to_string(),
+                Self::new_receiver_builtin_callable("object", "propertyIsEnumerable"),
+            ),
+        ]);
         let constructor = Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -2122,7 +2252,51 @@ impl Harness {
             ("prototype".to_string(), prototype.clone()),
             (
                 "assign".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_object_static_method_callable("assign"),
+            ),
+            (
+                "getOwnPropertyDescriptor".to_string(),
+                Self::new_object_static_method_callable("getOwnPropertyDescriptor"),
+            ),
+            (
+                "defineProperty".to_string(),
+                Self::new_object_static_method_callable("defineProperty"),
+            ),
+            (
+                "getOwnPropertyNames".to_string(),
+                Self::new_object_static_method_callable("getOwnPropertyNames"),
+            ),
+            (
+                "getOwnPropertySymbols".to_string(),
+                Self::new_object_static_method_callable("getOwnPropertySymbols"),
+            ),
+            (
+                "keys".to_string(),
+                Self::new_object_static_method_callable("keys"),
+            ),
+            (
+                "values".to_string(),
+                Self::new_object_static_method_callable("values"),
+            ),
+            (
+                "entries".to_string(),
+                Self::new_object_static_method_callable("entries"),
+            ),
+            (
+                "hasOwn".to_string(),
+                Self::new_object_static_method_callable("hasOwn"),
+            ),
+            (
+                "getPrototypeOf".to_string(),
+                Self::new_object_static_method_callable("getPrototypeOf"),
+            ),
+            (
+                "setPrototypeOf".to_string(),
+                Self::new_object_static_method_callable("setPrototypeOf"),
+            ),
+            (
+                "freeze".to_string(),
+                Self::new_object_static_method_callable("freeze"),
             ),
         ]);
         if let Value::Object(prototype_entries) = &prototype {
@@ -2147,239 +2321,90 @@ impl Harness {
         constructor
     }
 
-    pub(crate) fn new_event_target_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
+    pub(crate) fn new_reflect_object_value(&mut self) -> Value {
+        let to_string_tag = self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag);
+        let reflect = Self::new_object_value(vec![
             (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("event_target_constructor".to_string()),
+                "set".to_string(),
+                Self::new_reflect_static_method_callable("set"),
             ),
-            ("prototype".to_string(), prototype.clone()),
+            (
+                "ownKeys".to_string(),
+                Self::new_reflect_static_method_callable("ownKeys"),
+            ),
+            (to_string_tag_key, Value::String("Reflect".to_string())),
         ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
+        if let Value::Object(entries) = &reflect {
+            Self::mark_existing_public_properties_non_enumerable(entries);
         }
-        constructor
+        reflect
+    }
+
+    pub(crate) fn new_event_target_constructor_value() -> Value {
+        Self::new_object_backed_constructor_with_prototype("event_target_constructor", vec![])
     }
 
     pub(crate) fn new_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("event_constructor", vec![])
     }
 
     pub(crate) fn new_custom_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("custom_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("custom_event_constructor", vec![])
     }
 
     pub(crate) fn new_mouse_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("mouse_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("mouse_event_constructor", vec![])
     }
 
     pub(crate) fn new_keyboard_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("keyboard_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-            ("DOM_KEY_LOCATION_STANDARD".to_string(), Value::Number(0x00)),
-            ("DOM_KEY_LOCATION_LEFT".to_string(), Value::Number(0x01)),
-            ("DOM_KEY_LOCATION_RIGHT".to_string(), Value::Number(0x02)),
-            ("DOM_KEY_LOCATION_NUMPAD".to_string(), Value::Number(0x03)),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype(
+            "keyboard_event_constructor",
+            vec![
+                ("DOM_KEY_LOCATION_STANDARD".to_string(), Value::Number(0x00)),
+                ("DOM_KEY_LOCATION_LEFT".to_string(), Value::Number(0x01)),
+                ("DOM_KEY_LOCATION_RIGHT".to_string(), Value::Number(0x02)),
+                ("DOM_KEY_LOCATION_NUMPAD".to_string(), Value::Number(0x03)),
+            ],
+        )
     }
 
     pub(crate) fn new_wheel_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("wheel_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-            ("DOM_DELTA_PIXEL".to_string(), Value::Number(0)),
-            ("DOM_DELTA_LINE".to_string(), Value::Number(1)),
-            ("DOM_DELTA_PAGE".to_string(), Value::Number(2)),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype(
+            "wheel_event_constructor",
+            vec![
+                ("DOM_DELTA_PIXEL".to_string(), Value::Number(0)),
+                ("DOM_DELTA_LINE".to_string(), Value::Number(1)),
+                ("DOM_DELTA_PAGE".to_string(), Value::Number(2)),
+            ],
+        )
     }
 
     pub(crate) fn new_navigate_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("navigate_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("navigate_event_constructor", vec![])
     }
 
     pub(crate) fn new_pointer_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("pointer_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("pointer_event_constructor", vec![])
     }
 
     pub(crate) fn new_error_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("error_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("error_event_constructor", vec![])
     }
 
     pub(crate) fn new_hash_change_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("hash_change_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("hash_change_event_constructor", vec![])
     }
 
     pub(crate) fn new_before_unload_event_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("before_unload_event_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype(
+            "before_unload_event_constructor",
+            vec![],
+        )
     }
 
     pub(crate) fn new_image_data_constructor_value() -> Value {
-        let prototype = Self::new_object_value(Vec::new());
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("image_data_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("image_data_constructor", vec![])
     }
 
     pub(crate) fn new_navigate_event_default_signal_value() -> Value {
@@ -2425,7 +2450,7 @@ impl Harness {
     }
 
     pub(crate) fn new_document_constructor_value() -> Value {
-        Self::new_object_value(vec![
+        let constructor = Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
                 Value::String("document_constructor".to_string()),
@@ -2438,7 +2463,11 @@ impl Harness {
                 "parseHTMLUnsafe".to_string(),
                 Self::new_document_parse_html_callable(false),
             ),
-        ])
+        ]);
+        if let Value::Object(entries) = &constructor {
+            Self::mark_existing_public_properties_non_enumerable(entries);
+        }
+        constructor
     }
 
     pub(crate) fn new_fetch_callable_value() -> Value {
@@ -2575,22 +2604,7 @@ impl Harness {
     }
 
     pub(crate) fn new_file_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("file_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("file_constructor", vec![])
     }
 
     pub(crate) fn new_clipboard_item_constructor_value() -> Value {
@@ -2643,98 +2657,29 @@ impl Harness {
     }
 
     pub(crate) fn new_text_encoder_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("text_encoder_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("text_encoder_constructor", vec![])
     }
 
     pub(crate) fn new_text_decoder_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("text_decoder_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("text_decoder_constructor", vec![])
     }
 
     pub(crate) fn new_text_encoder_stream_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("text_encoder_stream_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype(
+            "text_encoder_stream_constructor",
+            vec![],
+        )
     }
 
     pub(crate) fn new_text_decoder_stream_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("text_decoder_stream_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype(
+            "text_decoder_stream_constructor",
+            vec![],
+        )
     }
 
     pub(crate) fn new_css_style_sheet_constructor_value() -> Value {
-        let prototype = Self::new_object_value(vec![]);
-        let constructor = Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("css_style_sheet_constructor".to_string()),
-            ),
-            ("prototype".to_string(), prototype.clone()),
-        ]);
-        if let Value::Object(prototype_entries) = &prototype {
-            Self::object_set_entry(
-                &mut prototype_entries.borrow_mut(),
-                "constructor".to_string(),
-                constructor.clone(),
-            );
-        }
-        constructor
+        Self::new_object_backed_constructor_with_prototype("css_style_sheet_constructor", vec![])
     }
 
     pub(crate) fn new_text_encoder_encode_callable() -> Value {
@@ -3414,6 +3359,27 @@ impl Harness {
         ])
     }
 
+    pub(crate) fn new_intl_collator_compare_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("intl_collator_get_compare".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_intl_date_time_format_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("intl_date_time_format_get_format".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_intl_number_format_getter_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("intl_number_format_get_format".to_string()),
+        )])
+    }
+
     pub(crate) fn new_global_decode_uri_callable(component: bool) -> Value {
         let kind = if component {
             "global_decode_uri_component"
@@ -3572,6 +3538,32 @@ impl Harness {
         ])
     }
 
+    fn new_object_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("object_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
+    fn new_reflect_static_method_callable(method: &str) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("reflect_static_method".to_string()),
+            ),
+            (
+                INTERNAL_STATIC_METHOD_NAME_KEY.to_string(),
+                Value::String(method.to_string()),
+            ),
+        ])
+    }
+
     fn new_bigint_static_method_callable(method: &str) -> Value {
         Self::new_object_value(vec![
             (
@@ -3694,6 +3686,113 @@ impl Harness {
                 Value::String(member.to_string()),
             ),
         ])
+    }
+
+    fn document_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "createElement"
+                | "createElementNS"
+                | "createTextNode"
+                | "createAttribute"
+                | "createDocumentFragment"
+                | "createRange"
+                | "getSelection"
+                | "append"
+                | "getElementById"
+                | "getElementsByClassName"
+                | "getElementsByName"
+                | "getElementsByTagName"
+                | "getElementsByTagNameNS"
+                | "querySelector"
+                | "querySelectorAll"
+                | "createTreeWalker"
+                | "addEventListener"
+                | "removeEventListener"
+        ) {
+            Some(Self::new_receiver_builtin_callable("document", key))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn parsed_document_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "createTreeWalker"
+                | "querySelector"
+                | "querySelectorAll"
+                | "getElementById"
+                | "getElementsByClassName"
+                | "getElementsByName"
+                | "getElementsByTagName"
+                | "createElement"
+                | "createElementNS"
+                | "createTextNode"
+                | "createAttribute"
+                | "createDocumentFragment"
+                | "createRange"
+                | "append"
+        ) {
+            Some(Self::new_receiver_builtin_callable("parsed_document", key))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn dom_parser_receiver_builtin_method(key: &str) -> Option<Value> {
+        if key == "parseFromString" {
+            Some(Self::new_receiver_builtin_callable("dom_parser", key))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn tree_walker_receiver_builtin_method(key: &str) -> Option<Value> {
+        if key == "nextNode" {
+            Some(Self::new_receiver_builtin_callable("tree_walker", key))
+        } else {
+            None
+        }
+    }
+
+    fn range_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "setStart" | "setEnd") {
+            Some(Self::new_receiver_builtin_callable("range", key))
+        } else {
+            None
+        }
+    }
+
+    fn selection_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(
+            key,
+            "addRange"
+                | "collapse"
+                | "collapseToEnd"
+                | "collapseToStart"
+                | "containsNode"
+                | "deleteFromDocument"
+                | "empty"
+                | "extend"
+                | "getComposedRanges"
+                | "getRangeAt"
+                | "modify"
+                | "removeAllRanges"
+                | "removeRange"
+                | "selectAllChildren"
+                | "setBaseAndExtent"
+                | "setPosition"
+                | "toString"
+        ) {
+            Some(Self::new_receiver_builtin_callable("selection", key))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_builtin_placeholder_value(value: &Value) -> bool {
+        matches!(value, Value::Function(function) if function.function_id == usize::MAX)
     }
 
     fn new_receiver_builtin_prototype_value(
@@ -4034,15 +4133,39 @@ impl Harness {
             Value::StringConstructor,
             "string",
             &[
+                "at",
+                "charAt",
+                "charCodeAt",
                 "concat",
+                "codePointAt",
                 "endsWith",
                 "includes",
+                "indexOf",
+                "lastIndexOf",
+                "isWellFormed",
+                "localeCompare",
+                "match",
+                "matchAll",
                 "normalize",
+                "padEnd",
+                "padStart",
+                "replace",
+                "replaceAll",
+                "repeat",
+                "search",
                 "slice",
                 "split",
                 "startsWith",
                 "substring",
+                "toLocaleLowerCase",
+                "toLocaleUpperCase",
+                "toLowerCase",
                 "toString",
+                "toUpperCase",
+                "toWellFormed",
+                "trim",
+                "trimEnd",
+                "trimStart",
                 "valueOf",
             ],
             Some("iterator"),
@@ -4160,6 +4283,57 @@ impl Harness {
         })
     }
 
+    fn cached_date_prototype_value(&mut self) -> Value {
+        self.cached_builtin_constructor_prototype_value("Date", |this| {
+            let prototype = Self::new_object_value(
+                [
+                    "getTime",
+                    "setTime",
+                    "toISOString",
+                    "toString",
+                    "valueOf",
+                    "getUTCFullYear",
+                    "getUTCMonth",
+                    "getUTCDate",
+                    "getUTCDay",
+                    "getUTCHours",
+                    "getUTCMinutes",
+                    "getUTCSeconds",
+                    "getUTCMilliseconds",
+                    "getFullYear",
+                    "getMonth",
+                    "getDate",
+                    "getHours",
+                    "getMinutes",
+                    "getSeconds",
+                ]
+                .into_iter()
+                .map(|method| {
+                    (
+                        method.to_string(),
+                        Self::new_receiver_builtin_callable("date", method),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            );
+            let Value::Object(entries) = &prototype else {
+                return prototype;
+            };
+            let to_string_tag_symbol =
+                this.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+            let to_string_tag_key = this.property_key_to_storage_key(&to_string_tag_symbol);
+            Self::object_set_entry(
+                &mut entries.borrow_mut(),
+                to_string_tag_key.clone(),
+                Value::String("Date".to_string()),
+            );
+            Self::mark_existing_public_properties_non_enumerable(entries);
+            Self::mark_property_non_enumerable(entries, &to_string_tag_key);
+            Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
+            prototype
+        })
+    }
+
     fn cached_regexp_constructor_prototype_value(&mut self) -> Value {
         self.cached_builtin_constructor_prototype_value("RegExp", |this| {
             let prototype = Self::new_receiver_builtin_prototype_value(
@@ -4170,6 +4344,60 @@ impl Harness {
             let Value::Object(entries) = &prototype else {
                 return prototype;
             };
+            for (property, member) in [
+                (SymbolStaticProperty::Match, "match"),
+                (SymbolStaticProperty::MatchAll, "matchAll"),
+                (SymbolStaticProperty::Replace, "replace"),
+                (SymbolStaticProperty::Search, "search"),
+                (SymbolStaticProperty::Split, "split"),
+            ] {
+                let symbol = this.eval_symbol_static_property(property);
+                let key = this.property_key_to_storage_key(&symbol);
+                Self::object_set_entry(
+                    &mut entries.borrow_mut(),
+                    key.clone(),
+                    Self::new_receiver_builtin_callable("regexp", member),
+                );
+                Self::mark_property_non_enumerable(entries, &key);
+            }
+            for key in [
+                "source",
+                "flags",
+                "global",
+                "ignoreCase",
+                "multiline",
+                "dotAll",
+                "sticky",
+                "hasIndices",
+                "unicode",
+                "unicodeSets",
+            ] {
+                Self::object_set_entry(
+                    &mut entries.borrow_mut(),
+                    key.to_string(),
+                    Value::Undefined,
+                );
+                Self::object_set_entry(
+                    &mut entries.borrow_mut(),
+                    Self::object_getter_storage_key(key),
+                    Self::new_receiver_builtin_callable("regexp", key),
+                );
+                Self::mark_property_non_enumerable(entries, key);
+            }
+            let to_string_tag_symbol =
+                this.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+            let to_string_tag_key = this.property_key_to_storage_key(&to_string_tag_symbol);
+            Self::object_set_entry(
+                &mut entries.borrow_mut(),
+                to_string_tag_key.clone(),
+                Value::String("RegExp".to_string()),
+            );
+            Self::object_set_entry(
+                &mut entries.borrow_mut(),
+                INTERNAL_REGEXP_PROTOTYPE_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::mark_property_non_enumerable(entries, &to_string_tag_key);
             Self::set_internal_prototype(entries, this.object_constructor_prototype_value());
             prototype
         })
@@ -4333,6 +4561,581 @@ impl Harness {
             .entry(function.function_id)
             .or_default();
         Self::object_set_entry(entries, "name".to_string(), Value::String(name.to_string()));
+        Self::object_set_entry(
+            entries,
+            Self::object_non_enumerable_storage_key("name"),
+            Value::Bool(true),
+        );
+        Self::object_set_entry(
+            entries,
+            Self::object_non_writable_storage_key("name"),
+            Value::Bool(true),
+        );
+    }
+
+    fn object_backed_callable_name_and_length(kind: &str) -> Option<(&'static str, i64)> {
+        match kind {
+            "generator_function_constructor" => Some(("GeneratorFunction", 1)),
+            "async_generator_function_constructor" => Some(("AsyncGeneratorFunction", 1)),
+            "boolean_constructor" => Some(("Boolean", 1)),
+            "number_constructor" => Some(("Number", 1)),
+            "bigint_constructor" => Some(("BigInt", 1)),
+            "object_constructor" => Some(("Object", 1)),
+            "function_constructor" => Some(("Function", 1)),
+            "function_call" => Some(("call", 1)),
+            "function_apply" => Some(("apply", 2)),
+            "function_bind" => Some(("bind", 1)),
+            "function_to_string" => Some(("toString", 0)),
+            "event_target_constructor" => Some(("EventTarget", 0)),
+            "event_constructor" => Some(("Event", 1)),
+            "custom_event_constructor" => Some(("CustomEvent", 1)),
+            "mouse_event_constructor" => Some(("MouseEvent", 1)),
+            "keyboard_event_constructor" => Some(("KeyboardEvent", 1)),
+            "wheel_event_constructor" => Some(("WheelEvent", 1)),
+            "navigate_event_constructor" => Some(("NavigateEvent", 1)),
+            "pointer_event_constructor" => Some(("PointerEvent", 1)),
+            "error_event_constructor" => Some(("ErrorEvent", 1)),
+            "hash_change_event_constructor" => Some(("HashChangeEvent", 1)),
+            "before_unload_event_constructor" => Some(("BeforeUnloadEvent", 1)),
+            "image_data_constructor" => Some(("ImageData", 2)),
+            "dom_parser_constructor" => Some(("DOMParser", 0)),
+            "document_constructor" => Some(("Document", 0)),
+            "document_parse_html" => Some(("parseHTML", 1)),
+            "document_parse_html_unsafe" => Some(("parseHTMLUnsafe", 1)),
+            "fetch_function" => Some(("fetch", 1)),
+            "window_close_function" => Some(("close", 0)),
+            "window_stop_function" => Some(("stop", 0)),
+            "window_focus_function" => Some(("focus", 0)),
+            "window_scroll_function" => Some(("scroll", 0)),
+            "window_scroll_by_function" => Some(("scrollBy", 0)),
+            "window_scroll_to_function" => Some(("scrollTo", 0)),
+            "window_move_by_function" => Some(("moveBy", 2)),
+            "window_move_to_function" => Some(("moveTo", 2)),
+            "window_resize_by_function" => Some(("resizeBy", 2)),
+            "window_resize_to_function" => Some(("resizeTo", 2)),
+            "window_post_message_function" => Some(("postMessage", 1)),
+            "window_get_computed_style_function" => Some(("getComputedStyle", 1)),
+            "window_alert_function" => Some(("alert", 0)),
+            "window_confirm_function" => Some(("confirm", 0)),
+            "window_print_function" => Some(("print", 0)),
+            "window_report_error_function" => Some(("reportError", 1)),
+            "window_prompt_function" => Some(("prompt", 0)),
+            "intl_collator_compare" => Some(("compare", 2)),
+            "intl_date_time_format" => Some(("format", 1)),
+            "intl_duration_format" => Some(("format", 1)),
+            "intl_list_format" => Some(("format", 1)),
+            "intl_number_format" => Some(("format", 1)),
+            "clipboard_item_constructor" => Some(("ClipboardItem", 1)),
+            "clipboard_write" => Some(("write", 1)),
+            "request_constructor" => Some(("Request", 1)),
+            "file_constructor" => Some(("File", 2)),
+            "headers_constructor" => Some(("Headers", 0)),
+            "worker_constructor" => Some(("Worker", 1)),
+            "data_transfer_constructor" => Some(("DataTransfer", 0)),
+            "option_constructor" => Some(("Option", 0)),
+            "audio_constructor" => Some(("Audio", 0)),
+            "text_encoder_constructor" => Some(("TextEncoder", 0)),
+            "text_decoder_constructor" => Some(("TextDecoder", 0)),
+            "text_encoder_stream_constructor" => Some(("TextEncoderStream", 0)),
+            "text_decoder_stream_constructor" => Some(("TextDecoderStream", 0)),
+            "css_style_sheet_constructor" => Some(("CSSStyleSheet", 0)),
+            "text_encoder_get_encoding" => Some(("encoding", 0)),
+            "text_encoder_encode" => Some(("encode", 0)),
+            "text_encoder_encode_into" => Some(("encodeInto", 2)),
+            "text_decoder_get_encoding" => Some(("encoding", 0)),
+            "text_decoder_get_fatal" => Some(("fatal", 0)),
+            "text_decoder_get_ignore_bom" => Some(("ignoreBOM", 0)),
+            "text_decoder_decode" => Some(("decode", 0)),
+            "text_encoder_stream_get_encoding" => Some(("encoding", 0)),
+            "text_encoder_stream_get_readable" => Some(("readable", 0)),
+            "text_encoder_stream_get_writable" => Some(("writable", 0)),
+            "text_decoder_stream_get_encoding" => Some(("encoding", 0)),
+            "text_decoder_stream_get_fatal" => Some(("fatal", 0)),
+            "text_decoder_stream_get_ignore_bom" => Some(("ignoreBOM", 0)),
+            "text_decoder_stream_get_readable" => Some(("readable", 0)),
+            "text_decoder_stream_get_writable" => Some(("writable", 0)),
+            _ => None,
+        }
+    }
+
+    fn static_object_method_name_and_length(value: &Value) -> Option<(String, i64)> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        let method = match Self::object_get_entry(&entries, INTERNAL_STATIC_METHOD_NAME_KEY) {
+            Some(Value::String(method)) => method,
+            _ => return None,
+        };
+        let length = match method.as_str() {
+            "assign" => 2,
+            "getOwnPropertyDescriptor" => 2,
+            "defineProperty" => 3,
+            "getOwnPropertyNames" => 1,
+            "getOwnPropertySymbols" => 1,
+            "keys" => 1,
+            "values" => 1,
+            "entries" => 1,
+            "hasOwn" => 2,
+            "getPrototypeOf" => 1,
+            "setPrototypeOf" => 2,
+            "freeze" => 1,
+            _ => return None,
+        };
+        Some((method, length))
+    }
+
+    fn static_reflect_method_name_and_length(value: &Value) -> Option<(String, i64)> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        let method = match Self::object_get_entry(&entries, INTERNAL_STATIC_METHOD_NAME_KEY) {
+            Some(Value::String(method)) => method,
+            _ => return None,
+        };
+        let length = match method.as_str() {
+            "set" => 3,
+            "ownKeys" => 1,
+            _ => return None,
+        };
+        Some((method, length))
+    }
+
+    fn receiver_builtin_callable_name_and_length(value: &Value) -> Option<(String, i64)> {
+        let Value::Object(entries) = value else {
+            return None;
+        };
+        let entries = entries.borrow();
+        let family = match Self::object_get_entry(&entries, "__bt_receiver_builtin_family") {
+            Some(Value::String(family)) => family,
+            _ => return None,
+        };
+        let member = match Self::object_get_entry(&entries, "__bt_receiver_builtin_member") {
+            Some(Value::String(member)) => member,
+            _ => return None,
+        };
+        let (name, length) = match (family.as_str(), member.as_str()) {
+            ("boolean", "toString") => ("toString", 0),
+            ("boolean", "valueOf") => ("valueOf", 0),
+            ("number", "toExponential") => ("toExponential", 1),
+            ("number", "toFixed") => ("toFixed", 1),
+            ("number", "toLocaleString") => ("toLocaleString", 0),
+            ("number", "toPrecision") => ("toPrecision", 1),
+            ("number", "toString") => ("toString", 1),
+            ("number", "valueOf") => ("valueOf", 0),
+            ("bigint", "toLocaleString") => ("toLocaleString", 0),
+            ("bigint", "toString") => ("toString", 1),
+            ("bigint", "valueOf") => ("valueOf", 0),
+            ("symbol", "toString") => ("toString", 0),
+            ("symbol", "valueOf") => ("valueOf", 0),
+            ("string", "at") => ("at", 1),
+            ("string", "charAt") => ("charAt", 1),
+            ("string", "charCodeAt") => ("charCodeAt", 1),
+            ("string", "concat") => ("concat", 1),
+            ("string", "codePointAt") => ("codePointAt", 1),
+            ("string", "endsWith") => ("endsWith", 1),
+            ("string", "includes") => ("includes", 1),
+            ("string", "indexOf") => ("indexOf", 1),
+            ("string", "isWellFormed") => ("isWellFormed", 0),
+            ("string", "lastIndexOf") => ("lastIndexOf", 1),
+            ("string", "localeCompare") => ("localeCompare", 1),
+            ("string", "match") => ("match", 1),
+            ("string", "matchAll") => ("matchAll", 1),
+            ("string", "normalize") => ("normalize", 0),
+            ("string", "padEnd") => ("padEnd", 1),
+            ("string", "padStart") => ("padStart", 1),
+            ("string", "replace") => ("replace", 2),
+            ("string", "replaceAll") => ("replaceAll", 2),
+            ("string", "repeat") => ("repeat", 1),
+            ("string", "search") => ("search", 1),
+            ("string", "slice") => ("slice", 2),
+            ("string", "split") => ("split", 2),
+            ("string", "startsWith") => ("startsWith", 1),
+            ("string", "substring") => ("substring", 2),
+            ("string", "toLocaleLowerCase") => ("toLocaleLowerCase", 0),
+            ("string", "toLocaleUpperCase") => ("toLocaleUpperCase", 0),
+            ("string", "toLowerCase") => ("toLowerCase", 0),
+            ("string", "toString") => ("toString", 0),
+            ("string", "toUpperCase") => ("toUpperCase", 0),
+            ("string", "toWellFormed") => ("toWellFormed", 0),
+            ("string", "trim") => ("trim", 0),
+            ("string", "trimEnd") => ("trimEnd", 0),
+            ("string", "trimStart") => ("trimStart", 0),
+            ("string", "valueOf") => ("valueOf", 0),
+            ("date", "getTime") => ("getTime", 0),
+            ("date", "setTime") => ("setTime", 1),
+            ("date", "toISOString") => ("toISOString", 0),
+            ("date", "toString") => ("toString", 0),
+            ("date", "valueOf") => ("valueOf", 0),
+            ("date", "getUTCFullYear") => ("getUTCFullYear", 0),
+            ("date", "getUTCMonth") => ("getUTCMonth", 0),
+            ("date", "getUTCDate") => ("getUTCDate", 0),
+            ("date", "getUTCDay") => ("getUTCDay", 0),
+            ("date", "getUTCHours") => ("getUTCHours", 0),
+            ("date", "getUTCMinutes") => ("getUTCMinutes", 0),
+            ("date", "getUTCSeconds") => ("getUTCSeconds", 0),
+            ("date", "getUTCMilliseconds") => ("getUTCMilliseconds", 0),
+            ("date", "getFullYear") => ("getFullYear", 0),
+            ("date", "getMonth") => ("getMonth", 0),
+            ("date", "getDate") => ("getDate", 0),
+            ("date", "getHours") => ("getHours", 0),
+            ("date", "getMinutes") => ("getMinutes", 0),
+            ("date", "getSeconds") => ("getSeconds", 0),
+            ("regexp", "source") => ("get source", 0),
+            ("regexp", "flags") => ("get flags", 0),
+            ("regexp", "global") => ("get global", 0),
+            ("regexp", "ignoreCase") => ("get ignoreCase", 0),
+            ("regexp", "multiline") => ("get multiline", 0),
+            ("regexp", "dotAll") => ("get dotAll", 0),
+            ("regexp", "sticky") => ("get sticky", 0),
+            ("regexp", "hasIndices") => ("get hasIndices", 0),
+            ("regexp", "unicode") => ("get unicode", 0),
+            ("regexp", "unicodeSets") => ("get unicodeSets", 0),
+            ("regexp", "exec") => ("exec", 1),
+            ("regexp", "test") => ("test", 1),
+            ("regexp", "toString") => ("toString", 0),
+            ("regexp", "match") => ("[Symbol.match]", 1),
+            ("regexp", "matchAll") => ("[Symbol.matchAll]", 1),
+            ("regexp", "replace") => ("[Symbol.replace]", 2),
+            ("regexp", "search") => ("[Symbol.search]", 1),
+            ("regexp", "split") => ("[Symbol.split]", 2),
+            ("intl_collator", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_date_time_format", "formatToParts") => ("formatToParts", 0),
+            ("intl_date_time_format", "formatRange") => ("formatRange", 2),
+            ("intl_date_time_format", "formatRangeToParts") => ("formatRangeToParts", 2),
+            ("intl_date_time_format", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_display_names", "of") => ("of", 1),
+            ("intl_display_names", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_duration_format", "formatToParts") => ("formatToParts", 1),
+            ("intl_duration_format", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_list_format", "formatToParts") => ("formatToParts", 1),
+            ("intl_list_format", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_locale", "getCalendars") => ("getCalendars", 0),
+            ("intl_locale", "getCollations") => ("getCollations", 0),
+            ("intl_locale", "getHourCycles") => ("getHourCycles", 0),
+            ("intl_locale", "getNumberingSystems") => ("getNumberingSystems", 0),
+            ("intl_locale", "getTextInfo") => ("getTextInfo", 0),
+            ("intl_locale", "getTimeZones") => ("getTimeZones", 0),
+            ("intl_locale", "getWeekInfo") => ("getWeekInfo", 0),
+            ("intl_locale", "maximize") => ("maximize", 0),
+            ("intl_locale", "minimize") => ("minimize", 0),
+            ("intl_locale", "toString") => ("toString", 0),
+            ("intl_number_format", "formatToParts") => ("formatToParts", 1),
+            ("intl_number_format", "formatRange") => ("formatRange", 2),
+            ("intl_number_format", "formatRangeToParts") => ("formatRangeToParts", 2),
+            ("intl_number_format", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_plural_rules", "select") => ("select", 1),
+            ("intl_plural_rules", "selectRange") => ("selectRange", 2),
+            ("intl_plural_rules", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_relative_time_format", "format") => ("format", 2),
+            ("intl_relative_time_format", "formatToParts") => ("formatToParts", 2),
+            ("intl_relative_time_format", "resolvedOptions") => ("resolvedOptions", 0),
+            ("intl_segmenter", "segment") => ("segment", 1),
+            ("intl_segmenter", "resolvedOptions") => ("resolvedOptions", 0),
+            ("object", "hasOwnProperty") => ("hasOwnProperty", 1),
+            ("object", "isPrototypeOf") => ("isPrototypeOf", 1),
+            ("object", "propertyIsEnumerable") => ("propertyIsEnumerable", 1),
+            ("object", "toString") => ("toString", 0),
+            ("object", "valueOf") => ("valueOf", 0),
+            ("document", "createElement") => ("createElement", 1),
+            ("document", "createElementNS") => ("createElementNS", 2),
+            ("document", "createTextNode") => ("createTextNode", 1),
+            ("document", "createAttribute") => ("createAttribute", 1),
+            ("document", "createDocumentFragment") => ("createDocumentFragment", 0),
+            ("document", "createRange") => ("createRange", 0),
+            ("document", "getSelection") => ("getSelection", 0),
+            ("document", "append") => ("append", 0),
+            ("document", "getElementById") => ("getElementById", 1),
+            ("document", "getElementsByClassName") => ("getElementsByClassName", 1),
+            ("document", "getElementsByName") => ("getElementsByName", 1),
+            ("document", "getElementsByTagName") => ("getElementsByTagName", 1),
+            ("document", "getElementsByTagNameNS") => ("getElementsByTagNameNS", 2),
+            ("document", "querySelector") => ("querySelector", 1),
+            ("document", "querySelectorAll") => ("querySelectorAll", 1),
+            ("document", "createTreeWalker") => ("createTreeWalker", 1),
+            ("document", "addEventListener") => ("addEventListener", 2),
+            ("document", "removeEventListener") => ("removeEventListener", 2),
+            ("parsed_document", "createTreeWalker") => ("createTreeWalker", 1),
+            ("parsed_document", "querySelector") => ("querySelector", 1),
+            ("parsed_document", "querySelectorAll") => ("querySelectorAll", 1),
+            ("parsed_document", "getElementById") => ("getElementById", 1),
+            ("parsed_document", "getElementsByClassName") => ("getElementsByClassName", 1),
+            ("parsed_document", "getElementsByName") => ("getElementsByName", 1),
+            ("parsed_document", "getElementsByTagName") => ("getElementsByTagName", 1),
+            ("parsed_document", "createElement") => ("createElement", 1),
+            ("parsed_document", "createElementNS") => ("createElementNS", 2),
+            ("parsed_document", "createTextNode") => ("createTextNode", 1),
+            ("parsed_document", "createAttribute") => ("createAttribute", 1),
+            ("parsed_document", "createDocumentFragment") => ("createDocumentFragment", 0),
+            ("parsed_document", "createRange") => ("createRange", 0),
+            ("parsed_document", "append") => ("append", 0),
+            ("dom_parser", "parseFromString") => ("parseFromString", 2),
+            ("tree_walker", "nextNode") => ("nextNode", 0),
+            ("range", "setStart") => ("setStart", 2),
+            ("range", "setEnd") => ("setEnd", 2),
+            ("selection", "addRange") => ("addRange", 1),
+            ("selection", "collapse") => ("collapse", 1),
+            ("selection", "collapseToEnd") => ("collapseToEnd", 0),
+            ("selection", "collapseToStart") => ("collapseToStart", 0),
+            ("selection", "containsNode") => ("containsNode", 1),
+            ("selection", "deleteFromDocument") => ("deleteFromDocument", 0),
+            ("selection", "empty") => ("empty", 0),
+            ("selection", "extend") => ("extend", 2),
+            ("selection", "getComposedRanges") => ("getComposedRanges", 0),
+            ("selection", "getRangeAt") => ("getRangeAt", 1),
+            ("selection", "modify") => ("modify", 3),
+            ("selection", "removeAllRanges") => ("removeAllRanges", 0),
+            ("selection", "removeRange") => ("removeRange", 1),
+            ("selection", "selectAllChildren") => ("selectAllChildren", 1),
+            ("selection", "setBaseAndExtent") => ("setBaseAndExtent", 4),
+            ("selection", "setPosition") => ("setPosition", 1),
+            ("selection", "toString") => ("toString", 0),
+            ("canvas_2d_context", "toString") => ("toString", 0),
+            _ => return None,
+        };
+        Some((name.to_string(), length))
+    }
+
+    fn object_to_string_tag_property(&mut self, value: &Value) -> Result<Option<String>> {
+        let symbol = self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let key = self.property_key_to_storage_key(&symbol);
+        match self.object_property_from_value(value, &key)? {
+            Value::String(tag) if !tag.is_empty() => Ok(Some(tag)),
+            _ => Ok(None),
+        }
+    }
+
+    fn object_prototype_to_string_tag(&mut self, value: &Value) -> Result<String> {
+        let tag = match value {
+            Value::Null => "Null".to_string(),
+            Value::Undefined => "Undefined".to_string(),
+            Value::Bool(_) => "Boolean".to_string(),
+            Value::Number(_) | Value::Float(_) => "Number".to_string(),
+            Value::BigInt(_) => "BigInt".to_string(),
+            Value::String(_) => "String".to_string(),
+            Value::Symbol(_) => "Symbol".to_string(),
+            Value::Array(_) => "Array".to_string(),
+            Value::Promise(_) => "Promise".to_string(),
+            Value::Map(_) => "Map".to_string(),
+            Value::WeakMap(_) => "WeakMap".to_string(),
+            Value::Set(_) => "Set".to_string(),
+            Value::WeakSet(_) => "WeakSet".to_string(),
+            Value::Blob(_) => "Blob".to_string(),
+            Value::ArrayBuffer(_) => "ArrayBuffer".to_string(),
+            Value::TypedArray(values) => values.borrow().kind.name().to_string(),
+            Value::RegExp(_) => "RegExp".to_string(),
+            Value::Date(_) => "Date".to_string(),
+            Value::NodeList(_) => "NodeList".to_string(),
+            Value::FormData(_) => "FormData".to_string(),
+            Value::Function(_) => "Function".to_string(),
+            Value::StringConstructor
+            | Value::BlobConstructor
+            | Value::UrlConstructor
+            | Value::ArrayBufferConstructor
+            | Value::PromiseConstructor
+            | Value::MapConstructor
+            | Value::WeakMapConstructor
+            | Value::SetConstructor
+            | Value::WeakSetConstructor
+            | Value::UrlSearchParamsConstructor
+            | Value::SymbolConstructor
+            | Value::RegExpConstructor
+            | Value::TypedArrayConstructor(_)
+            | Value::PromiseCapability(_) => "Function".to_string(),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if Self::string_wrapper_value_from_object(&entries).is_some() {
+                    "String".to_string()
+                } else if Self::boolean_wrapper_value_from_object(&entries).is_some() {
+                    "Boolean".to_string()
+                } else if Self::number_wrapper_value_from_object(&entries).is_some() {
+                    "Number".to_string()
+                } else if Self::bigint_wrapper_value_from_object(&entries).is_some() {
+                    "BigInt".to_string()
+                } else if Self::symbol_wrapper_id_from_object(&entries).is_some() {
+                    "Symbol".to_string()
+                } else if Self::callable_kind_from_value(value).is_some() {
+                    "Function".to_string()
+                } else if let Some(tag) = self.object_to_string_tag_property(value)? {
+                    tag
+                } else if Self::is_url_object(&entries) {
+                    "URL".to_string()
+                } else if Self::is_location_object(&entries) {
+                    "Location".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "Document".to_string()
+                } else if Self::is_range_object(&entries) {
+                    "Range".to_string()
+                } else if Self::is_selection_object(&entries) {
+                    "Selection".to_string()
+                } else if Self::is_match_media_object(&entries) {
+                    "MediaQueryList".to_string()
+                } else if Self::is_named_node_map_object(&entries) {
+                    "NamedNodeMap".to_string()
+                } else if Self::is_attr_object(&entries) {
+                    "Attr".to_string()
+                } else if Self::is_canvas_2d_context_object(&entries) {
+                    "CanvasRenderingContext2D".to_string()
+                } else if Self::is_class_list_object(&entries) {
+                    "DOMTokenList".to_string()
+                } else if Self::is_dom_string_map_object(&entries) {
+                    "DOMStringMap".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "DOMParser".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "TreeWalker".to_string()
+                } else if Self::is_css_style_sheet_object(&entries) {
+                    "CSSStyleSheet".to_string()
+                } else if Self::is_computed_style_object(&entries) {
+                    "CSSStyleDeclaration".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_READABLE_STREAM_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "ReadableStream".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_WRITABLE_STREAM_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "WritableStream".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_TEXT_ENCODER_STREAM_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "TextEncoderStream".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_TEXT_DECODER_STREAM_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "TextDecoderStream".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_ANIMATION_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "Animation".to_string()
+                } else if Self::is_event_object(&entries) {
+                    "Event".to_string()
+                } else if Self::is_hash_change_event_object(&entries) {
+                    "HashChangeEvent".to_string()
+                } else if Self::is_error_event_object(&entries) {
+                    "ErrorEvent".to_string()
+                } else if Self::is_before_unload_event_object(&entries) {
+                    "BeforeUnloadEvent".to_string()
+                } else if Self::is_keyboard_event_object(&entries) {
+                    "KeyboardEvent".to_string()
+                } else if Self::is_wheel_event_object(&entries) {
+                    "WheelEvent".to_string()
+                } else if Self::is_navigate_event_object(&entries) {
+                    "NavigateEvent".to_string()
+                } else if Self::is_pointer_event_object(&entries) {
+                    "PointerEvent".to_string()
+                } else {
+                    "Object".to_string()
+                }
+            }
+            Value::Node(_) => "Object".to_string(),
+        };
+        Ok(tag)
+    }
+
+    pub(crate) fn object_prototype_to_string_value(&mut self, value: &Value) -> Result<Value> {
+        Ok(Value::String(format!(
+            "[object {}]",
+            self.object_prototype_to_string_tag(value)?
+        )))
+    }
+
+    pub(crate) fn object_prototype_value_of_value(&mut self, value: &Value) -> Result<Value> {
+        match value {
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(
+                "Object.valueOf called on null or undefined".into(),
+            )),
+            _ => Ok(value.clone()),
+        }
+    }
+
+    fn object_prototype_reflection_target(
+        &mut self,
+        value: &Value,
+        method_name: &str,
+    ) -> Result<Value> {
+        match value {
+            Value::Null | Value::Undefined => Err(Error::ScriptRuntime(format!(
+                "Object.{method_name} called on null or undefined"
+            ))),
+            Value::String(_)
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::Float(_)
+            | Value::BigInt(_)
+            | Value::Symbol(_) => Ok(Self::box_primitive_value(value.clone())),
+            _ => Ok(value.clone()),
+        }
+    }
+
+    pub(crate) fn object_prototype_has_own_property_value(
+        &mut self,
+        value: &Value,
+        key: &Value,
+    ) -> Result<Value> {
+        let target = self.object_prototype_reflection_target(value, "hasOwnProperty")?;
+        let key = self.property_key_to_storage_key(key);
+        self.object_has_own_value(&target, &key)
+    }
+
+    pub(crate) fn object_prototype_property_is_enumerable_value(
+        &mut self,
+        value: &Value,
+        key: &Value,
+    ) -> Result<Value> {
+        let target = self.object_prototype_reflection_target(value, "propertyIsEnumerable")?;
+        let key = self.property_key_to_storage_key(key);
+        let descriptor = self.object_get_own_property_descriptor_value(&target, &key)?;
+        let Value::Object(_) = descriptor else {
+            return Ok(Value::Bool(false));
+        };
+        Ok(Value::Bool(
+            self.object_property_from_value(&descriptor, "enumerable")?
+                .truthy(),
+        ))
+    }
+
+    pub(crate) fn object_prototype_is_prototype_of_value(
+        &mut self,
+        prototype: &Value,
+        value: &Value,
+    ) -> Result<Value> {
+        if matches!(prototype, Value::Null | Value::Undefined) {
+            return Err(Error::ScriptRuntime(
+                "Object.isPrototypeOf called on null or undefined".into(),
+            ));
+        }
+        if Self::is_primitive_value(value) {
+            return Ok(Value::Bool(false));
+        }
+        let mut current = self.value_internal_prototype_value(value);
+        let mut hops = 0usize;
+        while let Some(next) = current {
+            if self.strict_equal(prototype, &next) {
+                return Ok(Value::Bool(true));
+            }
+            hops += 1;
+            if hops > 256 {
+                break;
+            }
+            current = self.value_internal_prototype_value(&next);
+        }
+        Ok(Value::Bool(false))
     }
 
     fn callable_name_and_length(&mut self, value: &Value) -> Option<(String, i64)> {
@@ -4362,21 +5165,6 @@ impl Harness {
                 3,
             )),
             Value::Object(_) => match Self::callable_kind_from_value(value) {
-                Some("generator_function_constructor") => {
-                    Some(("GeneratorFunction".to_string(), 1))
-                }
-                Some("async_generator_function_constructor") => {
-                    Some(("AsyncGeneratorFunction".to_string(), 1))
-                }
-                Some("boolean_constructor") => Some(("Boolean".to_string(), 1)),
-                Some("number_constructor") => Some(("Number".to_string(), 1)),
-                Some("bigint_constructor") => Some(("BigInt".to_string(), 1)),
-                Some("object_constructor") => Some(("Object".to_string(), 1)),
-                Some("function_constructor") => Some(("Function".to_string(), 1)),
-                Some("function_call") => Some(("call".to_string(), 1)),
-                Some("function_apply") => Some(("apply".to_string(), 2)),
-                Some("function_bind") => Some(("bind".to_string(), 1)),
-                Some("function_to_string") => Some(("toString".to_string(), 0)),
                 Some("bound_function") => {
                     let (target, _bound_this, bound_args) =
                         Self::bound_callable_components(value).ok()?;
@@ -4385,7 +5173,14 @@ impl Harness {
                     let bound_length = target_length.saturating_sub(bound_args.len() as i64).max(0);
                     Some((bound_name, bound_length))
                 }
-                _ => None,
+                Some("receiver_builtin_method") => {
+                    Self::receiver_builtin_callable_name_and_length(value)
+                }
+                Some("object_static_method") => Self::static_object_method_name_and_length(value),
+                Some("reflect_static_method") => Self::static_reflect_method_name_and_length(value),
+                Some(kind) => Self::object_backed_callable_name_and_length(kind)
+                    .map(|(name, length)| (name.to_string(), length)),
+                None => None,
             },
             _ => None,
         }
@@ -4419,7 +5214,96 @@ impl Harness {
         }
     }
 
-    fn callable_function_surface_value(&mut self, value: &Value, key: &str) -> Option<Value> {
+    fn coerce_object_like_to_string_via_primitive_methods(
+        &mut self,
+        value: &Value,
+        allow_symbol: bool,
+    ) -> Result<String> {
+        let mut saw_callable = false;
+        for method_name in ["toString", "valueOf"] {
+            let method = self.object_property_from_value(value, method_name)?;
+            if !self.is_callable_value(&method) {
+                continue;
+            }
+            saw_callable = true;
+            let event = EventState::new("script", self.dom.root, self.scheduler.now_ms);
+            let coerced = self.execute_callable_value_with_this_and_env(
+                &method,
+                &[],
+                &event,
+                None,
+                Some(value.clone()),
+            )?;
+            if Self::is_primitive_value(&coerced) {
+                if matches!(coerced, Value::Symbol(_)) {
+                    if !allow_symbol {
+                        return Err(Error::ScriptRuntime(
+                            "Cannot convert a Symbol value to a string".into(),
+                        ));
+                    }
+                }
+                return Ok(self.coerce_to_string_for_string_context(&coerced));
+            }
+        }
+        if saw_callable {
+            return Err(Error::ScriptRuntime(
+                "Cannot convert object to primitive value".into(),
+            ));
+        }
+        Ok(self.coerce_to_string_for_string_context(value))
+    }
+
+    pub(crate) fn coerce_to_string_for_tostring(&mut self, value: &Value) -> Result<String> {
+        match value {
+            Value::Symbol(_) => Err(Error::ScriptRuntime(
+                "Cannot convert a Symbol value to a string".into(),
+            )),
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(wrapped) = Self::string_wrapper_value_from_object(&entries) {
+                    return Ok(wrapped);
+                }
+                if Self::symbol_wrapper_id_from_object(&entries).is_some() {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot convert a Symbol value to a string".into(),
+                    ));
+                }
+                drop(entries);
+                self.coerce_object_like_to_string_via_primitive_methods(value, false)
+            }
+            Value::Date(_) => self.coerce_object_like_to_string_via_primitive_methods(value, false),
+            _ => Ok(self.coerce_to_string_for_string_context(value)),
+        }
+    }
+
+    pub(crate) fn coerce_to_string_for_string_constructor(
+        &mut self,
+        value: &Value,
+    ) -> Result<String> {
+        match value {
+            Value::Object(entries) => {
+                let entries = entries.borrow();
+                if let Some(wrapped) = Self::string_wrapper_value_from_object(&entries) {
+                    return Ok(wrapped);
+                }
+                drop(entries);
+                self.coerce_object_like_to_string_via_primitive_methods(value, true)
+            }
+            Value::Date(_) => self.coerce_object_like_to_string_via_primitive_methods(value, true),
+            _ => Ok(self.coerce_to_string_for_string_context(value)),
+        }
+    }
+
+    pub(crate) fn coerce_to_string_for_string_context(&mut self, value: &Value) -> String {
+        self.callable_source_text(value)
+            .unwrap_or_else(|| value.as_string())
+    }
+
+    pub(crate) fn callable_function_surface_value(
+        &mut self,
+        value: &Value,
+        key: &str,
+    ) -> Option<Value> {
         match key {
             "call" | "apply" | "bind" | "toString" => {
                 return Some(self.cached_function_surface_method_value(key));
@@ -4437,11 +5321,81 @@ impl Harness {
         None
     }
 
+    pub(crate) fn variant_callable_public_storage_key(value: &Value) -> Option<String> {
+        match value {
+            Value::StringConstructor => Some("String".to_string()),
+            Value::SymbolConstructor => Some("Symbol".to_string()),
+            Value::MapConstructor => Some("Map".to_string()),
+            Value::WeakMapConstructor => Some("WeakMap".to_string()),
+            Value::SetConstructor => Some("Set".to_string()),
+            Value::WeakSetConstructor => Some("WeakSet".to_string()),
+            Value::PromiseConstructor => Some("Promise".to_string()),
+            Value::BlobConstructor => Some("Blob".to_string()),
+            Value::ArrayBufferConstructor => Some("ArrayBuffer".to_string()),
+            Value::RegExpConstructor => Some("RegExp".to_string()),
+            Value::UrlSearchParamsConstructor => Some("URLSearchParams".to_string()),
+            Value::TypedArrayConstructor(kind) => Some(format!(
+                "TypedArrayConstructor:{}",
+                match kind {
+                    TypedArrayConstructorKind::Concrete(kind) => kind.name(),
+                    TypedArrayConstructorKind::Abstract => "TypedArray",
+                }
+            )),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn variant_callable_internal_prototype_value(&self, value: &Value) -> Option<Value> {
+        let storage_key = Self::variant_callable_public_storage_key(value)?;
+        let entries = self
+            .script_runtime
+            .variant_callable_public_properties
+            .get(&storage_key)?;
+        Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+    }
+
     pub(crate) fn new_string_wrapper_value(value: String) -> Value {
         Self::new_object_value(vec![(
             INTERNAL_STRING_WRAPPER_VALUE_KEY.to_string(),
             Value::String(value),
         )])
+    }
+
+    pub(crate) fn new_boolean_wrapper_value(value: bool) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_BOOLEAN_WRAPPER_VALUE_KEY.to_string(),
+            Value::Bool(value),
+        )])
+    }
+
+    pub(crate) fn new_number_wrapper_value(value: Value) -> Value {
+        Self::new_object_value(vec![(INTERNAL_NUMBER_WRAPPER_VALUE_KEY.to_string(), value)])
+    }
+
+    pub(crate) fn new_bigint_wrapper_value(value: JsBigInt) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_BIGINT_WRAPPER_VALUE_KEY.to_string(),
+            Value::BigInt(value),
+        )])
+    }
+
+    pub(crate) fn new_symbol_wrapper_value(symbol_id: usize) -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_SYMBOL_WRAPPER_KEY.to_string(),
+            Value::Number(symbol_id as i64),
+        )])
+    }
+
+    pub(crate) fn box_primitive_value(value: Value) -> Value {
+        match value {
+            Value::String(text) => Self::new_string_wrapper_value(text),
+            Value::Bool(value) => Self::new_boolean_wrapper_value(value),
+            Value::Number(value) => Self::new_number_wrapper_value(Value::Number(value)),
+            Value::Float(value) => Self::new_number_wrapper_value(Value::Float(value)),
+            Value::BigInt(value) => Self::new_bigint_wrapper_value(value),
+            Value::Symbol(symbol) => Self::new_symbol_wrapper_value(symbol.id),
+            other => other,
+        }
     }
 
     pub(crate) fn object_set_entry(entries: &mut impl ObjectEntryMut, key: String, value: Value) {
@@ -4463,8 +5417,28 @@ impl Harness {
         format!("{INTERNAL_OBJECT_SETTER_KEY_PREFIX}{property_key}")
     }
 
+    pub(crate) fn object_undefined_getter_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_OBJECT_UNDEFINED_GETTER_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_undefined_setter_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_OBJECT_UNDEFINED_SETTER_KEY_PREFIX}{property_key}")
+    }
+
     pub(crate) fn object_non_enumerable_storage_key(property_key: &str) -> String {
         format!("{INTERNAL_NON_ENUMERABLE_PROPERTY_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_non_writable_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_NON_WRITABLE_PROPERTY_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_non_configurable_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_NON_CONFIGURABLE_PROPERTY_KEY_PREFIX}{property_key}")
+    }
+
+    pub(crate) fn object_deleted_builtin_storage_key(property_key: &str) -> String {
+        format!("{INTERNAL_DELETED_BUILTIN_PROPERTY_KEY_PREFIX}{property_key}")
     }
 
     pub(crate) fn object_getter_from_entries(
@@ -4481,6 +5455,177 @@ impl Harness {
     ) -> Option<Value> {
         let setter_key = Self::object_setter_storage_key(property_key);
         Self::object_get_entry(entries, &setter_key)
+    }
+
+    pub(crate) fn has_object_getter_property(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        property_key: &str,
+    ) -> bool {
+        Self::object_getter_from_entries(entries, property_key).is_some()
+            || matches!(
+                Self::object_get_entry(
+                    entries,
+                    &Self::object_undefined_getter_storage_key(property_key),
+                ),
+                Some(Value::Bool(true))
+            )
+    }
+
+    pub(crate) fn has_object_setter_property(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        property_key: &str,
+    ) -> bool {
+        Self::object_setter_from_entries(entries, property_key).is_some()
+            || matches!(
+                Self::object_get_entry(
+                    entries,
+                    &Self::object_undefined_setter_storage_key(property_key),
+                ),
+                Some(Value::Bool(true))
+            )
+    }
+
+    pub(crate) fn has_object_accessor_property(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        property_key: &str,
+    ) -> bool {
+        Self::has_object_getter_property(entries, property_key)
+            || Self::has_object_setter_property(entries, property_key)
+    }
+
+    pub(crate) fn is_writable_object_key(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> bool {
+        !matches!(
+            Self::object_get_entry(entries, &Self::object_non_writable_storage_key(key)),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_configurable_object_key(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> bool {
+        !matches!(
+            Self::object_get_entry(entries, &Self::object_non_configurable_storage_key(key)),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn mark_builtin_object_property_deleted(
+        entries: &mut impl ObjectEntryMut,
+        key: &str,
+    ) {
+        Self::object_set_entry(
+            entries,
+            Self::object_deleted_builtin_storage_key(key),
+            Value::Bool(true),
+        );
+    }
+
+    pub(crate) fn is_builtin_object_property_deleted(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+        key: &str,
+    ) -> bool {
+        matches!(
+            Self::object_get_entry(entries, &Self::object_deleted_builtin_storage_key(key)),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_callable_own_surface_key(key: &str) -> bool {
+        matches!(key, "name" | "length")
+    }
+
+    pub(crate) fn deleted_callable_surface_fallback_value(key: &str) -> Option<Value> {
+        match key {
+            "name" => Some(Value::String(String::new())),
+            "length" => Some(Value::Number(0)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_function_builtin_prototype_key(function: &FunctionValue, key: &str) -> bool {
+        key == "prototype" && !function.is_arrow && !function.is_method
+    }
+
+    pub(crate) fn set_function_builtin_prototype_property(
+        entries: &mut ObjectValue,
+        value: Value,
+        writable: bool,
+    ) {
+        Self::delete_object_property_entries(entries, "prototype");
+        Self::object_set_entry(entries, "prototype".to_string(), value);
+        Self::object_set_entry(
+            entries,
+            Self::object_non_enumerable_storage_key("prototype"),
+            Value::Bool(true),
+        );
+        Self::object_set_entry(
+            entries,
+            Self::object_non_configurable_storage_key("prototype"),
+            Value::Bool(true),
+        );
+        if !writable {
+            Self::object_set_entry(
+                entries,
+                Self::object_non_writable_storage_key("prototype"),
+                Value::Bool(true),
+            );
+        }
+    }
+
+    pub(crate) fn is_regexp_prototype_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_REGEXP_PROTOTYPE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn regexp_default_property_value(key: &str) -> Option<Value> {
+        match key {
+            "source" => Some(Value::String("(?:)".to_string())),
+            "flags" => Some(Value::String(String::new())),
+            "global" | "ignoreCase" | "multiline" | "dotAll" | "sticky" | "hasIndices"
+            | "unicode" | "unicodeSets" => Some(Value::Bool(false)),
+            "lastIndex" => Some(Value::Number(0)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn regexp_instance_property_value(regex: &RegexValue, key: &str) -> Option<Value> {
+        match key {
+            "source" => Some(Value::String(regex.source.clone())),
+            "flags" => Some(Value::String(regex.flags.clone())),
+            "global" => Some(Value::Bool(regex.global)),
+            "ignoreCase" => Some(Value::Bool(regex.ignore_case)),
+            "multiline" => Some(Value::Bool(regex.multiline)),
+            "dotAll" => Some(Value::Bool(regex.dot_all)),
+            "sticky" => Some(Value::Bool(regex.sticky)),
+            "hasIndices" => Some(Value::Bool(regex.has_indices)),
+            "unicode" => Some(Value::Bool(regex.unicode)),
+            "unicodeSets" => Some(Value::Bool(regex.unicode_sets)),
+            "lastIndex" => Some(Value::Number(regex.last_index as i64)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_regexp_builtin_own_key(key: &str) -> bool {
+        matches!(
+            key,
+            "source"
+                | "flags"
+                | "global"
+                | "ignoreCase"
+                | "multiline"
+                | "dotAll"
+                | "sticky"
+                | "hasIndices"
+                | "unicode"
+                | "unicodeSets"
+                | "lastIndex"
+        )
     }
 
     fn invoke_object_getter(&mut self, getter: &Value, receiver: &Value) -> Result<Value> {
@@ -4505,6 +5650,9 @@ impl Harness {
     ) -> Result<Option<Value>> {
         if let Some(getter) = Self::object_getter_from_entries(entries, key) {
             return Ok(Some(self.invoke_object_getter(&getter, receiver)?));
+        }
+        if Self::has_object_accessor_property(entries, key) {
+            return Ok(Some(Value::Undefined));
         }
         Ok(Self::object_get_entry(entries, key))
     }
@@ -4539,6 +5687,7 @@ impl Harness {
                 "number_constructor" => "number_constructor",
                 "bigint_constructor" => "bigint_constructor",
                 "object_constructor" => "object_constructor",
+                "object_static_method" => "object_static_method",
                 "function_constructor" => "function_constructor",
                 "event_target_constructor" => "event_target_constructor",
                 "event_constructor" => "event_constructor",
@@ -4617,6 +5766,9 @@ impl Harness {
                 "worker_main_post_message" => "worker_main_post_message",
                 "worker_context_post_message" => "worker_context_post_message",
                 "worker_terminate" => "worker_terminate",
+                "intl_collator_get_compare" => "intl_collator_get_compare",
+                "intl_date_time_format_get_format" => "intl_date_time_format_get_format",
+                "intl_number_format_get_format" => "intl_number_format_get_format",
                 "global_decode_uri" => "global_decode_uri",
                 "global_decode_uri_component" => "global_decode_uri_component",
                 "global_atob" => "global_atob",
@@ -4640,6 +5792,7 @@ impl Harness {
                 "array_buffer_static_method" => "array_buffer_static_method",
                 "symbol_static_method" => "symbol_static_method",
                 "typed_array_static_method" => "typed_array_static_method",
+                "reflect_static_method" => "reflect_static_method",
                 "function_call" => "function_call",
                 "function_apply" => "function_apply",
                 "function_bind" => "function_bind",
@@ -4776,7 +5929,7 @@ impl Harness {
         )
     }
 
-    fn function_own_property_value(
+    pub(crate) fn function_own_property_value(
         &mut self,
         function: &Rc<FunctionValue>,
         key: &str,
@@ -4858,7 +6011,10 @@ impl Harness {
                 .get("Number")
                 .cloned()
                 .unwrap_or_else(Self::new_number_constructor_callable)
-        } else if matches!(key, "toLocaleString" | "toString" | "valueOf") {
+        } else if matches!(
+            key,
+            "toExponential" | "toFixed" | "toLocaleString" | "toPrecision" | "toString" | "valueOf"
+        ) {
             Self::new_receiver_builtin_callable("number", key)
         } else {
             Value::Undefined
@@ -4880,77 +6036,166 @@ impl Harness {
     }
 
     fn object_property_from_array_value(
-        &self,
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         values: &Rc<RefCell<ArrayValue>>,
         key: &str,
-    ) -> Value {
+    ) -> Result<Value> {
         let values = values.borrow();
         if key == "length" {
-            Value::Number(values.len() as i64)
-        } else if let Ok(index) = key.parse::<usize>() {
-            values.get(index).cloned().unwrap_or(Value::Undefined)
-        } else if let Some(value) = Self::object_get_entry(&values.properties, key) {
-            value
-        } else if self.is_iterator_property_key(key) {
-            Self::new_receiver_builtin_callable("array", "values")
-        } else if Self::is_array_method_name(key) {
-            Self::new_receiver_builtin_callable("array", key)
-        } else {
-            Value::Undefined
+            return Ok(Value::Number(values.len() as i64));
         }
+        let has_explicit_prototype =
+            Self::object_get_entry(&values.properties, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
+        if let Ok(index) = key.parse::<usize>() {
+            if index < values.len() && !Self::array_index_is_hole(&values, index) {
+                return Ok(values[index].clone());
+            }
+            drop(values);
+            if has_explicit_prototype {
+                return Ok(self
+                    .inherited_property_from_value_prototype_chain_with_receiver(
+                        owner, receiver, key,
+                    )?
+                    .unwrap_or(Value::Undefined));
+            }
+            return Ok(Value::Undefined);
+        }
+        if let Some(value) = Self::object_get_entry(&values.properties, key) {
+            return Ok(value);
+        }
+        if !has_explicit_prototype {
+            if self.is_iterator_property_key(key) {
+                return Ok(Self::new_receiver_builtin_callable("array", "values"));
+            }
+            if Self::is_array_method_name(key) {
+                return Ok(Self::new_receiver_builtin_callable("array", key));
+            }
+            return Ok(Value::Undefined);
+        }
+        drop(values);
+        Ok(self
+            .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+            .unwrap_or(Value::Undefined))
     }
 
     fn object_property_from_node_list_value(
-        &self,
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         nodes: &Rc<RefCell<NodeListValue>>,
         key: &str,
-    ) -> Value {
+    ) -> Result<Value> {
         if key == "length" {
-            Value::Number(self.node_list_len(nodes) as i64)
-        } else if let Ok(index) = key.parse::<usize>() {
-            self.node_list_get(nodes, index)
-                .map(Value::Node)
-                .unwrap_or(Value::Undefined)
-        } else if self.is_iterator_property_key(key) {
-            Self::new_receiver_builtin_callable("node_list", "values")
-        } else if Self::is_node_list_method_name(key) {
-            Self::new_receiver_builtin_callable("node_list", key)
-        } else {
-            Value::Undefined
+            return Ok(Value::Number(self.node_list_len(nodes) as i64));
         }
+        let has_explicit_prototype = {
+            let nodes_ref = nodes.borrow();
+            Self::object_get_entry(&nodes_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some()
+        };
+        if let Ok(index) = key.parse::<usize>() {
+            if let Some(node) = self.node_list_get(nodes, index) {
+                return Ok(Value::Node(node));
+            }
+            if has_explicit_prototype {
+                return Ok(self
+                    .inherited_property_from_value_prototype_chain_with_receiver(
+                        owner, receiver, key,
+                    )?
+                    .unwrap_or(Value::Undefined));
+            }
+            return Ok(Value::Undefined);
+        }
+        let own_value = {
+            let nodes_ref = nodes.borrow();
+            Self::object_get_entry(&nodes_ref.properties, key)
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        if !has_explicit_prototype {
+            if self.is_iterator_property_key(key) {
+                return Ok(Self::new_receiver_builtin_callable("node_list", "values"));
+            }
+            if Self::is_node_list_method_name(key) {
+                return Ok(Self::new_receiver_builtin_callable("node_list", key));
+            }
+            return Ok(Value::Undefined);
+        }
+        Ok(self
+            .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+            .unwrap_or(Value::Undefined))
     }
 
     fn object_property_from_typed_array_value(
-        &self,
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         values: &Rc<RefCell<TypedArrayValue>>,
         key: &str,
     ) -> Result<Value> {
-        if key == "constructor" {
-            return Ok(Value::TypedArrayConstructor(
-                TypedArrayConstructorKind::Concrete(values.borrow().kind),
-            ));
-        }
-        if self.is_iterator_property_key(key) {
-            return Ok(Self::new_receiver_builtin_callable("typed_array", "values"));
-        }
-        let snapshot = self.typed_array_snapshot(values)?;
+        let value_ref = values.borrow();
+        let has_explicit_prototype =
+            Self::object_get_entry(&value_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY).is_some();
+        let kind = value_ref.kind;
+        drop(value_ref);
         if key == "length" {
-            Ok(Value::Number(snapshot.len() as i64))
-        } else if let Ok(index) = key.parse::<usize>() {
-            Ok(snapshot.get(index).cloned().unwrap_or(Value::Undefined))
-        } else if Self::is_typed_array_method_name(key) {
-            Ok(Self::new_receiver_builtin_callable("typed_array", key))
-        } else {
-            Ok(Value::Undefined)
+            return Ok(Value::Number(values.borrow().observed_length() as i64));
         }
+        if let Ok(index) = key.parse::<usize>() {
+            let snapshot = self.typed_array_snapshot(values)?;
+            if let Some(value) = snapshot.get(index) {
+                return Ok(value.clone());
+            }
+            if has_explicit_prototype {
+                return Ok(self
+                    .inherited_property_from_value_prototype_chain_with_receiver(
+                        owner, receiver, key,
+                    )?
+                    .unwrap_or(Value::Undefined));
+            }
+            return Ok(Value::Undefined);
+        }
+        if let Some(value) = Self::object_get_entry(&values.borrow().properties, key) {
+            return Ok(value);
+        }
+        if !has_explicit_prototype {
+            if key == "constructor" {
+                return Ok(Value::TypedArrayConstructor(
+                    TypedArrayConstructorKind::Concrete(kind),
+                ));
+            }
+            if self.is_iterator_property_key(key) {
+                return Ok(Self::new_receiver_builtin_callable("typed_array", "values"));
+            }
+            if Self::is_typed_array_method_name(key) {
+                return Ok(Self::new_receiver_builtin_callable("typed_array", key));
+            }
+            return Ok(Value::Undefined);
+        }
+        Ok(self
+            .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+            .unwrap_or(Value::Undefined))
     }
 
-    fn object_property_from_promise_value(promise: &Rc<RefCell<PromiseValue>>, key: &str) -> Value {
+    fn object_property_from_promise_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        promise: &Rc<RefCell<PromiseValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        if !self.strict_equal(owner, receiver) {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
         if key == "constructor" {
-            return Value::PromiseConstructor;
+            return Ok(Value::PromiseConstructor);
         }
         if matches!(key, "then" | "catch" | "finally") {
-            return Self::new_receiver_builtin_callable("promise", key);
+            return Ok(Self::new_receiver_builtin_callable("promise", key));
         }
         let promise = promise.borrow();
         if key == "status" {
@@ -4959,90 +6204,172 @@ impl Harness {
                 PromiseState::Fulfilled(_) => "fulfilled",
                 PromiseState::Rejected(_) => "rejected",
             };
-            Value::String(status.to_string())
+            Ok(Value::String(status.to_string()))
         } else {
-            Value::Undefined
+            Ok(Value::Undefined)
         }
     }
 
-    fn object_property_from_map_value(&self, map: &Rc<RefCell<MapValue>>, key: &str) -> Value {
+    fn object_property_from_map_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        map: &Rc<RefCell<MapValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        let own_value = {
+            let map_ref = map.borrow();
+            self.object_property_from_entries_with_getter(receiver, &map_ref.properties, key)?
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        let use_prototype_chain = {
+            let map_ref = map.borrow();
+            !self.strict_equal(owner, receiver)
+                || Self::object_get_entry(&map_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .is_some()
+        };
+        if use_prototype_chain {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
+
         let map = map.borrow();
         let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
-        if key == "size" {
+        Ok(if key == "size" {
             Value::Number(map.entries.len() as i64)
         } else if key_is_to_string_tag {
             Value::String("Map".to_string())
         } else if key == "constructor" {
             Value::MapConstructor
-        } else if let Some(value) = Self::object_get_entry(&map.properties, key) {
-            value
         } else if self.is_iterator_property_key(key) {
             Self::new_receiver_builtin_callable("map", "entries")
         } else if Self::is_map_method_name(key) {
             Self::new_receiver_builtin_callable("map", key)
         } else {
             Value::Undefined
-        }
+        })
     }
 
     fn object_property_from_weak_map_value(
-        &self,
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         weak_map: &Rc<RefCell<WeakMapValue>>,
         key: &str,
-    ) -> Value {
-        let weak_map = weak_map.borrow();
+    ) -> Result<Value> {
+        let own_value = {
+            let weak_map_ref = weak_map.borrow();
+            self.object_property_from_entries_with_getter(receiver, &weak_map_ref.properties, key)?
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        let use_prototype_chain = {
+            let weak_map_ref = weak_map.borrow();
+            !self.strict_equal(owner, receiver)
+                || Self::object_get_entry(&weak_map_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .is_some()
+        };
+        if use_prototype_chain {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
+
         let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
-        if key_is_to_string_tag {
+        Ok(if key_is_to_string_tag {
             Value::String("WeakMap".to_string())
         } else if key == "constructor" {
             Value::WeakMapConstructor
-        } else if let Some(value) = Self::object_get_entry(&weak_map.properties, key) {
-            value
         } else if Self::is_weak_map_method_name(key) {
             Self::new_receiver_builtin_callable("weak_map", key)
         } else {
             Value::Undefined
-        }
+        })
     }
 
     fn object_property_from_weak_set_value(
-        &self,
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         weak_set: &Rc<RefCell<WeakSetValue>>,
         key: &str,
-    ) -> Value {
-        let weak_set = weak_set.borrow();
+    ) -> Result<Value> {
+        let own_value = {
+            let weak_set_ref = weak_set.borrow();
+            self.object_property_from_entries_with_getter(receiver, &weak_set_ref.properties, key)?
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        let use_prototype_chain = {
+            let weak_set_ref = weak_set.borrow();
+            !self.strict_equal(owner, receiver)
+                || Self::object_get_entry(&weak_set_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .is_some()
+        };
+        if use_prototype_chain {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
+
         let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
-        if key_is_to_string_tag {
+        Ok(if key_is_to_string_tag {
             Value::String("WeakSet".to_string())
         } else if key == "constructor" {
             Value::WeakSetConstructor
-        } else if let Some(value) = Self::object_get_entry(&weak_set.properties, key) {
-            value
         } else if Self::is_weak_set_method_name(key) {
             Self::new_receiver_builtin_callable("weak_set", key)
         } else {
             Value::Undefined
-        }
+        })
     }
 
-    fn object_property_from_set_value(&self, set: &Rc<RefCell<SetValue>>, key: &str) -> Value {
+    fn object_property_from_set_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        set: &Rc<RefCell<SetValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        let own_value = {
+            let set_ref = set.borrow();
+            self.object_property_from_entries_with_getter(receiver, &set_ref.properties, key)?
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        let use_prototype_chain = {
+            let set_ref = set.borrow();
+            !self.strict_equal(owner, receiver)
+                || Self::object_get_entry(&set_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .is_some()
+        };
+        if use_prototype_chain {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
+
         let set = set.borrow();
         let key_is_to_string_tag = self.is_to_string_tag_property_key(key);
-        if key == "size" {
+        Ok(if key == "size" {
             Value::Number(set.values.len() as i64)
         } else if key_is_to_string_tag {
             Value::String("Set".to_string())
         } else if key == "constructor" {
             Value::SetConstructor
-        } else if let Some(value) = Self::object_get_entry(&set.properties, key) {
-            value
         } else if self.is_iterator_property_key(key) {
             Self::new_receiver_builtin_callable("set", "values")
         } else if Self::is_set_method_name(key) {
             Self::new_receiver_builtin_callable("set", key)
         } else {
             Value::Undefined
-        }
+        })
     }
 
     fn object_property_from_form_data_value(
@@ -5065,9 +6392,20 @@ impl Harness {
         }
     }
 
-    fn object_property_from_blob_value(blob: &Rc<RefCell<BlobValue>>, key: &str) -> Value {
+    fn object_property_from_blob_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        blob: &Rc<RefCell<BlobValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        if !self.strict_equal(owner, receiver) {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
         let blob = blob.borrow();
-        match key {
+        Ok(match key {
             "size" => Value::Number(blob.bytes.len() as i64),
             "type" => Value::String(blob.mime_type.clone()),
             "constructor" => Value::BlobConstructor,
@@ -5075,15 +6413,23 @@ impl Harness {
                 Self::new_receiver_builtin_callable("blob", key)
             }
             _ => Value::Undefined,
-        }
+        })
     }
 
     fn object_property_from_array_buffer_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
         buffer: &Rc<RefCell<ArrayBufferValue>>,
         key: &str,
-    ) -> Value {
+    ) -> Result<Value> {
+        if !self.strict_equal(owner, receiver) {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
         let buffer = buffer.borrow();
-        match key {
+        Ok(match key {
             "byteLength" => Value::Number(buffer.byte_length() as i64),
             "detached" => Value::Bool(buffer.detached),
             "maxByteLength" => Value::Number(buffer.max_byte_length() as i64),
@@ -5093,7 +6439,7 @@ impl Harness {
                 Self::new_receiver_builtin_callable("array_buffer", key)
             }
             _ => Value::Undefined,
-        }
+        })
     }
 
     fn object_property_from_symbol_value(symbol: &Rc<SymbolValue>, key: &str) -> Value {
@@ -5109,23 +6455,39 @@ impl Harness {
         }
     }
 
-    fn object_property_from_regexp_value(regex: &Rc<RefCell<RegexValue>>, key: &str) -> Value {
+    fn object_property_from_regexp_value(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        regex: &Rc<RefCell<RegexValue>>,
+        key: &str,
+    ) -> Result<Value> {
+        let own_value = {
+            let regex_ref = regex.borrow();
+            self.object_property_from_entries_with_getter(receiver, &regex_ref.properties, key)?
+        };
+        if let Some(value) = own_value {
+            return Ok(value);
+        }
+        let use_prototype_chain = {
+            let regex_ref = regex.borrow();
+            !self.strict_equal(owner, receiver)
+                || Self::object_get_entry(&regex_ref.properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                    .is_some()
+        };
+        if use_prototype_chain {
+            return Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined));
+        }
+
         let regex = regex.borrow();
-        match key {
-            "source" => Value::String(regex.source.clone()),
-            "flags" => Value::String(regex.flags.clone()),
-            "global" => Value::Bool(regex.global),
-            "ignoreCase" => Value::Bool(regex.ignore_case),
-            "multiline" => Value::Bool(regex.multiline),
-            "dotAll" => Value::Bool(regex.dot_all),
-            "sticky" => Value::Bool(regex.sticky),
-            "hasIndices" => Value::Bool(regex.has_indices),
-            "unicode" => Value::Bool(regex.unicode),
-            "unicodeSets" => Value::Bool(regex.unicode_sets),
-            "lastIndex" => Value::Number(regex.last_index as i64),
-            "constructor" => Value::RegExpConstructor,
-            "exec" | "test" | "toString" => Self::new_receiver_builtin_callable("regexp", key),
-            _ => Self::object_get_entry(&regex.properties, key).unwrap_or(Value::Undefined),
+        if key == "lastIndex" {
+            Ok(Value::Number(regex.last_index as i64))
+        } else {
+            Ok(self
+                .inherited_property_from_value_prototype_chain_with_receiver(owner, receiver, key)?
+                .unwrap_or(Value::Undefined))
         }
     }
 
@@ -5912,6 +7274,9 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Result<Option<Value>> {
+        if let Some(value) = Self::object_property_from_range_or_selection_entries(entries, key) {
+            return Ok(Some(value));
+        }
         if let Some(value) = self.computed_style_object_property_from_entries(entries, key)? {
             return Ok(Some(value));
         }
@@ -6039,12 +7404,10 @@ impl Harness {
             }
         }
         if let Ok(index) = key.parse::<usize>() {
-            return Some(
-                text.chars()
-                    .nth(index)
-                    .map(|ch| Value::String(ch.to_string()))
-                    .unwrap_or(Value::Undefined),
-            );
+            return text
+                .chars()
+                .nth(index)
+                .map(|ch| Value::String(ch.to_string()));
         }
         None
     }
@@ -6150,6 +7513,11 @@ impl Harness {
         key: &str,
     ) -> Option<Value> {
         if Self::callable_kind_from_value(value).is_some() {
+            if Self::is_callable_own_surface_key(key)
+                && Self::is_builtin_object_property_deleted(entries, key)
+            {
+                return Self::deleted_callable_surface_fallback_value(key);
+            }
             if let Some(surface_value) = self.callable_function_surface_value(value, key) {
                 return Some(Self::object_get_entry(entries, key).unwrap_or(surface_value));
             }
@@ -6236,6 +7604,14 @@ impl Harness {
         if !is_document_object {
             return None;
         }
+        if Self::document_receiver_builtin_method(key).is_some() {
+            if let Some(value) = Self::object_get_entry(entries, key)
+                && !Self::is_builtin_placeholder_value(&value)
+            {
+                return Some(value);
+            }
+            return Self::document_receiver_builtin_method(key);
+        }
         let value = match key {
             "nodeType" => Value::Number(self.node_type_number(self.dom.root)),
             "textContent" => self.node_text_content_value(self.dom.root),
@@ -6264,6 +7640,33 @@ impl Harness {
         } else {
             Some(value)
         }
+    }
+
+    fn object_property_from_range_or_selection_entries(
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if Self::is_range_object(entries) {
+            if Self::range_receiver_builtin_method(key).is_some() {
+                if let Some(value) = Self::object_get_entry(entries, key)
+                    && !Self::is_builtin_placeholder_value(&value)
+                {
+                    return Some(value);
+                }
+                return Self::range_receiver_builtin_method(key);
+            }
+        }
+        if Self::is_selection_object(entries) {
+            if Self::selection_receiver_builtin_method(key).is_some() {
+                if let Some(value) = Self::object_get_entry(entries, key)
+                    && !Self::is_builtin_placeholder_value(&value)
+                {
+                    return Some(value);
+                }
+                return Self::selection_receiver_builtin_method(key);
+            }
+        }
+        None
     }
 
     fn object_property_from_url_entries(entries: &ObjectValue, key: &str) -> Option<Value> {
@@ -6298,6 +7701,7 @@ impl Harness {
 
     fn object_property_from_entries_via_prototype_chain(
         &mut self,
+        owner: &Value,
         receiver: &Value,
         entries: &ObjectValue,
         key: &str,
@@ -6308,20 +7712,24 @@ impl Harness {
             return Ok(value);
         }
         let mut prototype = Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
-            .or_else(|| self.value_internal_prototype_value(receiver));
-        while let Some(Value::Object(object)) = prototype {
-            let object_ref = object.borrow();
-            if let Some(value) =
-                self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
-            {
+            .or_else(|| self.value_internal_prototype_value(owner));
+        while let Some(current) = prototype {
+            if matches!(current, Value::Null | Value::Undefined) {
+                break;
+            }
+            let value = self.object_property_from_value_with_receiver(&current, key, receiver)?;
+            if !matches!(value, Value::Undefined) {
                 return Ok(value);
             }
-            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
+            prototype = self.value_internal_prototype_value(&current);
         }
         Ok(Value::Undefined)
     }
 
     pub(crate) fn value_internal_prototype_value(&mut self, value: &Value) -> Option<Value> {
+        if let Some(value) = self.variant_callable_internal_prototype_value(value) {
+            return Some(value);
+        }
         match value {
             Value::Object(entries) => {
                 let entries_ref = entries.borrow();
@@ -6338,6 +7746,18 @@ impl Harness {
                 }
                 if Self::string_wrapper_value_from_object(&entries_ref).is_some() {
                     return Some(self.cached_string_constructor_prototype_value());
+                }
+                if Self::boolean_wrapper_value_from_object(&entries_ref).is_some() {
+                    return self.constructor_prototype_from_env("Boolean");
+                }
+                if Self::number_wrapper_value_from_object(&entries_ref).is_some() {
+                    return self.constructor_prototype_from_env("Number");
+                }
+                if Self::bigint_wrapper_value_from_object(&entries_ref).is_some() {
+                    return self.constructor_prototype_from_env("BigInt");
+                }
+                if Self::symbol_wrapper_id_from_object(&entries_ref).is_some() {
+                    return Some(self.cached_symbol_constructor_prototype_value());
                 }
                 if Self::callable_kind_from_value(value).is_some() {
                     return Some(self.cached_function_constructor_prototype_value());
@@ -6367,18 +7787,52 @@ impl Harness {
                 Self::object_get_entry(&regex.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
                     .unwrap_or_else(|| self.cached_regexp_constructor_prototype_value()),
             ),
+            Value::Date(_) => Some(self.cached_date_prototype_value()),
             Value::Promise(_) => Some(self.cached_promise_constructor_prototype_value()),
-            Value::TypedArray(values) => Some(self.cached_typed_array_constructor_prototype_value(
-                TypedArrayConstructorKind::Concrete(values.borrow().kind),
-            )),
+            Value::TypedArray(values) => {
+                let (explicit, kind) = {
+                    let values_ref = values.borrow();
+                    (
+                        Self::object_get_entry(
+                            &values_ref.properties,
+                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                        ),
+                        values_ref.kind,
+                    )
+                };
+                Some(explicit.unwrap_or_else(|| {
+                    self.cached_typed_array_constructor_prototype_value(
+                        TypedArrayConstructorKind::Concrete(kind),
+                    )
+                }))
+            }
             Value::Blob(_) => Some(self.cached_blob_constructor_prototype_value()),
             Value::ArrayBuffer(_) => Some(self.cached_array_buffer_constructor_prototype_value()),
+            Value::NodeList(nodes) => {
+                Self::object_get_entry(&nodes.borrow().properties, INTERNAL_OBJECT_PROTOTYPE_KEY)
+            }
             Value::String(_) => Some(self.cached_string_constructor_prototype_value()),
             Value::Bool(_) => self.constructor_prototype_from_env("Boolean"),
             Value::Number(_) | Value::Float(_) => self.constructor_prototype_from_env("Number"),
             Value::BigInt(_) => self.constructor_prototype_from_env("BigInt"),
             Value::Symbol(_) => Some(self.cached_symbol_constructor_prototype_value()),
+            Value::UrlConstructor => {
+                let explicit = {
+                    let entries = self.browser_apis.url_constructor_properties.borrow();
+                    Self::object_get_entry(&entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                };
+                Some(explicit.unwrap_or_else(|| self.cached_function_constructor_prototype_value()))
+            }
             Value::Function(function) => {
+                if let Some(entries) = self
+                    .script_runtime
+                    .function_public_properties
+                    .get(&function.function_id)
+                    && let Some(value) =
+                        Self::object_get_entry(entries, INTERNAL_OBJECT_PROTOTYPE_KEY)
+                {
+                    return Some(value);
+                }
                 if function.is_generator {
                     Some(
                         self.generator_constructor_prototype_value(function.is_async)
@@ -6395,7 +7849,7 @@ impl Harness {
         }
     }
 
-    fn function_public_property_from_entries_with_receiver(
+    pub(crate) fn function_public_property_from_entries_with_receiver(
         &mut self,
         function: &Rc<FunctionValue>,
         key: &str,
@@ -6436,22 +7890,32 @@ impl Harness {
         }
     }
 
+    fn inherited_property_from_value_prototype_chain_with_receiver(
+        &mut self,
+        owner: &Value,
+        receiver: &Value,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let mut prototype = self.value_internal_prototype_value(owner);
+        while let Some(current) = prototype {
+            if matches!(current, Value::Null | Value::Undefined) {
+                break;
+            }
+            let value = self.object_property_from_value_with_receiver(&current, key, receiver)?;
+            if !matches!(value, Value::Undefined) {
+                return Ok(Some(value));
+            }
+            prototype = self.value_internal_prototype_value(&current);
+        }
+        Ok(None)
+    }
+
     fn inherited_property_from_value_prototype_chain(
         &mut self,
         receiver: &Value,
         key: &str,
     ) -> Result<Option<Value>> {
-        let mut prototype = self.value_internal_prototype_value(receiver);
-        while let Some(Value::Object(object)) = prototype {
-            let object_ref = object.borrow();
-            if let Some(value) =
-                self.object_property_from_entries_with_getter(receiver, &object_ref, key)?
-            {
-                return Ok(Some(value));
-            }
-            prototype = Self::object_get_entry(&object_ref, INTERNAL_OBJECT_PROTOTYPE_KEY);
-        }
-        Ok(None)
+        self.inherited_property_from_value_prototype_chain_with_receiver(receiver, receiver, key)
     }
 
     fn callable_value_property_or_inherited(
@@ -6498,7 +7962,7 @@ impl Harness {
         {
             return Ok(value);
         }
-        self.object_property_from_entries_via_prototype_chain(value, &entries, key)
+        self.object_property_from_entries_via_prototype_chain(value, value, &entries, key)
     }
 
     fn object_property_from_function_value(
@@ -6512,7 +7976,16 @@ impl Harness {
         {
             return Ok(custom_value);
         }
-        let own_value = self.function_own_property_value(function, key, true);
+        let own_value = if self
+            .script_runtime
+            .function_public_properties
+            .get(&function.function_id)
+            .is_some_and(|entries| Self::is_builtin_object_property_deleted(entries, key))
+        {
+            Self::deleted_callable_surface_fallback_value(key).unwrap_or(Value::Undefined)
+        } else {
+            self.function_own_property_value(function, key, true)
+        };
         if !matches!(own_value, Value::Undefined) {
             return Ok(own_value);
         }
@@ -6532,8 +8005,37 @@ impl Harness {
         key: &str,
         receiver: &Value,
     ) -> Result<Value> {
+        let owner = Value::Object(entries.clone());
         let entries = entries.borrow();
-        self.object_property_from_entries_via_prototype_chain(receiver, &entries, key)
+        if let Some(value) = self.object_property_from_attr_or_class_list_entries(&entries, key)
+            && self.is_callable_value(&value)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Ok(value);
+        }
+        if let Some(value) = self.object_property_from_web_api_entries(&entries, key)?
+            && self.is_callable_value(&value)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Ok(value);
+        }
+        if let Some(value) = self
+            .object_property_from_match_media_named_node_map_or_string_wrapper_entries(
+                &entries, key,
+            )
+            && self.is_callable_value(&value)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Ok(value);
+        }
+        if let Some(value) =
+            self.object_property_from_storage_document_and_url_entries(&entries, key)
+            && self.is_callable_value(&value)
+            && !Self::is_builtin_placeholder_value(&value)
+        {
+            return Ok(value);
+        }
+        self.object_property_from_entries_via_prototype_chain(&owner, receiver, &entries, key)
     }
 
     fn object_property_from_function_value_with_receiver(
@@ -6547,7 +8049,16 @@ impl Harness {
         {
             return Ok(custom_value);
         }
-        let own_value = self.function_own_property_value(function, key, false);
+        let own_value = if self
+            .script_runtime
+            .function_public_properties
+            .get(&function.function_id)
+            .is_some_and(|entries| Self::is_builtin_object_property_deleted(entries, key))
+        {
+            Self::deleted_callable_surface_fallback_value(key).unwrap_or(Value::Undefined)
+        } else {
+            self.function_own_property_value(function, key, false)
+        };
         if !matches!(own_value, Value::Undefined) {
             return Ok(own_value);
         }
@@ -6556,8 +8067,9 @@ impl Harness {
         {
             return Ok(inherited);
         }
+        let owner = Value::Function(function.clone());
         Ok(self
-            .inherited_property_from_value_prototype_chain(receiver, key)?
+            .inherited_property_from_value_prototype_chain_with_receiver(&owner, receiver, key)?
             .unwrap_or(Value::Undefined))
     }
 
@@ -6568,22 +8080,39 @@ impl Harness {
             Value::Bool(_) => Ok(self.object_property_from_bool_value(key)),
             Value::Number(_) | Value::Float(_) => Ok(self.object_property_from_number_value(key)),
             Value::BigInt(_) => Ok(self.object_property_from_bigint_value(key)),
-            Value::Array(values) => Ok(self.object_property_from_array_value(values, key)),
-            Value::NodeList(nodes) => Ok(self.object_property_from_node_list_value(nodes, key)),
-            Value::TypedArray(values) => self.object_property_from_typed_array_value(values, key),
+            Value::Array(values) => {
+                self.object_property_from_array_value(value, value, values, key)
+            }
+            Value::NodeList(nodes) => {
+                self.object_property_from_node_list_value(value, value, nodes, key)
+            }
+            Value::TypedArray(values) => {
+                self.object_property_from_typed_array_value(value, value, values, key)
+            }
             Value::Object(entries) => self.object_property_from_object_value(value, entries, key),
-            Value::Promise(promise) => Ok(Self::object_property_from_promise_value(promise, key)),
-            Value::Map(map) => Ok(self.object_property_from_map_value(map, key)),
-            Value::WeakMap(weak_map) => Ok(self.object_property_from_weak_map_value(weak_map, key)),
-            Value::WeakSet(weak_set) => Ok(self.object_property_from_weak_set_value(weak_set, key)),
-            Value::Set(set) => Ok(self.object_property_from_set_value(set, key)),
+            Value::Promise(promise) => {
+                self.object_property_from_promise_value(value, value, promise, key)
+            }
+            Value::Map(map) => self.object_property_from_map_value(value, value, map, key),
+            Value::WeakMap(weak_map) => {
+                self.object_property_from_weak_map_value(value, value, weak_map, key)
+            }
+            Value::WeakSet(weak_set) => {
+                self.object_property_from_weak_set_value(value, value, weak_set, key)
+            }
+            Value::Set(set) => self.object_property_from_set_value(value, value, set, key),
             Value::FormData(entries) => Ok(self.object_property_from_form_data_value(entries, key)),
-            Value::Blob(blob) => Ok(Self::object_property_from_blob_value(blob, key)),
+            Value::Blob(blob) => self.object_property_from_blob_value(value, value, blob, key),
             Value::ArrayBuffer(buffer) => {
-                Ok(Self::object_property_from_array_buffer_value(buffer, key))
+                self.object_property_from_array_buffer_value(value, value, buffer, key)
             }
             Value::Symbol(symbol) => Ok(Self::object_property_from_symbol_value(symbol, key)),
-            Value::RegExp(regex) => Ok(Self::object_property_from_regexp_value(regex, key)),
+            Value::RegExp(regex) => {
+                self.object_property_from_regexp_value(value, value, regex, key)
+            }
+            Value::Date(_) => Ok(self
+                .inherited_property_from_value_prototype_chain(value, key)?
+                .unwrap_or(Value::Undefined)),
             Value::Function(function) => {
                 self.object_property_from_function_value(value, function, key)
             }
@@ -6799,6 +8328,33 @@ impl Harness {
             }
             Value::Function(function) => {
                 self.object_property_from_function_value_with_receiver(function, key, receiver)
+            }
+            Value::Array(values) => {
+                self.object_property_from_array_value(value, receiver, values, key)
+            }
+            Value::NodeList(nodes) => {
+                self.object_property_from_node_list_value(value, receiver, nodes, key)
+            }
+            Value::TypedArray(values) => {
+                self.object_property_from_typed_array_value(value, receiver, values, key)
+            }
+            Value::Promise(promise) => {
+                self.object_property_from_promise_value(value, receiver, promise, key)
+            }
+            Value::Map(map) => self.object_property_from_map_value(value, receiver, map, key),
+            Value::WeakMap(weak_map) => {
+                self.object_property_from_weak_map_value(value, receiver, weak_map, key)
+            }
+            Value::WeakSet(weak_set) => {
+                self.object_property_from_weak_set_value(value, receiver, weak_set, key)
+            }
+            Value::Set(set) => self.object_property_from_set_value(value, receiver, set, key),
+            Value::Blob(blob) => self.object_property_from_blob_value(value, receiver, blob, key),
+            Value::ArrayBuffer(buffer) => {
+                self.object_property_from_array_buffer_value(value, receiver, buffer, key)
+            }
+            Value::RegExp(regex) => {
+                self.object_property_from_regexp_value(value, receiver, regex, key)
             }
             _ => self.object_property_from_value(value, key),
         }

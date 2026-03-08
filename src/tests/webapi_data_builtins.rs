@@ -4419,6 +4419,82 @@ fn dom_parser_and_tree_walker_basics_are_supported() -> Result<()> {
 }
 
 #[test]
+fn dom_parser_tree_walker_and_parsed_document_placeholder_methods_support_extracted_and_inherited_calls_work(
+) -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const parser = new DOMParser();
+            const parse = parser.parseFromString;
+            const parsed = parse.call(
+              parser,
+              '<div id="root">A<span>B</span></div>',
+              'text/html'
+            );
+            const parsedGet = parsed.getElementById;
+            const root = parsedGet.call(parsed, 'root');
+            const walker = parsed.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const next = walker.nextNode;
+            const first = next.call(walker).textContent.trim();
+            const second = next.call(walker).textContent.trim();
+
+            const parserReceiverError = (() => {
+              const inheritor = Object.create(parser);
+              try {
+                inheritor.parseFromString('<p></p>', 'text/html');
+                return false;
+              } catch (e) {
+                return String(e).includes('DOMParser method called on incompatible receiver');
+              }
+            })();
+
+            const parsedReceiverError = (() => {
+              const inheritor = Object.create(parsed);
+              try {
+                inheritor.getElementById('root');
+                return false;
+              } catch (e) {
+                return String(e).includes('Document method called on incompatible receiver');
+              }
+            })();
+
+            const walkerReceiverError = (() => {
+              const inheritor = Object.create(walker);
+              try {
+                inheritor.nextNode();
+                return false;
+              } catch (e) {
+                return String(e).includes('TreeWalker method called on incompatible receiver');
+              }
+            })();
+
+            document.getElementById('result').textContent = [
+              parse.name,
+              parse.length,
+              root.id,
+              next.name,
+              next.length,
+              first + second,
+              parserReceiverError,
+              parsedReceiverError,
+              walkerReceiverError
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "parseFromString|2|root|nextNode|0|AB|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn json_stringify_handles_special_values() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -4555,6 +4631,904 @@ fn object_property_access_missing_key_returns_undefined() -> Result<()> {
 }
 
 #[test]
+fn object_and_reflect_support_array_function_and_collection_targets_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const arr = [10, 0, 30];
+            function sample(a, b) {}
+            const map = new Map();
+
+            Object.defineProperty(arr, 'extra', { value: 'x', enumerable: true });
+            Reflect.set(arr, '1', 20);
+
+            Object.defineProperty(sample, 'x', { value: 'fx', enumerable: true });
+            Reflect.set(sample, 'y', 'fy');
+
+            Object.defineProperty(map, 'note', { value: 'm', enumerable: true });
+            Reflect.set(map, 'tag', 't');
+
+            const arrIndexDesc = Object.getOwnPropertyDescriptor(arr, '1');
+            const arrLengthDesc = Object.getOwnPropertyDescriptor(arr, 'length');
+            const fnDesc = Object.getOwnPropertyDescriptor(sample, 'x');
+            const fnLengthDesc = Object.getOwnPropertyDescriptor(sample, 'length');
+            const mapDesc = Object.getOwnPropertyDescriptor(map, 'note');
+
+            const fnKeysBeforeDelete = Object.keys(sample).join(',');
+            const deletedFnX = delete sample.x;
+
+            document.getElementById('result').textContent = [
+              Object.keys(arr).join(','),
+              Object.values(arr).join(','),
+              Object.entries(arr).map((pair) => pair.join('=')).join(','),
+              String(arrIndexDesc.value === 20 && arrIndexDesc.enumerable === true),
+              String(arrLengthDesc.value === 3 && arrLengthDesc.enumerable === false),
+              String(fnDesc.value === 'fx' && fnDesc.enumerable === true),
+              String(fnLengthDesc.value === 2 && fnLengthDesc.enumerable === false),
+              fnKeysBeforeDelete,
+              sample.y,
+              String(deletedFnX),
+              String(!Object.hasOwn(sample, 'x') && Object.hasOwn(sample, 'length')),
+              String(mapDesc.value === 'm' && mapDesc.enumerable === true),
+              Object.keys(map).join(','),
+              String(Object.hasOwn(map, 'note') && Object.hasOwn(map, 'tag')),
+              map.note + ':' + map.tag
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "0,1,2,extra|10,20,30,x|0=10,1=20,2=30,extra=x|true|true|true|true|x,y|fy|false|false|true|note,tag|true|m:t",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_descriptor_and_reflect_work_on_callable_object_surfaces() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const descName = Object.getOwnPropertyDescriptor(Object.keys, 'name');
+            const descLength = Object.getOwnPropertyDescriptor(Reflect.set, 'length');
+
+            Reflect.set(Object.keys, 'tag', 'callable');
+            Object.defineProperty(Reflect.set, 'note', {
+              value: 'reflect',
+              enumerable: true
+            });
+
+            document.getElementById('result').textContent = [
+              String(descName.value === 'keys' && descName.enumerable === false),
+              String(descLength.value === 3 && descLength.enumerable === false),
+              String(Object.hasOwn(Object.keys, 'name')),
+              String(Object.hasOwn(Reflect.set, 'length')),
+              Object.keys(Object.keys).join(','),
+              Object.keys(Reflect.set).join(','),
+              Object.keys.tag,
+              Reflect.set.note,
+              String(delete Object.keys.tag),
+              String(!Object.hasOwn(Object.keys, 'tag'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|tag|note|callable|reflect|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_and_reflect_own_keys_and_descriptor_attributes_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const describeKey = (key) =>
+              typeof key === 'symbol' ? 'sym:' + (Symbol.keyFor(key) || key.description) : key;
+
+            const arr = [10, 20];
+            const arrSym = Symbol('a');
+            Object.defineProperty(arr, 'hidden', { value: 'h', enumerable: false });
+            arr.extra = 'x';
+            arr[arrSym] = 'sa';
+
+            function sample(a, b) {}
+            const fnSym = Symbol.for('b');
+            Object.defineProperty(sample, 'note', { value: 'n', enumerable: true });
+            sample[fnSym] = 'sb';
+
+            Reflect.set(Object.keys, 'tag', 'callable');
+
+            const map = new Map();
+            Object.defineProperty(map, 'note', { value: 'm', enumerable: true });
+            map[arrSym] = 'ms';
+
+            const getNames = Object.getOwnPropertyNames;
+            const ownKeys = Reflect.ownKeys;
+
+            const arrLengthDesc = Object.getOwnPropertyDescriptor(arr, 'length');
+            const fnNameDesc = Object.getOwnPropertyDescriptor(sample, 'name');
+            const fnLengthDesc = Object.getOwnPropertyDescriptor(sample, 'length');
+            const fnPrototypeDesc = Object.getOwnPropertyDescriptor(sample, 'prototype');
+            const callableNameDesc = Object.getOwnPropertyDescriptor(Object.keys, 'name');
+            const callableLengthDesc = Object.getOwnPropertyDescriptor(Object.keys, 'length');
+            const mapSizeDesc = Object.getOwnPropertyDescriptor(map, 'size');
+
+            document.getElementById('result').textContent = [
+              getNames(arr).join(','),
+              ownKeys(arr).map(describeKey).join(','),
+              String(
+                arrLengthDesc.writable === true &&
+                arrLengthDesc.enumerable === false &&
+                arrLengthDesc.configurable === false
+              ),
+              getNames(sample).join(','),
+              ownKeys(sample).map(describeKey).join(','),
+              String(
+                fnNameDesc.writable === false &&
+                fnNameDesc.enumerable === false &&
+                fnNameDesc.configurable === true
+              ),
+              String(
+                fnLengthDesc.writable === false &&
+                fnLengthDesc.enumerable === false &&
+                fnLengthDesc.configurable === true
+              ),
+              String(
+                fnPrototypeDesc.writable === true &&
+                fnPrototypeDesc.enumerable === false &&
+                fnPrototypeDesc.configurable === false
+              ),
+              String(
+                Object.getOwnPropertyDescriptor(sample, 'call') === undefined &&
+                Object.hasOwn(sample, 'call') === false
+              ),
+              getNames(Object.keys).join(','),
+              ownKeys(Object.keys).map(describeKey).join(','),
+              String(
+                callableNameDesc.writable === false &&
+                callableNameDesc.enumerable === false &&
+                callableNameDesc.configurable === true
+              ),
+              String(
+                callableLengthDesc.writable === false &&
+                callableLengthDesc.enumerable === false &&
+                callableLengthDesc.configurable === true
+              ),
+              String(
+                Object.getOwnPropertyDescriptor(Object.keys, 'call') === undefined &&
+                Object.hasOwn(Object.keys, 'call') === false
+              ),
+              String(Object.getOwnPropertyNames(Object).includes('getOwnPropertyNames')),
+              String(Reflect.ownKeys(Reflect).map(describeKey).join(',') === 'set,ownKeys,sym:Symbol.toStringTag'),
+              getNames(map).join(','),
+              ownKeys(map).map(describeKey).join(','),
+              String(
+                mapSizeDesc.writable === false &&
+                mapSizeDesc.enumerable === false &&
+                mapSizeDesc.configurable === true
+              )
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "0,1,length,hidden,extra|0,1,length,hidden,extra,sym:a|true|length,name,prototype,note|length,name,prototype,note,sym:b|true|true|true|true|length,name,tag|length,name,tag|true|true|true|true|true|size,note|size,note,sym:a|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_and_reflect_descriptor_mutation_and_symbol_key_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const describeKey = (key) =>
+              typeof key === 'symbol' ? 'sym:' + (Symbol.keyFor(key) || key.description) : key;
+
+            const arr = [1, 2];
+            const arrSymA = Symbol('a');
+            const arrSymB = Symbol('b');
+            Object.defineProperty(arr, '0', {
+              value: 7,
+              enumerable: false,
+              writable: false,
+              configurable: false
+            });
+            Object.defineProperty(arr, arrSymA, {
+              value: 'sa',
+              enumerable: false,
+              writable: false,
+              configurable: false
+            });
+            Reflect.set(arr, arrSymB, 'sb');
+            const arrSet = Reflect.set(arr, '0', 9);
+            const arrDelete = delete arr[0];
+            const arrDesc = Object.getOwnPropertyDescriptor(arr, '0');
+            const arrSymDesc = Object.getOwnPropertyDescriptor(arr, arrSymA);
+
+            function sample(a, b) {}
+            Object.defineProperty(sample, 'length', {
+              value: 9,
+              enumerable: true,
+              writable: false,
+              configurable: false
+            });
+            const fnSet = Reflect.set(sample, 'length', 10);
+            const fnDelete = delete sample.length;
+            const fnDesc = Object.getOwnPropertyDescriptor(sample, 'length');
+
+            Object.defineProperty(Object.keys, 'name', {
+              value: 'keys2',
+              enumerable: true,
+              writable: false,
+              configurable: false
+            });
+            const callableSet = Reflect.set(Object.keys, 'name', 'keys3');
+            const callableDesc = Object.getOwnPropertyDescriptor(Object.keys, 'name');
+
+            const map = new Map();
+            const mapSym = Symbol('m');
+            Object.defineProperty(map, 'size', {
+              value: 99,
+              enumerable: true,
+              writable: false,
+              configurable: false
+            });
+            Object.defineProperty(map, mapSym, {
+              value: 'ms',
+              enumerable: false,
+              writable: false,
+              configurable: false
+            });
+            const mapSet = Reflect.set(map, 'size', 100);
+            const mapDelete = delete map.size;
+            const mapDesc = Object.getOwnPropertyDescriptor(map, 'size');
+            const mapSymDesc = Object.getOwnPropertyDescriptor(map, mapSym);
+
+            document.getElementById('result').textContent = [
+              Object.keys(arr).join(','),
+              Object.getOwnPropertyNames(arr).join(','),
+              Reflect.ownKeys(arr).map(describeKey).join(','),
+              String(arr[0] === 7 && arr[1] === 2),
+              String(arrSet === false && arrDelete === false),
+              String(
+                arrDesc.value === 7 &&
+                arrDesc.writable === false &&
+                arrDesc.enumerable === false &&
+                arrDesc.configurable === false
+              ),
+              String(
+                arrSymDesc.value === 'sa' &&
+                arrSymDesc.writable === false &&
+                arrSymDesc.enumerable === false &&
+                arrSymDesc.configurable === false
+              ),
+              Object.keys(sample).join(','),
+              String(sample.length === 9),
+              String(fnSet === false && fnDelete === false),
+              String(
+                fnDesc.value === 9 &&
+                fnDesc.writable === false &&
+                fnDesc.enumerable === true &&
+                fnDesc.configurable === false
+              ),
+              Object.keys(Object.keys).join(','),
+              String(Object.keys.name === 'keys2'),
+              String(callableSet),
+              String(
+                callableDesc.value === 'keys2' &&
+                callableDesc.writable === false &&
+                callableDesc.enumerable === true &&
+                callableDesc.configurable === false
+              ),
+              Object.keys(map).join(','),
+              Reflect.ownKeys(map).map(describeKey).join(','),
+              String(map.size === 99),
+              String(mapSet === false && mapDelete === false),
+              String(
+                mapDesc.value === 99 &&
+                mapDesc.writable === false &&
+                mapDesc.enumerable === true &&
+                mapDesc.configurable === false
+              ),
+              String(
+                mapSymDesc.value === 'ms' &&
+                mapSymDesc.writable === false &&
+                mapSymDesc.enumerable === false &&
+                mapSymDesc.configurable === false
+              )
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "1|0,1,length|0,1,length,sym:a,sym:b|true|true|true|true|length|true|true|true|name|true|false|true|size|size,sym:m|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn callable_delete_and_builtin_surface_residuals_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function sample(a, b) {}
+            Object.defineProperty(sample, 'length', {
+              value: 9,
+              enumerable: true,
+              writable: false,
+              configurable: true
+            });
+            const fnDelete = delete sample.length;
+            const fnSet = Reflect.set(sample, 'length', 10);
+            sample.length = 11;
+            const fnDesc = Object.getOwnPropertyDescriptor(sample, 'length');
+
+            Object.defineProperty(Object.keys, 'name', {
+              value: 'keys2',
+              enumerable: true,
+              writable: false,
+              configurable: true
+            });
+            const callableDelete = delete Object.keys.name;
+            const callableSet = Reflect.set(Object.keys, 'name', 'keys3');
+            Object.keys.name = 'keys4';
+            const callableDesc = Object.getOwnPropertyDescriptor(Object.keys, 'name');
+
+            const map = new Map([[1, 'a']]);
+            Object.defineProperty(map, 'size', {
+              value: 99,
+              enumerable: true,
+              writable: false,
+              configurable: true
+            });
+            const mapDelete = delete map.size;
+            const mapSet = Reflect.set(map, 'size', 100);
+            map.size = 101;
+            const mapDesc = Object.getOwnPropertyDescriptor(map, 'size');
+
+            const re = /ab/g;
+            Object.defineProperty(re, 'source', {
+              value: 'override',
+              enumerable: true,
+              writable: false,
+              configurable: true
+            });
+            const reDelete = delete re.source;
+            const reSet = Reflect.set(re, 'source', 'again');
+            re.source = 'later';
+            const reDesc = Object.getOwnPropertyDescriptor(re, 'source');
+
+            document.getElementById('result').textContent = [
+              String(fnDelete),
+              String(fnSet),
+              String(fnDesc === undefined),
+              Object.getOwnPropertyNames(sample).join(','),
+              String(sample.length === 0),
+              String(callableDelete),
+              String(callableSet),
+              String(callableDesc === undefined),
+              Object.getOwnPropertyNames(Object.keys).join(','),
+              String(Object.hasOwn(Object.keys, 'name') === false),
+              String(Object.keys.name === ''),
+              String(mapDelete),
+              String(mapSet),
+              String(mapDesc === undefined),
+              Object.getOwnPropertyNames(map).join(','),
+              String(Object.hasOwn(map, 'size') === false),
+              String(map.size === 1),
+              String(reDelete),
+              String(reSet),
+              String(reDesc === undefined),
+              String(!Object.getOwnPropertyNames(re).includes('source')),
+              String(Object.hasOwn(re, 'source') === false),
+              String(re.source === 'ab')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|false|true|name,prototype|true|true|false|true|length|true|true|true|false|true||true|true|true|false|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn function_prototype_descriptor_and_write_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function Box() {}
+            const replacement = { mark: 1 };
+
+            const deleteBefore = delete Box.prototype;
+            const reflectBefore = Reflect.set(Box, 'prototype', replacement);
+            const descAfterSet = Object.getOwnPropertyDescriptor(Box, 'prototype');
+            const instanceBefore = Object.getPrototypeOf(new Box()) === replacement;
+
+            Object.defineProperty(Box, 'prototype', { writable: false });
+            const descAfterFreeze = Object.getOwnPropertyDescriptor(Box, 'prototype');
+            const reflectAfterFreeze = Reflect.set(Box, 'prototype', { mark: 2 });
+            Box.prototype = { mark: 3 };
+            const deleteAfterFreeze = delete Box.prototype;
+            const instanceAfter = Object.getPrototypeOf(new Box()) === replacement;
+
+            document.getElementById('result').textContent = [
+              String(deleteBefore === false),
+              String(reflectBefore === true),
+              String(descAfterSet.value === replacement),
+              String(
+                descAfterSet.writable === true &&
+                descAfterSet.enumerable === false &&
+                descAfterSet.configurable === false
+              ),
+              String(Object.keys(Box).length === 0),
+              String(Object.getOwnPropertyNames(Box).join(',') === 'length,name,prototype'),
+              String(instanceBefore === true),
+              String(descAfterFreeze.value === replacement),
+              String(
+                descAfterFreeze.writable === false &&
+                descAfterFreeze.enumerable === false &&
+                descAfterFreeze.configurable === false
+              ),
+              String(reflectAfterFreeze === false),
+              String(Box.prototype === replacement),
+              String(deleteAfterFreeze === false),
+              String(instanceAfter === true)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn regexp_prototype_accessor_and_own_surface_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const re = /ab/gi;
+            const ownDesc = Object.getOwnPropertyDescriptor(re, 'source');
+            const protoSourceDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source');
+            const protoFlagsDesc = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags');
+            const protoSourceGetter = protoSourceDesc.get;
+            const protoFlagsGetter = protoFlagsDesc.get;
+
+            const deleteInherited = delete re.source;
+            const reflectInherited = Reflect.set(re, 'source', 'nope');
+            re.source = 'still-nope';
+
+            Object.defineProperty(re, 'source', {
+              value: 'own',
+              enumerable: true,
+              configurable: true
+            });
+            const ownAfterDefine = Object.getOwnPropertyDescriptor(re, 'source');
+            const namesAfterDefine = Object.getOwnPropertyNames(re).join(',');
+            const deleteOwn = delete re.source;
+
+            document.getElementById('result').textContent = [
+              String(Object.getOwnPropertyNames(re).join(',') === 'lastIndex'),
+              String(Reflect.ownKeys(re).join(',') === 'lastIndex'),
+              String(Object.hasOwn(re, 'source') === false),
+              String(ownDesc === undefined),
+              String(
+                typeof protoSourceGetter === 'function' &&
+                protoSourceDesc.enumerable === false &&
+                protoSourceDesc.configurable === true &&
+                protoSourceDesc.set === undefined
+              ),
+              String(
+                typeof protoFlagsGetter === 'function' &&
+                protoFlagsDesc.enumerable === false &&
+                protoFlagsDesc.configurable === true &&
+                protoFlagsDesc.set === undefined
+              ),
+              String(protoSourceGetter.call(re) === 'ab'),
+              String(protoFlagsGetter.call(re) === 'gi'),
+              String(protoSourceGetter.call(RegExp.prototype) === '(?:)'),
+              String(protoFlagsGetter.call(RegExp.prototype) === ''),
+              String(deleteInherited === true),
+              String(reflectInherited === false),
+              String(re.source === 'ab'),
+              String(namesAfterDefine === 'lastIndex,source'),
+              String(
+                ownAfterDefine.value === 'own' &&
+                ownAfterDefine.enumerable === true &&
+                ownAfterDefine.configurable === true
+              ),
+              String(deleteOwn === true),
+              String(Object.getOwnPropertyNames(re).join(',') === 'lastIndex'),
+              String(re.source === 'ab'),
+              String(RegExp.prototype.toString() === '/(?:)/')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn accessor_only_own_key_synthesis_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const encoder = new TextEncoder();
+            const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+            const encoderDesc = Object.getOwnPropertyDescriptor(encoder, 'encoding');
+            const decoderDesc = Object.getOwnPropertyDescriptor(decoder, 'encoding');
+
+            document.getElementById('result').textContent = [
+              Object.getOwnPropertyNames(encoder).join(','),
+              Object.keys(encoder).join(','),
+              Reflect.ownKeys(encoder).join(','),
+              String(
+                typeof encoderDesc.get === 'function' &&
+                encoderDesc.set === undefined &&
+                encoderDesc.enumerable === true &&
+                encoderDesc.configurable === true
+              ),
+              Object.getOwnPropertyNames(decoder).join(','),
+              Object.keys(decoder).join(','),
+              Reflect.ownKeys(decoder).join(','),
+              String(
+                typeof decoderDesc.get === 'function' &&
+                decoderDesc.set === undefined &&
+                decoderDesc.enumerable === true &&
+                decoderDesc.configurable === true
+              ),
+              String(decoder.encoding === 'utf-8' && decoder.fatal === true && decoder.ignoreBOM === true)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "encoding,encode,encodeInto|encoding,encode,encodeInto|encoding,encode,encodeInto|true|encoding,fatal,ignoreBOM,decode|encoding,fatal,ignoreBOM,decode|encoding,fatal,ignoreBOM,decode|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn non_configurable_redefine_invariant_sweep_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const accessorBox = {};
+            const getter = () => 1;
+            Object.defineProperty(accessorBox, 'x', { get: getter });
+            const accessorDesc = Object.getOwnPropertyDescriptor(accessorBox, 'x');
+            let accessorErr = '';
+            try {
+              Object.defineProperty(accessorBox, 'x', { set(v) {} });
+            } catch (err) {
+              accessorErr = String(err);
+            }
+            const accessorDelete = delete accessorBox.x;
+
+            const dataBox = {};
+            Object.defineProperty(dataBox, 'y', { value: 3 });
+            const dataDesc = Object.getOwnPropertyDescriptor(dataBox, 'y');
+            const dataSet = Reflect.set(dataBox, 'y', 4);
+            const dataDelete = delete dataBox.y;
+            let dataErr = '';
+            try {
+              Object.defineProperty(dataBox, 'y', { value: 4 });
+            } catch (err) {
+              dataErr = String(err);
+            }
+
+            const arr = [9];
+            Object.defineProperty(arr, '0', { writable: false });
+            const arrDesc = Object.getOwnPropertyDescriptor(arr, '0');
+            const arrSet = Reflect.set(arr, '0', 10);
+            let arrErr = '';
+            try {
+              Object.defineProperty(arr, '0', { value: 10 });
+            } catch (err) {
+              arrErr = String(err);
+            }
+            const arrAfterDesc = Object.getOwnPropertyDescriptor(arr, '0');
+
+            const list = [1, 2, 3];
+            Object.defineProperty(list, 'length', { writable: false });
+            const lengthDesc = Object.getOwnPropertyDescriptor(list, 'length');
+            const lengthSet = Reflect.set(list, 'length', 1);
+            let lengthAccessorErr = '';
+            try {
+              Object.defineProperty(list, 'length', { get() { return 1; } });
+            } catch (err) {
+              lengthAccessorErr = String(err);
+            }
+            let lengthValueErr = '';
+            try {
+              Object.defineProperty(list, 'length', { value: 1 });
+            } catch (err) {
+              lengthValueErr = String(err);
+            }
+
+            const re = /ab/g;
+            Object.defineProperty(re, 'lastIndex', { writable: false });
+            const reDesc = Object.getOwnPropertyDescriptor(re, 'lastIndex');
+            const reSet = Reflect.set(re, 'lastIndex', 3);
+            let reAccessorErr = '';
+            try {
+              Object.defineProperty(re, 'lastIndex', { get() { return 1; } });
+            } catch (err) {
+              reAccessorErr = String(err);
+            }
+            let reValueErr = '';
+            try {
+              Object.defineProperty(re, 'lastIndex', { value: 2 });
+            } catch (err) {
+              reValueErr = String(err);
+            }
+
+            const map = new Map();
+            Object.defineProperty(map, 'size', { value: 9 });
+            const mapDesc = Object.getOwnPropertyDescriptor(map, 'size');
+            const mapSet = Reflect.set(map, 'size', 10);
+            const mapDelete = delete map.size;
+            let mapErr = '';
+            try {
+              Object.defineProperty(map, 'size', { value: 10 });
+            } catch (err) {
+              mapErr = String(err);
+            }
+
+            document.getElementById('result').textContent = [
+              String(
+                typeof accessorDesc.get === 'function' &&
+                accessorDesc.set === undefined &&
+                accessorDesc.enumerable === false &&
+                accessorDesc.configurable === false
+              ),
+              String(accessorErr.includes('Cannot redefine property: x')),
+              String(accessorDelete === false),
+              String(Object.getOwnPropertyNames(accessorBox).join(',') === 'x'),
+              String(
+                dataDesc.value === 3 &&
+                dataDesc.writable === false &&
+                dataDesc.enumerable === false &&
+                dataDesc.configurable === false
+              ),
+              String(dataSet === false && dataDelete === false),
+              String(dataErr.includes('Cannot redefine property: y')),
+              String(
+                arrDesc.value === 9 &&
+                arrDesc.writable === false &&
+                arrDesc.enumerable === true &&
+                arrDesc.configurable === true
+              ),
+              String(arrSet === false),
+              String(arrErr === ''),
+              String(
+                arr[0] === 10 &&
+                arrAfterDesc.value === 10 &&
+                arrAfterDesc.writable === false &&
+                arrAfterDesc.enumerable === true &&
+                arrAfterDesc.configurable === true
+              ),
+              String(
+                lengthDesc.value === 3 &&
+                lengthDesc.writable === false &&
+                lengthDesc.enumerable === false &&
+                lengthDesc.configurable === false
+              ),
+              String(lengthSet === false),
+              String(
+                lengthAccessorErr.includes('Cannot redefine property: length') &&
+                lengthValueErr.includes('Cannot redefine property: length')
+              ),
+              String(
+                reDesc.value === 0 &&
+                reDesc.writable === false &&
+                reDesc.enumerable === false &&
+                reDesc.configurable === false
+              ),
+              String(reSet === false),
+              String(
+                reAccessorErr.includes('Cannot redefine property: lastIndex') &&
+                reValueErr.includes('Cannot redefine property: lastIndex')
+              ),
+              String(
+                mapDesc.value === 9 &&
+                mapDesc.writable === false &&
+                mapDesc.enumerable === false &&
+                mapDesc.configurable === false
+              ),
+              String(mapSet === false && mapDelete === false),
+              String(mapErr.includes('Cannot redefine property: size'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn define_property_descriptor_object_coercion_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const mixedSteps = [];
+            const mixedProto = {
+              get enumerable() { mixedSteps.push('enumerable'); return true; },
+              get configurable() { mixedSteps.push('configurable'); return true; },
+              get writable() { mixedSteps.push('writable'); return true; }
+            };
+            const mixedDesc = {
+              __proto__: mixedProto,
+              get value() { mixedSteps.push('value'); return 1; },
+              get get() { mixedSteps.push('get'); return undefined; },
+              get set() { mixedSteps.push('set'); return undefined; }
+            };
+            let mixedErr = '';
+            try {
+              Object.defineProperty({}, 'mixed', mixedDesc);
+            } catch (err) {
+              mixedErr = String(err);
+            }
+
+            const fnSteps = [];
+            function descriptorFn() {}
+            Object.defineProperty(descriptorFn, 'enumerable', {
+              get() { fnSteps.push('enumerable'); return true; }
+            });
+            Object.defineProperty(descriptorFn, 'configurable', {
+              get() { fnSteps.push('configurable'); return true; }
+            });
+            Object.defineProperty(descriptorFn, 'value', {
+              get() { fnSteps.push('value'); return 9; }
+            });
+
+            const target = {};
+            const returned = Object.defineProperty(target, 'fromFn', descriptorFn);
+            const fnDesc = Object.getOwnPropertyDescriptor(target, 'fromFn');
+
+            document.getElementById('result').textContent = [
+              mixedSteps.join(','),
+              String(mixedErr.includes('Invalid property descriptor')),
+              String(returned === target),
+              fnSteps.join(','),
+              String(
+                fnDesc.value === 9 &&
+                fnDesc.writable === false &&
+                fnDesc.enumerable === true &&
+                fnDesc.configurable === true
+              )
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "enumerable,configurable,value,writable,get,set|true|true|enumerable,configurable,value|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn define_property_accessor_undefined_parity_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const box = {};
+            const defined = Object.defineProperty(box, 'ghost', {
+              get: undefined,
+              set: undefined,
+              enumerable: true,
+              configurable: true
+            });
+            const desc = Object.getOwnPropertyDescriptor(box, 'ghost');
+            const namesBefore = Object.getOwnPropertyNames(box).join(',');
+            const keysBefore = Object.keys(box).join(',');
+            const ownKeysBefore = Reflect.ownKeys(box).join(',');
+            const readBefore = box.ghost;
+            box.ghost = 1;
+            const readAfterAssign = box.ghost;
+            const reflectSet = Reflect.set(box, 'ghost', 2);
+            const deleted = delete box.ghost;
+            const afterDelete = Object.getOwnPropertyDescriptor(box, 'ghost');
+
+            document.getElementById('result').textContent = [
+              String(defined === box),
+              String(
+                desc.get === undefined &&
+                desc.set === undefined &&
+                desc.enumerable === true &&
+                desc.configurable === true
+              ),
+              namesBefore,
+              keysBefore,
+              ownKeysBefore,
+              String(readBefore === undefined && readAfterAssign === undefined),
+              String(reflectSet === false),
+              String(deleted === true),
+              String(afterDelete === undefined)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true|true|ghost|ghost|ghost|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
 fn member_call_expression_on_nested_object_path_works() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -4642,6 +5616,572 @@ fn object_method_runtime_type_errors_are_reported() -> Result<()> {
         other => panic!("unexpected hasOwnProperty error: {other:?}"),
     }
 
+    Ok(())
+}
+
+#[test]
+fn object_prototype_to_string_and_value_of_receiver_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const obj = { a: 1 };
+            const toStringFn = obj['toString'];
+            const valueOfFn = obj['valueOf'];
+            let nullValueOf = 'none';
+            try {
+              Object.prototype.valueOf.call(null);
+            } catch (e) {
+              nullValueOf = String(e);
+            }
+
+            document.getElementById('result').textContent = [
+              obj.toString(),
+              obj['toString'](),
+              String(obj),
+              String(toStringFn === Object.prototype.toString),
+              String(valueOfFn === Object.prototype.valueOf),
+              String(valueOfFn.call(obj) === obj),
+              Object.prototype.toString.call(null),
+              Object.prototype.toString.call(undefined),
+              Object.prototype.toString.call(1),
+              Object.prototype.toString.call('x'),
+              String(Function.prototype.toString.call(toStringFn) === toStringFn.toString()),
+              String(nullValueOf.includes('Object.valueOf called on null or undefined'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "[object Object]|[object Object]|[object Object]|true|true|true|[object Null]|[object Undefined]|[object Number]|[object String]|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn define_property_boxed_descriptor_wrappers_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const boolSteps = [];
+            const boolDesc = new Boolean(false);
+            Object.defineProperty(boolDesc, 'enumerable', {
+              get() { boolSteps.push('enumerable'); return true; }
+            });
+            Object.defineProperty(boolDesc, 'configurable', {
+              get() { boolSteps.push('configurable'); return true; }
+            });
+            Object.defineProperty(boolDesc, 'value', {
+              get() { boolSteps.push('value'); return 11; }
+            });
+
+            const dataTarget = {};
+            Object.defineProperty(dataTarget, 'boxed', boolDesc);
+            const dataDesc = Object.getOwnPropertyDescriptor(dataTarget, 'boxed');
+
+            let assigned = 'none';
+            const numSteps = [];
+            const BoxedNumber = Number;
+            const numDesc = new BoxedNumber(0);
+            Object.defineProperty(numDesc, 'enumerable', {
+              get() { numSteps.push('enumerable'); return true; }
+            });
+            Object.defineProperty(numDesc, 'configurable', {
+              get() { numSteps.push('configurable'); return true; }
+            });
+            Object.defineProperty(numDesc, 'get', {
+              get() { numSteps.push('get'); return undefined; }
+            });
+            Object.defineProperty(numDesc, 'set', {
+              get() {
+                numSteps.push('set');
+                return function(v) { assigned = String(v); };
+              }
+            });
+
+            const accessorTarget = {};
+            Object.defineProperty(accessorTarget, 'ghost', numDesc);
+            accessorTarget.ghost = 5;
+            const accessorDesc = Object.getOwnPropertyDescriptor(accessorTarget, 'ghost');
+            const viaObject = Object(1);
+            const boxedNumber = new Number(2);
+            const boxedNumberDetails = [
+              String(Object.getPrototypeOf(viaObject) === Number.prototype),
+              String(viaObject.valueOf()),
+              viaObject.toString(),
+              String(boxedNumber.valueOf()),
+              boxedNumber.toFixed(1)
+            ].join(':');
+
+            document.getElementById('result').textContent = [
+              boolSteps.join(','),
+              String(
+                dataDesc.value === 11 &&
+                dataDesc.enumerable === true &&
+                dataDesc.configurable === true &&
+                dataDesc.writable === false
+              ),
+              numSteps.join(','),
+              String(
+                accessorTarget.ghost === undefined &&
+                accessorDesc.get === undefined &&
+                typeof accessorDesc.set === 'function' &&
+                assigned === '5'
+              ),
+              Object.keys(accessorTarget).join(','),
+              boxedNumberDetails
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "enumerable,configurable,value|true|enumerable,configurable,get,set|true|ghost|true:1:1:2:2.0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_constructor_boxes_numbers_with_number_wrapper_surface_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const viaObject = Object(1);
+            const boxedNumber = new Number(2);
+
+            document.getElementById('result').textContent = [
+              String(Object.getPrototypeOf(viaObject) === Number.prototype),
+              String(viaObject.valueOf()),
+              viaObject.toString(),
+              String(boxedNumber.valueOf()),
+              boxedNumber.toFixed(1)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text("#result", "true|1|1|2|2.0")?;
+    Ok(())
+}
+
+#[test]
+fn string_wrapper_reflective_surface_and_copy_paths_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const wrapped = Object('ab');
+            wrapped.extra = 'x';
+            const zero = Object.getOwnPropertyDescriptor(wrapped, '0');
+            const lengthDesc = Object.getOwnPropertyDescriptor(wrapped, 'length');
+            const assigned = Object.assign({}, wrapped);
+            const spread = { ...wrapped };
+
+            document.getElementById('result').textContent = [
+              Object.getOwnPropertyNames(wrapped).join(','),
+              Reflect.ownKeys(wrapped).join(','),
+              Object.keys(wrapped).join(','),
+              Object.values(wrapped).join(','),
+              Object.entries(wrapped).map(([key, value]) => key + ':' + value).join(','),
+              [zero.value, String(zero.writable), String(zero.enumerable), String(zero.configurable)].join(':'),
+              [String(lengthDesc.value), String(lengthDesc.writable), String(lengthDesc.enumerable), String(lengthDesc.configurable)].join(':'),
+              [String(Object.hasOwn(wrapped, '0')), String(Object.hasOwn(wrapped, 'length')), String(Object.hasOwn(wrapped, 'extra'))].join(':'),
+              Object.keys(assigned).join(','),
+              Object.values(assigned).join(','),
+              Object.keys(spread).join(','),
+              Object.values(spread).join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "0,1,length,extra|0,1,length,extra|0,1,extra|a,b,x|0:a,1:b,extra:x|a:false:true:false|2:false:false:false|true:true:true|0,1,extra|a,b,x|0,1,extra|a,b,x",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn boxed_primitive_wrapper_tags_and_prototype_introspection_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const boolBox = Object(false);
+            const numBox = Object(7);
+            const bigBox = Object(7n);
+            const sym = Symbol('s');
+            const symBox = Object(sym);
+
+            document.getElementById('result').textContent = [
+              String(Object.getPrototypeOf(boolBox) === Boolean.prototype),
+              String(Object.getPrototypeOf(numBox) === Number.prototype),
+              String(Object.getPrototypeOf(bigBox) === BigInt.prototype),
+              String(Object.getPrototypeOf(symBox) === Symbol.prototype),
+              Object.prototype.toString.call(boolBox),
+              Object.prototype.toString.call(numBox),
+              Object.prototype.toString.call(bigBox),
+              Object.prototype.toString.call(symBox),
+              String(boolBox.constructor === Boolean),
+              String(numBox.constructor === Number),
+              String(bigBox.constructor === BigInt),
+              String(symBox.constructor === Symbol),
+              String(boolBox.valueOf()),
+              String(numBox.valueOf()),
+              String(bigBox.valueOf()),
+              String(symBox.valueOf() === sym),
+              String(Object.getOwnPropertyNames(boolBox).length),
+              String(Object.getOwnPropertyNames(numBox).length),
+              String(Object.getOwnPropertyNames(bigBox).length),
+              String(Object.getOwnPropertyNames(symBox).length)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|[object Boolean]|[object Number]|[object BigInt]|[object Symbol]|true|true|true|true|false|7|7|true|0|0|0|0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_wrapper_descriptor_invariants_and_override_attempts_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const wrapped = Object('ab');
+            const receiver = {};
+
+            wrapped[0] = 'x';
+            wrapped.length = 9;
+
+            const reflectSameIndex = Reflect.set(wrapped, '0', 'x');
+            const reflectSameLength = Reflect.set(wrapped, 'length', 9);
+            const reflectOtherIndex = Reflect.set(wrapped, '0', 'x', receiver);
+            const reflectOtherLength = Reflect.set(wrapped, 'length', 9, receiver);
+
+            const deleteIndex = delete wrapped[0];
+            const deleteLength = delete wrapped.length;
+
+            let sameIndex = 'ok';
+            try {
+              Object.defineProperty(wrapped, '0', {
+                value: 'a',
+                writable: false,
+                enumerable: true,
+                configurable: false
+              });
+            } catch (error) {
+              sameIndex = String(error.message || error);
+            }
+
+            let badIndex = 'ok';
+            try {
+              Object.defineProperty(wrapped, '0', { value: 'x' });
+            } catch (error) {
+              badIndex = String(error.message || error);
+            }
+
+            let sameLength = 'ok';
+            try {
+              Object.defineProperty(wrapped, 'length', { value: 2 });
+            } catch (error) {
+              sameLength = String(error.message || error);
+            }
+
+            let badLength = 'ok';
+            try {
+              Object.defineProperty(wrapped, 'length', { value: 3 });
+            } catch (error) {
+              badLength = String(error.message || error);
+            }
+
+            Object.defineProperty(wrapped, '2', {
+              value: 'c',
+              writable: true,
+              enumerable: true,
+              configurable: true
+            });
+
+            const zero = Object.getOwnPropertyDescriptor(wrapped, '0');
+            const lengthDesc = Object.getOwnPropertyDescriptor(wrapped, 'length');
+            const two = Object.getOwnPropertyDescriptor(wrapped, '2');
+
+            document.getElementById('result').textContent = [
+              wrapped[0],
+              String(wrapped.length),
+              String(reflectSameIndex),
+              String(reflectSameLength),
+              String(reflectOtherIndex),
+              String(reflectOtherLength),
+              String(deleteIndex),
+              String(deleteLength),
+              [zero.value, String(zero.writable), String(zero.enumerable), String(zero.configurable)].join(':'),
+              [String(lengthDesc.value), String(lengthDesc.writable), String(lengthDesc.enumerable), String(lengthDesc.configurable)].join(':'),
+              [two.value, String(two.writable), String(two.enumerable), String(two.configurable)].join(':'),
+              sameIndex,
+              badIndex,
+              sameLength,
+              badLength,
+              String(Object.hasOwn(receiver, '0')),
+              String(Object.hasOwn(receiver, 'length')),
+              Object.getOwnPropertyNames(wrapped).join(','),
+              Reflect.ownKeys(wrapped).join(','),
+              Object.keys(wrapped).join(','),
+              Object.values(wrapped).join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "a|2|false|false|false|false|false|false|a:false:true:false|2:false:false:false|c:true:true:true|ok|Cannot redefine property: 0|ok|Cannot redefine property: length|false|false|0,1,2,length|0,1,2,length|0,1,2|a,b,c",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn wrapper_prototype_mutation_and_string_exotic_introspection_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const wrapped = Object('ab');
+            const boolBox = Object(false);
+
+            const hasProtoMethodBefore = 'propertyIsEnumerable' in wrapped;
+            const ownEnum0 = wrapped.propertyIsEnumerable('0');
+            const ownEnumLength = wrapped.propertyIsEnumerable('length');
+            const ownHas0 = wrapped.hasOwnProperty('0');
+            const ownHas2 = wrapped.hasOwnProperty('2');
+            const stringProtoBefore = String.prototype.isPrototypeOf(wrapped);
+
+            const proto = {
+              2: 'c',
+              tail() {
+                return this[2] + this[0];
+              }
+            };
+            const boolProto = { flag: 7 };
+            const setProto = Object.setPrototypeOf;
+            const returned = setProto(wrapped, proto);
+            Object.setPrototypeOf(boolBox, boolProto);
+
+            const nullWrapped = Object('z');
+            Object.setPrototypeOf(nullWrapped, null);
+
+            document.getElementById('result').textContent = [
+              String(hasProtoMethodBefore),
+              String(ownEnum0),
+              String(ownEnumLength),
+              String(ownHas0),
+              String(ownHas2),
+              String(stringProtoBefore),
+              String(returned === wrapped),
+              String(Object.getPrototypeOf(wrapped) === proto),
+              wrapped[0],
+              wrapped[1],
+              wrapped[2],
+              wrapped.tail(),
+              String('2' in wrapped),
+              String('tail' in wrapped),
+              String(String.prototype.isPrototypeOf(wrapped)),
+              String(proto.isPrototypeOf(wrapped)),
+              String(Object.getPrototypeOf(boolBox) === boolProto),
+              String(boolBox.flag),
+              String('0' in nullWrapped),
+              String('toString' in nullWrapped),
+              Object.getOwnPropertyNames(nullWrapped).join(','),
+              Reflect.ownKeys(nullWrapped).join(','),
+              Object.keys(nullWrapped).join(','),
+              String(Object.prototype.propertyIsEnumerable.call(nullWrapped, '0')),
+              String(Object.prototype.propertyIsEnumerable.call(nullWrapped, 'length'))
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|false|true|false|true|true|true|a|b|c|ca|true|true|false|true|true|7|true|false|0,length|0,length|0|true|false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn wrapper_primitive_prototype_methods_survive_custom_prototype_chains_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const num = new Number(12.5);
+            const customProto = {
+              tail() {
+                return Number.prototype.valueOf.call(this) + 4;
+              }
+            };
+            Object.setPrototypeOf(customProto, Number.prototype);
+            const setResult = Object.setPrototypeOf(num, customProto);
+
+            const fixed = num.toFixed;
+            const precision = Object.getPrototypeOf(num).toPrecision;
+            const exponential = Object.getPrototypeOf(customProto).toExponential;
+
+            const bool = Object(true);
+            const boolProto = {
+              shout() {
+                return Boolean.prototype.toString.call(this).toUpperCase();
+              }
+            };
+            Object.setPrototypeOf(boolProto, Boolean.prototype);
+            Object.setPrototypeOf(bool, boolProto);
+
+            const big = Object(255n);
+            const bigProto = {
+              hex() {
+                return BigInt.prototype.toString.call(this, 16);
+              }
+            };
+            Object.setPrototypeOf(bigProto, BigInt.prototype);
+            Object.setPrototypeOf(big, bigProto);
+
+            const sym = Object(Symbol('s'));
+            const symProto = {
+              desc() {
+                return Symbol.prototype.toString.call(this);
+              }
+            };
+            Object.setPrototypeOf(symProto, Symbol.prototype);
+            Object.setPrototypeOf(sym, symProto);
+
+            document.getElementById('result').textContent = [
+              String(setResult === num),
+              String(Object.getPrototypeOf(num) === customProto),
+              String(customProto.isPrototypeOf(num)),
+              String(Number.prototype.isPrototypeOf(num)),
+              fixed.call(num, 1),
+              precision.call(num, 4),
+              exponential.call(num, 2),
+              String(num.tail()),
+              bool.shout(),
+              big.hex(),
+              sym.desc(),
+              String(fixed.name === 'toFixed'),
+              String(fixed.length === 1)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|12.5|12.50|1.25e+1|16.5|TRUE|ff|Symbol(s)|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_static_prototype_mutation_covers_functions_primitives_and_regexp_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            function fn() {}
+            const proto = {
+              mark: 7,
+              ping() {
+                return 'pong';
+              }
+            };
+            const re = /a/;
+            const reProto = { tag: 'rx' };
+            const setProto = Object.setPrototypeOf;
+            const getProto = Object.getPrototypeOf;
+
+            const fnBefore = getProto(fn) === Function.prototype;
+            const setFn = setProto(fn, proto);
+            const fnAfter = getProto(fn) === proto;
+            const fnMark = fn.mark === 7;
+            const fnPing = fn.ping();
+            const protoCheck = proto.isPrototypeOf(fn);
+
+            setProto(fn, null);
+            const fnNull = getProto(fn) === null;
+
+            const primitiveNumber = setProto(1, proto) === 1;
+            const primitiveBig = setProto(2n, null) === 2n;
+
+            const ctorProto = { brand: 'ctor' };
+            const setCtor = setProto(Boolean, ctorProto);
+            const ctorAfter = getProto(Boolean) === ctorProto;
+            const ctorBrand = Boolean.brand === 'ctor';
+
+            const setRe = setProto(re, reProto);
+            const reAfter = getProto(re) === reProto;
+            const reTag = re.tag === 'rx';
+
+            document.getElementById('result').textContent = [
+              String(fnBefore),
+              String(setFn === fn),
+              String(fnAfter),
+              String(fnMark),
+              fnPing,
+              String(protoCheck),
+              String(fnNull),
+              String(primitiveNumber),
+              String(primitiveBig),
+              String(setCtor === Boolean),
+              String(ctorAfter),
+              String(ctorBrand),
+              String(setRe === re),
+              String(reAfter),
+              String(reTag)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "true|true|true|true|pong|true|true|true|true|true|true|true|true|true|true",
+    )?;
     Ok(())
 }
 
@@ -5024,6 +6564,140 @@ fn constructor_identity_and_string_raw_getter_breadth_work() -> Result<()> {
 }
 
 #[test]
+fn object_backed_host_callable_name_length_and_source_text_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const hostFetch = window['fetch'];
+            const checks = [
+              [window.Event, 'Event', '1'],
+              [window.EventTarget, 'EventTarget', '0'],
+              [window.KeyboardEvent, 'KeyboardEvent', '1'],
+              [window.WheelEvent, 'WheelEvent', '1'],
+              [window.Document, 'Document', '0'],
+              [window.Document.parseHTML, 'parseHTML', '1'],
+              [window.Document.parseHTMLUnsafe, 'parseHTMLUnsafe', '1'],
+              [hostFetch, 'fetch', '1'],
+              [window.TextEncoder, 'TextEncoder', '0'],
+              [window.TextDecoder, 'TextDecoder', '0']
+            ];
+
+            const result = checks.map(([value, name, length]) => [
+              String(value.name === name),
+              String(String(value.length) === length),
+              String(value.toString().includes(name)),
+              String(Function.prototype.toString.call(value) === value.toString()),
+              String(String(value) === value.toString())
+            ].join(':')).join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn string_search_and_padding_raw_getter_metadata_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const proto = String.prototype;
+            const checks = [
+              [proto.charAt, 'charAt', '1'],
+              [proto.at, 'at', '1'],
+              [proto.search, 'search', '1'],
+              [proto.match, 'match', '1'],
+              [proto.matchAll, 'matchAll', '1'],
+              [proto.replace, 'replace', '2'],
+              [proto.replaceAll, 'replaceAll', '2'],
+              [proto.localeCompare, 'localeCompare', '1'],
+              [proto.trim, 'trim', '0'],
+              [proto.toUpperCase, 'toUpperCase', '0'],
+              [proto.isWellFormed, 'isWellFormed', '0'],
+              [proto.toWellFormed, 'toWellFormed', '0'],
+              [proto.indexOf, 'indexOf', '1'],
+              [proto.lastIndexOf, 'lastIndexOf', '1'],
+              [proto.padStart, 'padStart', '1'],
+              [proto.padEnd, 'padEnd', '1'],
+              [proto.repeat, 'repeat', '1']
+            ];
+
+            const result = checks.map(([value, name, length]) => [
+              String(value.name === name),
+              String(String(value.length) === length),
+              String(value.toString().includes(name)),
+              String(Function.prototype.toString.call(value) === value.toString()),
+              String(value === proto[name]),
+              String(value === String.prototype[name])
+            ].join(':')).join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true|true:true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn regexp_symbol_method_raw_getter_metadata_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const checks = [
+              [Symbol.match, '[Symbol.match]', '1'],
+              [Symbol.matchAll, '[Symbol.matchAll]', '1'],
+              [Symbol.replace, '[Symbol.replace]', '2'],
+              [Symbol.search, '[Symbol.search]', '1'],
+              [Symbol.split, '[Symbol.split]', '2']
+            ];
+
+            const result = checks.map(([symbol, name, length]) => {
+              const value = RegExp.prototype[symbol];
+              return [
+                String(value.name === name),
+                String(String(value.length) === length),
+                String(value.toString().includes(name)),
+                String(Function.prototype.toString.call(value) === value.toString()),
+                String(value === RegExp.prototype[symbol])
+              ].join(':');
+            }).join('|');
+
+            document.getElementById('result').textContent = result;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true|true:true:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn stable_constructor_prototype_identity_and_symbol_bracket_access_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>
@@ -5092,5 +6766,260 @@ fn function_constructor_name_and_callable_prototype_chain_work() -> Result<()> {
         "#result",
         "anonymous|2|true|Function|true|true|true|Function|true|Function",
     )?;
+    Ok(())
+}
+
+#[test]
+fn object_like_prototype_targets_preserve_inherited_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const arrProto = [];
+          arrProto.extra = 'array';
+          const fnProto = function protoFn() {};
+          fnProto.fnMarker = 'fn';
+          Object.setPrototypeOf(arrProto, fnProto);
+
+          const plain = {};
+          Object.setPrototypeOf(plain, arrProto);
+
+          const ctorTarget = {};
+          Object.setPrototypeOf(ctorTarget, Int8Array);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(plain) === arrProto),
+            String(Object.getPrototypeOf(arrProto) === fnProto),
+            plain.extra,
+            plain.fnMarker,
+            String(typeof plain.call === 'function'),
+            String(typeof plain.push === 'undefined'),
+            String(Object.getPrototypeOf(ctorTarget) === Int8Array),
+            String(typeof ctorTarget.of === 'function'),
+            String(ctorTarget.BYTES_PER_ELEMENT === 1)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|array|fn|true|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn collection_and_regexp_explicit_prototype_override_disables_builtin_fast_paths_work() -> Result<()>
+{
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const customProto = {
+            marker: 'override',
+            get() { return 'map-custom'; },
+            has() { return 'set-custom'; },
+            exec() { return 'regexp-custom'; }
+          };
+
+          const map = new Map([['k', 1]]);
+          const set = new Set([1]);
+          const re = /ab/g;
+
+          Object.setPrototypeOf(map, customProto);
+          Object.setPrototypeOf(set, customProto);
+          Object.setPrototypeOf(re, customProto);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(map) === customProto),
+            map.marker,
+            String(map.size === undefined),
+            String(map.get() === 'map-custom'),
+            String(Object.getPrototypeOf(set) === customProto),
+            set.marker,
+            String(set.size === undefined),
+            String(set.has() === 'set-custom'),
+            String(Object.getPrototypeOf(re) === customProto),
+            re.marker,
+            String(re.lastIndex === undefined),
+            String(re.exec() === 'regexp-custom')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true|override|true|true|true|override|true|true|true|override|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn non_ordinary_prototype_traversal_preserves_receiver_and_hides_instance_state_work() -> Result<()>
+{
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const mapProto = new Map([['k', 1]]);
+          mapProto.extra = 'map';
+          const setProto = new Set([1]);
+          setProto.extra = 'set';
+          const regexpProto = /ab/gi;
+          regexpProto.extra = 'regexp';
+          const promiseProto = Promise.resolve(1);
+          const blobProto = new Blob(['hi'], { type: 'text/plain' });
+          const bufferProto = new ArrayBuffer(4);
+
+          const mapTarget = {};
+          Object.setPrototypeOf(mapTarget, mapProto);
+          const setTarget = {};
+          Object.setPrototypeOf(setTarget, setProto);
+          const regexpTarget = {};
+          Object.setPrototypeOf(regexpTarget, regexpProto);
+          const promiseTarget = {};
+          Object.setPrototypeOf(promiseTarget, promiseProto);
+          const blobTarget = {};
+          Object.setPrototypeOf(blobTarget, blobProto);
+          const bufferTarget = {};
+          Object.setPrototypeOf(bufferTarget, bufferProto);
+
+          let regexpSource = '';
+          let mapGetCall = '';
+          let promiseThenCall = '';
+          try {
+            regexpSource = regexpTarget.source;
+          } catch (error) {
+            regexpSource = String(error);
+          }
+          try {
+            mapTarget.get('k');
+          } catch (error) {
+            mapGetCall = String(error);
+          }
+          try {
+            promiseTarget.then(() => {});
+          } catch (error) {
+            promiseThenCall = String(error);
+          }
+
+          document.getElementById('result').textContent = [
+            mapTarget.extra,
+            String(mapTarget.size === undefined),
+            String(typeof mapTarget.get === 'function'),
+            String(String(mapGetCall).includes('Map method called on incompatible receiver')),
+            setTarget.extra,
+            String(setTarget.size === undefined),
+            String(typeof setTarget.has === 'function'),
+            regexpTarget.extra,
+            String(regexpTarget.lastIndex === undefined),
+            String(String(regexpSource).includes('RegExp method called on incompatible receiver')),
+            String(typeof promiseTarget.then === 'function'),
+            String(promiseTarget.status === undefined),
+            String(String(promiseThenCall).includes('Promise method called on incompatible receiver')),
+            String(typeof blobTarget.slice === 'function'),
+            String(blobTarget.size === undefined),
+            String(typeof bufferTarget.slice === 'function'),
+            String(bufferTarget.byteLength === undefined)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "map|true|true|true|set|true|true|regexp|true|true|true|true|true|true|true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn object_like_array_and_function_prototype_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const arrProto = [];
+          arrProto.extra = 'array';
+          const fnProto = function protoFn() {};
+          fnProto.fnMarker = 'fn';
+          Object.setPrototypeOf(arrProto, fnProto);
+
+          const plain = {};
+          Object.setPrototypeOf(plain, arrProto);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(plain) === arrProto),
+            String(Object.getPrototypeOf(arrProto) === fnProto),
+            plain.extra,
+            plain.fnMarker
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|array|fn")?;
+    Ok(())
+}
+
+#[test]
+fn object_like_function_prototype_surface_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const arrProto = [];
+          const fnProto = function protoFn() {};
+          Object.setPrototypeOf(arrProto, fnProto);
+
+          const plain = {};
+          Object.setPrototypeOf(plain, arrProto);
+
+          document.getElementById('result').textContent = [
+            String(typeof plain.call === 'function')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn object_like_function_prototype_missing_method_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const arrProto = [];
+          const fnProto = function protoFn() {};
+          Object.setPrototypeOf(arrProto, fnProto);
+
+          const plain = {};
+          Object.setPrototypeOf(plain, arrProto);
+
+          document.getElementById('result').textContent = [
+            String(typeof plain.push === 'undefined')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn object_like_constructor_prototype_lookup_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const target = {};
+          Object.setPrototypeOf(target, Int8Array);
+
+          document.getElementById('result').textContent = [
+            String(Object.getPrototypeOf(target) === Int8Array),
+            String(typeof target.of === 'function'),
+            String(target.BYTES_PER_ELEMENT === 1)
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "true|true|true")?;
     Ok(())
 }
