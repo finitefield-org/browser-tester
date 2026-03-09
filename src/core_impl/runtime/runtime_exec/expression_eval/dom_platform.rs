@@ -176,9 +176,18 @@ impl Harness {
                             }
                         }
                         DomProp::ReturnValue => Ok(Value::String(self.dialog_return_value(node)?)),
-                        DomProp::ClosedBy => Ok(Value::String(
-                            self.dom.attr(node, "closedby").unwrap_or_default(),
-                        )),
+                        DomProp::ClosedBy => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["closedBy", "closedby"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "closedby").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::Readonly => Ok(Value::Bool(self.dom.readonly(node))),
                         DomProp::Disabled => Ok(Value::Bool(self.dom.disabled(node))),
                         DomProp::Required => Ok(Value::Bool(self.dom.required(node))),
@@ -274,13 +283,38 @@ impl Harness {
                             .previous_element_sibling(node)
                             .map(Value::Node)
                             .unwrap_or(Value::Null)),
-                        DomProp::Slot => Ok(Value::String(
-                            self.dom.attr(node, "slot").unwrap_or_default(),
-                        )),
-                        DomProp::Role => Ok(Value::String(self.resolved_role_for_node(node))),
-                        DomProp::ElementTiming => Ok(Value::String(
-                            self.dom.attr(node, "elementtiming").unwrap_or_default(),
-                        )),
+                        DomProp::Slot => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["slot"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "slot").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Role => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["role"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(self.resolved_role_for_node(node)))
+                            }
+                        }
+                        DomProp::ElementTiming => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["elementTiming", "elementtiming"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "elementtiming").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::HtmlFor => {
                             if self
                                 .node_explicit_own_property_overrides_dom_property(node, "htmlFor")
@@ -304,24 +338,10 @@ impl Harness {
                             }
                         }
                         DomProp::Name => {
-                            if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
-                                && self.node_has_explicit_own_property(node, "name")
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["name"])?
                             {
-                                let entries = self.node_expando_entries(node);
-                                if let Some(value) = self.object_property_from_entries_with_getter(
-                                    &Value::Node(node),
-                                    &entries,
-                                    "name",
-                                )? {
-                                    Ok(value)
-                                } else {
-                                    Ok(Value::String(
-                                        self.dom.attr(node, "name").unwrap_or_default(),
-                                    ))
-                                }
+                                Ok(value)
                             } else {
                                 Ok(Value::String(
                                     self.dom.attr(node, "name").unwrap_or_default(),
@@ -439,45 +459,151 @@ impl Harness {
                                 Ok(Value::String(self.resolved_dir_for_node(node)))
                             }
                         }
-                        DomProp::AccessKey => Ok(Value::String(
-                            self.dom.attr(node, "accesskey").unwrap_or_default(),
-                        )),
+                        DomProp::AccessKey => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["accessKey", "accesskey"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "accesskey").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AutoComplete => Ok(Value::String(
                             self.dom.attr(node, "autocomplete").unwrap_or_default(),
                         )),
-                        DomProp::AutoCapitalize => Ok(Value::String(
-                            self.dom.attr(node, "autocapitalize").unwrap_or_default(),
-                        )),
-                        DomProp::AutoCorrect => Ok(Value::String(
-                            self.dom.attr(node, "autocorrect").unwrap_or_default(),
-                        )),
-                        DomProp::ContentEditable => Ok(Value::String(
-                            self.content_editable_property_value_for_node(node),
-                        )),
+                        DomProp::AutoCapitalize => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["autocapitalize"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "autocapitalize").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AutoCorrect => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["autocorrect"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "autocorrect").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::ContentEditable => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["contentEditable", "contenteditable"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.content_editable_property_value_for_node(node),
+                                ))
+                            }
+                        }
                         DomProp::Draggable => {
-                            Ok(Value::Bool(self.draggable_property_value_for_node(node)))
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["draggable"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.draggable_property_value_for_node(node)))
+                            }
                         }
-                        DomProp::EnterKeyHint => Ok(Value::String(
-                            self.dom.attr(node, "enterkeyhint").unwrap_or_default(),
-                        )),
-                        DomProp::Inert => Ok(Value::Bool(self.dom.has_attr(node, "inert")?)),
-                        DomProp::InputMode => Ok(Value::String(
-                            self.dom.attr(node, "inputmode").unwrap_or_default(),
-                        )),
-                        DomProp::Nonce => Ok(Value::String(
-                            self.dom.attr(node, "nonce").unwrap_or_default(),
-                        )),
-                        DomProp::Popover => Ok(Value::String(
-                            self.dom.attr(node, "popover").unwrap_or_default(),
-                        )),
+                        DomProp::EnterKeyHint => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["enterKeyHint", "enterkeyhint"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "enterkeyhint").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Inert => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["inert"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "inert")?))
+                            }
+                        }
+                        DomProp::InputMode => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["inputMode", "inputmode"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "inputmode").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Nonce => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["nonce"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "nonce").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Popover => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["popover"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "popover").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::Spellcheck => {
-                            Ok(Value::Bool(self.spellcheck_property_value_for_node(node)))
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["spellcheck"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.spellcheck_property_value_for_node(node)))
+                            }
                         }
-                        DomProp::TabIndex => Ok(Value::Number(
-                            self.reflected_i64_attribute_or_default(node, "tabindex", -1),
-                        )),
+                        DomProp::TabIndex => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["tabIndex", "tabindex"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(
+                                    self.reflected_i64_attribute_or_default(node, "tabindex", -1),
+                                ))
+                            }
+                        }
                         DomProp::Translate => {
-                            Ok(Value::Bool(self.translate_property_value_for_node(node)))
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["translate"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.translate_property_value_for_node(node)))
+                            }
                         }
                         DomProp::Cite => {
                             if self.node_explicit_own_property_overrides_dom_property(node, "cite")
@@ -500,15 +626,40 @@ impl Harness {
                                 ))
                             }
                         }
-                        DomProp::DateTime => Ok(Value::String(
-                            self.dom.attr(node, "datetime").unwrap_or_default(),
-                        )),
-                        DomProp::BrClear => Ok(Value::String(
-                            self.dom.attr(node, "clear").unwrap_or_default(),
-                        )),
-                        DomProp::CaptionAlign => Ok(Value::String(
-                            self.dom.attr(node, "align").unwrap_or_default(),
-                        )),
+                        DomProp::DateTime => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["dateTime", "datetime"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "datetime").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::BrClear => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["clear"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "clear").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::CaptionAlign => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["align"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "align").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::ColSpan => {
                             if self.dom.tag_name(node).is_some_and(|tag| {
                                 tag.eq_ignore_ascii_case("col")
@@ -686,6 +837,10 @@ impl Harness {
                                 Ok(Value::Bool(
                                     self.dom_runtime.document_visibility_state == "hidden",
                                 ))
+                            } else if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["hidden"])?
+                            {
+                                Ok(value)
                             } else {
                                 Ok(Value::Bool(self.dom.attr(node, "hidden").is_some()))
                             }
@@ -749,10 +904,22 @@ impl Harness {
                             }
                         }
                         DomProp::AudioAutoplay => {
-                            Ok(Value::Bool(self.dom.has_attr(node, "autoplay")?))
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["autoplay"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "autoplay")?))
+                            }
                         }
                         DomProp::AudioControls => {
-                            Ok(Value::Bool(self.dom.has_attr(node, "controls")?))
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["controls"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "controls")?))
+                            }
                         }
                         DomProp::AudioControlsList => {
                             if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
@@ -802,8 +969,24 @@ impl Harness {
                                 ))
                             }
                         }
-                        DomProp::AudioLoop => Ok(Value::Bool(self.dom.has_attr(node, "loop")?)),
-                        DomProp::AudioMuted => Ok(Value::Bool(self.dom.has_attr(node, "muted")?)),
+                        DomProp::AudioLoop => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["loop"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "loop")?))
+                            }
+                        }
+                        DomProp::AudioMuted => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["muted"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "muted")?))
+                            }
+                        }
                         DomProp::AudioPreload => {
                             if self
                                 .node_explicit_own_property_overrides_dom_property(node, "preload")
@@ -937,9 +1120,17 @@ impl Harness {
                                 self.resolve_aria_element_list_property(node, prop_name),
                             ))
                         }
-                        DomProp::AnchorAlt => Ok(Value::String(
-                            self.dom.attr(node, "alt").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorAlt => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["alt"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "alt").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorAttributionSrc => {
                             if self.node_explicit_own_property_overrides_dom_property(
                                 node,
@@ -963,9 +1154,17 @@ impl Harness {
                                 ))
                             }
                         }
-                        DomProp::AnchorDownload => Ok(Value::String(
-                            self.dom.attr(node, "download").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorDownload => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["download"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "download").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorHash => {
                             Ok(Value::String(self.anchor_hash_property_value(node)))
                         }
@@ -996,9 +1195,17 @@ impl Harness {
                                 Ok(Value::String(self.resolve_anchor_href(node)))
                             }
                         }
-                        DomProp::AnchorHreflang => Ok(Value::String(
-                            self.dom.attr(node, "hreflang").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorHreflang => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["hreflang"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "hreflang").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorInterestForElement => {
                             if self
                                 .dom
@@ -1041,9 +1248,17 @@ impl Harness {
                                 })
                                 .unwrap_or_default(),
                         )),
-                        DomProp::AnchorPing => Ok(Value::String(
-                            self.dom.attr(node, "ping").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorPing => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["ping"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "ping").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorPort => Ok(Value::String(
                             self.anchor_location_parts(node)
                                 .map(|parts| parts.effective_port())
@@ -1054,12 +1269,29 @@ impl Harness {
                                 .map(|parts| parts.protocol())
                                 .unwrap_or_else(|| ":".to_string()),
                         )),
-                        DomProp::AnchorReferrerPolicy => Ok(Value::String(
-                            self.dom.attr(node, "referrerpolicy").unwrap_or_default(),
-                        )),
-                        DomProp::AnchorRel => Ok(Value::String(
-                            self.dom.attr(node, "rel").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorReferrerPolicy => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["referrerPolicy", "referrerpolicy"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "referrerpolicy").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AnchorRel => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["rel"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "rel").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorRelList => Ok(Self::new_array_value(
                             self.anchor_rel_tokens(node)
                                 .into_iter()
@@ -1072,9 +1304,17 @@ impl Harness {
                         DomProp::AnchorSearch => {
                             Ok(Value::String(self.anchor_search_property_value(node)))
                         }
-                        DomProp::AnchorTarget => Ok(Value::String(
-                            self.dom.attr(node, "target").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorTarget => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["target"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "target").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorText => Ok(Value::String(self.dom.text_content(node))),
                         DomProp::AnchorType => {
                             if self.node_explicit_own_property_overrides_dom_property(node, "type")
@@ -1138,20 +1378,59 @@ impl Harness {
                                 .unwrap_or_default(),
                         )),
                         DomProp::AnchorNoHref => {
-                            Ok(Value::Bool(self.dom.attr(node, "nohref").is_some()))
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["noHref", "nohref"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.attr(node, "nohref").is_some()))
+                            }
                         }
-                        DomProp::AnchorCharset => Ok(Value::String(
-                            self.dom.attr(node, "charset").unwrap_or_default(),
-                        )),
-                        DomProp::AnchorCoords => Ok(Value::String(
-                            self.dom.attr(node, "coords").unwrap_or_default(),
-                        )),
-                        DomProp::AnchorRev => Ok(Value::String(
-                            self.dom.attr(node, "rev").unwrap_or_default(),
-                        )),
-                        DomProp::AnchorShape => Ok(Value::String(
-                            self.dom.attr(node, "shape").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorCharset => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["charset"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "charset").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AnchorCoords => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["coords"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "coords").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AnchorRev => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["rev"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "rev").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AnchorShape => {
+                            if let Some(value) =
+                                self.node_explicit_own_dom_property_shadow_value(node, &["shape"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "shape").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::Size => {
                             if self
                                 .dom

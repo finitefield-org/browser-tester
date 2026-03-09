@@ -1120,6 +1120,26 @@ impl Harness {
             "id" | "className"
                 | "lang"
                 | "dir"
+                | "accessKey"
+                | "accesskey"
+                | "autocapitalize"
+                | "autocorrect"
+                | "contentEditable"
+                | "contenteditable"
+                | "draggable"
+                | "enterKeyHint"
+                | "enterkeyhint"
+                | "hidden"
+                | "inert"
+                | "inputMode"
+                | "inputmode"
+                | "nonce"
+                | "popover"
+                | "spellcheck"
+                | "tabIndex"
+                | "tabindex"
+                | "title"
+                | "translate"
                 | "controlsList"
                 | "controlslist"
                 | "crossOrigin"
@@ -1152,12 +1172,41 @@ impl Harness {
                 | "played"
                 | "value"
                 | "open"
+                | "closedBy"
+                | "closedby"
                 | "htmlFor"
+                | "slot"
+                | "role"
+                | "elementTiming"
+                | "elementtiming"
+                | "name"
                 | "cite"
+                | "dateTime"
+                | "datetime"
+                | "clear"
+                | "align"
                 | "href"
                 | "src"
                 | "currentSrc"
                 | "currentsrc"
+                | "autoplay"
+                | "controls"
+                | "loop"
+                | "muted"
+                | "alt"
+                | "download"
+                | "hreflang"
+                | "ping"
+                | "referrerPolicy"
+                | "referrerpolicy"
+                | "rel"
+                | "target"
+                | "noHref"
+                | "nohref"
+                | "charset"
+                | "coords"
+                | "rev"
+                | "shape"
                 | "media"
                 | "type"
                 | "kind"
@@ -7944,10 +7993,20 @@ impl Harness {
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("input"))
             .unwrap_or(false);
+        let is_option = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("option"))
+            .unwrap_or(false);
         let is_textarea = self
             .dom
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("textarea"))
+            .unwrap_or(false);
+        let is_output = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("output"))
             .unwrap_or(false);
         let is_button = self
             .dom
@@ -8078,6 +8137,18 @@ impl Harness {
             "innerText" => Ok(Value::String(self.dom.text_content(*node))),
             "innerHTML" => Ok(Value::String(self.dom.inner_html(*node)?)),
             "outerHTML" => Ok(Value::String(self.dom.outer_html(*node)?)),
+            "defaultValue" => {
+                if is_input || is_textarea || is_output {
+                    Ok(Value::String(
+                        self.dom
+                            .element(*node)
+                            .map(|element| element.default_value.clone())
+                            .unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "value" => Ok(Value::String(self.dom.value(*node)?)),
             "files" => self.input_files_value(*node),
             "valueAsNumber" => Ok(Self::number_value(self.input_value_as_number(*node)?)),
@@ -8085,7 +8156,43 @@ impl Harness {
                 .input_value_as_date_ms(*node)?
                 .map(Self::new_date_value)
                 .unwrap_or(Value::Null)),
+            "defaultChecked" => {
+                if is_input {
+                    Ok(Value::Bool(
+                        self.dom
+                            .element(*node)
+                            .map(|element| element.default_checked)
+                            .unwrap_or(false),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "checked" => Ok(Value::Bool(self.dom.checked(*node)?)),
+            "defaultSelected" => {
+                if is_option {
+                    Ok(Value::Bool(
+                        self.dom
+                            .element(*node)
+                            .map(|element| element.default_selected)
+                            .unwrap_or(false),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "selected" => {
+                if is_option {
+                    Ok(Value::Bool(
+                        self.dom
+                            .element(*node)
+                            .map(|element| element.selected)
+                            .unwrap_or(false),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "disabled" => Ok(Value::Bool(self.dom.disabled(*node))),
             "required" => Ok(Value::Bool(self.dom.required(*node))),
             "multiple" => {
@@ -8144,7 +8251,13 @@ impl Harness {
                 }
             }
             "target" => {
-                if is_form {
+                if is_form
+                    || self.dom.tag_name(*node).is_some_and(|tag| {
+                        tag.eq_ignore_ascii_case("a")
+                            || tag.eq_ignore_ascii_case("area")
+                            || tag.eq_ignore_ascii_case("base")
+                    })
+                {
                     Ok(Value::String(
                         self.dom.attr(*node, "target").unwrap_or_default(),
                     ))
@@ -8200,6 +8313,114 @@ impl Harness {
                 }
             }
             "href" => Ok(Value::String(self.resolve_anchor_href(*node))),
+            "download"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "download").unwrap_or_default(),
+                ))
+            }
+            "hreflang"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a")
+                        || tag.eq_ignore_ascii_case("area")
+                        || tag.eq_ignore_ascii_case("link")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "hreflang").unwrap_or_default(),
+                ))
+            }
+            "ping"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "ping").unwrap_or_default(),
+                ))
+            }
+            "referrerPolicy" | "referrerpolicy"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a")
+                        || tag.eq_ignore_ascii_case("area")
+                        || tag.eq_ignore_ascii_case("img")
+                        || tag.eq_ignore_ascii_case("link")
+                        || tag.eq_ignore_ascii_case("script")
+                        || tag.eq_ignore_ascii_case("iframe")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "referrerpolicy").unwrap_or_default(),
+                ))
+            }
+            "rel"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a")
+                        || tag.eq_ignore_ascii_case("area")
+                        || tag.eq_ignore_ascii_case("link")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "rel").unwrap_or_default(),
+                ))
+            }
+            "alt"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a")
+                        || tag.eq_ignore_ascii_case("area")
+                        || tag.eq_ignore_ascii_case("img")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "alt").unwrap_or_default(),
+                ))
+            }
+            "charset"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "charset").unwrap_or_default(),
+                ))
+            }
+            "coords"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "coords").unwrap_or_default(),
+                ))
+            }
+            "rev"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "rev").unwrap_or_default(),
+                ))
+            }
+            "shape"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::String(
+                    self.dom.attr(*node, "shape").unwrap_or_default(),
+                ))
+            }
+            "noHref" | "nohref"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "nohref").is_some()))
+            }
             "formEnctype" => {
                 if is_button {
                     Ok(Value::String(
@@ -8427,6 +8648,34 @@ impl Harness {
             }
             "readyState" if self.is_track_element(*node) => Ok(Value::Number(0)),
             "defaultMuted"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "muted").is_some()))
+            }
+            "autoplay"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "autoplay").is_some()))
+            }
+            "controls"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "controls").is_some()))
+            }
+            "loop"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "loop").is_some()))
+            }
+            "muted"
                 if self.dom.tag_name(*node).is_some_and(|tag| {
                     tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
                 }) =>
@@ -8685,8 +8934,14 @@ impl Harness {
             "baseURI" => Ok(Value::String(self.document_base_url())),
             "dataset" => Ok(self.dom_string_map_live_value(*node)),
             "open" => Ok(Value::Bool(self.dom.has_attr(*node, "open")?)),
+            "closedBy" | "closedby" => Ok(Value::String(
+                self.dom.attr(*node, "closedby").unwrap_or_default(),
+            )),
             "htmlFor" => Ok(Value::String(
                 self.dom.attr(*node, "for").unwrap_or_default(),
+            )),
+            "elementTiming" | "elementtiming" => Ok(Value::String(
+                self.dom.attr(*node, "elementtiming").unwrap_or_default(),
             )),
             "options" => {
                 if is_select {

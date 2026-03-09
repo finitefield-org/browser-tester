@@ -878,6 +878,10 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("input"));
+        let is_option = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("option"));
         let is_textarea = self
             .dom
             .tag_name(node)
@@ -995,6 +999,11 @@ impl Harness {
                 };
                 self.dom.set_outer_html(node, &html)?
             }
+            "defaultValue" if is_input => self.dom.set_attr(node, "value", &value.as_string())?,
+            "defaultValue" if is_textarea => {
+                self.dom
+                    .set_textarea_default_value_state(node, value.as_string())?;
+            }
             "value" => self.dom.set_value(node, &value.as_string())?,
             "selectedIndex" if is_select => {
                 self.set_select_selected_index(node, Self::value_to_i64(&value))?
@@ -1007,7 +1016,16 @@ impl Harness {
                 let files = self.mock_files_from_input_assignment_value(&value)?;
                 self.dom.set_file_input_files(node, &files)?;
             }
+            "defaultChecked" if is_input => {
+                self.set_reflected_boolean_attribute(node, "checked", value.truthy())?;
+            }
             "checked" => self.dom.set_checked(node, value.truthy())?,
+            "defaultSelected" if is_option => {
+                self.set_reflected_boolean_attribute(node, "selected", value.truthy())?;
+            }
+            "selected" if is_option => self
+                .dom
+                .set_option_selected_property(node, value.truthy())?,
             "indeterminate" => self.dom.set_indeterminate(node, value.truthy())?,
             "open" => {
                 self.set_reflected_boolean_attribute(node, "open", value.truthy())?;

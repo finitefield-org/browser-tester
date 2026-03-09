@@ -1894,3 +1894,81 @@ fn audio_direct_src_reset_and_load_churn_keeps_current_src_aligned_work() -> Res
     )?;
     Ok(())
 }
+
+#[test]
+fn audio_load_triggered_direct_nested_precedence_matrix_stays_aligned_work() -> Result<()> {
+    let html = r#"
+        <audio id='player' src='/audio/direct.mp3'>
+          <source id='bad' src='/audio/bad.txt' type='text/plain'>
+          <source id='primary' src='/audio/primary.ogg' type='audio/ogg'>
+          <source id='fallback' src='/audio/fallback.wav' type='audio/wav' media='not all'>
+        </audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const bad = document.getElementById('bad');
+          const primary = document.getElementById('primary');
+          const fallback = document.getElementById('fallback');
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(player.networkState),
+              String(player.readyState)
+            ].join(':');
+          }
+
+          player.load();
+          const before = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          const afterRemovingDirect = snapshot();
+
+          primary.type = 'text/plain';
+          fallback.media = 'all';
+          player.load();
+          const afterFilteredNestedFlip = snapshot();
+
+          player.src = '/audio/direct-2.mp3';
+          player.load();
+          const afterRestoringDirect = snapshot();
+
+          player.innerHTML = '<source id="rebuilt-bad" src="/audio/rebuilt-bad.txt" type="text/plain"><source id="rebuilt" src="/audio/rebuilt.mp3" type="audio/mpeg"><source id="rebuilt-filtered" src="/audio/rebuilt-filtered.wav" type="audio/wav" media="not all">';
+          player.load();
+          const afterNestedResetWhileDirect = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          const afterNestedRestore = snapshot();
+
+          document.getElementById('rebuilt').removeAttribute('src');
+          document.getElementById('rebuilt-bad').type = 'audio/mpeg';
+          player.load();
+          const afterReweightingNested = snapshot();
+
+          bad.type = 'audio/mpeg';
+          player.appendChild(bad);
+          player.load();
+          const afterReinsertingOriginal = snapshot();
+
+          document.getElementById('result').textContent = [
+            before,
+            afterRemovingDirect,
+            afterFilteredNestedFlip,
+            afterRestoringDirect,
+            afterNestedResetWhileDirect,
+            afterNestedRestore,
+            afterReweightingNested,
+            afterReinsertingOriginal
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/audio/direct.mp3:1:0|https://app.local/audio/primary.ogg:1:0|https://app.local/audio/fallback.wav:1:0|https://app.local/audio/direct-2.mp3:1:0|https://app.local/audio/direct-2.mp3:1:0|https://app.local/audio/rebuilt.mp3:1:0|https://app.local/audio/rebuilt-bad.txt:1:0|https://app.local/audio/rebuilt-bad.txt:1:0",
+    )?;
+    Ok(())
+}

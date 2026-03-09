@@ -598,15 +598,7 @@ impl Harness {
                             )));
                         }
                         self.with_script_env(|this, env| {
-                            let controls = this.form_elements(node)?;
-                            let mut valid = true;
-                            for control in &controls {
-                                if !this.required_control_satisfied(*control, &controls)? {
-                                    valid = false;
-                                    let _ = this
-                                        .dispatch_event_with_env(*control, "invalid", env, true)?;
-                                }
-                            }
+                            let valid = this.validate_form_submission_with_env(node, env)?;
                             Ok(Value::Bool(valid))
                         })
                     }
@@ -5310,8 +5302,12 @@ impl Harness {
 
                         let default_selected = args.get(2).is_some_and(Value::truthy);
                         let selected = args.get(3).is_some_and(Value::truthy);
-                        if default_selected || selected {
+                        if default_selected {
                             self.dom.set_attr(option, "selected", "true")?;
+                        }
+                        if selected {
+                            self.dom
+                                .set_option_selected_state(option, true, Some(true))?;
                         }
 
                         Ok(Value::Node(option))

@@ -94,6 +94,160 @@ fn form_submission_attributes_and_request_submit_work() -> Result<()> {
 }
 
 #[test]
+fn form_submitter_property_tracks_request_submit_image_and_submit_bypass_work() -> Result<()> {
+    let html = r#"
+        <form id='target'>
+          <input id='name' name='name' required value='ok'>
+          <button id='button-submit' type='submit'>Button</button>
+          <input id='image-submit' type='image' alt='send' src='/send.png'>
+        </form>
+        <button id='request-button' type='button'>request button</button>
+        <button id='request-image' type='button'>request image</button>
+        <button id='direct-submit' type='button'>direct submit</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('target');
+          const buttonSubmit = document.getElementById('button-submit');
+          const imageSubmit = document.getElementById('image-submit');
+          const result = document.getElementById('result');
+          const log = [];
+
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            log.push([
+              event.type,
+              event.submitter ? event.submitter.id : 'null',
+              String(event.isTrusted),
+              event.submitter && event.submitter.form ? event.submitter.form.id : 'none'
+            ].join(':'));
+            result.textContent = log.join('|');
+          });
+
+          document.getElementById('request-button').addEventListener('click', () => {
+            form.requestSubmit(buttonSubmit);
+          });
+          document.getElementById('request-image').addEventListener('click', () => {
+            form.requestSubmit(imageSubmit);
+          });
+          document.getElementById('direct-submit').addEventListener('click', () => {
+            form.submit();
+            result.textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#request-button")?;
+    h.assert_text("#result", "submit:button-submit:true:target")?;
+    h.click("#request-image")?;
+    h.assert_text(
+        "#result",
+        "submit:button-submit:true:target|submit:image-submit:true:target",
+    )?;
+    h.click("#direct-submit")?;
+    h.assert_text(
+        "#result",
+        "submit:button-submit:true:target|submit:image-submit:true:target",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn trusted_click_and_implicit_enter_choose_default_submitter_work() -> Result<()> {
+    let html = r#"
+        <form id='target'>
+          <input id='name' name='name' value='ok'>
+          <button id='submitter' type='submit'>Send</button>
+        </form>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('target');
+          const result = document.getElementById('result');
+          const log = [];
+
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            log.push([
+              event.submitter ? event.submitter.id : 'null',
+              String(event.isTrusted),
+              event.submitter ? event.submitter.tagName : 'none'
+            ].join(':'));
+            result.textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#submitter")?;
+    h.assert_text("#result", "submitter:true:BUTTON")?;
+    h.press_enter("#name")?;
+    h.assert_text("#result", "submitter:true:BUTTON|submitter:true:BUTTON")?;
+    Ok(())
+}
+
+#[test]
+fn external_submitter_request_submit_and_trusted_click_follow_owner_reassociation_work()
+-> Result<()> {
+    let html = r#"
+        <form id='a'>
+          <input id='a-name' name='name' value='a-ok'>
+        </form>
+        <form id='b'>
+          <input id='b-name' name='name' value='b-ok'>
+        </form>
+        <button id='external' type='submit' form='a'>External</button>
+        <button id='request-a' type='button'>request a</button>
+        <button id='move-owner' type='button'>move owner</button>
+        <button id='request-b' type='button'>request b</button>
+        <p id='result'></p>
+        <script>
+          const formA = document.getElementById('a');
+          const formB = document.getElementById('b');
+          const external = document.getElementById('external');
+          const result = document.getElementById('result');
+          const log = [];
+
+          function record(label, event) {
+            event.preventDefault();
+            log.push([
+              label,
+              event.submitter ? event.submitter.id : 'null',
+              event.submitter && event.submitter.form ? event.submitter.form.id : 'none',
+              String(event.isTrusted)
+            ].join(':'));
+            result.textContent = log.join('|');
+          }
+
+          formA.addEventListener('submit', (event) => record('a', event));
+          formB.addEventListener('submit', (event) => record('b', event));
+
+          document.getElementById('request-a').addEventListener('click', () => {
+            formA.requestSubmit(external);
+          });
+          document.getElementById('move-owner').addEventListener('click', () => {
+            external.setAttribute('form', 'b');
+          });
+          document.getElementById('request-b').addEventListener('click', () => {
+            formB.requestSubmit(external);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#request-a")?;
+    h.assert_text("#result", "a:external:a:true")?;
+    h.click("#move-owner")?;
+    h.click("#request-b")?;
+    h.assert_text("#result", "a:external:a:true|b:external:b:true")?;
+    h.click("#external")?;
+    h.assert_text(
+        "#result",
+        "a:external:a:true|b:external:b:true|b:external:b:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn form_elements_is_live_cached_and_specialized_collection_surface_work() -> Result<()> {
     let html = r#"
         <form id='target'>
@@ -1044,6 +1198,66 @@ fn form_direct_property_lookup_prefers_expando_over_reflected_builtin_and_named_
     h.assert_text(
         "#result",
         "own-name:own-submit:own-pick:true:true:true:true|signup:function:[object RadioNodeList]:a:false:false:false:named-submit",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn form_reset_restores_dirty_defaults_textarea_select_fallback_and_output_work() -> Result<()> {
+    let html = r#"
+        <form id='profile'>
+          <input id='name' value='default'>
+          <input id='agree' type='checkbox' checked>
+          <textarea id='story'>seed</textarea>
+          <select id='pet'>
+            <option value='cat' selected>Cat</option>
+            <option value='dog'>Dog</option>
+          </select>
+          <select id='fallback'>
+            <option value='first'>First</option>
+            <option value='second'>Second</option>
+          </select>
+          <output id='status'>ready</output>
+        </form>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('profile');
+          const name = document.getElementById('name');
+          const agree = document.getElementById('agree');
+          const story = document.getElementById('story');
+          const pet = document.getElementById('pet');
+          const fallback = document.getElementById('fallback');
+          const status = document.getElementById('status');
+
+          name.value = 'changed';
+          name.setAttribute('value', 'updated-default');
+          agree.checked = false;
+          agree.setAttribute('checked', '');
+          story.value = 'edited';
+          pet.value = 'dog';
+          fallback.value = 'second';
+          status.value = 'busy';
+
+          form.reset();
+
+          document.getElementById('result').textContent = [
+            name.value,
+            name.getAttribute('value'),
+            String(agree.checked),
+            String(agree.hasAttribute('checked')),
+            story.value,
+            pet.value,
+            fallback.value,
+            status.value,
+            status.textContent
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "updated-default:updated-default:true:true:seed:cat:first:ready:ready",
     )?;
     Ok(())
 }

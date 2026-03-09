@@ -100,3 +100,108 @@ fn label_role_override_and_htmlfor_reflection_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn label_descendant_click_focuses_and_activates_associated_controls_work() -> Result<()> {
+    let html = r#"
+        <input id='check' type='checkbox'>
+        <label id='check-label' for='check'><span id='check-span'>Check</span></label>
+
+        <select id='pick'>
+          <option value='a'>A</option>
+          <option value='b'>B</option>
+        </select>
+        <label id='pick-label' for='pick'><span id='pick-span'>Pick</span></label>
+
+        <input id='upload' type='file'>
+        <label id='upload-label' for='upload'><span id='upload-span'>Upload</span></label>
+
+        <button id='save' type='button'>Save</button>
+        <label id='save-label' for='save'><span id='save-span'>Save label</span></label>
+
+        <input id='disabled' type='checkbox' disabled>
+        <label id='disabled-label' for='disabled'><span id='disabled-span'>Disabled</span></label>
+
+        <p id='result'></p>
+        <script>
+          const events = [];
+          document.getElementById('pick').addEventListener('click', () => {
+            events.push('pick:' + String(document.activeElement === document.getElementById('pick')));
+          });
+          document.getElementById('upload').addEventListener('click', () => {
+            events.push('upload:' + String(document.activeElement === document.getElementById('upload')));
+          });
+          document.getElementById('save').addEventListener('click', () => {
+            events.push('save:' + String(document.activeElement === document.getElementById('save')));
+          });
+          document.getElementById('disabled').addEventListener('click', () => {
+            events.push('disabled');
+          });
+
+          document.getElementById('check-span').click();
+          const a = [
+            String(document.getElementById('check').checked),
+            String(document.activeElement === document.getElementById('check'))
+          ].join(':');
+
+          document.getElementById('pick-span').click();
+          const b = String(document.activeElement === document.getElementById('pick'));
+
+          document.getElementById('upload-span').click();
+          const c = String(document.activeElement === document.getElementById('upload'));
+
+          document.getElementById('save-span').click();
+          const d = String(document.activeElement === document.getElementById('save'));
+
+          document.getElementById('disabled-span').click();
+          const e = [
+            String(document.getElementById('disabled').checked),
+            String(document.activeElement === document.getElementById('save'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            a,
+            b,
+            c,
+            d,
+            e,
+            events.join(',')
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:true|true|true|true|false:true|pick:true,upload:true,save:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn label_nested_interactive_descendant_does_not_retarget_associated_control_work() -> Result<()> {
+    let html = r#"
+        <label id='wrapper'>
+          <button id='inner' type='button'><span id='inner-span'>Inner</span></button>
+          <input id='check' type='checkbox'>
+        </label>
+        <p id='result'></p>
+        <script>
+          let buttonClicks = 0;
+          document.getElementById('inner').addEventListener('click', () => {
+            buttonClicks += 1;
+          });
+          document.getElementById('inner-span').click();
+          document.getElementById('result').textContent = [
+            String(buttonClicks),
+            String(document.getElementById('check').checked),
+            String(document.activeElement === document.getElementById('check')),
+            String(document.activeElement === document.getElementById('inner'))
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#result", "1:false:false:false")?;
+    Ok(())
+}

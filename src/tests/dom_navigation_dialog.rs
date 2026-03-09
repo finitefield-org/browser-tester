@@ -4735,6 +4735,186 @@ fn dialog_form_method_dialog_closes_and_keeps_submit_return_value() -> Result<()
 }
 
 #[test]
+fn dialog_invalid_submit_dispatches_non_bubbling_invalid_and_keeps_dialog_open_work() -> Result<()>
+{
+    let html = r#"
+        <dialog id='dialog'>
+          <form id='form' method='dialog'>
+            <input id='name' required>
+            <button id='submit' type='submit' value='ok'>Submit</button>
+          </form>
+        </dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          const form = document.getElementById('form');
+          const input = document.getElementById('name');
+          const log = [];
+
+          form.addEventListener('invalid', () => {
+            log.push('bubble');
+          });
+          form.addEventListener('invalid', () => {
+            log.push('capture');
+          }, true);
+          input.addEventListener('invalid', (event) => {
+            log.push([
+              'target',
+              String(event.cancelable),
+              String(event.bubbles),
+              String(event.defaultPrevented)
+            ].join(':'));
+            event.preventDefault();
+            log.push('after:' + String(event.defaultPrevented));
+          });
+          form.addEventListener('submit', () => {
+            log.push('submit');
+          });
+          dialog.addEventListener('close', () => {
+            log.push('close');
+          });
+
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialog.showModal();
+            document.getElementById('submit').click();
+            document.getElementById('result').textContent = [
+              log.join(','),
+              String(dialog.open),
+              String(dialog.returnValue === '')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text(
+        "#result",
+        "capture,target:true:false:false,after:true|true|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dialog_submitter_formmethod_override_can_suppress_close_default_action() -> Result<()> {
+    let html = r#"
+        <dialog id='dialog'>
+          <form id='form' method='dialog'>
+            <input id='name' value='ok'>
+            <button id='stay' type='submit' value='stay' formmethod='post'>Stay</button>
+          </form>
+        </dialog>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const dialog = document.getElementById('dialog');
+          const form = document.getElementById('form');
+          let submits = 0;
+          let closes = 0;
+
+          form.addEventListener('submit', () => {
+            submits++;
+          });
+          dialog.addEventListener('close', () => {
+            closes++;
+          });
+
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialog.showModal();
+            document.getElementById('stay').click();
+            document.getElementById('result').textContent =
+              [submits, closes, String(dialog.open), String(dialog.returnValue === '')].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text("#result", "1:0:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn external_submitter_override_attributes_and_owner_reassociation_drive_dialog_default_action()
+-> Result<()> {
+    let html = r#"
+        <dialog id='dialog-a'>
+          <form id='form-a' method='post'>
+            <input id='a-name' required>
+          </form>
+        </dialog>
+        <dialog id='dialog-b'>
+          <form id='form-b' method='post'>
+            <input id='b-name' required>
+          </form>
+        </dialog>
+        <button
+          id='external'
+          type='submit'
+          form='form-a'
+          value='outside'
+          formaction='/submit/override'
+          formenctype='text/plain'
+          formmethod='dialog'
+          formnovalidate
+          formtarget='preview'
+        >External</button>
+        <button id='trigger'>run</button>
+        <p id='result'></p>
+        <script>
+          const external = document.getElementById('external');
+          const dialogA = document.getElementById('dialog-a');
+          const dialogB = document.getElementById('dialog-b');
+          const formA = document.getElementById('form-a');
+          const formB = document.getElementById('form-b');
+          const log = [];
+
+          function record(label, event) {
+            log.push([
+              label,
+              event.submitter.id,
+              String(event.submitter.formAction.indexOf('/submit/override') >= 0),
+              event.submitter.formEnctype,
+              event.submitter.formMethod,
+              String(event.submitter.formNoValidate),
+              event.submitter.formTarget,
+              event.submitter.form.id,
+              String(event.isTrusted)
+            ].join(':'));
+          }
+
+          formA.addEventListener('submit', (event) => record('submit-a', event));
+          formB.addEventListener('submit', (event) => record('submit-b', event));
+          dialogA.addEventListener('close', () => {
+            log.push('close-a:' + dialogA.returnValue + ':' + dialogA.open);
+          });
+          dialogB.addEventListener('close', () => {
+            log.push('close-b:' + dialogB.returnValue + ':' + dialogB.open);
+          });
+
+          document.getElementById('trigger').addEventListener('click', () => {
+            dialogA.showModal();
+            external.click();
+            external.setAttribute('form', 'form-b');
+            dialogB.showModal();
+            external.click();
+            document.getElementById('result').textContent =
+              log.join('|') + '|states:' + dialogA.open + ':' + dialogB.open;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text(
+        "#result",
+        "submit-a:external:true:text/plain:dialog:true:preview:form-a:true|close-a:outside:false|submit-b:external:true:text/plain:dialog:true:preview:form-b:true|close-b:outside:false|states:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn dialog_form_submit_is_blocked_when_required_control_is_empty() -> Result<()> {
     let html = r#"
         <dialog id='dialog'>

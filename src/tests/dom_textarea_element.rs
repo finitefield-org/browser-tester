@@ -153,3 +153,49 @@ fn textarea_attributes_and_role_override_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn textarea_default_value_dirty_sync_and_reset_work() -> Result<()> {
+    let html = r#"
+        <form id='story-form'>
+          <textarea id='story'>seed</textarea>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const form = document.getElementById('story-form');
+            const story = document.getElementById('story');
+
+            story.defaultValue = 'base';
+            const clean = [
+              story.defaultValue,
+              story.value,
+              story.textContent
+            ].join(':');
+
+            story.value = 'dirty';
+            story.defaultValue = 'later';
+            const dirty = [
+              story.defaultValue,
+              story.value,
+              story.textContent
+            ].join(':');
+
+            form.reset();
+            const reset = [
+              story.defaultValue,
+              story.value
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [clean, dirty, reset].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "base:base:base|later:dirty:later|later:later")?;
+    Ok(())
+}

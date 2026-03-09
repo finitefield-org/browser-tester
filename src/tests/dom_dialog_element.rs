@@ -72,3 +72,71 @@ fn dialog_methods_and_closedby_returnvalue_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn dialog_beforetoggle_prevent_default_blocks_show_and_close_default_actions_work() -> Result<()> {
+    let html = r#"
+        <dialog id='target'></dialog>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const log = [];
+            let blockOpen = true;
+            let blockClose = true;
+
+            target.addEventListener('beforetoggle', (event) => {
+              log.push([
+                'before',
+                event.oldState,
+                event.newState,
+                String(event.cancelable),
+                String(event.bubbles)
+              ].join(':'));
+              if ((blockOpen && event.newState === 'open') ||
+                  (blockClose && event.newState === 'closed')) {
+                log.push('prevent:' + event.newState);
+                event.preventDefault();
+              }
+            });
+            target.addEventListener('toggle', (event) => {
+              log.push('toggle:' + event.newState);
+            });
+            target.addEventListener('close', () => {
+              log.push('close');
+            });
+
+            target.showModal();
+            const afterBlockedOpen = String(target.open);
+
+            blockOpen = false;
+            target.showModal();
+            const afterAllowedOpen = String(target.open);
+
+            target.close('blocked');
+            const afterBlockedClose = String(target.open);
+
+            blockClose = false;
+            target.close('done');
+            const afterAllowedClose = String(target.open);
+
+            document.getElementById('result').textContent = [
+              afterBlockedOpen,
+              afterAllowedOpen,
+              afterBlockedClose,
+              afterAllowedClose,
+              log.join('|')
+            ].join(';');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false;true;true;false;before:closed:open:true:false|prevent:open|before:closed:open:true:false|toggle:open|before:open:closed:true:false|prevent:closed|before:open:closed:true:false|toggle:closed|close",
+    )?;
+    Ok(())
+}

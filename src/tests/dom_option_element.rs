@@ -150,7 +150,7 @@ fn option_constructor_defaults_and_instanceof_work() -> Result<()> {
     h.click("#run")?;
     h.assert_text(
         "#result",
-        "true:true:true:Four:true:5:5:true:true:true:true:true:3,Four,Five,6",
+        "true:true:true:Four:true:5:5:true:false:true:true:true:3,Four,Five,6",
     )?;
     Ok(())
 }

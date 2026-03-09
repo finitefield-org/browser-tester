@@ -93,3 +93,25 @@ fn element_copy_event_synthetic_dispatch_does_not_change_clipboard_text() -> Res
     h.assert_text("#event", "false")?;
     Ok(())
 }
+
+#[test]
+fn element_copy_event_inherited_raw_getter_prevent_default_override_works() -> Result<()> {
+    let html = r#"
+        <input id='target' value='Alpha Beta' />
+        <script>
+          const target = document.getElementById('target');
+          target.setSelectionRange(0, 5);
+          document.addEventListener('copy', (event) => {
+            const inheritedSetData = Object.create(event.clipboardData).setData;
+            event.preventDefault();
+            inheritedSetData.call(event.clipboardData, 'text/plain', 'RAW-COPY');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_text("original");
+    h.copy("#target")?;
+    assert_eq!(h.clipboard_text(), "RAW-COPY");
+    Ok(())
+}

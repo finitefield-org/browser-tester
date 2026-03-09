@@ -3152,3 +3152,128 @@ fn video_cached_media_wrapper_callables_stay_stable_across_direct_src_reset_and_
     )?;
     Ok(())
 }
+
+#[test]
+fn video_media_wrapper_callable_alias_paths_stay_live_across_load_triggered_precedence_churn_work()
+-> Result<()> {
+    let html = r#"
+        <video id='player' src='/video/direct.mp4'>
+          <source id='bad' src='/video/bad.txt' type='text/plain'>
+          <source id='primary' src='/video/primary.webm' type='video/webm'>
+          <track id='track-en' kind='captions' srclang='en' src='/tracks/en.vtt'>
+        </video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 2;
+
+          const alias = {
+            wrappers: {
+              tracks: player.textTracks,
+              ranges: player.buffered
+            }
+          };
+
+          const item = alias.wrappers['tracks'].item;
+          const values = alias.wrappers.tracks['values'];
+          const iterator = alias.wrappers['tracks'][Symbol.iterator];
+          const start = alias.wrappers.ranges['start'];
+          const end = alias.wrappers['ranges'].end;
+          const lengthGetter = Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'length').get;
+
+          function borrowItem(receiver, index) {
+            return Function.prototype.call.call(item, receiver, index);
+          }
+
+          function borrowValues(receiver) {
+            return Function.prototype.apply.call(values, receiver, []);
+          }
+
+          function borrowIterator(receiver) {
+            return Function.prototype.call.call(iterator, receiver);
+          }
+
+          function borrowStart(receiver, index) {
+            return Function.prototype.call.call(start, receiver, index);
+          }
+
+          function borrowEnd(receiver, index) {
+            return Function.prototype.apply.call(end, receiver, [index]);
+          }
+
+          function borrowLength(receiver) {
+            return Function.prototype.call.call(lengthGetter, receiver);
+          }
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(alias.wrappers.tracks === player.textTracks),
+              String(alias.wrappers.ranges === player.buffered),
+              String(item === alias.wrappers.tracks.item),
+              String(values === alias.wrappers.tracks.values),
+              String(iterator === alias.wrappers.tracks[Symbol.iterator]),
+              String(start === alias.wrappers.ranges.start),
+              String(end === alias.wrappers.ranges.end),
+              borrowItem(alias.wrappers.tracks, 0).id,
+              Array.from(borrowValues(alias.wrappers.tracks)).map((track) => track.id).join(','),
+              Array.from(borrowIterator(alias.wrappers.tracks)).map((track) => track.id).join(','),
+              String(borrowLength(alias.wrappers.ranges)),
+              String(borrowStart(alias.wrappers.ranges, 0)),
+              String(borrowEnd(alias.wrappers.ranges, 0))
+            ].join(':');
+          }
+
+          player.load();
+          const before = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          player.currentTime = 3.5;
+          const afterRemovingDirect = snapshot();
+
+          player.src = '/video/direct-2.mp4';
+          player.load();
+          player.currentTime = 4.5;
+          const afterRestoringDirect = snapshot();
+
+          player.innerHTML = '<source id="rebuilt-bad" src="/video/rebuilt-bad.txt" type="text/plain"><source id="rebuilt" src="/video/rebuilt.mp4" type="video/mp4"><track id="track-en" kind="captions" srclang="en" src="/tracks/en.vtt">';
+          player.load();
+          player.currentTime = 5.5;
+          const afterNestedResetWhileDirect = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          player.currentTime = 6.5;
+          const afterNestedRestore = snapshot();
+
+          document.getElementById('rebuilt').removeAttribute('src');
+          document.getElementById('rebuilt-bad').type = 'video/mp4';
+          player.load();
+          player.currentTime = 7.5;
+          const afterReweightingNested = snapshot();
+
+          player.src = '/video/direct-3.mp4';
+          player.load();
+          player.currentTime = 8.5;
+          const afterDirectAgain = snapshot();
+
+          document.getElementById('result').textContent = [
+            before,
+            afterRemovingDirect,
+            afterRestoringDirect,
+            afterNestedResetWhileDirect,
+            afterNestedRestore,
+            afterReweightingNested,
+            afterDirectAgain
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/video/direct.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:0|https://app.local/video/primary.webm:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:3.5|https://app.local/video/direct-2.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:4.5|https://app.local/video/direct-2.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:5.5|https://app.local/video/rebuilt.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:6.5|https://app.local/video/rebuilt-bad.txt:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:7.5|https://app.local/video/direct-3.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:8.5",
+    )?;
+    Ok(())
+}

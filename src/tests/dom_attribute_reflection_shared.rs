@@ -993,6 +993,194 @@ fn attribute_reflection_html_2_3_2_generic_element_shadow_define_property_delete
 }
 
 #[test]
+fn attribute_reflection_html_3_2_6_remaining_global_attributes_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <div
+          id='box'
+          accesskey='h'
+          autocapitalize='characters'
+          autocorrect='on'
+          contenteditable='true'
+          draggable='true'
+          enterkeyhint='search'
+          hidden
+          inert
+          inputmode='numeric'
+          nonce='seed'
+          popover='auto'
+          spellcheck='true'
+          tabindex='4'
+          title='tip'
+          translate='no'
+        >box</div>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+
+            Object.defineProperty(box, 'accessKey', {
+              value: 'shadow-key',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'autocapitalize', {
+              value: 'shadow-cap',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'autocorrect', {
+              value: 'shadow-correct',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'contentEditable', {
+              value: 'shadow-edit',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'draggable', {
+              value: 'shadow-drag',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'enterKeyHint', {
+              value: 'shadow-enter',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'hidden', {
+              value: 'shadow-hidden',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'inert', {
+              value: 'shadow-inert',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'inputMode', {
+              value: 'shadow-mode',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'nonce', {
+              value: 'shadow-nonce',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'popover', {
+              get() { return this.getAttribute('data-popover-shadow') || 'shadow-pop'; },
+              set(value) { this.setAttribute('data-popover-shadow', value); },
+              configurable: true
+            });
+            Object.defineProperty(box, 'spellcheck', {
+              value: 'shadow-spell',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'tabIndex', {
+              value: 'shadow-tab',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'title', {
+              value: 'shadow-title',
+              writable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'translate', {
+              value: 'shadow-translate',
+              writable: true,
+              configurable: true
+            });
+
+            const shadowed = [
+              box.accessKey + ':' + box['accessKey'] + ':' + box.getAttribute('accesskey'),
+              box.autocapitalize + ':' + box['autocapitalize'] + ':' + box.getAttribute('autocapitalize'),
+              box.autocorrect + ':' + box['autocorrect'] + ':' + box.getAttribute('autocorrect'),
+              box.contentEditable + ':' + box['contentEditable'] + ':' + box.getAttribute('contenteditable'),
+              box.draggable + ':' + box['draggable'] + ':' + box.getAttribute('draggable'),
+              box.enterKeyHint + ':' + box['enterKeyHint'] + ':' + box.getAttribute('enterkeyhint'),
+              box.hidden + ':' + box['hidden'] + ':' + box.hasAttribute('hidden'),
+              box.inert + ':' + box['inert'] + ':' + box.hasAttribute('inert'),
+              box.inputMode + ':' + box['inputMode'] + ':' + box.getAttribute('inputmode'),
+              box.nonce + ':' + box['nonce'] + ':' + box.getAttribute('nonce'),
+              box.popover + ':' + box['popover'] + ':' + box.getAttribute('popover') + ':' + (box.getAttribute('data-popover-shadow') === null),
+              box.spellcheck + ':' + box['spellcheck'] + ':' + box.getAttribute('spellcheck'),
+              box.tabIndex + ':' + box['tabIndex'] + ':' + box.getAttribute('tabindex'),
+              box.title + ':' + box['title'] + ':' + box.getAttribute('title'),
+              box.translate + ':' + box['translate'] + ':' + box.getAttribute('translate')
+            ].join(',');
+
+            box.accessKey = 'set-key';
+            box.autocapitalize = 'set-cap';
+            box.autocorrect = 'set-correct';
+            box.contentEditable = 'set-edit';
+            box.draggable = 'set-drag';
+            box.enterKeyHint = 'set-enter';
+            box.hidden = 'set-hidden';
+            box.inert = 'set-inert';
+            box.inputMode = 'set-mode';
+            box.nonce = 'set-nonce';
+            box.popover = 'set-pop';
+            box.spellcheck = 'set-spell';
+            box.tabIndex = 'set-tab';
+            box.title = 'set-title';
+            box.translate = 'set-translate';
+
+            const assigned = [
+              box.accessKey + ':' + box.getAttribute('accesskey'),
+              box.autocapitalize + ':' + box.getAttribute('autocapitalize'),
+              box.autocorrect + ':' + box.getAttribute('autocorrect'),
+              box.contentEditable + ':' + box.getAttribute('contenteditable'),
+              box.draggable + ':' + box.getAttribute('draggable'),
+              box.enterKeyHint + ':' + box.getAttribute('enterkeyhint'),
+              box.hidden + ':' + box.hasAttribute('hidden'),
+              box.inert + ':' + box.hasAttribute('inert'),
+              box.inputMode + ':' + box.getAttribute('inputmode'),
+              box.nonce + ':' + box.getAttribute('nonce'),
+              box.popover + ':' + box.getAttribute('popover') + ':' + box.getAttribute('data-popover-shadow'),
+              box.spellcheck + ':' + box.getAttribute('spellcheck'),
+              box.tabIndex + ':' + box.getAttribute('tabindex'),
+              box.title + ':' + box.getAttribute('title'),
+              box.translate + ':' + box.getAttribute('translate')
+            ].join(',');
+
+            const restored = [
+              String(delete box.accessKey) + ':' + box.accessKey + ':' + box.getAttribute('accesskey'),
+              String(delete box.autocapitalize) + ':' + box.autocapitalize + ':' + box.getAttribute('autocapitalize'),
+              String(delete box.autocorrect) + ':' + box.autocorrect + ':' + box.getAttribute('autocorrect'),
+              String(delete box.contentEditable) + ':' + box.contentEditable + ':' + box.getAttribute('contenteditable'),
+              String(delete box.draggable) + ':' + box.draggable + ':' + box.getAttribute('draggable'),
+              String(delete box.enterKeyHint) + ':' + box.enterKeyHint + ':' + box.getAttribute('enterkeyhint'),
+              String(delete box.inert) + ':' + box.inert + ':' + box.hasAttribute('inert'),
+              String(delete box.inputMode) + ':' + box.inputMode + ':' + box.getAttribute('inputmode'),
+              String(delete box.nonce) + ':' + box.nonce + ':' + box.getAttribute('nonce'),
+              String(delete box.popover) + ':' + box.popover + ':' + box.getAttribute('popover') + ':' + box.getAttribute('data-popover-shadow'),
+              String(delete box.spellcheck) + ':' + box.spellcheck + ':' + box.getAttribute('spellcheck'),
+              String(delete box.tabIndex) + ':' + box.tabIndex + ':' + box.getAttribute('tabindex'),
+              String(delete box.title) + ':' + box.title + ':' + box.getAttribute('title'),
+              String(delete box.translate) + ':' + box.translate + ':' + box.getAttribute('translate')
+            ].join(',');
+
+            document.getElementById('result').textContent =
+              shadowed + '|' + assigned + '|' + restored;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow-key:shadow-key:h,shadow-cap:shadow-cap:characters,shadow-correct:shadow-correct:on,shadow-edit:shadow-edit:true,shadow-drag:shadow-drag:true,shadow-enter:shadow-enter:search,shadow-hidden:shadow-hidden:true,shadow-inert:shadow-inert:true,shadow-mode:shadow-mode:numeric,shadow-nonce:shadow-nonce:,shadow-pop:shadow-pop:auto:true,shadow-spell:shadow-spell:true,shadow-tab:shadow-tab:4,shadow-title:shadow-title:tip,shadow-translate:shadow-translate:no|set-key:h,set-cap:characters,set-correct:on,set-edit:true,set-drag:true,set-enter:search,set-hidden:true,set-inert:true,set-mode:numeric,set-nonce:,set-pop:auto:set-pop,set-spell:true,set-tab:4,set-title:tip,set-translate:no|true:h:h,true:characters:characters,true:on:on,true:true:true,true:true:true,true:search:search,true:true:true,true:numeric:numeric,true:seed:,true:auto:auto:set-pop,true:true:true,true:4:4,true:tip:tip,true:false:no",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn attribute_reflection_html_2_6_1_generic_reflected_property_shadow_define_property_delete_and_fast_path_parity_work()
 -> Result<()> {
     let html = r#"
@@ -1239,6 +1427,327 @@ fn attribute_reflection_html_2_6_1_resource_url_property_shadow_define_property_
     h.assert_text(
         "#result",
         "set:next-attr:set:next-attr:set:next-attr:https://source.test/register:set:next-srcset:set:next-srcset:set:next-srcset:/img/hero-1x.png 1x, /img/hero-2x.png 2x|set:reflect-attr:set:reflect-attr:set:reflect-attr:https://source.test/register:set:reflect-srcset:set:reflect-srcset:set:reflect-srcset:/img/hero-1x.png 1x, /img/hero-2x.png 2x|https://source.test/register:https://source.test/register:https://source.test/register:/img/hero-1x.png 1x, /img/hero-2x.png 2x:/img/hero-1x.png 1x, /img/hero-2x.png 2x:/img/hero-1x.png 1x, /img/hero-2x.png 2x",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_non_form_plain_property_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <div id='box' slot='hero' role='note' elementtiming='paint'></div>
+        <dialog id='dialog' closedby='none'></dialog>
+        <map id='map' name='zones'></map>
+        <time id='stamp' datetime='2024-01-01'></time>
+        <br id='line' clear='left'>
+        <table><caption id='cap' align='bottom'>Cap</caption></table>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+            const dialog = document.getElementById('dialog');
+            const map = document.getElementById('map');
+            const stamp = document.getElementById('stamp');
+            const line = document.getElementById('line');
+            const cap = document.getElementById('cap');
+
+            const shadow = {
+              slot: 'shadow-slot',
+              role: 'shadow-role',
+              elementTiming: 'shadow-paint',
+              closedBy: 'shadow-closed',
+              name: 'shadow-name',
+              dateTime: 'shadow-time',
+              clear: 'shadow-clear',
+              align: 'shadow-align'
+            };
+
+            function shadowAccessor(key) {
+              return {
+                get() { return shadow[key]; },
+                set(value) { shadow[key] = 'set:' + value; },
+                configurable: true
+              };
+            }
+
+            Object.defineProperty(box, 'slot', shadowAccessor('slot'));
+            Object.defineProperty(box, 'role', shadowAccessor('role'));
+            Object.defineProperty(box, 'elementTiming', shadowAccessor('elementTiming'));
+            Object.defineProperty(dialog, 'closedBy', shadowAccessor('closedBy'));
+            Object.defineProperty(map, 'name', shadowAccessor('name'));
+            Object.defineProperty(stamp, 'dateTime', shadowAccessor('dateTime'));
+            Object.defineProperty(line, 'clear', shadowAccessor('clear'));
+            Object.defineProperty(cap, 'align', shadowAccessor('align'));
+
+            document.getElementById('box').slot = 'next-slot';
+            box.role = 'group';
+            box.elementTiming = 'next-paint';
+            dialog.closedBy = 'any';
+            map.name = 'next-name';
+            stamp.dateTime = '2025-05-01';
+            line.clear = 'right';
+            cap.align = 'top';
+
+            const first = [
+              [box.slot, box['slot'], shadow.slot, box.getAttribute('slot')].join(','),
+              [box.role, box['role'], shadow.role, box.getAttribute('role')].join(','),
+              [box.elementTiming, box['elementTiming'], shadow.elementTiming, box.getAttribute('elementtiming')].join(','),
+              [dialog.closedBy, dialog['closedBy'], shadow.closedBy, dialog.getAttribute('closedby')].join(','),
+              [map.name, map['name'], shadow.name, map.getAttribute('name')].join(','),
+              [stamp.dateTime, stamp['dateTime'], shadow.dateTime, stamp.getAttribute('datetime')].join(','),
+              [line.clear, line['clear'], shadow.clear, line.getAttribute('clear')].join(','),
+              [cap.align, cap['align'], shadow.align, cap.getAttribute('align')].join(',')
+            ].join(';');
+
+            Reflect.set(box, 'slot', 'reflect-slot');
+            Reflect.set(box, 'role', 'region');
+            Reflect.set(box, 'elementTiming', 'reflect-paint');
+            Reflect.set(dialog, 'closedBy', 'close-request');
+            Reflect.set(map, 'name', 'reflect-name');
+            Reflect.set(stamp, 'dateTime', '2030-12-31');
+            Reflect.set(line, 'clear', 'all');
+            Reflect.set(cap, 'align', 'left');
+
+            const second = [
+              [box.slot, box['slot'], shadow.slot, box.getAttribute('slot')].join(','),
+              [box.role, box['role'], shadow.role, box.getAttribute('role')].join(','),
+              [box.elementTiming, box['elementTiming'], shadow.elementTiming, box.getAttribute('elementtiming')].join(','),
+              [dialog.closedBy, dialog['closedBy'], shadow.closedBy, dialog.getAttribute('closedby')].join(','),
+              [map.name, map['name'], shadow.name, map.getAttribute('name')].join(','),
+              [stamp.dateTime, stamp['dateTime'], shadow.dateTime, stamp.getAttribute('datetime')].join(','),
+              [line.clear, line['clear'], shadow.clear, line.getAttribute('clear')].join(','),
+              [cap.align, cap['align'], shadow.align, cap.getAttribute('align')].join(',')
+            ].join(';');
+
+            delete box.slot;
+            delete box.role;
+            delete box.elementTiming;
+            delete dialog.closedBy;
+            delete map.name;
+            delete stamp.dateTime;
+            delete line.clear;
+            delete cap.align;
+
+            const third = [
+              [box.slot, box['slot'], box.getAttribute('slot')].join(','),
+              [box.role, box['role'], box.getAttribute('role')].join(','),
+              [box.elementTiming, box['elementTiming'], box.getAttribute('elementtiming')].join(','),
+              [dialog.closedBy, dialog['closedBy'], dialog.getAttribute('closedby')].join(','),
+              [map.name, map['name'], map.getAttribute('name')].join(','),
+              [stamp.dateTime, stamp['dateTime'], stamp.getAttribute('datetime')].join(','),
+              [line.clear, line['clear'], line.getAttribute('clear')].join(','),
+              [cap.align, cap['align'], cap.getAttribute('align')].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = [first, second, third].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "set:next-slot,set:next-slot,set:next-slot,hero;set:group,set:group,set:group,note;set:next-paint,set:next-paint,set:next-paint,paint;set:any,set:any,set:any,none;set:next-name,set:next-name,set:next-name,zones;set:2025-05-01,set:2025-05-01,set:2025-05-01,2024-01-01;set:right,set:right,set:right,left;set:top,set:top,set:top,bottom|set:reflect-slot,set:reflect-slot,set:reflect-slot,hero;set:region,set:region,set:region,note;set:reflect-paint,set:reflect-paint,set:reflect-paint,paint;set:close-request,set:close-request,set:close-request,none;set:reflect-name,set:reflect-name,set:reflect-name,zones;set:2030-12-31,set:2030-12-31,set:2030-12-31,2024-01-01;set:all,set:all,set:all,left;set:left,set:left,set:left,bottom|hero,hero,hero;note,note,note;paint,paint,paint;none,none,none;zones,zones,zones;2024-01-01,2024-01-01,2024-01-01;left,left,left;bottom,bottom,bottom",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_non_form_hyperlink_and_media_plain_property_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <a
+          id='link'
+          href='/docs'
+          download='report.txt'
+          hreflang='en'
+          ping='/ping'
+          referrerpolicy='origin'
+          rel='noopener'
+          target='_blank'>Link</a>
+        <map name='zones'>
+          <area
+            id='area'
+            alt='hot'
+            charset='utf-8'
+            coords='1,2,3'
+            rev='legacy'
+            shape='circle'
+            nohref>
+        </map>
+        <audio id='audio' autoplay controls loop muted></audio>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const link = document.getElementById('link');
+            const area = document.getElementById('area');
+            const audio = document.getElementById('audio');
+
+            const shadow = {
+              download: 'shadow-download',
+              hreflang: 'shadow-hreflang',
+              ping: 'shadow-ping',
+              referrerPolicy: 'shadow-referrer',
+              rel: 'shadow-rel',
+              target: 'shadow-target',
+              alt: 'shadow-alt',
+              charset: 'shadow-charset',
+              coords: 'shadow-coords',
+              rev: 'shadow-rev',
+              shape: 'shadow-shape',
+              noHref: 'shadow-nohref',
+              autoplay: 'shadow-autoplay',
+              controls: 'shadow-controls',
+              loop: 'shadow-loop',
+              muted: 'shadow-muted'
+            };
+
+            function shadowAccessor(key) {
+              return {
+                get() { return shadow[key]; },
+                set(value) { shadow[key] = 'set:' + value; },
+                configurable: true
+              };
+            }
+
+            Object.defineProperty(link, 'download', shadowAccessor('download'));
+            Object.defineProperty(link, 'hreflang', shadowAccessor('hreflang'));
+            Object.defineProperty(link, 'ping', shadowAccessor('ping'));
+            Object.defineProperty(link, 'referrerPolicy', shadowAccessor('referrerPolicy'));
+            Object.defineProperty(link, 'rel', shadowAccessor('rel'));
+            Object.defineProperty(link, 'target', shadowAccessor('target'));
+            Object.defineProperty(area, 'alt', shadowAccessor('alt'));
+            Object.defineProperty(area, 'charset', shadowAccessor('charset'));
+            Object.defineProperty(area, 'coords', shadowAccessor('coords'));
+            Object.defineProperty(area, 'rev', shadowAccessor('rev'));
+            Object.defineProperty(area, 'shape', shadowAccessor('shape'));
+            Object.defineProperty(area, 'noHref', shadowAccessor('noHref'));
+            Object.defineProperty(audio, 'autoplay', shadowAccessor('autoplay'));
+            Object.defineProperty(audio, 'controls', shadowAccessor('controls'));
+            Object.defineProperty(audio, 'loop', shadowAccessor('loop'));
+            Object.defineProperty(audio, 'muted', shadowAccessor('muted'));
+
+            document.getElementById('link').download = 'next.txt';
+            link.hreflang = 'fr';
+            link.ping = '/next-ping';
+            link.referrerPolicy = 'strict-origin';
+            link.rel = 'nofollow';
+            link.target = '_self';
+            area.alt = 'next-alt';
+            area.charset = 'shift-jis';
+            area.coords = '4,5,6';
+            area.rev = 'next-rev';
+            area.shape = 'rect';
+            area.noHref = false;
+            audio.autoplay = false;
+            audio.controls = false;
+            audio.loop = false;
+            audio.muted = false;
+
+            const first = [
+              [link.download, link['download'], shadow.download, link.getAttribute('download')].join(','),
+              [link.hreflang, link['hreflang'], shadow.hreflang, link.getAttribute('hreflang')].join(','),
+              [link.ping, link['ping'], shadow.ping, link.getAttribute('ping')].join(','),
+              [link.referrerPolicy, link['referrerPolicy'], shadow.referrerPolicy, link.getAttribute('referrerpolicy')].join(','),
+              [link.rel, link['rel'], shadow.rel, link.getAttribute('rel')].join(','),
+              [link.target, link['target'], shadow.target, link.getAttribute('target')].join(','),
+              [area.alt, area['alt'], shadow.alt, area.getAttribute('alt')].join(','),
+              [area.charset, area['charset'], shadow.charset, area.getAttribute('charset')].join(','),
+              [area.coords, area['coords'], shadow.coords, area.getAttribute('coords')].join(','),
+              [area.rev, area['rev'], shadow.rev, area.getAttribute('rev')].join(','),
+              [area.shape, area['shape'], shadow.shape, area.getAttribute('shape')].join(','),
+              [area.noHref, area['noHref'], shadow.noHref, String(area.hasAttribute('nohref'))].join(','),
+              [audio.autoplay, audio['autoplay'], shadow.autoplay, String(audio.hasAttribute('autoplay'))].join(','),
+              [audio.controls, audio['controls'], shadow.controls, String(audio.hasAttribute('controls'))].join(','),
+              [audio.loop, audio['loop'], shadow.loop, String(audio.hasAttribute('loop'))].join(','),
+              [audio.muted, audio['muted'], shadow.muted, String(audio.hasAttribute('muted'))].join(',')
+            ].join(';');
+
+            Reflect.set(link, 'download', 'reflect-download');
+            Reflect.set(link, 'hreflang', 'es');
+            Reflect.set(link, 'ping', '/reflect-ping');
+            Reflect.set(link, 'referrerPolicy', 'no-referrer');
+            Reflect.set(link, 'rel', 'ugc');
+            Reflect.set(link, 'target', '_top');
+            Reflect.set(area, 'alt', 'reflect-alt');
+            Reflect.set(area, 'charset', 'utf-16');
+            Reflect.set(area, 'coords', '7,8,9');
+            Reflect.set(area, 'rev', 'reflect-rev');
+            Reflect.set(area, 'shape', 'poly');
+            Reflect.set(area, 'noHref', true);
+            Reflect.set(audio, 'autoplay', true);
+            Reflect.set(audio, 'controls', true);
+            Reflect.set(audio, 'loop', true);
+            Reflect.set(audio, 'muted', true);
+
+            const second = [
+              [link.download, link['download'], shadow.download, link.getAttribute('download')].join(','),
+              [link.hreflang, link['hreflang'], shadow.hreflang, link.getAttribute('hreflang')].join(','),
+              [link.ping, link['ping'], shadow.ping, link.getAttribute('ping')].join(','),
+              [link.referrerPolicy, link['referrerPolicy'], shadow.referrerPolicy, link.getAttribute('referrerpolicy')].join(','),
+              [link.rel, link['rel'], shadow.rel, link.getAttribute('rel')].join(','),
+              [link.target, link['target'], shadow.target, link.getAttribute('target')].join(','),
+              [area.alt, area['alt'], shadow.alt, area.getAttribute('alt')].join(','),
+              [area.charset, area['charset'], shadow.charset, area.getAttribute('charset')].join(','),
+              [area.coords, area['coords'], shadow.coords, area.getAttribute('coords')].join(','),
+              [area.rev, area['rev'], shadow.rev, area.getAttribute('rev')].join(','),
+              [area.shape, area['shape'], shadow.shape, area.getAttribute('shape')].join(','),
+              [area.noHref, area['noHref'], shadow.noHref, String(area.hasAttribute('nohref'))].join(','),
+              [audio.autoplay, audio['autoplay'], shadow.autoplay, String(audio.hasAttribute('autoplay'))].join(','),
+              [audio.controls, audio['controls'], shadow.controls, String(audio.hasAttribute('controls'))].join(','),
+              [audio.loop, audio['loop'], shadow.loop, String(audio.hasAttribute('loop'))].join(','),
+              [audio.muted, audio['muted'], shadow.muted, String(audio.hasAttribute('muted'))].join(',')
+            ].join(';');
+
+            delete link.download;
+            delete link.hreflang;
+            delete link.ping;
+            delete link.referrerPolicy;
+            delete link.rel;
+            delete link.target;
+            delete area.alt;
+            delete area.charset;
+            delete area.coords;
+            delete area.rev;
+            delete area.shape;
+            delete area.noHref;
+            delete audio.autoplay;
+            delete audio.controls;
+            delete audio.loop;
+            delete audio.muted;
+
+            const third = [
+              [link.download, link['download'], link.getAttribute('download')].join(','),
+              [link.hreflang, link['hreflang'], link.getAttribute('hreflang')].join(','),
+              [link.ping, link['ping'], link.getAttribute('ping')].join(','),
+              [link.referrerPolicy, link['referrerPolicy'], link.getAttribute('referrerpolicy')].join(','),
+              [link.rel, link['rel'], link.getAttribute('rel')].join(','),
+              [link.target, link['target'], link.getAttribute('target')].join(','),
+              [area.alt, area['alt'], area.getAttribute('alt')].join(','),
+              [area.charset, area['charset'], area.getAttribute('charset')].join(','),
+              [area.coords, area['coords'], area.getAttribute('coords')].join(','),
+              [area.rev, area['rev'], area.getAttribute('rev')].join(','),
+              [area.shape, area['shape'], area.getAttribute('shape')].join(','),
+              [String(area.noHref), String(area['noHref']), String(area.hasAttribute('nohref'))].join(','),
+              [String(audio.autoplay), String(audio['autoplay']), String(audio.hasAttribute('autoplay'))].join(','),
+              [String(audio.controls), String(audio['controls']), String(audio.hasAttribute('controls'))].join(','),
+              [String(audio.loop), String(audio['loop']), String(audio.hasAttribute('loop'))].join(','),
+              [String(audio.muted), String(audio['muted']), String(audio.hasAttribute('muted'))].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = [first, second, third].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "set:next.txt,set:next.txt,set:next.txt,report.txt;set:fr,set:fr,set:fr,en;set:/next-ping,set:/next-ping,set:/next-ping,/ping;set:strict-origin,set:strict-origin,set:strict-origin,origin;set:nofollow,set:nofollow,set:nofollow,noopener;set:_self,set:_self,set:_self,_blank;set:next-alt,set:next-alt,set:next-alt,hot;set:shift-jis,set:shift-jis,set:shift-jis,utf-8;set:4,5,6,set:4,5,6,set:4,5,6,1,2,3;set:next-rev,set:next-rev,set:next-rev,legacy;set:rect,set:rect,set:rect,circle;set:false,set:false,set:false,true;set:false,set:false,set:false,true;set:false,set:false,set:false,true;set:false,set:false,set:false,true;set:false,set:false,set:false,true|set:reflect-download,set:reflect-download,set:reflect-download,report.txt;set:es,set:es,set:es,en;set:/reflect-ping,set:/reflect-ping,set:/reflect-ping,/ping;set:no-referrer,set:no-referrer,set:no-referrer,origin;set:ugc,set:ugc,set:ugc,noopener;set:_top,set:_top,set:_top,_blank;set:reflect-alt,set:reflect-alt,set:reflect-alt,hot;set:utf-16,set:utf-16,set:utf-16,utf-8;set:7,8,9,set:7,8,9,set:7,8,9,1,2,3;set:reflect-rev,set:reflect-rev,set:reflect-rev,legacy;set:poly,set:poly,set:poly,circle;set:true,set:true,set:true,true;set:true,set:true,set:true,true;set:true,set:true,set:true,true;set:true,set:true,set:true,true;set:true,set:true,set:true,true|report.txt,report.txt,report.txt;en,en,en;/ping,/ping,/ping;origin,origin,origin;noopener,noopener,noopener;_blank,_blank,_blank;hot,hot,hot;utf-8,utf-8,utf-8;1,2,3,1,2,3,1,2,3;legacy,legacy,legacy;circle,circle,circle;true,true,true;true,true,true;true,true,true;true,true,true;true,true,true",
     )?;
     Ok(())
 }

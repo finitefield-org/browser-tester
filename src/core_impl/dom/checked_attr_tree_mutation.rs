@@ -1,6 +1,39 @@
 use super::*;
 
 impl Dom {
+    pub(crate) fn control_form_owner(&self, node_id: NodeId) -> Option<NodeId> {
+        if let Some(form_id) = self.attr(node_id, "form").filter(|id| !id.is_empty()) {
+            if let Some(form_node) = self.by_id(&form_id) {
+                if self
+                    .tag_name(form_node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+                {
+                    return Some(form_node);
+                }
+            }
+        }
+        self.find_ancestor_by_tag(node_id, "form")
+    }
+
+    pub(crate) fn set_checked_state(
+        &mut self,
+        node_id: NodeId,
+        checked: bool,
+        dirty_state: Option<bool>,
+    ) -> Result<()> {
+        if checked && is_radio_input(self, node_id) {
+            self.uncheck_other_radios_in_group(node_id, dirty_state);
+        }
+        let element = self
+            .element_mut(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("checked target is not an element".into()))?;
+        element.checked = checked;
+        if let Some(dirty) = dirty_state {
+            element.checked_dirty = dirty;
+        }
+        Ok(())
+    }
+
     pub(crate) fn checked(&self, node_id: NodeId) -> Result<bool> {
         let element = self
             .element(node_id)
@@ -9,22 +42,19 @@ impl Dom {
     }
 
     pub(crate) fn set_checked(&mut self, node_id: NodeId, checked: bool) -> Result<()> {
-        if checked && is_radio_input(self, node_id) {
-            self.uncheck_other_radios_in_group(node_id);
-        }
-        let element = self
-            .element_mut(node_id)
-            .ok_or_else(|| Error::ScriptRuntime("checked target is not an element".into()))?;
-        element.checked = checked;
-        Ok(())
+        self.set_checked_state(node_id, checked, Some(true))
     }
 
-    pub(crate) fn uncheck_other_radios_in_group(&mut self, target: NodeId) {
+    pub(crate) fn uncheck_other_radios_in_group(
+        &mut self,
+        target: NodeId,
+        dirty_state: Option<bool>,
+    ) {
         let target_name = self.attr(target, "name").unwrap_or_default();
         if target_name.is_empty() {
             return;
         }
-        let target_form = self.find_ancestor_by_tag(target, "form");
+        let target_form = self.control_form_owner(target);
 
         let all_nodes = self.all_element_nodes();
         for node in all_nodes {
@@ -37,11 +67,14 @@ impl Dom {
             if self.attr(node, "name").unwrap_or_default() != target_name {
                 continue;
             }
-            if self.find_ancestor_by_tag(node, "form") != target_form {
+            if self.control_form_owner(node) != target_form {
                 continue;
             }
             if let Some(element) = self.element_mut(node) {
                 element.checked = false;
+                if let Some(dirty) = dirty_state {
+                    element.checked_dirty = dirty;
+                }
             }
         }
     }
@@ -53,7 +86,7 @@ impl Dom {
                 continue;
             }
             if self.attr(node, "checked").is_some() {
-                self.set_checked(node, true)?;
+                self.set_checked_state(node, true, Some(false))?;
             }
         }
         Ok(())
@@ -169,49 +202,53 @@ impl Dom {
             element.attrs.insert(lowered.clone(), value.to_string());
 
             if lowered == "value" {
+                let current_is_dirty = element.dirty_value && uses_dirty_value_state(element);
+                let is_checkbox_or_radio = is_checkbox_or_radio_input_element(element);
+                let default_value = if is_file_input_element(element) {
+                    normalize_file_input_value("")
+                } else if is_image_input_element(element) {
+                    normalize_image_input_value(value)
+                } else if is_color_input_element(element) {
+                    normalize_color_input_value(value)
+                } else if is_date_input_element(element) {
+                    normalize_date_input_value(value)
+                } else if is_datetime_local_input_element(element) {
+                    normalize_datetime_local_input_value(value)
+                } else if is_time_input_element(element) {
+                    normalize_time_input_value(value)
+                } else if is_number_input_element(element) {
+                    normalize_number_input_value(value)
+                } else if is_range_input_element(element) {
+                    normalize_range_input_value(
+                        value,
+                        element.attrs.get("min").map(String::as_str),
+                        element.attrs.get("max").map(String::as_str),
+                        element.attrs.get("step").map(String::as_str),
+                        element.attrs.get("value").map(String::as_str),
+                    )
+                } else if is_password_input_element(element) {
+                    normalize_password_input_value(value)
+                } else {
+                    value.to_string()
+                };
+                element.default_value = default_value.clone();
                 if is_file_input_element(element) {
                     if value.is_empty() {
                         element.files.clear();
-                        element.value = normalize_file_input_value(value);
-                        let len = element.value.chars().count();
-                        element.selection_start = len;
-                        element.selection_end = len;
-                        element.selection_direction = "none".to_string();
+                        Self::write_current_value_state(
+                            element,
+                            normalize_file_input_value(value),
+                            Some(false),
+                        );
                     }
                 } else if is_image_input_element(element) {
-                    element.value = normalize_image_input_value(value);
-                    let len = element.value.chars().count();
-                    element.selection_start = len;
-                    element.selection_end = len;
-                    element.selection_direction = "none".to_string();
-                } else {
-                    element.value = if is_color_input_element(element) {
-                        normalize_color_input_value(value)
-                    } else if is_date_input_element(element) {
-                        normalize_date_input_value(value)
-                    } else if is_datetime_local_input_element(element) {
-                        normalize_datetime_local_input_value(value)
-                    } else if is_time_input_element(element) {
-                        normalize_time_input_value(value)
-                    } else if is_number_input_element(element) {
-                        normalize_number_input_value(value)
-                    } else if is_range_input_element(element) {
-                        normalize_range_input_value(
-                            value,
-                            element.attrs.get("min").map(String::as_str),
-                            element.attrs.get("max").map(String::as_str),
-                            element.attrs.get("step").map(String::as_str),
-                            element.attrs.get("value").map(String::as_str),
-                        )
-                    } else if is_password_input_element(element) {
-                        normalize_password_input_value(value)
-                    } else {
-                        value.to_string()
-                    };
-                    let len = element.value.chars().count();
-                    element.selection_start = len;
-                    element.selection_end = len;
-                    element.selection_direction = "none".to_string();
+                    Self::write_current_value_state(
+                        element,
+                        normalize_image_input_value(value),
+                        Some(false),
+                    );
+                } else if is_checkbox_or_radio || !current_is_dirty {
+                    Self::write_current_value_state(element, default_value, Some(false));
                 }
                 if element.tag_name.eq_ignore_ascii_case("progress") {
                     element.indeterminate = false;
@@ -317,7 +354,7 @@ impl Dom {
                     element.files.clear();
                 }
             } else if lowered == "checked" {
-                element.checked = true;
+                element.default_checked = true;
             } else if lowered == "disabled" {
                 element.disabled = true;
             } else if lowered == "readonly" {
@@ -337,12 +374,18 @@ impl Dom {
         };
 
         if lowered == "checked" {
-            self.set_checked(node_id, true)?;
+            let should_sync_current = self
+                .element(node_id)
+                .map(|element| !element.checked_dirty)
+                .unwrap_or(false);
+            if should_sync_current {
+                self.set_checked_state(node_id, true, Some(false))?;
+            }
         } else if lowered == "type"
             && self.attr(node_id, "checked").is_some()
             && is_radio_input(self, node_id)
         {
-            self.set_checked(node_id, true)?;
+            self.set_checked_state(node_id, true, Some(false))?;
         }
         if matches!(lowered.as_str(), "min" | "max" | "step")
             && self
@@ -377,8 +420,27 @@ impl Dom {
             self.rebuild_id_index();
         }
 
+        if lowered == "selected" && is_option {
+            if let Some(element) = self.element_mut(node_id) {
+                let should_sync_current = !element.selected_dirty;
+                element.default_selected = true;
+                if should_sync_current {
+                    element.selected = true;
+                }
+            }
+        }
+
         if is_option && (lowered == "selected" || lowered == "value") {
             self.sync_select_value_for_option(node_id)?;
+        }
+        if matches!(lowered.as_str(), "name" | "form")
+            && self
+                .element(node_id)
+                .map(|element| element.checked)
+                .unwrap_or(false)
+            && is_radio_input(self, node_id)
+        {
+            self.uncheck_other_radios_in_group(node_id, None);
         }
         if let Some(group_name) = details_open_group_to_enforce {
             if self.attr(node_id, "open").is_some() {
@@ -400,7 +462,9 @@ impl Dom {
             element.attrs.remove(&lowered);
 
             if lowered == "value" {
-                element.value = if is_color_input_element(element) {
+                let current_is_dirty = element.dirty_value && uses_dirty_value_state(element);
+                let is_checkbox_or_radio = is_checkbox_or_radio_input_element(element);
+                let default_value = if is_color_input_element(element) {
                     normalize_color_input_value("")
                 } else if is_date_input_element(element) {
                     normalize_date_input_value("")
@@ -424,15 +488,15 @@ impl Dom {
                 } else {
                     String::new()
                 };
-                let len = element.value.chars().count();
-                element.selection_start = len;
-                element.selection_end = len;
-                element.selection_direction = "none".to_string();
+                element.default_value = default_value.clone();
+                if is_checkbox_or_radio || !current_is_dirty {
+                    Self::write_current_value_state(element, default_value, Some(false));
+                }
                 if element.tag_name.eq_ignore_ascii_case("progress") {
                     element.indeterminate = true;
                 }
             } else if lowered == "checked" {
-                element.checked = false;
+                element.default_checked = false;
             } else if lowered == "disabled" {
                 element.disabled = false;
             } else if lowered == "readonly" {
@@ -442,6 +506,16 @@ impl Dom {
             }
             is_option
         };
+
+        if lowered == "checked" {
+            let should_sync_current = self
+                .element(node_id)
+                .map(|element| !element.checked_dirty)
+                .unwrap_or(false);
+            if should_sync_current {
+                self.set_checked_state(node_id, false, Some(false))?;
+            }
+        }
 
         if lowered == "id" && connected {
             self.rebuild_id_index();
@@ -474,8 +548,28 @@ impl Dom {
             element.selection_direction = "none".to_string();
         }
 
+        if lowered == "selected" && is_option {
+            if let Some(element) = self.element_mut(node_id) {
+                let should_sync_current = !element.selected_dirty;
+                element.default_selected = false;
+                if should_sync_current {
+                    element.selected = false;
+                }
+            }
+        }
+
         if is_option && (lowered == "selected" || lowered == "value") {
             self.sync_select_value_for_option(node_id)?;
+        }
+
+        if matches!(lowered.as_str(), "name" | "form")
+            && self
+                .element(node_id)
+                .map(|element| element.checked)
+                .unwrap_or(false)
+            && is_radio_input(self, node_id)
+        {
+            self.uncheck_other_radios_in_group(node_id, None);
         }
 
         Ok(())

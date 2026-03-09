@@ -1749,7 +1749,7 @@ fn select_value_assignment_updates_selected_option_and_form_data() -> Result<()>
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "B:false:true:B")?;
+    h.assert_text("#result", "B:true:false:B")?;
     Ok(())
 }
 
@@ -1780,7 +1780,7 @@ fn select_value_assignment_can_match_option_text_without_value_attribute() -> Re
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "Beta:Beta:false:true")?;
+    h.assert_text("#result", "Beta:Beta:false:false")?;
     Ok(())
 }
 

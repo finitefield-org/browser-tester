@@ -168,7 +168,57 @@ fn focus_in_and_focus_out_events_are_dispatched() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#btn")?;
-    h.assert_text("#result", "aIaFaOaBbIbFbObB:active")?;
+    h.assert_text("#result", "aFaIaBaObFbIbBbO:active")?;
+    Ok(())
+}
+
+#[test]
+fn focus_and_blur_do_not_bubble_but_focusin_and_focusout_do_work() -> Result<()> {
+    let html = r#"
+        <div id='scope'>
+          <input id='a'>
+          <input id='b'>
+        </div>
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          const scope = document.getElementById('scope');
+          const a = document.getElementById('a');
+          const b = document.getElementById('b');
+          const log = [];
+
+          scope.addEventListener('focus', (event) => {
+            log.push('focus:' + event.target.id);
+          });
+          scope.addEventListener('blur', (event) => {
+            log.push('blur:' + event.target.id);
+          });
+          scope.addEventListener('focusin', (event) => {
+            log.push('focusin:' + event.target.id);
+            event.preventDefault();
+            log.push('focusinAfter:' + event.defaultPrevented);
+          });
+          scope.addEventListener('focusout', (event) => {
+            log.push('focusout:' + event.target.id);
+            event.preventDefault();
+            log.push('focusoutAfter:' + event.defaultPrevented);
+          });
+
+          document.getElementById('btn').addEventListener('click', () => {
+            a.focus();
+            b.focus();
+            b.blur();
+            document.getElementById('result').textContent = log.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "focusin:a,focusinAfter:false,focusout:a,focusoutAfter:false,focusin:b,focusinAfter:false,focusout:b,focusoutAfter:false",
+    )?;
     Ok(())
 }
 
@@ -463,6 +513,141 @@ fn html_input_file_multiple_required_and_cancel_event_work() -> Result<()> {
     h.assert_text(
         "#result",
         "C:\\fakepath\\a.txt:2:a.txt,b.txt:true:false|[]:0:false:true|i:2,c:2,x:2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_file_selection_orders_input_then_change_and_cancel_work() -> Result<()> {
+    let html = r#"
+        <input id='upload' type='file' multiple>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const upload = document.getElementById('upload');
+          const log = [];
+
+          upload.addEventListener('input', (event) => {
+            log.push(['input', event.defaultPrevented, upload.files.length].join(':'));
+            event.preventDefault();
+            log.push(['inputAfter', event.defaultPrevented].join(':'));
+          });
+          upload.addEventListener('change', (event) => {
+            log.push(['change', event.defaultPrevented, upload.files.length].join(':'));
+            event.preventDefault();
+            log.push(['changeAfter', event.defaultPrevented].join(':'));
+          });
+          upload.addEventListener('cancel', () => {
+            log.push('cancel:' + upload.files.length);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let files = vec![MockFile::new("a.txt"), MockFile::new("b.txt")];
+    h.set_input_files("#upload", &files)?;
+    h.set_input_files("#upload", &files)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "input:false:2|inputAfter:false|change:false:2|changeAfter:false|cancel:2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_file_reset_clears_files_and_same_file_reselection_replays_input_change_work()
+-> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='upload' type='file' name='upload'>
+          <button id='reset' type='reset'>reset</button>
+          <button id='run' type='button'>run</button>
+        </form>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const input = document.getElementById('upload');
+          const log = [];
+          input.addEventListener('input', () => log.push('i:' + input.files.length));
+          input.addEventListener('change', () => log.push('c:' + input.files.length));
+          input.addEventListener('cancel', () => log.push('x:' + input.files.length));
+          document.getElementById('run').addEventListener('click', () => {
+            const names = new FormData(form).getAll('upload').join(',');
+            document.getElementById('result').textContent = [
+              '[' + input.value + ']',
+              String(input.files.length),
+              names,
+              log.join(',')
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    let file = MockFile::new("same.txt");
+
+    h.set_input_files("#upload", std::slice::from_ref(&file))?;
+    h.click("#run")?;
+    h.assert_text("#result", "[C:\\fakepath\\same.txt]|1|same.txt|i:1,c:1")?;
+
+    h.click("#reset")?;
+    h.click("#run")?;
+    h.assert_text("#result", "[]|0||i:1,c:1")?;
+
+    h.set_input_files("#upload", &[file])?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[C:\\fakepath\\same.txt]|1|same.txt|i:1,c:1,i:1,c:1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_input_file_form_data_tracks_multiple_files_and_files_null_clears_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='docs' type='file' name='docs' multiple>
+          <button id='run' type='button'>run</button>
+        </form>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const docs = document.getElementById('docs');
+          document.getElementById('run').addEventListener('click', () => {
+            const before = [
+              docs.value,
+              String(docs.files.length),
+              docs.files.map((file) => file.name).join(','),
+              new FormData(form).getAll('docs').join(',')
+            ].join(':');
+
+            docs.files = null;
+            const after = [
+              '[' + docs.value + ']',
+              String(docs.files.length),
+              String(new FormData(form).getAll('docs').length)
+            ].join(':');
+
+            document.getElementById('result').textContent = before + '|' + after;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_input_files(
+        "#docs",
+        &[MockFile::new("a.txt"), MockFile::new("nested/b.txt")],
+    )?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "C:\\fakepath\\a.txt:2:a.txt,b.txt:a.txt,b.txt|[]:0:0",
     )?;
     Ok(())
 }
@@ -2460,6 +2645,64 @@ fn html_input_submit_formnovalidate_bypasses_validation() -> Result<()> {
 }
 
 #[test]
+fn input_and_form_validity_methods_dispatch_non_bubbling_cancelable_invalid_events_work()
+-> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' required>
+        </form>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const input = document.getElementById('name');
+          const log = [];
+
+          function probe(label, action) {
+            log.length = 0;
+            const value = action();
+            return [label, String(value), log.join(',')].join(':');
+          }
+
+          form.addEventListener('invalid', () => {
+            log.push('bubble');
+          });
+          form.addEventListener('invalid', (event) => {
+            log.push('capture:' + event.eventPhase);
+          }, true);
+          input.addEventListener('invalid', (event) => {
+            log.push([
+              'target',
+              event.eventPhase,
+              String(event.cancelable),
+              String(event.bubbles),
+              String(event.defaultPrevented)
+            ].join(':'));
+            event.preventDefault();
+            log.push('after:' + String(event.defaultPrevented));
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            document.getElementById('result').textContent = [
+              probe('formCheck', () => form.checkValidity()),
+              probe('formReport', () => form.reportValidity()),
+              probe('inputCheck', () => input.checkValidity()),
+              probe('inputReport', () => input.reportValidity())
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "formCheck:false:capture:1,target:2:true:false:false,after:true|formReport:false:capture:1,target:2:true:false:false,after:true|inputCheck:false:capture:1,target:2:true:false:false,after:true|inputReport:false:capture:1,target:2:true:false:false,after:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_submit_novalidate_form_bypasses_validation() -> Result<()> {
     let html = r#"
         <form id='f' novalidate>
@@ -2486,6 +2729,84 @@ fn html_input_submit_novalidate_form_bypasses_validation() -> Result<()> {
     h.click("#send")?;
     h.click("#run")?;
     h.assert_text("#result", "[]:1")?;
+    Ok(())
+}
+
+#[test]
+fn trusted_submit_and_reset_click_ordering_and_click_prevent_default_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' value='seed'>
+          <input id='submitter' type='submit' value='Send'>
+          <input id='resetter' type='reset' value='Reset'>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const name = document.getElementById('name');
+          const submitter = document.getElementById('submitter');
+          const resetter = document.getElementById('resetter');
+          const log = [];
+          let cancelSubmitClick = false;
+          let cancelResetClick = false;
+
+          submitter.addEventListener('click', (event) => {
+            log.push('submitClick:' + event.defaultPrevented);
+            if (cancelSubmitClick) {
+              event.preventDefault();
+              log.push('submitClickAfter:' + event.defaultPrevented);
+            }
+          });
+          form.addEventListener('submit', (event) => {
+            log.push('submit:' + event.defaultPrevented);
+            event.preventDefault();
+            log.push('submitAfter:' + event.defaultPrevented);
+          });
+
+          resetter.addEventListener('click', (event) => {
+            log.push('resetClick:' + event.defaultPrevented);
+            if (cancelResetClick) {
+              event.preventDefault();
+              log.push('resetClickAfter:' + event.defaultPrevented);
+            }
+          });
+          form.addEventListener('reset', () => {
+            log.push('reset');
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            submitter.click();
+            const first = log.join(',');
+
+            log.length = 0;
+            cancelSubmitClick = true;
+            submitter.click();
+            const second = log.join(',');
+
+            log.length = 0;
+            name.value = 'dirty';
+            resetter.click();
+            const third = [name.value, log.join(',')].join(':');
+
+            log.length = 0;
+            cancelResetClick = true;
+            name.value = 'dirty';
+            resetter.click();
+            const fourth = [name.value, log.join(',')].join(':');
+
+            document.getElementById('result').textContent =
+              [first, second, third, fourth].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "submitClick:false,submit:false,submitAfter:true|submitClick:false,submitClickAfter:true|seed:resetClick:false,reset|dirty:resetClick:false,resetClickAfter:true",
+    )?;
     Ok(())
 }
 
@@ -2630,6 +2951,286 @@ fn html_input_reset_does_not_participate_in_constraint_validation() -> Result<()
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#result", "true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_reset_click_restores_dirty_defaults_across_textarea_and_select_work() -> Result<()> {
+    let html = r#"
+        <form id='profile'>
+          <input id='name' value='default'>
+          <input id='agree' type='checkbox' checked>
+          <textarea id='story'>seed</textarea>
+          <select id='pet'>
+            <option value='cat' selected>Cat</option>
+            <option value='dog'>Dog</option>
+          </select>
+          <input id='resetter' type='reset' value='Reset'>
+        </form>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('profile');
+          const name = document.getElementById('name');
+          const agree = document.getElementById('agree');
+          const story = document.getElementById('story');
+          const pet = document.getElementById('pet');
+          const resetter = document.getElementById('resetter');
+
+          name.value = 'changed';
+          name.setAttribute('value', 'updated-default');
+          agree.checked = false;
+          agree.setAttribute('checked', '');
+          story.value = 'edited';
+          pet.value = 'dog';
+
+          resetter.click();
+
+          document.getElementById('result').textContent = [
+            name.value,
+            String(name.getAttribute('value')),
+            String(agree.checked),
+            String(agree.hasAttribute('checked')),
+            story.value,
+            pet.value
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "updated-default:updated-default:true:true:seed:cat",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn text_input_change_commits_on_blur_only_for_user_input_work() -> Result<()> {
+    let html = r#"
+        <input id='name' value='seed'>
+        <button id='script' type='button'>script</button>
+        <button id='dump' type='button'>dump</button>
+        <p id='result'></p>
+        <script>
+          const name = document.getElementById('name');
+          const log = [];
+
+          name.addEventListener('input', (event) => {
+            log.push(['input', name.value, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['inputAfter', event.defaultPrevented].join(':'));
+          });
+          name.addEventListener('change', (event) => {
+            log.push(['change', name.value, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['changeAfter', event.defaultPrevented].join(':'));
+          });
+          name.addEventListener('blur', () => {
+            log.push('blur:' + name.value);
+          });
+
+          document.getElementById('script').addEventListener('click', () => {
+            name.value = 'scripted';
+          });
+          document.getElementById('dump').addEventListener('click', () => {
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.focus("#name")?;
+    h.type_text("#name", "Alice")?;
+    h.blur("#name")?;
+    h.click("#dump")?;
+    h.assert_text(
+        "#result",
+        "input:Alice:false|inputAfter:false|change:Alice:false|changeAfter:false|blur:Alice",
+    )?;
+
+    let mut h = Harness::from_html(html)?;
+    h.focus("#name")?;
+    h.click("#script")?;
+    h.blur("#name")?;
+    h.click("#dump")?;
+    h.assert_text("#result", "blur:scripted")?;
+    Ok(())
+}
+
+#[test]
+fn trusted_type_text_focuses_control_and_dispatches_selectionchange_before_input_work() -> Result<()>
+{
+    let html = r#"
+        <input id='name' value='x'>
+        <p id='result'></p>
+        <script>
+          const field = document.getElementById('name');
+          const log = [];
+
+          field.addEventListener('focus', () => {
+            log.push('focus:' + String(document.activeElement === field));
+          });
+          field.addEventListener('focusin', () => {
+            log.push('focusin:' + String(document.activeElement === field));
+          });
+          document.addEventListener('selectionchange', () => {
+            log.push('selectionchange:' + field.selectionStart + '-' + field.selectionEnd);
+          });
+          field.addEventListener('input', () => {
+            log.push(
+              'input:' +
+              field.value + ':' +
+              field.selectionStart + '-' + field.selectionEnd + ':' +
+              String(document.activeElement === field)
+            );
+            document.getElementById('result').textContent = log.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.type_text("#name", "abc")?;
+    h.assert_text(
+        "#result",
+        "focus:true,focusin:true,selectionchange:3-3,input:abc:3-3:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn trusted_paste_focuses_target_and_dispatches_selectionchange_before_input_work() -> Result<()> {
+    let html = r#"
+        <input id='target' value='hello'>
+        <p id='result'></p>
+        <script>
+          const target = document.getElementById('target');
+          target.setSelectionRange(1, 4, 'forward');
+          const log = [];
+
+          target.addEventListener('focus', () => {
+            log.push('focus:' + String(document.activeElement === target));
+          });
+          target.addEventListener('focusin', () => {
+            log.push('focusin:' + String(document.activeElement === target));
+          });
+          target.addEventListener('paste', () => {
+            log.push('paste:' + target.selectionStart + '-' + target.selectionEnd);
+          });
+          document.addEventListener('selectionchange', () => {
+            log.push('selectionchange:' + target.selectionStart + '-' + target.selectionEnd);
+          });
+          target.addEventListener('input', () => {
+            log.push(
+              'input:' +
+              target.value + ':' +
+              target.selectionStart + '-' + target.selectionEnd + ':' +
+              String(document.activeElement === target)
+            );
+            document.getElementById('result').textContent = log.join(',');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_text("Z");
+    h.paste("#target")?;
+    h.assert_text(
+        "#result",
+        "focus:true,focusin:true,paste:1-4,selectionchange:2-2,input:hZo:2-2:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn text_control_select_focuses_element_and_dispatches_selectionchange_work() -> Result<()> {
+    let html = r#"
+        <input id='field' value='hello'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const field = document.getElementById('field');
+          const log = [];
+
+          field.addEventListener('focus', () => {
+            log.push('focus:' + String(document.activeElement === field));
+          });
+          field.addEventListener('focusin', () => {
+            log.push('focusin:' + String(document.activeElement === field));
+          });
+          document.addEventListener('selectionchange', () => {
+            log.push('selectionchange:' + field.selectionStart + '-' + field.selectionEnd);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            field.select();
+            document.getElementById('result').textContent = [
+              log.join(','),
+              String(document.activeElement === field),
+              field.selectionStart + '-' + field.selectionEnd
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "focus:true,focusin:true,selectionchange:0-5|true|0-5",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn textarea_change_commits_on_blur_only_for_user_input_work() -> Result<()> {
+    let html = r#"
+        <textarea id='story'>seed</textarea>
+        <button id='script' type='button'>script</button>
+        <button id='dump' type='button'>dump</button>
+        <p id='result'></p>
+        <script>
+          const story = document.getElementById('story');
+          const log = [];
+
+          story.addEventListener('input', (event) => {
+            log.push(['input', story.value, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['inputAfter', event.defaultPrevented].join(':'));
+          });
+          story.addEventListener('change', (event) => {
+            log.push(['change', story.value, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['changeAfter', event.defaultPrevented].join(':'));
+          });
+          story.addEventListener('blur', () => {
+            log.push('blur:' + story.value);
+          });
+
+          document.getElementById('script').addEventListener('click', () => {
+            story.value = 'scripted';
+          });
+          document.getElementById('dump').addEventListener('click', () => {
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.focus("#story")?;
+    h.type_text("#story", "Alice")?;
+    h.blur("#story")?;
+    h.click("#dump")?;
+    h.assert_text(
+        "#result",
+        "input:Alice:false|inputAfter:false|change:Alice:false|changeAfter:false|blur:Alice",
+    )?;
+
+    let mut h = Harness::from_html(html)?;
+    h.focus("#story")?;
+    h.click("#script")?;
+    h.blur("#story")?;
+    h.click("#dump")?;
+    h.assert_text("#result", "blur:scripted")?;
     Ok(())
 }
 
@@ -2842,6 +3443,60 @@ fn html_input_checkbox_switch_keeps_checkbox_behavior() -> Result<()> {
 }
 
 #[test]
+fn trusted_checkbox_click_orders_click_before_input_change_and_canceled_click_restores_state_work()
+-> Result<()> {
+    let html = r#"
+        <input id='box' type='checkbox'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const log = [];
+          let cancelNext = false;
+
+          box.addEventListener('click', (event) => {
+            log.push(['click', box.checked, box.indeterminate, event.defaultPrevented].join(':'));
+            if (cancelNext) {
+              event.preventDefault();
+              log.push(['clickAfter', box.checked, box.indeterminate, event.defaultPrevented].join(':'));
+            }
+          });
+          box.addEventListener('input', (event) => {
+            log.push(['input', box.checked, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['inputAfter', event.defaultPrevented].join(':'));
+          });
+          box.addEventListener('change', (event) => {
+            log.push(['change', box.checked, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['changeAfter', event.defaultPrevented].join(':'));
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            box.indeterminate = true;
+            box.click();
+            const first = [box.checked, box.indeterminate, log.join(',')].join(':');
+
+            log.length = 0;
+            cancelNext = true;
+            box.click();
+            const second = [box.checked, box.indeterminate, log.join(',')].join(':');
+
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:false:click:true:false:false,input:true:false,inputAfter:false,change:true:false,changeAfter:false|true:false:click:false:false:false,clickAfter:false:false:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_radio_form_data_and_default_on_value_work() -> Result<()> {
     let html = r#"
         <form id='f'>
@@ -2919,6 +3574,64 @@ fn html_input_radio_required_group_and_label_click_work() -> Result<()> {
 }
 
 #[test]
+fn trusted_radio_click_orders_click_before_input_change_and_canceled_click_restores_group_work()
+-> Result<()> {
+    let html = r#"
+        <form>
+          <input id='a' type='radio' name='plan' checked>
+          <input id='b' type='radio' name='plan'>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const a = document.getElementById('a');
+          const b = document.getElementById('b');
+          const log = [];
+          let cancelNext = false;
+
+          b.addEventListener('click', (event) => {
+            log.push(['click', a.checked, b.checked, event.defaultPrevented].join(':'));
+            if (cancelNext) {
+              event.preventDefault();
+              log.push(['clickAfter', a.checked, b.checked, event.defaultPrevented].join(':'));
+            }
+          });
+          b.addEventListener('input', (event) => {
+            log.push(['input', a.checked, b.checked, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['inputAfter', event.defaultPrevented].join(':'));
+          });
+          b.addEventListener('change', (event) => {
+            log.push(['change', a.checked, b.checked, event.defaultPrevented].join(':'));
+            event.preventDefault();
+            log.push(['changeAfter', event.defaultPrevented].join(':'));
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            b.click();
+            const first = [a.checked, b.checked, log.join(',')].join(':');
+
+            log.length = 0;
+            cancelNext = true;
+            a.checked = true;
+            b.click();
+            const second = [a.checked, b.checked, log.join(',')].join(':');
+
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "false:true:click:false:true:false,input:false:true:false,inputAfter:false,change:false:true:false,changeAfter:false|true:false:click:false:true:false,clickAfter:false:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_radio_set_attribute_checked_preserves_group_exclusive() -> Result<()> {
     let html = r#"
         <form>
@@ -2970,6 +3683,54 @@ fn html_input_radio_type_change_with_checked_attribute_keeps_group_exclusive() -
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#result", "false:true:b")?;
+    Ok(())
+}
+
+#[test]
+fn html_input_radio_external_form_owner_mutation_keeps_group_sync_and_validity_work() -> Result<()>
+{
+    let html = r#"
+        <form id='f'>
+          <input id='in' type='radio' name='plan' required checked>
+        </form>
+        <input id='out' type='radio' name='plan'>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const inside = document.getElementById('in');
+          const outside = document.getElementById('out');
+
+          document.getElementById('run').addEventListener('click', () => {
+            outside.checked = true;
+            const before = [
+              String(inside.checked),
+              String(outside.checked),
+              String(inside.checkValidity())
+            ].join(':');
+
+            outside.setAttribute('form', 'f');
+            const attached = [
+              String(inside.checked),
+              String(outside.checked),
+              String(inside.checkValidity()),
+              String(outside.checkValidity())
+            ].join(':');
+
+            outside.removeAttribute('form');
+            const detached = [
+              String(inside.checkValidity()),
+              String(outside.checkValidity())
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [before, attached, detached].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true:true:true|false:true:true:true|false:true")?;
     Ok(())
 }
 

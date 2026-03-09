@@ -178,3 +178,80 @@ fn input_multiple_property_assignment_reflects_attribute() -> Result<()> {
     h.assert_text("#result", "true:true:false:false|false:false|true:true")?;
     Ok(())
 }
+
+#[test]
+fn input_default_value_and_default_checked_dirty_sync_work() -> Result<()> {
+    let html = r#"
+        <form id='prefs'>
+          <input id='name' value='seed'>
+          <input id='agree' type='checkbox'>
+          <input id='r1' type='radio' name='plan' checked>
+          <input id='r2' type='radio' name='plan'>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const form = document.getElementById('prefs');
+            const name = document.getElementById('name');
+            const agree = document.getElementById('agree');
+            const r1 = document.getElementById('r1');
+            const r2 = document.getElementById('r2');
+
+            name.defaultValue = 'base';
+            agree.defaultChecked = true;
+            r2.defaultChecked = true;
+            const clean = [
+              name.defaultValue,
+              name.value,
+              name.getAttribute('value'),
+              String(agree.defaultChecked),
+              String(agree.checked),
+              String(r1.defaultChecked),
+              String(r1.checked),
+              String(r2.defaultChecked),
+              String(r2.checked)
+            ].join(':');
+
+            name.value = 'dirty';
+            agree.checked = false;
+            r1.checked = true;
+            name.defaultValue = 'later';
+            agree.defaultChecked = true;
+            r1.defaultChecked = false;
+            r2.defaultChecked = true;
+            const dirty = [
+              name.defaultValue,
+              name.value,
+              name.getAttribute('value'),
+              String(agree.defaultChecked),
+              String(agree.checked),
+              String(r1.defaultChecked),
+              String(r1.checked),
+              String(r2.defaultChecked),
+              String(r2.checked)
+            ].join(':');
+
+            form.reset();
+            const reset = [
+              name.defaultValue,
+              name.value,
+              String(agree.checked),
+              String(r1.checked),
+              String(r2.checked)
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [clean, dirty, reset].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "base:base:base:true:true:true:false:true:true|later:dirty:later:true:false:false:true:true:false|later:later:true:false:true",
+    )?;
+    Ok(())
+}

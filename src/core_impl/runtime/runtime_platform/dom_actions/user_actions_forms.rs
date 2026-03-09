@@ -1,6 +1,141 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+enum LegacyInputActivationState {
+    Checkbox {
+        checked: bool,
+        checked_dirty: bool,
+        indeterminate: bool,
+    },
+    RadioGroup {
+        states: Vec<(NodeId, bool, bool)>,
+    },
+}
+
 impl Harness {
+    fn dispatch_text_selectionchange_if_needed_with_env(
+        &mut self,
+        target: NodeId,
+        before_start: usize,
+        before_end: usize,
+        before_direction: &str,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if !self.node_supports_text_selection(target) {
+            return Ok(());
+        }
+        let after_start = self.dom.selection_start(target)?;
+        let after_end = self.dom.selection_end(target)?;
+        let after_direction = self.dom.selection_direction(target)?;
+        if before_start != after_start
+            || before_end != after_end
+            || before_direction != after_direction
+        {
+            let _ = self.dispatch_document_selectionchange_with_env(env)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_form_control_input_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(target, "input", env, true, true, false, None, None, None)
+    }
+
+    fn dispatch_form_control_change_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(target, "change", env, true, true, false, None, None, None)
+    }
+
+    fn snapshot_radio_group_activation_state(&self, target: NodeId) -> Vec<(NodeId, bool, bool)> {
+        let target_name = self.dom.attr(target, "name").unwrap_or_default();
+        if target_name.is_empty() {
+            return vec![(
+                target,
+                self.dom.checked(target).unwrap_or(false),
+                self.dom
+                    .element(target)
+                    .map(|element| element.checked_dirty)
+                    .unwrap_or(false),
+            )];
+        }
+        let target_form = self.dom.control_form_owner(target);
+        self.dom
+            .all_element_nodes()
+            .into_iter()
+            .filter(|node| is_radio_input(&self.dom, *node))
+            .filter(|node| self.dom.attr(*node, "name").unwrap_or_default() == target_name)
+            .filter(|node| self.dom.control_form_owner(*node) == target_form)
+            .map(|node| {
+                (
+                    node,
+                    self.dom.checked(node).unwrap_or(false),
+                    self.dom
+                        .element(node)
+                        .map(|element| element.checked_dirty)
+                        .unwrap_or(false),
+                )
+            })
+            .collect()
+    }
+
+    fn legacy_pre_activate_input_control(
+        &mut self,
+        target: NodeId,
+    ) -> Result<Option<LegacyInputActivationState>> {
+        if is_checkbox_input(&self.dom, target) {
+            let snapshot =
+                self.dom
+                    .element(target)
+                    .map(|element| LegacyInputActivationState::Checkbox {
+                        checked: element.checked,
+                        checked_dirty: element.checked_dirty,
+                        indeterminate: element.indeterminate,
+                    });
+            if let Some(LegacyInputActivationState::Checkbox {
+                checked,
+                checked_dirty: _,
+                indeterminate: _,
+            }) = snapshot.as_ref()
+            {
+                self.dom.set_indeterminate(target, false)?;
+                self.dom.set_checked_state(target, !*checked, Some(true))?;
+            }
+            return Ok(snapshot);
+        }
+
+        if is_radio_input(&self.dom, target) {
+            let states = self.snapshot_radio_group_activation_state(target);
+            if !self.dom.checked(target)? {
+                self.dom.set_checked_state(target, true, Some(true))?;
+            }
+            return Ok(Some(LegacyInputActivationState::RadioGroup { states }));
+        }
+
+        Ok(None)
+    }
+
+    fn checkbox_state_changed_from_snapshot(
+        &self,
+        target: NodeId,
+        checked: bool,
+        indeterminate: bool,
+    ) -> bool {
+        self.dom.checked(target).unwrap_or(checked) != checked
+            || self.dom.indeterminate(target).unwrap_or(indeterminate) != indeterminate
+    }
+
+    fn radio_group_state_changed_from_snapshot(&self, states: &[(NodeId, bool, bool)]) -> bool {
+        states
+            .iter()
+            .any(|(node, checked, _)| self.dom.checked(*node).unwrap_or(*checked) != *checked)
+    }
+
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         if self.is_effectively_disabled(target) {
@@ -36,15 +171,17 @@ impl Harness {
             .to_ascii_lowercase();
 
         if tag == "select" {
-            return stacker::grow(32 * 1024 * 1024, || {
-                let previous_value = self.dom.value(target)?;
-                self.dom.set_select_value(target, text)?;
-                let next_value = self.dom.value(target)?;
-                if next_value != previous_value {
-                    self.dispatch_event(target, "input")?;
-                    self.dispatch_event(target, "change")?;
-                }
-                Ok(())
+            return self.with_script_env_always(|this, env| {
+                stacker::grow(32 * 1024 * 1024, || {
+                    let previous_value = this.dom.value(target)?;
+                    this.dom.set_select_value(target, text)?;
+                    let next_value = this.dom.value(target)?;
+                    if next_value != previous_value {
+                        this.dispatch_form_control_input_with_env(target, env)?;
+                        this.dispatch_form_control_change_with_env(target, env)?;
+                    }
+                    Ok(())
+                })
             });
         }
 
@@ -56,10 +193,32 @@ impl Harness {
             });
         }
 
-        stacker::grow(32 * 1024 * 1024, || {
-            self.dom.set_value(target, text)?;
-            self.dispatch_event(target, "input")?;
-            Ok(())
+        self.with_script_env_always(|this, env| {
+            stacker::grow(32 * 1024 * 1024, || {
+                this.focus_node_with_env(target, env)?;
+                let before_selection = if this.node_supports_text_selection(target) {
+                    Some((
+                        this.dom.selection_start(target)?,
+                        this.dom.selection_end(target)?,
+                        this.dom.selection_direction(target)?,
+                    ))
+                } else {
+                    None
+                };
+                this.dom.set_value(target, text)?;
+                if let Some((before_start, before_end, before_direction)) = before_selection {
+                    this.dispatch_text_selectionchange_if_needed_with_env(
+                        target,
+                        before_start,
+                        before_end,
+                        &before_direction,
+                        env,
+                    )?;
+                }
+                this.dispatch_form_control_input_with_env(target, env)?;
+                this.note_user_committed_change_candidate(target)?;
+                Ok(())
+            })
         })
     }
 
@@ -85,15 +244,17 @@ impl Harness {
             });
         }
 
-        stacker::grow(32 * 1024 * 1024, || {
-            let previous_value = self.dom.value(target)?;
-            self.dom.set_select_value(target, value)?;
-            let next_value = self.dom.value(target)?;
-            if next_value != previous_value {
-                self.dispatch_event(target, "input")?;
-                self.dispatch_event(target, "change")?;
-            }
-            Ok(())
+        self.with_script_env_always(|this, env| {
+            stacker::grow(32 * 1024 * 1024, || {
+                let previous_value = this.dom.value(target)?;
+                this.dom.set_select_value(target, value)?;
+                let next_value = this.dom.value(target)?;
+                if next_value != previous_value {
+                    this.dispatch_form_control_input_with_env(target, env)?;
+                    this.dispatch_form_control_change_with_env(target, env)?;
+                }
+                Ok(())
+            })
         })
     }
 
@@ -151,8 +312,8 @@ impl Harness {
 
         let changed = self.dom.set_file_input_files(target, files)?;
         if changed {
-            self.dispatch_event_with_env(target, "input", env, true)?;
-            self.dispatch_event_with_env(target, "change", env, true)?;
+            self.dispatch_form_control_input_with_env(target, env)?;
+            self.dispatch_form_control_change_with_env(target, env)?;
         } else {
             self.dispatch_event_with_env(target, "cancel", env, true)?;
         }
@@ -190,15 +351,17 @@ impl Harness {
             });
         }
 
-        stacker::grow(32 * 1024 * 1024, || {
-            let current = self.dom.checked(target)?;
-            if current != checked {
-                self.dom.set_checked(target, checked)?;
-                self.dispatch_event(target, "input")?;
-                self.dispatch_event(target, "change")?;
-            }
+        self.with_script_env_always(|this, env| {
+            stacker::grow(32 * 1024 * 1024, || {
+                let current = this.dom.checked(target)?;
+                if current != checked {
+                    this.dom.set_checked(target, checked)?;
+                    this.dispatch_form_control_input_with_env(target, env)?;
+                    this.dispatch_form_control_change_with_env(target, env)?;
+                }
 
-            Ok(())
+                Ok(())
+            })
         })
     }
 
@@ -298,13 +461,38 @@ impl Harness {
 
         self.dom.set_active_pseudo_element(Some(target));
         let result: Result<()> = (|| {
+            let legacy_activation = self.legacy_pre_activate_input_control(target)?;
             let click_outcome = self.dispatch_event_with_env(target, "click", env, true)?;
             if click_outcome.default_prevented {
+                if let Some(state) = legacy_activation {
+                    match state {
+                        LegacyInputActivationState::Checkbox {
+                            checked,
+                            checked_dirty,
+                            indeterminate,
+                        } => {
+                            if let Some(element) = self.dom.element_mut(target) {
+                                element.checked = checked;
+                                element.checked_dirty = checked_dirty;
+                                element.indeterminate = indeterminate;
+                            }
+                        }
+                        LegacyInputActivationState::RadioGroup { states } => {
+                            for (node, checked, checked_dirty) in states {
+                                if let Some(element) = self.dom.element_mut(node) {
+                                    element.checked = checked;
+                                    element.checked_dirty = checked_dirty;
+                                }
+                            }
+                        }
+                    }
+                }
                 return Ok(());
             }
 
-            if let Some(control) = self.resolve_label_control(target) {
+            if let Some(control) = self.resolve_label_activation_control(target) {
                 if control != target {
+                    self.focus_node_with_env(control, env)?;
                     self.click_node_with_env(control, env)?;
                     return Ok(());
                 }
@@ -315,20 +503,25 @@ impl Harness {
                 let _ = self.set_details_open_state_with_env(details, next_open, env)?;
             }
 
-            if is_checkbox_input(&self.dom, target) {
-                let current = self.dom.checked(target)?;
-                self.dom.set_indeterminate(target, false)?;
-                self.dom.set_checked(target, !current)?;
-                self.dispatch_event_with_env(target, "input", env, true)?;
-                self.dispatch_event_with_env(target, "change", env, true)?;
-            }
-
-            if is_radio_input(&self.dom, target) {
-                let current = self.dom.checked(target)?;
-                if !current {
-                    self.dom.set_checked(target, true)?;
-                    self.dispatch_event_with_env(target, "input", env, true)?;
-                    self.dispatch_event_with_env(target, "change", env, true)?;
+            if let Some(state) = legacy_activation {
+                match state {
+                    LegacyInputActivationState::Checkbox {
+                        checked,
+                        checked_dirty: _,
+                        indeterminate,
+                    } => {
+                        if self.checkbox_state_changed_from_snapshot(target, checked, indeterminate)
+                        {
+                            self.dispatch_form_control_input_with_env(target, env)?;
+                            self.dispatch_form_control_change_with_env(target, env)?;
+                        }
+                    }
+                    LegacyInputActivationState::RadioGroup { states } => {
+                        if self.radio_group_state_changed_from_snapshot(&states) {
+                            self.dispatch_form_control_input_with_env(target, env)?;
+                            self.dispatch_form_control_change_with_env(target, env)?;
+                        }
+                    }
                 }
             }
 
@@ -383,29 +576,29 @@ impl Harness {
 
         for option in options {
             let is_target = option == target;
-            let option_element = self
+            let has_selected = self
                 .dom
-                .element_mut(option)
-                .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
-            let has_selected = option_element.attrs.contains_key("selected");
+                .element(option)
+                .map(|element| element.selected)
+                .unwrap_or(false);
             if is_target {
                 if !has_selected {
-                    option_element
-                        .attrs
-                        .insert("selected".to_string(), "true".to_string());
+                    self.dom
+                        .set_option_selected_state(option, true, Some(true))?;
                 }
                 continue;
             }
             if !is_multiple && has_selected {
-                option_element.attrs.remove("selected");
+                self.dom
+                    .set_option_selected_state(option, false, Some(true))?;
             }
         }
 
         self.dom.sync_select_value(select_node)?;
         let next_value = self.dom.value(select_node)?;
         if next_value != previous_value {
-            self.dispatch_event_with_env(select_node, "input", env, true)?;
-            self.dispatch_event_with_env(select_node, "change", env, true)?;
+            self.dispatch_form_control_input_with_env(select_node, env)?;
+            self.dispatch_form_control_change_with_env(select_node, env)?;
         }
         Ok(())
     }
@@ -539,16 +732,46 @@ impl Harness {
 
         self.focus_node_with_env(target, env)?;
         let keydown = self.dispatch_event_with_env(target, "keydown", env, true)?;
-        if !keydown.default_prevented
-            && self.dom.tag_name(target).is_some_and(|tag| {
+        if !keydown.default_prevented {
+            let activates_click = self.dom.tag_name(target).is_some_and(|tag| {
                 (tag.eq_ignore_ascii_case("a") && self.dom.attr(target, "href").is_some())
                     || tag.eq_ignore_ascii_case("button")
-            })
-        {
-            self.click_node_with_env(target, env)?;
+            }) || is_submit_control(&self.dom, target);
+
+            if activates_click {
+                self.click_node_with_env(target, env)?;
+            } else if self.supports_implicit_submit_on_enter(target) {
+                if let Some(form_id) = self.resolve_form_for_submit(target) {
+                    let submitter = self.default_submitter_for_form(form_id)?;
+                    self.request_form_submit_node_with_env(form_id, submitter, env)?;
+                }
+            }
         }
         let _ = self.dispatch_event_with_env(target, "keyup", env, true)?;
         Ok(())
+    }
+
+    fn supports_implicit_submit_on_enter(&self, target: NodeId) -> bool {
+        let Some(tag) = self.dom.tag_name(target) else {
+            return false;
+        };
+        if !tag.eq_ignore_ascii_case("input") {
+            return false;
+        }
+
+        matches!(
+            self.normalized_input_type(target).as_str(),
+            "text"
+                | "search"
+                | "url"
+                | "tel"
+                | "email"
+                | "password"
+                | "number"
+                | "date"
+                | "time"
+                | "datetime-local"
+        )
     }
 
     fn text_slice_by_char_range(text: &str, start: usize, end: usize) -> String {
@@ -582,6 +805,20 @@ impl Harness {
         Self::object_get_entry(&store.borrow(), "text/plain").map(|value| value.as_string())
     }
 
+    fn clipboard_plain_text_for_paste_default_action(event: &EventState) -> Option<String> {
+        let object = event.clipboard_data_object.as_ref()?;
+        let entries = object.borrow();
+        if let Some(Value::Object(store)) =
+            Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_STORE_KEY)
+        {
+            if let Some(value) = Self::object_get_entry(&store.borrow(), "text/plain") {
+                return Some(value.as_string());
+            }
+        }
+        Self::object_get_entry(&entries, INTERNAL_CLIPBOARD_DATA_TEXT_KEY)
+            .map(|value| value.as_string())
+    }
+
     pub(crate) fn copy_node_with_env(
         &mut self,
         target: NodeId,
@@ -591,6 +828,7 @@ impl Harness {
             return Ok(());
         }
 
+        self.focus_node_with_env(target, env)?;
         let outcome = self.dispatch_event_with_env(target, "copy", env, true)?;
         if outcome.default_prevented {
             if let Some(text) = Self::clipboard_plain_text_from_event(&outcome) {
@@ -633,13 +871,14 @@ impl Harness {
             return Ok(());
         }
 
+        self.focus_node_with_env(target, env)?;
         let outcome = self.dispatch_event_with_env(target, "paste", env, true)?;
         if outcome.default_prevented {
             return Ok(());
         }
 
-        let pasted_text = outcome
-            .clipboard_data
+        let pasted_text = Self::clipboard_plain_text_for_paste_default_action(&outcome)
+            .or(outcome.clipboard_data)
             .unwrap_or_else(|| self.platform_mocks.clipboard_text.clone());
 
         if self.node_supports_text_selection(target) {
@@ -650,7 +889,8 @@ impl Harness {
             self.set_node_range_text(target, &[Value::String(pasted_text)])?;
             let after = self.dom.value(target)?;
             if after != before {
-                self.dispatch_event_with_env(target, "input", env, true)?;
+                self.dispatch_form_control_input_with_env(target, env)?;
+                self.note_user_committed_change_candidate(target)?;
             }
             return Ok(());
         }
@@ -661,7 +901,7 @@ impl Harness {
             after.push_str(&pasted_text);
             self.dom.set_text_content(host, &after)?;
             if after != before {
-                self.dispatch_event_with_env(host, "input", env, true)?;
+                self.dispatch_form_control_input_with_env(host, env)?;
             }
         }
 
@@ -682,7 +922,7 @@ impl Harness {
     ) -> Result<()> {
         // form.submit() bypasses validation and submit event dispatch.
         if let Some(form_id) = self.resolve_submit_form_target(target) {
-            self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+            self.maybe_close_dialog_for_form_submit_with_env(form_id, None, env)?;
         }
 
         Ok(())
@@ -731,16 +971,17 @@ impl Harness {
         submitter: Option<NodeId>,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        let skip_validation = self.dom.attr(form_id, "novalidate").is_some()
-            || submitter.is_some_and(|node| self.dom.attr(node, "formnovalidate").is_some());
+        let skip_validation = self.form_submission_skips_validation(form_id, submitter);
 
-        if !skip_validation && !self.form_is_valid_for_submit(form_id)? {
+        if !skip_validation && !self.validate_form_submission_with_env(form_id, env)? {
             return Ok(());
         }
 
-        let submit_outcome = self.dispatch_event_with_env(form_id, "submit", env, true)?;
+        let mut submit_event = EventState::new("submit", form_id, self.scheduler.now_ms);
+        submit_event.submitter = submitter.map(Value::Node);
+        let submit_outcome = self.dispatch_prepared_event_with_env(submit_event, env)?;
         if !submit_outcome.default_prevented {
-            self.maybe_close_dialog_for_form_submit_with_env(form_id, env)?;
+            self.maybe_close_dialog_for_form_submit_with_env(form_id, submitter, env)?;
         }
         Ok(())
     }
@@ -748,17 +989,22 @@ impl Harness {
     pub(crate) fn maybe_close_dialog_for_form_submit_with_env(
         &mut self,
         form: NodeId,
+        submitter: Option<NodeId>,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
-        let Some(method) = self.dom.attr(form, "method") else {
-            return Ok(());
-        };
+        let method = self.effective_form_submit_method(form, submitter);
         if !method.eq_ignore_ascii_case("dialog") {
             return Ok(());
         }
         let Some(dialog) = self.dom.find_ancestor_by_tag(form, "dialog") else {
             return Ok(());
         };
+        if self.dialog_return_value(dialog)?.is_empty() {
+            self.set_dialog_return_value(
+                dialog,
+                self.dialog_submitter_return_value(form, submitter),
+            )?;
+        }
         let _ = self.transition_dialog_open_state_with_env(dialog, false, true, env)?;
         Ok(())
     }
@@ -780,9 +1026,15 @@ impl Harness {
         let controls = self.form_elements(form_id)?;
         for control in controls {
             if is_checkbox_input(&self.dom, control) || is_radio_input(&self.dom, control) {
-                let default_checked = self.dom.attr(control, "checked").is_some();
-                self.dom.set_checked(control, default_checked)?;
+                let default_checked = self
+                    .dom
+                    .element(control)
+                    .map(|element| element.default_checked)
+                    .unwrap_or(false);
+                self.dom
+                    .set_checked_state(control, default_checked, Some(false))?;
                 self.dom.set_indeterminate(control, false)?;
+                self.sync_change_tracking_to_current_value(control)?;
                 continue;
             }
 
@@ -792,7 +1044,19 @@ impl Harness {
                 .map(|tag| tag.eq_ignore_ascii_case("select"))
                 .unwrap_or(false)
             {
+                let mut options = Vec::new();
+                self.dom.collect_select_options(control, &mut options);
+                for option in options {
+                    let default_selected = self
+                        .dom
+                        .element(option)
+                        .map(|element| element.default_selected)
+                        .unwrap_or(false);
+                    self.dom
+                        .set_option_selected_state(option, default_selected, Some(false))?;
+                }
                 self.dom.sync_select_value(control)?;
+                self.sync_change_tracking_to_current_value(control)?;
                 continue;
             }
 
@@ -802,7 +1066,15 @@ impl Harness {
                 .map(is_file_input_element)
                 .unwrap_or(false);
             if is_file_input {
-                self.dom.set_value(control, "")?;
+                self.dom.set_current_value_state(
+                    control,
+                    normalize_file_input_value(""),
+                    Some(false),
+                )?;
+                if let Some(element) = self.dom.element_mut(control) {
+                    element.files.clear();
+                }
+                self.sync_change_tracking_to_current_value(control)?;
                 continue;
             }
 
@@ -815,14 +1087,25 @@ impl Harness {
                 let default_value = self
                     .dom
                     .element(control)
-                    .map(|element| element.value.clone())
+                    .map(|element| element.default_value.clone())
                     .unwrap_or_default();
-                self.dom.set_value(control, &default_value)?;
+                self.dom.set_text_content(control, &default_value)?;
+                if let Some(element) = self.dom.element_mut(control) {
+                    element.value = default_value;
+                    element.dirty_value = false;
+                }
+                self.sync_change_tracking_to_current_value(control)?;
                 continue;
             }
 
-            let default_value = self.dom.attr(control, "value").unwrap_or_default();
-            self.dom.set_value(control, &default_value)?;
+            let default_value = self
+                .dom
+                .element(control)
+                .map(|element| element.default_value.clone())
+                .unwrap_or_default();
+            self.dom
+                .set_current_value_state(control, default_value, Some(false))?;
+            self.sync_change_tracking_to_current_value(control)?;
         }
 
         Ok(())

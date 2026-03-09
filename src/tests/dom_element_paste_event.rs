@@ -113,3 +113,28 @@ fn element_paste_event_inserts_clipboard_text_into_contenteditable_host() -> Res
     h.assert_text("#editable", "Hello World")?;
     Ok(())
 }
+
+#[test]
+fn element_paste_event_mutated_clipboard_data_drives_default_insertion() -> Result<()> {
+    let html = r#"
+        <input id='target' value='hello' />
+        <p id='event'></p>
+        <script>
+          const target = document.getElementById('target');
+          target.setSelectionRange(1, 4);
+          document.addEventListener('paste', (event) => {
+            const inheritedSetData = Object.create(event.clipboardData).setData;
+            inheritedSetData.call(event.clipboardData, 'text/plain', 'WORLD');
+            document.getElementById('event').textContent =
+              event.clipboardData.getData('text/plain');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_text("ZZ");
+    h.paste("#target")?;
+    h.assert_value("#target", "hWORLDo")?;
+    h.assert_text("#event", "WORLD")?;
+    Ok(())
+}

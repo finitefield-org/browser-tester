@@ -1,6 +1,101 @@
 use super::*;
 
 impl Harness {
+    fn node_or_ancestor_has_hidden_attribute(&self, node: NodeId) -> bool {
+        let mut cursor = Some(node);
+        while let Some(current) = cursor {
+            if self.dom.attr(current, "hidden").is_some() {
+                return true;
+            }
+            cursor = self.dom.parent(current);
+        }
+        false
+    }
+
+    pub(crate) fn control_dispatches_change_on_blur(&self, node: NodeId) -> bool {
+        let Some(tag) = self.dom.tag_name(node) else {
+            return false;
+        };
+        if tag.eq_ignore_ascii_case("textarea") {
+            return true;
+        }
+        if !tag.eq_ignore_ascii_case("input") {
+            return false;
+        }
+        !matches!(
+            self.normalized_input_type(node).as_str(),
+            "hidden" | "checkbox" | "radio" | "file" | "submit" | "reset" | "button" | "image"
+        )
+    }
+
+    pub(crate) fn sync_change_tracking_to_current_value(&mut self, node: NodeId) -> Result<()> {
+        if !self.control_dispatches_change_on_blur(node) {
+            self.dom_runtime.focused_form_control_values.remove(&node);
+            self.dom_runtime.pending_form_control_change.remove(&node);
+            return Ok(());
+        }
+        let current = self.dom.value(node)?;
+        if let Some(snapshot) = self.dom_runtime.focused_form_control_values.get_mut(&node) {
+            *snapshot = current;
+        }
+        self.dom_runtime.pending_form_control_change.remove(&node);
+        Ok(())
+    }
+
+    pub(crate) fn note_user_committed_change_candidate(&mut self, node: NodeId) -> Result<()> {
+        if !self.control_dispatches_change_on_blur(node) {
+            return Ok(());
+        }
+        let current = self.dom.value(node)?;
+        let baseline = self
+            .dom_runtime
+            .focused_form_control_values
+            .get(&node)
+            .cloned()
+            .unwrap_or_else(|| current.clone());
+        if current != baseline {
+            self.dom_runtime.pending_form_control_change.insert(node);
+        } else {
+            self.dom_runtime.pending_form_control_change.remove(&node);
+        }
+        Ok(())
+    }
+
+    fn prime_focus_change_tracking(&mut self, node: NodeId) -> Result<()> {
+        if !self.control_dispatches_change_on_blur(node) {
+            self.dom_runtime.focused_form_control_values.remove(&node);
+            self.dom_runtime.pending_form_control_change.remove(&node);
+            return Ok(());
+        }
+        let current = self.dom.value(node)?;
+        self.dom_runtime
+            .focused_form_control_values
+            .insert(node, current);
+        self.dom_runtime.pending_form_control_change.remove(&node);
+        Ok(())
+    }
+
+    fn maybe_dispatch_change_on_blur_with_env(
+        &mut self,
+        node: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        let baseline = self.dom_runtime.focused_form_control_values.remove(&node);
+        let was_pending = self.dom_runtime.pending_form_control_change.remove(&node);
+        if !was_pending {
+            return Ok(());
+        }
+        let Some(baseline) = baseline else {
+            return Ok(());
+        };
+        if self.dom.value(node)? != baseline {
+            let _ = self.dispatch_event_with_options(
+                node, "change", env, true, true, false, None, None, None,
+            )?;
+        }
+        Ok(())
+    }
+
     fn untrusted_event_default_flags(event_type: &str) -> (bool, bool) {
         if event_type.eq_ignore_ascii_case("paste")
             || event_type.eq_ignore_ascii_case("copy")
@@ -30,16 +125,6 @@ impl Harness {
             }
         }
         None
-    }
-
-    pub(crate) fn dispatch_event(
-        &mut self,
-        target: NodeId,
-        event_type: &str,
-    ) -> Result<EventState> {
-        self.with_script_env(|this, env| {
-            this.dispatch_event_with_env(target, event_type, env, true)
-        })
     }
 
     pub(crate) fn dispatch_event_with_env(
@@ -97,6 +182,21 @@ impl Harness {
         event.old_state = old_state.map(str::to_string);
         event.new_state = new_state.map(str::to_string);
         self.dispatch_prepared_event_with_env(event, env)
+    }
+
+    pub(crate) fn dispatch_invalid_event(&mut self, target: NodeId) -> Result<EventState> {
+        self.with_script_env(|this, env| this.dispatch_invalid_event_with_env(target, env, true))
+    }
+
+    pub(crate) fn dispatch_invalid_event_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+        trusted: bool,
+    ) -> Result<EventState> {
+        self.dispatch_event_with_options(
+            target, "invalid", env, trusted, false, true, None, None, None,
+        )
     }
 
     pub(crate) fn dispatch_prepared_event_with_env(
@@ -177,6 +277,10 @@ impl Harness {
         node: NodeId,
         env: &mut HashMap<String, Value>,
     ) -> Result<()> {
+        if !self.dom.is_connected(node) {
+            return Ok(());
+        }
+
         let is_hidden_input = self
             .dom
             .tag_name(node)
@@ -187,6 +291,10 @@ impl Harness {
                 .unwrap_or_else(|| "text".to_string())
                 .eq_ignore_ascii_case("hidden");
         if is_hidden_input {
+            return Ok(());
+        }
+
+        if self.node_or_ancestor_has_hidden_attribute(node) {
             return Ok(());
         }
 
@@ -203,8 +311,11 @@ impl Harness {
         }
 
         self.dom.set_active_element(Some(node));
-        self.dispatch_event_with_env(node, "focusin", env, true)?;
-        self.dispatch_event_with_env(node, "focus", env, true)?;
+        self.prime_focus_change_tracking(node)?;
+        self.dispatch_event_with_options(node, "focus", env, true, false, false, None, None, None)?;
+        self.dispatch_event_with_options(
+            node, "focusin", env, true, true, false, None, None, None,
+        )?;
         Ok(())
     }
 
@@ -221,9 +332,12 @@ impl Harness {
             return Ok(());
         }
 
-        self.dispatch_event_with_env(node, "focusout", env, true)?;
-        self.dispatch_event_with_env(node, "blur", env, true)?;
+        self.maybe_dispatch_change_on_blur_with_env(node, env)?;
         self.dom.set_active_element(None);
+        self.dispatch_event_with_options(node, "blur", env, true, false, false, None, None, None)?;
+        self.dispatch_event_with_options(
+            node, "focusout", env, true, true, false, None, None, None,
+        )?;
         Ok(())
     }
 

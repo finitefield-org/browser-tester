@@ -54,6 +54,7 @@ impl Dom {
         };
         let value_len = value.chars().count();
         let checked = attrs.contains_key("checked");
+        let selected = attrs.contains_key("selected");
         let disabled = attrs.contains_key("disabled");
         let readonly = attrs.contains_key("readonly");
         let required = attrs.contains_key("required");
@@ -62,10 +63,17 @@ impl Dom {
             tag_name,
             namespace_uri,
             attrs,
-            value,
+            value: value.clone(),
+            default_value: value,
+            dirty_value: false,
             files: Vec::new(),
             checked,
+            default_checked: checked,
+            checked_dirty: false,
             indeterminate: false,
+            selected,
+            default_selected: selected,
+            selected_dirty: false,
             disabled,
             readonly,
             required,
@@ -99,9 +107,16 @@ impl Dom {
             namespace_uri,
             attrs: HashMap::new(),
             value: String::new(),
+            default_value: String::new(),
+            dirty_value: false,
             files: Vec::new(),
             checked: false,
+            default_checked: false,
+            checked_dirty: false,
             indeterminate: false,
+            selected: false,
+            default_selected: false,
+            selected_dirty: false,
             disabled: false,
             readonly: false,
             required: false,

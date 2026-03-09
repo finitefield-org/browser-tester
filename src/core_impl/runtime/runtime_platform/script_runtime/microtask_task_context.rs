@@ -283,6 +283,13 @@ impl Harness {
             ),
         ];
 
+        if event.event_type.eq_ignore_ascii_case("submit") || event.submitter.is_some() {
+            entries.push((
+                "submitter".to_string(),
+                event.submitter.as_ref().cloned().unwrap_or(Value::Null),
+            ));
+        }
+
         if event.before_unload_interface || event.event_type.eq_ignore_ascii_case("beforeunload") {
             entries.push((
                 INTERNAL_BEFORE_UNLOAD_EVENT_OBJECT_KEY.to_string(),

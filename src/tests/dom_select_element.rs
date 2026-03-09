@@ -51,7 +51,7 @@ fn select_selection_properties_work() -> Result<()> {
 
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
-    h.assert_text("#result", "cat:2:4:y:1|parrot:3:false:true")?;
+    h.assert_text("#result", "cat:2:4:y:1|parrot:3:true:false")?;
     Ok(())
 }
 
@@ -142,7 +142,7 @@ fn setting_select_value_updates_selection_state() -> Result<()> {
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_value("#formwork-opening-faces-override", "1")?;
-    h.assert_text("#result", "1:1:false:true")?;
+    h.assert_text("#result", "1:1:true:false")?;
     Ok(())
 }
 
@@ -197,6 +197,66 @@ fn type_text_accepts_select_and_updates_value() -> Result<()> {
     h.type_text("#json-key-sort-indent", "2")?;
     h.assert_value("#json-key-sort-indent", "2")?;
     h.assert_text("#result", "input:2|change:2")?;
+    Ok(())
+}
+
+#[test]
+fn option_click_orders_click_before_input_change_and_prevent_default_skips_selection_work()
+-> Result<()> {
+    let html = r#"
+        <select id='pets'>
+          <option id='cat' value='cat' selected>Cat</option>
+          <option id='dog' value='dog'>Dog</option>
+        </select>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const select = document.getElementById('pets');
+          const cat = document.getElementById('cat');
+          const dog = document.getElementById('dog');
+          const log = [];
+          let cancelNext = false;
+
+          for (const option of [cat, dog]) {
+            option.addEventListener('click', (event) => {
+              log.push(option.id + ':click:' + event.defaultPrevented);
+              if (cancelNext) {
+                event.preventDefault();
+                log.push(option.id + ':clickAfter:' + event.defaultPrevented);
+              }
+            });
+          }
+          select.addEventListener('input', (event) => {
+            log.push('input:' + select.value + ':' + event.defaultPrevented);
+            event.preventDefault();
+            log.push('inputAfter:' + event.defaultPrevented);
+          });
+          select.addEventListener('change', (event) => {
+            log.push('change:' + select.value + ':' + event.defaultPrevented);
+            event.preventDefault();
+            log.push('changeAfter:' + event.defaultPrevented);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            dog.click();
+            const first = select.value + ':' + log.join(',');
+
+            log.length = 0;
+            cancelNext = true;
+            cat.click();
+            const second = select.value + ':' + log.join(',');
+
+            document.getElementById('result').textContent = first + '|' + second;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "dog:dog:click:false,input:dog:false,inputAfter:false,change:dog:false,changeAfter:false|dog:cat:click:false,cat:clickAfter:true",
+    )?;
     Ok(())
 }
 
@@ -678,6 +738,67 @@ fn selected_options_and_options_duplicate_names_do_not_switch_to_radio_node_list
     h.assert_text(
         "#result",
         "[object HTMLCollection]:HTMLCollection:o1:true:true:undefined:true:true:undefined:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn option_selected_and_default_selected_stay_separate_across_dirty_and_reset_work() -> Result<()> {
+    let html = r#"
+        <form id='prefs'>
+          <select id='pet'>
+            <option id='cat' value='cat' selected>Cat</option>
+            <option id='dog' value='dog'>Dog</option>
+          </select>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const form = document.getElementById('prefs');
+            const select = document.getElementById('pet');
+            const cat = document.getElementById('cat');
+            const dog = document.getElementById('dog');
+
+            dog.selected = true;
+            const step1 = [
+              select.value,
+              select.selectedIndex,
+              String(cat.selected),
+              String(dog.selected),
+              String(cat.hasAttribute('selected')),
+              String(dog.hasAttribute('selected'))
+            ].join(':');
+
+            cat.defaultSelected = false;
+            dog.defaultSelected = true;
+            const step2 = [
+              String(cat.defaultSelected),
+              String(dog.defaultSelected),
+              String(cat.hasAttribute('selected')),
+              String(dog.hasAttribute('selected')),
+              select.value
+            ].join(':');
+
+            form.reset();
+            const step3 = [
+              select.value,
+              select.selectedIndex,
+              String(cat.selected),
+              String(dog.selected)
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [step1, step2, step3].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "dog:1:false:true:true:false|false:true:false:true:dog|dog:1:false:true",
     )?;
     Ok(())
 }

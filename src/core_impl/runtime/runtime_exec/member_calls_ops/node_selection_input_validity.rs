@@ -275,7 +275,12 @@ impl Harness {
         }
         options
             .iter()
-            .position(|option| self.dom.attr(*option, "selected").is_some())
+            .position(|option| {
+                self.dom
+                    .element(*option)
+                    .map(|element| element.selected)
+                    .unwrap_or(false)
+            })
             .map(|index| index as i64)
             .unwrap_or(-1)
     }
@@ -284,7 +289,12 @@ impl Harness {
         self.select_option_nodes(select_node)
             .iter()
             .copied()
-            .filter(|option| self.dom.attr(*option, "selected").is_some())
+            .filter(|option| {
+                self.dom
+                    .element(*option)
+                    .map(|element| element.selected)
+                    .unwrap_or(false)
+            })
             .collect::<Vec<_>>()
     }
 
@@ -328,16 +338,11 @@ impl Harness {
             .unwrap_or_default();
 
         for (index, option) in options.iter().enumerate() {
-            let option_element = self.dom.element_mut(*option).ok_or_else(|| {
-                Error::ScriptRuntime("selectedIndex option target is not an element".into())
-            })?;
-            if Some(index) == selected_position {
-                option_element
-                    .attrs
-                    .insert("selected".to_string(), "true".to_string());
-            } else {
-                option_element.attrs.remove("selected");
-            }
+            self.dom.set_option_selected_state(
+                *option,
+                Some(index) == selected_position,
+                Some(true),
+            )?;
         }
 
         let select_element = self
@@ -4160,9 +4165,16 @@ impl Harness {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(format!("{member} takes no arguments")));
                 }
+                let is_form = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+                if is_form {
+                    return Ok(Some(Value::Bool(self.validate_form_submission(node)?)));
+                }
                 let validity = self.compute_input_validity(node)?;
                 if !validity.valid {
-                    let _ = self.dispatch_event(node, "invalid")?;
+                    let _ = self.dispatch_invalid_event(node)?;
                 }
                 Ok(Some(Value::Bool(validity.valid)))
             }
@@ -4285,6 +4297,7 @@ impl Harness {
                     return Err(Error::ScriptRuntime("select takes no arguments".into()));
                 }
                 if self.node_supports_text_selection(node) {
+                    self.focus_node(node)?;
                     let len = self.dom.value(node)?.chars().count();
                     self.set_node_selection_range(node, 0, len as i64, "none".to_string())?;
                 }
@@ -5726,11 +5739,11 @@ impl Harness {
         if name.is_empty() {
             return self.dom.checked(node).unwrap_or(false);
         }
-        let form = self.dom.find_ancestor_by_tag(node, "form");
+        let form = self.dom.control_form_owner(node);
         self.dom.all_element_nodes().into_iter().any(|candidate| {
             is_radio_input(&self.dom, candidate)
                 && self.dom.attr(candidate, "name").unwrap_or_default() == name
-                && self.dom.find_ancestor_by_tag(candidate, "form") == form
+                && self.dom.control_form_owner(candidate) == form
                 && self.dom.checked(candidate).unwrap_or(false)
         })
     }

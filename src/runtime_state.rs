@@ -880,6 +880,7 @@ pub(crate) struct EventState {
     pub(crate) bubbles: bool,
     pub(crate) cancelable: bool,
     pub(crate) detail: Option<Value>,
+    pub(crate) submitter: Option<Value>,
     pub(crate) hash_change_interface: bool,
     pub(crate) hash_change_old_url: String,
     pub(crate) hash_change_new_url: String,
@@ -956,6 +957,7 @@ impl EventState {
             bubbles: true,
             cancelable: true,
             detail: None,
+            submitter: None,
             hash_change_interface: false,
             hash_change_old_url: String::new(),
             hash_change_new_url: String::new(),
@@ -1330,6 +1332,8 @@ pub(crate) struct DomRuntimeState {
     pub(crate) shadow_roots: HashMap<NodeId, ShadowRootRecord>,
     pub(crate) dialog_return_values: HashMap<NodeId, String>,
     pub(crate) click_in_progress: HashSet<NodeId>,
+    pub(crate) focused_form_control_values: HashMap<NodeId, String>,
+    pub(crate) pending_form_control_change: HashSet<NodeId>,
 }
 
 impl Default for DomRuntimeState {
@@ -1366,6 +1370,8 @@ impl Default for DomRuntimeState {
             shadow_roots: HashMap::new(),
             dialog_return_values: HashMap::new(),
             click_in_progress: HashSet::new(),
+            focused_form_control_values: HashMap::new(),
+            pending_form_control_change: HashSet::new(),
         }
     }
 }

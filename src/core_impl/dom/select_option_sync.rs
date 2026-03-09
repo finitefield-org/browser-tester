@@ -1,6 +1,36 @@
 use super::*;
 
 impl Dom {
+    pub(crate) fn set_option_selected_state(
+        &mut self,
+        option_node: NodeId,
+        selected: bool,
+        dirty_state: Option<bool>,
+    ) -> Result<()> {
+        let element = self
+            .element_mut(option_node)
+            .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
+        if !element.tag_name.eq_ignore_ascii_case("option") {
+            return Err(Error::ScriptRuntime(
+                "selected target is not an option".into(),
+            ));
+        }
+        element.selected = selected;
+        if let Some(dirty) = dirty_state {
+            element.selected_dirty = dirty;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_option_selected_property(
+        &mut self,
+        option_node: NodeId,
+        selected: bool,
+    ) -> Result<()> {
+        self.set_option_selected_state(option_node, selected, Some(true))?;
+        self.sync_select_value_for_option(option_node)
+    }
+
     pub(crate) fn initialize_form_control_values(&mut self) -> Result<()> {
         let nodes = self.all_element_nodes();
         for node in nodes {
@@ -13,6 +43,8 @@ impl Dom {
                 let element = self.element_mut(node).ok_or_else(|| {
                     Error::ScriptRuntime("textarea target is not an element".into())
                 })?;
+                element.default_value = text.clone();
+                element.dirty_value = false;
                 element.value = text;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -31,6 +63,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -49,6 +83,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -67,6 +103,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -85,6 +123,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -103,6 +143,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -127,6 +169,8 @@ impl Dom {
                     element.attrs.get("step").map(String::as_str),
                     element.attrs.get("value").map(String::as_str),
                 );
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -145,6 +189,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalized.clone();
+                element.dirty_value = false;
                 element.value = normalized;
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -162,6 +208,8 @@ impl Dom {
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
                 element.files.clear();
+                element.default_value = normalize_file_input_value("");
+                element.dirty_value = false;
                 element.value = normalize_file_input_value("");
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -178,6 +226,8 @@ impl Dom {
                 let element = self
                     .element_mut(node)
                     .ok_or_else(|| Error::ScriptRuntime("input target is not an element".into()))?;
+                element.default_value = normalize_image_input_value("");
+                element.dirty_value = false;
                 element.value = normalize_image_input_value("");
                 let len = element.value.chars().count();
                 element.selection_start = len;
@@ -195,6 +245,8 @@ impl Dom {
                 let element = self.element_mut(node).ok_or_else(|| {
                     Error::ScriptRuntime("output target is not an element".into())
                 })?;
+                element.default_value = default_value.clone();
+                element.dirty_value = false;
                 element.value = default_value;
                 continue;
             }
@@ -237,22 +289,16 @@ impl Dom {
         };
 
         let multiple = self.attr(select_node, "multiple").is_some();
-        let option_is_selected = self.attr(option_node, "selected").is_some();
+        let option_is_selected = self
+            .element(option_node)
+            .map(|element| element.selected)
+            .unwrap_or(false);
         if !multiple && option_is_selected {
             let mut options = Vec::new();
             self.collect_select_options(select_node, &mut options);
             let selected_value = self.option_effective_value(option_node)?;
             for option in options {
-                let option_element = self.element_mut(option).ok_or_else(|| {
-                    Error::ScriptRuntime("option target is not an element".into())
-                })?;
-                if option == option_node {
-                    option_element
-                        .attrs
-                        .insert("selected".to_string(), "true".to_string());
-                } else {
-                    option_element.attrs.remove("selected");
-                }
+                self.set_option_selected_state(option, option == option_node, Some(false))?;
             }
             let select_element = self
                 .element_mut(select_node)
@@ -288,16 +334,11 @@ impl Dom {
             .map(|(node, value)| (*node, value.clone()));
 
         for (option, _) in &option_values {
-            let option_element = self
-                .element_mut(*option)
-                .ok_or_else(|| Error::ScriptRuntime("option target is not an element".into()))?;
-            if Some(*option) == matched.as_ref().map(|(node, _)| *node) {
-                option_element
-                    .attrs
-                    .insert("selected".to_string(), "true".to_string());
-            } else {
-                option_element.attrs.remove("selected");
-            }
+            self.set_option_selected_state(
+                *option,
+                Some(*option) == matched.as_ref().map(|(node, _)| *node),
+                Some(true),
+            )?;
         }
 
         let element = self
@@ -331,22 +372,17 @@ impl Dom {
         let mut selected_indices = options
             .iter()
             .enumerate()
-            .filter_map(|(index, option)| self.attr(*option, "selected").map(|_| index))
+            .filter_map(|(index, option)| {
+                self.element(*option)
+                    .filter(|element| element.selected)
+                    .map(|_| index)
+            })
             .collect::<Vec<_>>();
 
         if !multiple {
             let keep = selected_indices.first().copied().unwrap_or(0);
             for (index, option) in options.iter().enumerate() {
-                let option_element = self.element_mut(*option).ok_or_else(|| {
-                    Error::ScriptRuntime("option target is not an element".into())
-                })?;
-                if index == keep {
-                    option_element
-                        .attrs
-                        .insert("selected".to_string(), "true".to_string());
-                } else {
-                    option_element.attrs.remove("selected");
-                }
+                self.set_option_selected_state(*option, index == keep, Some(false))?;
             }
             selected_indices.clear();
             selected_indices.push(keep);

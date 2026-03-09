@@ -55,6 +55,8 @@ impl Harness {
         self.script_runtime.next_event_target_listener_slot = 0;
         self.dom.set_active_element(None);
         self.dom.set_active_pseudo_element(None);
+        self.dom_runtime.focused_form_control_values.clear();
+        self.dom_runtime.pending_form_control_change.clear();
         self.dom_runtime.document_ready_state = "loading".to_string();
         self.dom_runtime.document_visibility_state = "visible".to_string();
         self.dom_runtime.document_scroll_x = 0;

@@ -419,9 +419,16 @@ pub(crate) struct Element {
     pub(crate) namespace_uri: Option<String>,
     pub(crate) attrs: HashMap<String, String>,
     pub(crate) value: String,
+    pub(crate) default_value: String,
+    pub(crate) dirty_value: bool,
     pub(crate) files: Vec<MockFile>,
     pub(crate) checked: bool,
+    pub(crate) default_checked: bool,
+    pub(crate) checked_dirty: bool,
     pub(crate) indeterminate: bool,
+    pub(crate) selected: bool,
+    pub(crate) default_selected: bool,
+    pub(crate) selected_dirty: bool,
     pub(crate) disabled: bool,
     pub(crate) readonly: bool,
     pub(crate) required: bool,
@@ -585,6 +592,26 @@ pub(crate) fn is_image_input_element(element: &Element) -> bool {
         .get("type")
         .map(|kind| kind.eq_ignore_ascii_case("image"))
         .unwrap_or(false)
+}
+
+pub(crate) fn uses_dirty_value_state(element: &Element) -> bool {
+    if element.tag_name.eq_ignore_ascii_case("textarea") {
+        return true;
+    }
+    if !element.tag_name.eq_ignore_ascii_case("input") {
+        return false;
+    }
+
+    element
+        .attrs
+        .get("type")
+        .map(|kind| {
+            matches!(
+                kind.to_ascii_lowercase().as_str(),
+                "" | "text" | "search" | "tel" | "url" | "email"
+            )
+        })
+        .unwrap_or(true)
 }
 
 pub(crate) fn normalize_file_input_name(name: &str) -> String {

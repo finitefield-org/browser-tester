@@ -1,6 +1,54 @@
 use super::*;
 
 impl Dom {
+    pub(crate) fn write_current_value_state(
+        element: &mut Element,
+        value: String,
+        dirty_state: Option<bool>,
+    ) {
+        element.value = value;
+        if let Some(dirty) = dirty_state {
+            element.dirty_value = dirty;
+        }
+        let len = element.value.chars().count();
+        element.selection_start = len;
+        element.selection_end = len;
+        element.selection_direction = "none".to_string();
+    }
+
+    pub(crate) fn set_current_value_state(
+        &mut self,
+        node_id: NodeId,
+        value: String,
+        dirty_state: Option<bool>,
+    ) -> Result<()> {
+        let element = self
+            .element_mut(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
+        Self::write_current_value_state(element, value, dirty_state);
+        Ok(())
+    }
+
+    pub(crate) fn set_textarea_default_value_state(
+        &mut self,
+        node_id: NodeId,
+        value: String,
+    ) -> Result<()> {
+        let is_dirty = self
+            .element(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("defaultValue target is not an element".into()))?
+            .dirty_value;
+        self.set_text_content(node_id, &value)?;
+        let element = self
+            .element_mut(node_id)
+            .ok_or_else(|| Error::ScriptRuntime("defaultValue target is not an element".into()))?;
+        element.default_value = value.clone();
+        if !is_dirty {
+            Self::write_current_value_state(element, value, Some(false));
+        }
+        Ok(())
+    }
+
     pub(crate) fn value(&self, node_id: NodeId) -> Result<String> {
         let element = self
             .element(node_id)
@@ -50,6 +98,11 @@ impl Dom {
             .unwrap_or(false)
         {
             self.set_text_content(node_id, value)?;
+            let element = self
+                .element_mut(node_id)
+                .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
+            element.value = value.to_string();
+            element.dirty_value = true;
             return Ok(());
         }
         if self
@@ -72,22 +125,20 @@ impl Dom {
                     .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
                 if clear {
                     element.files.clear();
-                    element.value.clear();
-                    element.selection_start = 0;
-                    element.selection_end = 0;
-                    element.selection_direction = "none".to_string();
+                    Self::write_current_value_state(
+                        element,
+                        normalize_file_input_value(value),
+                        Some(true),
+                    );
                 }
                 return Ok(());
             }
             if is_image_input_element(element) {
-                let element = self
-                    .element_mut(node_id)
-                    .ok_or_else(|| Error::ScriptRuntime("value target is not an element".into()))?;
-                element.value = normalize_image_input_value(value);
-                let len = element.value.chars().count();
-                element.selection_start = len;
-                element.selection_end = len;
-                element.selection_direction = "none".to_string();
+                self.set_current_value_state(
+                    node_id,
+                    normalize_image_input_value(value),
+                    Some(true),
+                )?;
                 return Ok(());
             }
             (
@@ -125,12 +176,12 @@ impl Dom {
             element
                 .attrs
                 .insert("value".to_string(), next_value.clone());
+            element.default_value = next_value.clone();
+            Self::write_current_value_state(element, next_value, Some(false));
+            return Ok(());
         }
-        element.value = next_value;
-        let len = element.value.chars().count();
-        element.selection_start = len;
-        element.selection_end = len;
-        element.selection_direction = "none".to_string();
+        let dirty_state = uses_dirty_value_state(element);
+        Self::write_current_value_state(element, next_value, Some(dirty_state));
         Ok(())
     }
 
@@ -163,11 +214,11 @@ impl Dom {
 
         let changed = element.files != next_files;
         element.files = next_files;
-        element.value = file_input_value_from_files(&element.files);
-        let len = element.value.chars().count();
-        element.selection_start = len;
-        element.selection_end = len;
-        element.selection_direction = "none".to_string();
+        Self::write_current_value_state(
+            element,
+            file_input_value_from_files(&element.files),
+            Some(true),
+        );
         Ok(changed)
     }
 

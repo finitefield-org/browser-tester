@@ -130,6 +130,63 @@ impl Harness {
         Ok(out)
     }
 
+    pub(crate) fn default_submitter_for_form(&self, form: NodeId) -> Result<Option<NodeId>> {
+        for control in self.form_elements(form)? {
+            if is_submit_control(&self.dom, control) && !self.is_effectively_disabled(control) {
+                return Ok(Some(control));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn effective_form_submit_method(
+        &self,
+        form: NodeId,
+        submitter: Option<NodeId>,
+    ) -> String {
+        if let Some(submitter_node) = submitter {
+            if self.resolve_form_for_submit(submitter_node) == Some(form) {
+                if let Some(raw) = self.dom.attr(submitter_node, "formmethod") {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+        }
+
+        self.dom.attr(form, "method").unwrap_or_default()
+    }
+
+    pub(crate) fn form_submission_skips_validation(
+        &self,
+        form: NodeId,
+        submitter: Option<NodeId>,
+    ) -> bool {
+        if self.dom.attr(form, "novalidate").is_some() {
+            return true;
+        }
+
+        submitter.is_some_and(|submitter_node| {
+            self.resolve_form_for_submit(submitter_node) == Some(form)
+                && self.dom.attr(submitter_node, "formnovalidate").is_some()
+        })
+    }
+
+    pub(crate) fn dialog_submitter_return_value(
+        &self,
+        form: NodeId,
+        submitter: Option<NodeId>,
+    ) -> String {
+        let Some(submitter_node) = submitter else {
+            return String::new();
+        };
+        if self.resolve_form_for_submit(submitter_node) != Some(form) {
+            return String::new();
+        }
+        self.dom.attr(submitter_node, "value").unwrap_or_default()
+    }
+
     pub(crate) fn form_controls_named_matches(
         &self,
         form: NodeId,
@@ -153,7 +210,7 @@ impl Harness {
                 continue;
             }
             let name = self.dom.attr(control, "name").unwrap_or_default();
-            let value = if self
+            if self
                 .dom
                 .tag_name(control)
                 .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
@@ -164,11 +221,12 @@ impl Harness {
                     .eq_ignore_ascii_case("hidden")
                 && name == "_charset_"
             {
-                "UTF-8".to_string()
+                out.push((name, "UTF-8".to_string()));
             } else {
-                self.form_data_control_value(control)?
-            };
-            out.push((name, value));
+                for value in self.form_data_control_values(control)? {
+                    out.push((name.clone(), value));
+                }
+            }
         }
         Ok(out)
     }
@@ -200,10 +258,7 @@ impl Harness {
                 .attr(control, "type")
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            if matches!(
-                kind.as_str(),
-                "button" | "submit" | "reset" | "file" | "image"
-            ) {
+            if matches!(kind.as_str(), "button" | "submit" | "reset" | "image") {
                 return Ok(false);
             }
             if kind == "checkbox" || kind == "radio" {
@@ -218,14 +273,45 @@ impl Harness {
         self.dom.value(control)
     }
 
-    pub(crate) fn form_is_valid_for_submit(&self, form: NodeId) -> Result<bool> {
+    pub(crate) fn form_data_control_values(&self, control: NodeId) -> Result<Vec<String>> {
+        if self
+            .dom
+            .tag_name(control)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+            && self
+                .dom
+                .attr(control, "type")
+                .unwrap_or_default()
+                .eq_ignore_ascii_case("file")
+        {
+            return Ok(self
+                .dom
+                .files(control)?
+                .into_iter()
+                .map(|file| file.name)
+                .collect());
+        }
+        Ok(vec![self.form_data_control_value(control)?])
+    }
+
+    pub(crate) fn validate_form_submission(&mut self, form: NodeId) -> Result<bool> {
+        self.with_script_env(|this, env| this.validate_form_submission_with_env(form, env))
+    }
+
+    pub(crate) fn validate_form_submission_with_env(
+        &mut self,
+        form: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<bool> {
         let controls = self.form_elements(form)?;
+        let mut valid = true;
         for control in &controls {
             if !self.required_control_satisfied(*control, &controls)? {
-                return Ok(false);
+                valid = false;
+                let _ = self.dispatch_invalid_event_with_env(*control, env, true)?;
             }
         }
-        Ok(true)
+        Ok(valid)
     }
 
     pub(crate) fn required_control_satisfied(

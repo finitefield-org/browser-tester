@@ -259,6 +259,36 @@ impl Harness {
             .find(|candidate| self.is_labelable_control(*candidate))
     }
 
+    pub(crate) fn resolve_label_activation_control(&self, target: NodeId) -> Option<NodeId> {
+        if self.is_labelable_control(target) {
+            return None;
+        }
+
+        let label = if self
+            .dom
+            .tag_name(target)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("label"))
+        {
+            target
+        } else {
+            self.dom.find_ancestor_by_tag(target, "label")?
+        };
+
+        let mut cursor = self.dom.parent(target);
+        while let Some(node) = cursor {
+            if node == label {
+                break;
+            }
+            if self.is_labelable_control(node) {
+                return None;
+            }
+            cursor = self.dom.parent(node);
+        }
+
+        self.resolve_label_control(label)
+            .filter(|control| *control != target)
+    }
+
     pub(crate) fn resolve_details_for_summary_click(&self, target: NodeId) -> Option<NodeId> {
         let summary = if self
             .dom
