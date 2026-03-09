@@ -5256,6 +5256,392 @@ fn specialized_collection_constructors_share_html_collection_callable_surface_wo
 }
 
 #[test]
+fn text_track_list_constructor_surface_and_prototype_chain_work() -> Result<()> {
+    let html = r#"
+        <video id="player">
+          <track id="captions-en" kind="captions" srclang="en" src="/tracks/en.vtt">
+        </video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const tracks = player.textTracks;
+          let illegal = '';
+
+          try {
+            TextTrackList();
+          } catch (error) {
+            illegal = String(error);
+          }
+
+          document.getElementById('result').textContent = [
+            typeof TextTrackList,
+            String(window.TextTrackList === TextTrackList),
+            String(tracks.constructor === TextTrackList),
+            String(Object.getPrototypeOf(tracks) === TextTrackList.prototype),
+            String(Object.getPrototypeOf(TextTrackList.prototype) === NodeList.prototype),
+            String(TextTrackList.prototype.item === NodeList.prototype.item),
+            Object.prototype.toString.call(tracks),
+            String(illegal.includes('Illegal constructor'))
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "function|true|true|true|true|true|[object TextTrackList]|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn time_ranges_constructor_surface_and_prototype_chain_work() -> Result<()> {
+    let html = r#"
+        <video id="player" src="/movie.mp4"></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 4;
+          const ranges = player.buffered;
+          let illegal = '';
+
+          try {
+            TimeRanges();
+          } catch (error) {
+            illegal = String(error);
+          }
+
+          const lengthDesc = Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'length');
+
+          document.getElementById('result').textContent = [
+            typeof TimeRanges,
+            String(window.TimeRanges === TimeRanges),
+            String(ranges.constructor === TimeRanges),
+            String(Object.getPrototypeOf(ranges) === TimeRanges.prototype),
+            String(Object.getPrototypeOf(TimeRanges.prototype) !== null),
+            String(typeof TimeRanges.prototype.start),
+            String(typeof TimeRanges.prototype.end),
+            String(typeof lengthDesc.get),
+            String(lengthDesc.enumerable),
+            Object.prototype.toString.call(ranges),
+            String(illegal.includes('Illegal constructor'))
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "function|true|true|true|true|function|function|function|false|[object TimeRanges]|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn time_ranges_prototype_methods_support_extracted_calls_and_receiver_checks_work() -> Result<()> {
+    let html = r#"
+        <video id="player" src="/movie.mp4"></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 5;
+          const ranges = player.buffered;
+          const proto = TimeRanges.prototype;
+          const lengthGetter = Object.getOwnPropertyDescriptor(proto, 'length').get;
+          const start = proto.start;
+          const end = ranges['end'];
+          let getterError = '';
+          let startError = '';
+          let endError = '';
+
+          try {
+            lengthGetter.call({});
+          } catch (error) {
+            getterError = String(error);
+          }
+
+          try {
+            start.call({}, 0);
+          } catch (error) {
+            startError = String(error);
+          }
+
+          try {
+            end.call({}, 0);
+          } catch (error) {
+            endError = String(error);
+          }
+
+          const before = [
+            String(Object.getPrototypeOf(TimeRanges) === Function.prototype),
+            String(TimeRanges.prototype.constructor === TimeRanges),
+            String(Object.getPrototypeOf(TimeRanges.prototype) === Object.prototype),
+            Object.getOwnPropertyNames(TimeRanges.prototype).sort().join(','),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'start').enumerable),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'end').enumerable),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'length').enumerable),
+            String(ranges.start === TimeRanges.prototype.start),
+            String(ranges['end'] === TimeRanges.prototype.end),
+            String(lengthGetter.call(ranges)),
+            String(start.call(ranges, 0)),
+            String(end.call(ranges, 0))
+          ].join(':');
+
+          player.currentTime = 8.5;
+
+          const after = [
+            String(lengthGetter.call(ranges)),
+            String(start.call(ranges, 0)),
+            String(end.call(ranges, 0)),
+            String(getterError.includes('TimeRanges method called on incompatible receiver')),
+            String(startError.includes('TimeRanges method called on incompatible receiver')),
+            String(endError.includes('TimeRanges method called on incompatible receiver'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            after
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "true:true:true:constructor,end,length,start:false:false:false:true:true:1:0:5|1:0:8.5:true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn time_ranges_constructor_and_prototype_reflective_surface_work() -> Result<()> {
+    let html = r#"
+        <video id="player" src="/movie.mp4"></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 2;
+          const ranges = player.buffered;
+
+          const ctorBefore = [
+            String(Object.keys(TimeRanges).length),
+            String(Object.getOwnPropertyNames(TimeRanges).includes('prototype')),
+            String(Object.getOwnPropertyNames(TimeRanges).includes('length')),
+            String(Reflect.ownKeys(TimeRanges).includes('name')),
+            String(Object.getOwnPropertyDescriptor(TimeRanges, 'prototype').enumerable),
+            String(Object.keys(Object.assign({}, TimeRanges)).length),
+            String(Object.keys({ ...TimeRanges }).length)
+          ].join(':');
+
+          const protoBefore = [
+            Object.getOwnPropertyNames(TimeRanges.prototype).sort().join(','),
+            String(Reflect.ownKeys(TimeRanges.prototype).includes('length')),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'constructor').enumerable),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'start').enumerable),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'end').enumerable),
+            String(Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'length').enumerable),
+            String(Object.keys(Object.assign({}, TimeRanges.prototype)).length),
+            String(Object.keys({ ...TimeRanges.prototype }).length)
+          ].join(':');
+
+          Object.defineProperty(TimeRanges, 'marker', {
+            value: 'ctor',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(TimeRanges.prototype, 'marker', {
+            value: 'proto',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(ranges, 'marker', {
+            value: 'range',
+            enumerable: true,
+            configurable: true
+          });
+
+          const shadowed = [
+            TimeRanges.marker,
+            TimeRanges.prototype.marker,
+            ranges.marker,
+            Object.keys(TimeRanges).join(','),
+            Object.keys(TimeRanges.prototype).join(','),
+            Object.keys(ranges).join(','),
+            Object.assign({}, TimeRanges).marker,
+            Object.assign({}, TimeRanges.prototype).marker,
+            Object.assign({}, ranges).marker
+          ].join(':');
+
+          delete TimeRanges.marker;
+          delete TimeRanges.prototype.marker;
+          delete ranges.marker;
+
+          const restored = [
+            String(Object.hasOwn(TimeRanges, 'marker')),
+            String(Object.hasOwn(TimeRanges.prototype, 'marker')),
+            String(Object.hasOwn(ranges, 'marker')),
+            String(Object.keys(TimeRanges).length),
+            String(Object.keys(TimeRanges.prototype).length),
+            String(Object.keys(ranges).length),
+            String(ranges.length),
+            String(ranges.end(0))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            ctorBefore,
+            protoBefore,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "0:true:true:true:false:0:0|constructor,end,length,start:true:false:false:false:false:0:0|ctor:proto:range:marker:marker:marker:ctor:proto:range|false:false:false:0:0:0:1:2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn time_ranges_mutability_invariants_and_shadow_restore_work() -> Result<()> {
+    let html = r#"
+        <video id="player" src="/movie.mp4"></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 2.5;
+          const ranges = player.buffered;
+          const proto = TimeRanges.prototype;
+          const startDesc = Object.getOwnPropertyDescriptor(proto, 'start');
+
+          const before = [
+            String(ranges.length),
+            String(ranges.start(0)),
+            String(ranges.end(0)),
+            String(Object.keys(ranges).length),
+            String(Object.hasOwn(ranges, 'length'))
+          ].join(':');
+
+          Object.defineProperty(ranges, 'length', {
+            get() {
+              return 7;
+            },
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(ranges, 'end', {
+            value: 'shadow-end',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(proto, 'start', {
+            value: function(index) {
+              return 99 + index;
+            },
+            enumerable: startDesc.enumerable,
+            writable: startDesc.writable,
+            configurable: startDesc.configurable
+          });
+
+          const shadowed = [
+            String(ranges.length),
+            String(ranges.end),
+            String(ranges.start(0)),
+            Object.keys(ranges).sort().join(','),
+            String(Object.getOwnPropertyDescriptor(ranges, 'length').enumerable),
+            String(Object.getOwnPropertyDescriptor(ranges, 'end').enumerable)
+          ].join(':');
+
+          delete ranges.length;
+          delete ranges.end;
+          Object.defineProperty(proto, 'start', startDesc);
+          player.currentTime = 6;
+
+          const restored = [
+            String(ranges.length),
+            String(ranges.start(0)),
+            String(ranges.end(0)),
+            String(Object.hasOwn(ranges, 'length')),
+            String(Object.hasOwn(ranges, 'end')),
+            String(Object.keys(ranges).length)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "1:0:2.5:0:false|7:shadow-end:99:end,length:true:true|1:0:6:false:false:0",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn time_ranges_expando_and_explicit_prototype_override_keep_object_surface_work() -> Result<()> {
+    let html = r#"
+        <video id="player" src="/movie.mp4"></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 3;
+          const ranges = player.buffered;
+          const originalProto = Object.getPrototypeOf(ranges);
+          const customProto = {
+            start(index) {
+              return 77 + index;
+            }
+          };
+          Object.setPrototypeOf(customProto, originalProto);
+          Object.setPrototypeOf(ranges, customProto);
+          Object.defineProperty(ranges, 'marker', {
+            value: 'own',
+            enumerable: true,
+            configurable: true
+          });
+
+          const shadowed = [
+            String(ranges === player.buffered),
+            String(ranges.start(0)),
+            String(ranges.end(0)),
+            ranges.marker,
+            Object.keys(ranges).join(','),
+            Object.assign({}, ranges).marker,
+            ({ ...ranges }).marker
+          ].join(':');
+
+          delete ranges.marker;
+          Object.setPrototypeOf(ranges, originalProto);
+          player.currentTime = 8;
+
+          const restored = [
+            String(ranges === player.buffered),
+            String(Object.getPrototypeOf(ranges) === TimeRanges.prototype),
+            String(ranges.start(0)),
+            String(ranges.end(0)),
+            String(Object.keys(ranges).length)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text("#result", "true:77:3:own:marker:own:own|true:true:0:8:0")?;
+    Ok(())
+}
+
+#[test]
 fn logical_and_relational_and_strict_operators_work() -> Result<()> {
     let html = r#"
         <input id='age' value='25'>

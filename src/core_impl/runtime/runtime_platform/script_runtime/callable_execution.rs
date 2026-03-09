@@ -275,8 +275,10 @@ impl Harness {
             "date" => "Date",
             "map" => "Map",
             "node_list" => "NodeList",
+            "time_ranges" => "TimeRanges",
             "radio_node_list" => "RadioNodeList",
             "html_form" => "HTMLFormElement",
+            "html_media" => "HTMLMediaElement",
             "html_collection" => "HTMLCollection",
             "weak_map" => "WeakMap",
             "set" => "Set",
@@ -498,6 +500,36 @@ impl Harness {
                         ))
                     })
             }
+            "time_ranges" => {
+                let (_object, owner, kind) =
+                    Self::time_ranges_receiver_object_and_state(Some(&receiver))?;
+                let ranges = self.media_time_ranges_snapshot(owner, &kind);
+                match member.as_str() {
+                    "length_get" => Ok(Value::Number(ranges.len() as i64)),
+                    "start" | "end" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(format!(
+                                "{member} requires exactly one index argument"
+                            )));
+                        }
+                        let index = Self::value_to_i64(&args[0]);
+                        if index < 0 || (index as usize) >= ranges.len() {
+                            return Err(Error::ScriptRuntime(format!(
+                                "TimeRanges.{member} index out of range"
+                            )));
+                        }
+                        let (start, end) = ranges[index as usize];
+                        Ok(Self::number_value(if member == "start" {
+                            start
+                        } else {
+                            end
+                        }))
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported TimeRanges method: {member}"
+                    ))),
+                }
+            }
             "radio_node_list" => {
                 let Value::NodeList(nodes) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
@@ -580,6 +612,102 @@ impl Harness {
                     }
                     _ => Err(Error::ScriptRuntime(format!(
                         "unsupported HTMLFormElement method: {member}"
+                    ))),
+                }
+            }
+            "html_media" => {
+                let Value::Node(node) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                let is_media = self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                });
+                if !is_media {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                match member.as_str() {
+                    "play" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("play takes no arguments".into()));
+                        }
+                        self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, false);
+                        Ok(Value::Promise(
+                            self.promise_resolve_value_as_promise(Value::Undefined)?,
+                        ))
+                    }
+                    "pause" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("pause takes no arguments".into()));
+                        }
+                        self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, true);
+                        Ok(Value::Undefined)
+                    }
+                    "load" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("load takes no arguments".into()));
+                        }
+                        self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, true);
+                        self.set_media_numeric_state_value(
+                            node,
+                            INTERNAL_MEDIA_CURRENT_TIME_KEY,
+                            &Value::Number(0),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "canPlayType" => {
+                        let mime = args.first().map(Value::as_string).unwrap_or_default();
+                        let normalized = mime.trim().to_ascii_lowercase();
+                        let essence = normalized.split(';').next().unwrap_or("").trim();
+                        let is_token = |part: &str| {
+                            !part.is_empty()
+                                && part.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric()
+                                        || matches!(
+                                            byte,
+                                            b'!' | b'#'
+                                                | b'$'
+                                                | b'&'
+                                                | b'^'
+                                                | b'_'
+                                                | b'.'
+                                                | b'+'
+                                                | b'-'
+                                        )
+                                })
+                        };
+                        let can_play = if essence.matches('/').count() == 1 {
+                            if let Some((major, minor)) = essence.split_once('/') {
+                                if matches!(major, "audio" | "video")
+                                    && is_token(major)
+                                    && is_token(minor)
+                                {
+                                    "maybe"
+                                } else {
+                                    ""
+                                }
+                            } else {
+                                ""
+                            }
+                        } else {
+                            ""
+                        };
+                        Ok(Value::String(can_play.to_string()))
+                    }
+                    "fastSeek" => {
+                        let Some(target_time) = args.first() else {
+                            return Err(Error::ScriptRuntime(
+                                "fastSeek requires an argument".into(),
+                            ));
+                        };
+                        self.set_media_numeric_state_value(
+                            node,
+                            INTERNAL_MEDIA_CURRENT_TIME_KEY,
+                            target_time,
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported HTMLMediaElement method: {member}"
                     ))),
                 }
             }
@@ -2224,6 +2352,36 @@ impl Harness {
             }
         };
         Ok((object.clone(), owner))
+    }
+
+    fn time_ranges_receiver_object_and_state(
+        receiver: Option<&Value>,
+    ) -> Result<(Rc<RefCell<ObjectValue>>, NodeId, String)> {
+        let Some(Value::Object(object)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "TimeRanges method called on incompatible receiver".into(),
+            ));
+        };
+        let (owner, kind) = {
+            let entries = object.borrow();
+            if !Self::is_time_ranges_object(&entries) {
+                return Err(Error::ScriptRuntime(
+                    "TimeRanges method called on incompatible receiver".into(),
+                ));
+            }
+            let Some(owner) = Self::time_ranges_owner_node(&entries) else {
+                return Err(Error::ScriptRuntime(
+                    "TimeRanges method called on incompatible receiver".into(),
+                ));
+            };
+            let Some(kind) = Self::time_ranges_kind(&entries) else {
+                return Err(Error::ScriptRuntime(
+                    "TimeRanges method called on incompatible receiver".into(),
+                ));
+            };
+            (owner, kind)
+        };
+        Ok((object.clone(), owner, kind))
     }
 
     fn text_decoder_input_bytes(&self, input: Option<&Value>) -> Result<Vec<u8>> {
@@ -4056,6 +4214,8 @@ impl Harness {
                         }
                     }
                     "node_list_constructor"
+                    | "text_track_list_constructor"
+                    | "time_ranges_constructor"
                     | "radio_node_list_constructor"
                     | "html_collection_constructor"
                     | "html_form_controls_collection_constructor"

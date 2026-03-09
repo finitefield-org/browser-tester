@@ -123,6 +123,7 @@ impl Harness {
         self.dom_runtime.live_selected_options_lists.clear();
         self.dom_runtime.live_datalist_options_lists.clear();
         self.dom_runtime.live_media_text_tracks_lists.clear();
+        self.dom_runtime.live_media_time_ranges_objects.clear();
         self.dom_runtime.live_document_forms_list = None;
         self.dom_runtime.live_document_images_list = None;
         self.dom_runtime.live_document_links_list = None;
@@ -413,6 +414,8 @@ impl Harness {
         let data_transfer_constructor = Self::new_data_transfer_constructor_value();
         let option_constructor = Self::new_option_constructor_value();
         let node_list_constructor = self.cached_node_list_constructor_value();
+        let text_track_list_constructor = self.cached_text_track_list_constructor_value();
+        let time_ranges_constructor = self.cached_time_ranges_constructor_value();
         let radio_node_list_constructor = self.cached_radio_node_list_constructor_value();
         let html_collection_constructor = self.cached_html_collection_constructor_value();
         let html_form_controls_collection_constructor =
@@ -538,6 +541,8 @@ impl Harness {
             &audio_constructor,
             &data_transfer_constructor,
             &node_list_constructor,
+            &text_track_list_constructor,
+            &time_ranges_constructor,
             &radio_node_list_constructor,
             &html_collection_constructor,
             &html_form_controls_collection_constructor,
@@ -649,6 +654,16 @@ impl Harness {
                 &mut window_entries,
                 "NodeList".to_string(),
                 node_list_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextTrackList".to_string(),
+                text_track_list_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TimeRanges".to_string(),
+                time_ranges_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -966,6 +981,12 @@ impl Harness {
         self.script_runtime
             .env
             .insert("NodeList".to_string(), node_list_constructor);
+        self.script_runtime
+            .env
+            .insert("TextTrackList".to_string(), text_track_list_constructor);
+        self.script_runtime
+            .env
+            .insert("TimeRanges".to_string(), time_ranges_constructor);
         self.script_runtime
             .env
             .insert("RadioNodeList".to_string(), radio_node_list_constructor);

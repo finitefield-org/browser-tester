@@ -990,12 +990,78 @@ impl Harness {
         ]
     }
 
+    fn node_cached_receiver_builtin_callable(
+        &mut self,
+        node: NodeId,
+        cache_key: &str,
+        family: &str,
+        member: &str,
+    ) -> Value {
+        if let Some(value) = self
+            .dom_runtime
+            .node_expando_props
+            .get(&(node, cache_key.to_string()))
+            .cloned()
+        {
+            return value;
+        }
+        let value = Self::new_receiver_builtin_callable(family, member);
+        self.dom_runtime
+            .node_expando_props
+            .insert((node, cache_key.to_string()), value.clone());
+        value
+    }
+
     pub(crate) fn form_builtin_property_value(&self, key: &str) -> Option<Value> {
         match key {
             "submit" | "requestSubmit" | "reset" | "checkValidity" | "reportValidity" => {
                 Some(Self::new_receiver_builtin_callable("html_form", key))
             }
             _ => None,
+        }
+    }
+
+    pub(crate) fn html_media_builtin_own_string_keys() -> [&'static str; 5] {
+        ["play", "pause", "load", "canPlayType", "fastSeek"]
+    }
+
+    pub(crate) fn html_media_builtin_property_value(
+        &mut self,
+        media: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        match key {
+            "play" => Ok(Some(self.node_cached_receiver_builtin_callable(
+                media,
+                INTERNAL_MEDIA_PLAY_CALLABLE_KEY,
+                "html_media",
+                "play",
+            ))),
+            "pause" => Ok(Some(self.node_cached_receiver_builtin_callable(
+                media,
+                INTERNAL_MEDIA_PAUSE_CALLABLE_KEY,
+                "html_media",
+                "pause",
+            ))),
+            "load" => Ok(Some(self.node_cached_receiver_builtin_callable(
+                media,
+                INTERNAL_MEDIA_LOAD_CALLABLE_KEY,
+                "html_media",
+                "load",
+            ))),
+            "canPlayType" => Ok(Some(self.node_cached_receiver_builtin_callable(
+                media,
+                INTERNAL_MEDIA_CAN_PLAY_TYPE_CALLABLE_KEY,
+                "html_media",
+                "canPlayType",
+            ))),
+            "fastSeek" => Ok(Some(self.node_cached_receiver_builtin_callable(
+                media,
+                INTERNAL_MEDIA_FAST_SEEK_CALLABLE_KEY,
+                "html_media",
+                "fastSeek",
+            ))),
+            _ => Ok(None),
         }
     }
 
@@ -1069,7 +1135,21 @@ impl Harness {
                 | "seeking"
                 | "networkState"
                 | "readyState"
+                | "defaultMuted"
+                | "currentTime"
+                | "volume"
+                | "duration"
+                | "playbackRate"
+                | "defaultPlaybackRate"
+                | "play"
+                | "pause"
+                | "load"
+                | "canPlayType"
+                | "fastSeek"
                 | "textTracks"
+                | "buffered"
+                | "seekable"
+                | "played"
                 | "value"
                 | "open"
                 | "htmlFor"
@@ -1128,6 +1208,68 @@ impl Harness {
             }
         }
         Ok(None)
+    }
+
+    fn media_numeric_state_value(&self, node: NodeId, key: &str, default: f64) -> Value {
+        self.dom_runtime
+            .node_expando_props
+            .get(&(node, key.to_string()))
+            .cloned()
+            .unwrap_or_else(|| Self::number_value(default))
+    }
+
+    fn media_boolean_state_value(&self, node: NodeId, key: &str, default: bool) -> Value {
+        match self
+            .dom_runtime
+            .node_expando_props
+            .get(&(node, key.to_string()))
+        {
+            Some(Value::Bool(value)) => Value::Bool(*value),
+            Some(value) => Value::Bool(value.truthy()),
+            None => Value::Bool(default),
+        }
+    }
+
+    fn media_numeric_state_number(&self, node: NodeId, key: &str, default: f64) -> f64 {
+        match self
+            .dom_runtime
+            .node_expando_props
+            .get(&(node, key.to_string()))
+        {
+            Some(Value::Number(value)) => *value as f64,
+            Some(Value::Float(value)) => *value,
+            Some(value) => Self::coerce_number_for_number_constructor(value),
+            None => default,
+        }
+    }
+
+    pub(crate) fn set_media_numeric_state_value(&mut self, node: NodeId, key: &str, value: &Value) {
+        let next = Self::coerce_number_for_number_constructor(value);
+        self.dom_runtime
+            .node_expando_props
+            .insert((node, key.to_string()), Self::number_value(next));
+    }
+
+    pub(crate) fn set_media_boolean_state_value(&mut self, node: NodeId, key: &str, next: bool) {
+        self.dom_runtime
+            .node_expando_props
+            .insert((node, key.to_string()), Value::Bool(next));
+    }
+
+    pub(crate) fn media_time_ranges_snapshot(&self, media: NodeId, kind: &str) -> Vec<(f64, f64)> {
+        let has_src = !self.resolve_media_src(media).is_empty();
+        if !has_src {
+            return Vec::new();
+        }
+
+        let current_time = self
+            .media_numeric_state_number(media, INTERNAL_MEDIA_CURRENT_TIME_KEY, 0.0)
+            .max(0.0);
+        match kind {
+            "buffered" | "seekable" => vec![(0.0, current_time)],
+            "played" if current_time > 0.0 => vec![(0.0, current_time)],
+            _ => Vec::new(),
+        }
     }
 
     fn radio_node_list_value_string_from_nodes(&self, nodes: &[NodeId]) -> Result<String> {
@@ -1245,6 +1387,29 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_CLASS_LIST_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn is_time_ranges_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_TIME_RANGES_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn time_ranges_owner_node(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_TIME_RANGES_MEDIA_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn time_ranges_kind(entries: &(impl ObjectEntryLookup + ?Sized)) -> Option<String> {
+        match Self::object_get_entry(entries, INTERNAL_TIME_RANGES_KIND_KEY) {
+            Some(Value::String(kind)) => Some(kind),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_dom_string_map_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
@@ -2386,6 +2551,30 @@ impl Harness {
             ),
             (INTERNAL_CLASS_LIST_NODE_KEY.to_string(), Value::Node(node)),
         ])
+    }
+
+    pub(crate) fn new_time_ranges_value(&mut self, media: NodeId, kind: &str) -> Value {
+        let object = Self::new_object_value(vec![
+            (
+                INTERNAL_TIME_RANGES_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_TIME_RANGES_MEDIA_NODE_KEY.to_string(),
+                Value::Node(media),
+            ),
+            (
+                INTERNAL_TIME_RANGES_KIND_KEY.to_string(),
+                Value::String(kind.to_string()),
+            ),
+        ]);
+        if let Value::Object(entries) = &object {
+            Self::set_internal_prototype(
+                entries,
+                self.cached_time_ranges_constructor_prototype_value(),
+            );
+        }
+        object
     }
 
     pub(crate) fn input_files_value(&self, node: NodeId) -> Result<Value> {
@@ -4823,6 +5012,142 @@ impl Harness {
         Value::Object(prototype)
     }
 
+    pub(crate) fn cached_text_track_list_constructor_value(&mut self) -> Value {
+        let parent = self.cached_node_list_constructor_prototype_value();
+        self.cached_collection_like_constructor_value(
+            "TextTrackList",
+            "text_track_list_constructor",
+            "node_list",
+            &[],
+            Some(parent),
+        )
+    }
+
+    fn cached_text_track_list_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("TextTrackList")
+            .cloned()
+        {
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_text_track_list_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("TextTrackList".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_time_ranges_constructor_value(&mut self) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get("TimeRanges")
+            .cloned()
+        {
+            if let Value::Object(entries) = &constructor {
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    self.install_time_ranges_prototype_accessors(&prototype);
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                }
+            }
+            return constructor;
+        }
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("time_ranges_constructor"),
+            "time_ranges",
+            &["start", "end"],
+        );
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        self.install_time_ranges_prototype_accessors(&prototype);
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String("TimeRanges".to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        self.script_runtime
+            .constructor_static_methods
+            .insert("TimeRanges".to_string(), constructor.clone());
+        constructor
+    }
+
+    fn install_time_ranges_prototype_accessors(&mut self, prototype: &Rc<RefCell<ObjectValue>>) {
+        let has_length_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "length")
+        };
+        if has_length_accessor {
+            return;
+        }
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            Self::object_getter_storage_key("length"),
+            Self::new_receiver_builtin_callable("time_ranges", "length_get"),
+        );
+        Self::mark_property_non_enumerable(prototype, "length");
+    }
+
+    fn cached_time_ranges_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("TimeRanges")
+            .cloned()
+        {
+            self.install_time_ranges_prototype_accessors(&prototype);
+            Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_time_ranges_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.install_time_ranges_prototype_accessors(&prototype);
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("TimeRanges".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
     pub(crate) fn cached_html_collection_constructor_value(&mut self) -> Value {
         self.cached_collection_like_constructor_value(
             "HTMLCollection",
@@ -5522,6 +5847,8 @@ impl Harness {
             "object_constructor" => Some(("Object", 1)),
             "function_constructor" => Some(("Function", 1)),
             "node_list_constructor" => Some(("NodeList", 0)),
+            "text_track_list_constructor" => Some(("TextTrackList", 0)),
+            "time_ranges_constructor" => Some(("TimeRanges", 0)),
             "radio_node_list_constructor" => Some(("RadioNodeList", 0)),
             "html_collection_constructor" => Some(("HTMLCollection", 0)),
             "html_form_controls_collection_constructor" => Some(("HTMLFormControlsCollection", 0)),
@@ -5736,6 +6063,9 @@ impl Harness {
             ("node_list", "entries") => ("entries", 0),
             ("node_list", "keys") => ("keys", 0),
             ("node_list", "values") => ("values", 0),
+            ("time_ranges", "length_get") => ("get length", 0),
+            ("time_ranges", "start") => ("start", 1),
+            ("time_ranges", "end") => ("end", 1),
             ("radio_node_list", "value_get") => ("get value", 0),
             ("radio_node_list", "value_set") => ("set value", 1),
             ("html_form", "submit") => ("submit", 0),
@@ -5743,6 +6073,11 @@ impl Harness {
             ("html_form", "reset") => ("reset", 0),
             ("html_form", "checkValidity") => ("checkValidity", 0),
             ("html_form", "reportValidity") => ("reportValidity", 0),
+            ("html_media", "play") => ("play", 0),
+            ("html_media", "pause") => ("pause", 0),
+            ("html_media", "load") => ("load", 0),
+            ("html_media", "canPlayType") => ("canPlayType", 1),
+            ("html_media", "fastSeek") => ("fastSeek", 1),
             ("html_collection", "item") => ("item", 1),
             ("html_collection", "namedItem") => ("namedItem", 1),
             ("html_collection", "forEach") => ("forEach", 1),
@@ -6731,6 +7066,8 @@ impl Harness {
                 "object_static_method" => "object_static_method",
                 "function_constructor" => "function_constructor",
                 "node_list_constructor" => "node_list_constructor",
+                "text_track_list_constructor" => "text_track_list_constructor",
+                "time_ranges_constructor" => "time_ranges_constructor",
                 "radio_node_list_constructor" => "radio_node_list_constructor",
                 "html_collection_constructor" => "html_collection_constructor",
                 "html_form_controls_collection_constructor" => {
@@ -7622,6 +7959,11 @@ impl Harness {
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("form"))
             .unwrap_or(false);
+        let is_media = self
+            .dom
+            .tag_name(*node)
+            .map(|tag| tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video"))
+            .unwrap_or(false);
         let is_form_associated_control = is_form_control(&self.dom, *node);
         let is_labelable_control = self.is_labelable_control(*node);
         let is_col_or_colgroup = self
@@ -8084,6 +8426,13 @@ impl Harness {
                 Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
             }
             "readyState" if self.is_track_element(*node) => Ok(Value::Number(0)),
+            "defaultMuted"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(self.dom.attr(*node, "muted").is_some()))
+            }
             "controlsList" | "controlslist" => Ok(Value::String(
                 self.dom.attr(*node, "controlslist").unwrap_or_default(),
             )),
@@ -8107,7 +8456,7 @@ impl Harness {
                     tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
                 }) =>
             {
-                Ok(Value::Bool(true))
+                Ok(self.media_boolean_state_value(*node, INTERNAL_MEDIA_PAUSED_KEY, true))
             }
             "ended"
                 if self.dom.tag_name(*node).is_some_and(|tag| {
@@ -8142,12 +8491,72 @@ impl Harness {
             {
                 Ok(Value::Number(0))
             }
+            "currentTime"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_numeric_state_value(*node, INTERNAL_MEDIA_CURRENT_TIME_KEY, 0.0))
+            }
+            "volume"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_numeric_state_value(*node, INTERNAL_MEDIA_VOLUME_KEY, 1.0))
+            }
+            "duration"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_numeric_state_value(*node, INTERNAL_MEDIA_DURATION_KEY, f64::NAN))
+            }
+            "playbackRate"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_numeric_state_value(*node, INTERNAL_MEDIA_PLAYBACK_RATE_KEY, 1.0))
+            }
+            "defaultPlaybackRate"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_numeric_state_value(
+                    *node,
+                    INTERNAL_MEDIA_DEFAULT_PLAYBACK_RATE_KEY,
+                    1.0,
+                ))
+            }
             "textTracks"
                 if self.dom.tag_name(*node).is_some_and(|tag| {
                     tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
                 }) =>
             {
                 Ok(self.media_text_tracks_live_list_value(*node))
+            }
+            "buffered"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_time_ranges_live_value(*node, "buffered"))
+            }
+            "seekable"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_time_ranges_live_value(*node, "seekable"))
+            }
+            "played"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_time_ranges_live_value(*node, "played"))
             }
             "currentSrc" | "currentsrc"
                 if self.dom.tag_name(*node).is_some_and(|tag| {
@@ -8439,6 +8848,11 @@ impl Harness {
                 .node_expando_props
                 .get(&(*node, key.to_string()))
                 .cloned()
+                .or(if is_media {
+                    self.html_media_builtin_property_value(*node, key)?
+                } else {
+                    None
+                })
                 .or(if is_form {
                     self.form_builtin_property_value(key)
                 } else {
@@ -9147,6 +9561,9 @@ impl Harness {
                     .unwrap_or_else(|| match nodes.borrow().kind {
                         NodeListKind::NodeList => {
                             self.cached_node_list_constructor_prototype_value()
+                        }
+                        NodeListKind::TextTrackList => {
+                            self.cached_text_track_list_constructor_prototype_value()
                         }
                         NodeListKind::RadioNodeList => {
                             self.cached_radio_node_list_constructor_prototype_value()

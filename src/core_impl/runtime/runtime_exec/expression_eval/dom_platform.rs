@@ -1992,6 +1992,25 @@ impl Harness {
         Value::NodeList(list)
     }
 
+    pub(crate) fn media_time_ranges_live_value(&mut self, media: NodeId, kind: &str) -> Value {
+        let cache_key = (media, kind.to_string());
+        let existing = self
+            .dom_runtime
+            .live_media_time_ranges_objects
+            .get(&cache_key)
+            .cloned();
+        let object = existing.unwrap_or_else(|| {
+            let Value::Object(object) = self.new_time_ranges_value(media, kind) else {
+                unreachable!("new_time_ranges_value must return an object");
+            };
+            self.dom_runtime
+                .live_media_time_ranges_objects
+                .insert(cache_key, object.clone());
+            object
+        });
+        Value::Object(object)
+    }
+
     pub(crate) fn named_node_map_live_value(&mut self, owner: NodeId) -> Value {
         let existing = self.dom_runtime.live_named_node_maps.get(&owner).cloned();
         let map = existing.unwrap_or_else(|| {

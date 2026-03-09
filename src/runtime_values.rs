@@ -339,6 +339,7 @@ pub(crate) enum LiveNodeListSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NodeListKind {
     NodeList,
+    TextTrackList,
     RadioNodeList,
     HtmlCollection,
     HtmlFormControlsCollection,
@@ -349,6 +350,7 @@ impl NodeListKind {
     pub(crate) fn display_name(&self) -> &'static str {
         match self {
             Self::NodeList => "NodeList",
+            Self::TextTrackList => "TextTrackList",
             Self::RadioNodeList => "RadioNodeList",
             Self::HtmlCollection => "HTMLCollection",
             Self::HtmlFormControlsCollection => "HTMLFormControlsCollection",
@@ -452,7 +454,7 @@ impl NodeListValue {
     pub(crate) fn live_media_text_tracks(media: NodeId, nodes: Vec<NodeId>) -> Self {
         Self {
             nodes,
-            kind: NodeListKind::NodeList,
+            kind: NodeListKind::TextTrackList,
             live_source: Some(LiveNodeListSource::MediaTextTracks { media }),
             properties: ObjectValue::default(),
         }

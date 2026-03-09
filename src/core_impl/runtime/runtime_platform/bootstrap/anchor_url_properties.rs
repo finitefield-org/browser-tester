@@ -167,6 +167,63 @@ impl Harness {
         )
     }
 
+    fn media_type_essence_supported(target_tag: &str, raw_type: &str) -> bool {
+        let normalized = raw_type.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return true;
+        }
+        let essence = normalized.split(';').next().unwrap_or("").trim();
+        if essence.matches('/').count() != 1 {
+            return false;
+        }
+        let Some((major, minor)) = essence.split_once('/') else {
+            return false;
+        };
+        let is_token = |part: &str| {
+            !part.is_empty()
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(
+                            byte,
+                            b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
+                        )
+                })
+        };
+        if !is_token(major) || !is_token(minor) {
+            return false;
+        }
+        match target_tag {
+            "audio" => major == "audio",
+            "video" => matches!(major, "audio" | "video"),
+            _ => matches!(major, "audio" | "video"),
+        }
+    }
+
+    fn media_source_candidate_url(&self, target: NodeId, source: NodeId) -> Option<String> {
+        let target_tag = self.dom.tag_name(target)?.to_ascii_lowercase();
+        if !matches!(target_tag.as_str(), "audio" | "video") {
+            return None;
+        }
+        if let Some(media) = self.dom.attr(source, "media")
+            && !self.media_condition_matches(&media)
+        {
+            return None;
+        }
+        if let Some(raw_type) = self.dom.attr(source, "type")
+            && !Self::media_type_essence_supported(&target_tag, &raw_type)
+        {
+            return None;
+        }
+        if let Some(src) = self.dom.attr(source, "src")
+            && !src.trim().is_empty()
+        {
+            return Some(src);
+        }
+        self.dom
+            .attr(source, "srcset")
+            .and_then(|srcset| Self::first_srcset_url(&srcset))
+    }
+
     fn first_srcset_url(srcset: &str) -> Option<String> {
         for candidate in srcset.split(',') {
             let candidate = candidate.trim();
@@ -269,11 +326,7 @@ impl Harness {
                     .tag_name(child)
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("source"))
                 {
-                    self.dom.attr(child, "src").or_else(|| {
-                        self.dom
-                            .attr(child, "srcset")
-                            .and_then(|v| Self::first_srcset_url(&v))
-                    })
+                    self.media_source_candidate_url(node, child)
                 } else {
                     None
                 }

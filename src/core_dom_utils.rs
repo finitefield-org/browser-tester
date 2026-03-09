@@ -118,6 +118,23 @@ pub(crate) const INTERNAL_MOCK_FILE_OBJECT_KEY: &str = "\u{0}\u{0}bt_mock_file:o
 pub(crate) const INTERNAL_MOCK_FILE_BLOB_KEY: &str = "\u{0}\u{0}bt_mock_file:blob";
 pub(crate) const INTERNAL_CLASS_LIST_OBJECT_KEY: &str = "\u{0}\u{0}bt_class_list:object";
 pub(crate) const INTERNAL_CLASS_LIST_NODE_KEY: &str = "\u{0}\u{0}bt_class_list:node";
+pub(crate) const INTERNAL_TIME_RANGES_OBJECT_KEY: &str = "\u{0}\u{0}bt_time_ranges:object";
+pub(crate) const INTERNAL_TIME_RANGES_MEDIA_NODE_KEY: &str = "\u{0}\u{0}bt_time_ranges:media_node";
+pub(crate) const INTERNAL_TIME_RANGES_KIND_KEY: &str = "\u{0}\u{0}bt_time_ranges:kind";
+pub(crate) const INTERNAL_MEDIA_CURRENT_TIME_KEY: &str = "\u{0}\u{0}bt_media:current_time";
+pub(crate) const INTERNAL_MEDIA_PAUSED_KEY: &str = "\u{0}\u{0}bt_media:paused";
+pub(crate) const INTERNAL_MEDIA_PLAY_CALLABLE_KEY: &str = "\u{0}\u{0}bt_media:play_callable";
+pub(crate) const INTERNAL_MEDIA_PAUSE_CALLABLE_KEY: &str = "\u{0}\u{0}bt_media:pause_callable";
+pub(crate) const INTERNAL_MEDIA_LOAD_CALLABLE_KEY: &str = "\u{0}\u{0}bt_media:load_callable";
+pub(crate) const INTERNAL_MEDIA_CAN_PLAY_TYPE_CALLABLE_KEY: &str =
+    "\u{0}\u{0}bt_media:can_play_type_callable";
+pub(crate) const INTERNAL_MEDIA_FAST_SEEK_CALLABLE_KEY: &str =
+    "\u{0}\u{0}bt_media:fast_seek_callable";
+pub(crate) const INTERNAL_MEDIA_VOLUME_KEY: &str = "\u{0}\u{0}bt_media:volume";
+pub(crate) const INTERNAL_MEDIA_DURATION_KEY: &str = "\u{0}\u{0}bt_media:duration";
+pub(crate) const INTERNAL_MEDIA_PLAYBACK_RATE_KEY: &str = "\u{0}\u{0}bt_media:playback_rate";
+pub(crate) const INTERNAL_MEDIA_DEFAULT_PLAYBACK_RATE_KEY: &str =
+    "\u{0}\u{0}bt_media:default_playback_rate";
 pub(crate) const INTERNAL_DOM_STRING_MAP_KEY_PREFIX: &str = "\u{0}\u{0}bt_dom_string_map:";
 pub(crate) const INTERNAL_DOM_STRING_MAP_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_string_map:object";
 pub(crate) const INTERNAL_DOM_STRING_MAP_OWNER_NODE_KEY: &str =

@@ -1297,6 +1297,20 @@ impl Harness {
         Ok(out)
     }
 
+    fn html_media_own_string_keys(&mut self, media: NodeId) -> Vec<String> {
+        let expando_keys = self.node_expando_string_keys(media);
+        let expando_set = expando_keys.iter().cloned().collect::<HashSet<_>>();
+        let mut out = expando_keys;
+
+        for key in Self::html_media_builtin_own_string_keys() {
+            if !expando_set.contains(key) {
+                out.push(key.to_string());
+            }
+        }
+
+        out
+    }
+
     fn node_own_property_descriptor_value(
         &mut self,
         node: NodeId,
@@ -1313,19 +1327,32 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
-        if !is_form {
+        if is_form {
+            if let Some(value) = self.html_form_builtin_property_value(node, key)? {
+                return Ok(Some(Self::own_data_property_descriptor_with_attrs(
+                    value, false, false, true,
+                )));
+            }
+
+            return Ok(self.form_named_property_value(node, key)?.map(|value| {
+                Self::own_data_property_descriptor_with_attrs(value, false, false, true)
+            }));
+        }
+
+        let is_media = self.dom.tag_name(node).is_some_and(|tag| {
+            tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+        });
+        if !is_media {
             return Ok(None);
         }
 
-        if let Some(value) = self.html_form_builtin_property_value(node, key)? {
+        if let Some(value) = self.html_media_builtin_property_value(node, key)? {
             return Ok(Some(Self::own_data_property_descriptor_with_attrs(
                 value, false, false, true,
             )));
         }
 
-        Ok(self
-            .form_named_property_value(node, key)?
-            .map(|value| Self::own_data_property_descriptor_with_attrs(value, false, false, true)))
+        Ok(None)
     }
 
     fn object_like_enumerable_keys(&mut self, object: &Value) -> Result<Vec<String>> {
@@ -1413,6 +1440,10 @@ impl Harness {
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
                 if is_form {
                     self.html_form_own_string_keys(*node)
+                } else if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) {
+                    Ok(self.html_media_own_string_keys(*node))
                 } else {
                     Ok(self.node_expando_string_keys(*node))
                 }
@@ -2487,7 +2518,16 @@ impl Harness {
                     .tag_name(*node)
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
                 if !is_form {
-                    return Ok(Value::Bool(false));
+                    let is_media = self.dom.tag_name(*node).is_some_and(|tag| {
+                        tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                    });
+                    if !is_media {
+                        return Ok(Value::Bool(false));
+                    }
+                    return Ok(Value::Bool(
+                        self.html_media_builtin_property_value(*node, key)?
+                            .is_some(),
+                    ));
                 }
                 Ok(Value::Bool(
                     self.html_form_builtin_property_value(*node, key)?.is_some()

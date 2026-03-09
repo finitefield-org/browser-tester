@@ -1225,8 +1225,53 @@ impl Harness {
             "loop" => {
                 self.set_reflected_boolean_attribute(node, "loop", value.truthy())?;
             }
+            "defaultMuted" => {
+                self.set_reflected_boolean_attribute(node, "muted", value.truthy())?;
+            }
             "muted" => {
                 self.set_reflected_boolean_attribute(node, "muted", value.truthy())?;
+            }
+            "currentTime"
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                self.set_media_numeric_state_value(node, INTERNAL_MEDIA_CURRENT_TIME_KEY, &value);
+            }
+            "volume"
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                self.set_media_numeric_state_value(node, INTERNAL_MEDIA_VOLUME_KEY, &value);
+            }
+            "playbackRate"
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                self.set_media_numeric_state_value(node, INTERNAL_MEDIA_PLAYBACK_RATE_KEY, &value);
+            }
+            "defaultPlaybackRate"
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                self.set_media_numeric_state_value(
+                    node,
+                    INTERNAL_MEDIA_DEFAULT_PLAYBACK_RATE_KEY,
+                    &value,
+                );
+            }
+            "duration" | "paused" | "ended" | "seeking" | "networkState" | "readyState"
+            | "textTracks" | "buffered" | "seekable" | "played"
+                if self.dom.tag_name(node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                if reflect_set {
+                    return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                }
             }
             "preload" => self.dom.set_attr(node, "preload", &value.as_string())?,
             "playsInline" | "playsinline" => {

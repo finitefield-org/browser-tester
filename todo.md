@@ -1527,15 +1527,395 @@
 
 - [x] Confirmed no new mock was required (no README update)
 
-## Next Task (P1.102: TextTrackList branding and remaining media playback-state parity sweep)
+- [x] Completed P1.102: TextTrackList branding and remaining media playback-state parity sweep
+  - split media-owned `textTracks` wrappers off plain `NodeList` branding by exposing a dedicated `TextTrackList` constructor/prototype surface while keeping the cached live-wrapper identity and `delete`/shadow fallback behavior intact
+  - added shared media playback-state handling for `defaultMuted`, `currentTime`, `volume`, and readonly `duration`, so explicit own data/accessor shadows restore the underlying computed or reflected surface after `delete`
+  - added regressions for `TextTrackList` constructor/prototype exposure and media playback-state shadowing/restoration on video elements
 
-- [ ] Separate media-owned text track collections from plain `NodeList` branding and prototype defaults
-  - add a dedicated `TextTrackList`-like surface for `textTracks`, then confirm constructor/prototype tags, iterator paths, and reflective APIs line up without regressing live wrapper caching or shadow/delete behavior
+- [x] Verify
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib`
 
-- [ ] Audit remaining playback-state properties that still bypass shared own-shadow precedence
-  - cover surfaces such as `currentTime`, `defaultMuted`, `volume`, `duration`, and adjacent media state fields that may still rely on specialized getters/setters or skip generic descriptor parity
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.103: TextTrackList object surface and residual media timeline/playback parity sweep)
+
+- [x] Completed P1.103: TextTrackList object surface and residual media timeline/playback parity sweep
+  - locked in `TextTrackList` reflective/object-surface parity for `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, descriptor reads, object copy, expando shadowing, and `delete` restoration without leaking plain `NodeList` defaults
+  - extended shared media own-shadow/internal-state handling to `playbackRate` and `defaultPlaybackRate`, so generic node lookup, direct assignment, `Object.defineProperty(...)`, and `delete` restore the underlying playback state consistently
+  - added regressions for `TextTrackList` reflective surface/object-copy behavior and media playback-rate shadow/restore parity on video elements
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2395 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.104: TimeRanges branding and remaining media buffered/seekable/played parity sweep)
+
+- [x] Completed P1.104: TimeRanges branding and remaining media buffered/seekable/played parity sweep
+  - introduced a dedicated `TimeRanges` constructor/prototype/tagged surface and cached media-owned wrappers so `buffered`, `seekable`, and `played` no longer fall back to generic collection branding
+  - wired live `length` / `start()` / `end()` behavior plus readonly media property shadow/delete restoration so direct lookup, `Object.defineProperty(...)`, `Reflect.set(...)`, and `delete` converge on the same computed range surface
+  - added regressions for constructor/prototype exposure, reflective/object-copy behavior, and media timeline shadow/restore parity on video elements
+
+- [x] Verify
+  - `cargo test --lib language_core_expressions -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2398 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.105: TimeRanges prototype identity and remaining media method surface parity sweep)
+
+- [x] Completed P1.105: TimeRanges prototype identity and remaining media method surface parity sweep
+  - fixed cached `TimeRanges.prototype` rehydration so its parent prototype resolves back to `Object.prototype` even when the constructor was initialized before the final `Object` binding was available
+  - added extracted-call and receiver validation coverage for `TimeRanges.prototype.start`, `end`, and the `length` getter, including constructor/prototype identity and raw getter/property-path behavior
+  - added live-wrapper regressions proving `buffered`, `seekable`, and `played` survive media `src` mutation while preserving wrapper identity and updating extracted `TimeRanges` calls against the current media state
+
+- [x] Verify
+  - `cargo test --lib language_core_expressions -- --nocapture`
+  - `cargo test --lib dom_video_element -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2400 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.106: TimeRanges reflective surface and remaining media collection/method parity sweep)
+
+- [x] Completed P1.106: TimeRanges reflective surface and remaining media collection/method parity sweep
+  - locked in `TimeRanges` constructor/prototype reflective own-surface coverage for `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, descriptor visibility, object copy, expando shadowing, and `delete` restoration
+  - added regressions proving cached timeline wrappers and neighboring cached media collections (`textTracks`) stay live and keep identity together when media source and playback state change through property/method paths
+  - confirmed the current runtime already matches the expected branded `TimeRanges` reflective surface, so this sweep closed with regression coverage only
+
+- [x] Verify
+  - `cargo test --lib language_core_expressions -- --nocapture`
+  - `cargo test --lib dom_video_element -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib` (`2402 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.107: TimeRanges mutability invariants and media load/playback method parity sweep)
+
+- [x] Completed P1.107: TimeRanges mutability invariants and media load/playback method parity sweep
+  - added receiver-aware `HTMLMediaElement` `play` / `pause` / `load` builtins, backed `paused` with internal media state, and reset `currentTime` through `load()` so cached `buffered` / `seekable` / `played` wrappers stay live across method-driven transitions
+  - widened generic node own-shadow precedence to cover media methods, keeping direct property reads, extracted calls, `Object.defineProperty(...)`, and `delete` restoration aligned for `play` / `pause` / `load`
+  - added regressions for `TimeRanges` mutability/shadow-restore invariants and for video media-method parity across cached wrapper identity, incompatible receiver checks, and load/playback state updates
+
+- [x] Verify
+  - `cargo test --lib time_ranges_mutability_invariants_and_shadow_restore_work -- --nocapture`
+  - `cargo test --lib video_media_methods_update_cached_time_ranges_and_receiver_parity_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib` (`2404 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.108: HTMLMediaElement method reflective surface and TimeRanges object-surface residual sweep)
+
+- [x] Completed P1.108: HTMLMediaElement method reflective surface and TimeRanges object-surface residual sweep
+  - cached receiver-aware `HTMLMediaElement` `play` / `pause` / `load` callables on media nodes so raw getter identity, `.name` / `.length`, descriptor reads, own-key synthesis, and shadow/delete restoration stay stable across audio and video elements
+  - extended `Object.getOwnPropertyDescriptor(...)`, `Object.hasOwn(...)`, and own-key synthesis for media nodes so non-enumerable builtin method surface matches direct property lookup instead of constructing fresh callables on each read
+  - added regressions for `TimeRanges` expando/object-copy behavior and explicit prototype overrides so cached live wrappers retain object-surface parity while still reflecting updated media timeline state
+
+- [x] Verify
+  - `cargo test --lib audio_media_method_reflective_surface_and_stable_identity_work -- --nocapture`
+  - `cargo test --lib video_media_method_reflective_surface_shadow_and_restore_work -- --nocapture`
+  - `cargo test --lib time_ranges_expando_and_explicit_prototype_override_keep_object_surface_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib` (`2407 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.109: HTMLMediaElement method breadth and cached media wrapper residual sweep)
+
+- [x] Completed P1.109: HTMLMediaElement method breadth and cached media wrapper residual sweep
+  - added cached receiver-aware `canPlayType` and `fastSeek` callables to the `HTMLMediaElement` reflective own surface so raw getter identity, callable metadata, descriptor reads, and shadow/delete restoration align with `play` / `pause` / `load`
+  - implemented basic `canPlayType(...)` MIME probing and `fastSeek(...)` current-time mutation through shared media state so extracted calls and receiver validation work on both generic lookup and reflective APIs
+  - added regressions proving cached `TextTrackList` and `TimeRanges` wrappers keep expando state, explicit prototype overrides, and object-copy parity across `load()` resets and `src` transitions
+
+- [x] Verify
+  - `cargo test --lib audio_can_play_type_and_fast_seek_reflective_surface_work -- --nocapture`
+  - `cargo test --lib video_cached_media_wrappers_keep_expando_and_prototype_across_load_and_src_changes_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib` (`2409 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.110: HTMLMediaElement remaining network/source method surface and media collection residual sweep)
+
+- [x] Completed P1.110: HTMLMediaElement remaining network/source method surface and media collection residual sweep
+  - tightened `canPlayType(...)` MIME handling so malformed or unsupported type strings return the empty string while valid audio/video MIME shapes still report support, keeping extracted-call parity with the cached `HTMLMediaElement` method surface
+  - added regressions for source fallback and network-state transitions so `currentSrc`, `networkState`, and `readyState` stay aligned across `<source>` removal, direct `src` assignment, and `load()`-driven resets
+  - added regressions proving cached `TextTrackList` and `TimeRanges` wrappers keep reflective keys, object-copy behavior, and live identity across combined source removal, track insertion, and media state transitions
+
+- [x] Verify
+  - `cargo test --lib video_source_selection_network_state_and_can_play_type_edge_cases_work -- --nocapture`
+  - `cargo test --lib video_media_collections_reflective_surface_stays_live_across_source_and_track_mutations_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo test --lib` (`2411 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.111: HTMLMediaElement source-child mutation matrix and media wrapper callable residual sweep)
+
+- [x] Completed P1.111: HTMLMediaElement source-child mutation matrix and media wrapper callable residual sweep
+  - added regressions proving `currentSrc`, `networkState`, and `readyState` stay aligned when `<source>` children mutate in place, reorder, or switch between `src` and `srcset`-style inputs on an existing media element
+  - added regressions for cached `TextTrackList` and `TimeRanges` wrappers so extracted `item`, `values`, `Symbol.iterator`, `start`, `end`, and `length` getter paths remain live across track insertion, track removal, `load()` resets, and `src` transitions
+  - confirmed the existing runtime already satisfied this matrix, so no implementation change was required beyond locking the behavior with regression coverage
+
+- [x] Verify
+  - `cargo test --lib audio_source_child_attribute_mutation_updates_current_src_and_network_state_work -- --nocapture`
+  - `cargo test --lib video_media_wrapper_extracted_calls_and_iterators_stay_live_after_child_mutations_work -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib` (`2413 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.112: HTMLMediaElement source-attribute mutation breadth and media wrapper reflective residual sweep)
+
+- [x] Broadened media source mutation coverage beyond child insertion/removal
+  - `resolve_media_src(...)` now respects `<source type>` and `<source media>` filtering for `audio` / `video` before falling back to `src` / `srcset`, so `currentSrc`, `networkState`, and `readyState` stay aligned when existing source attributes are rewritten in-place
+
+- [x] Swept reflective and descriptor parity on cached media wrappers
+  - added regressions that keep `TextTrackList` and `TimeRanges` wrapper identity, prototype overrides, own descriptor state, and object-copy behavior stable across more complex source attribute mutations
+
+- [x] Verify
+  - `cargo test --lib audio_source_attribute_mutation_respects_type_media_and_srcset_work -- --nocapture`
+  - `cargo test --lib video_media_wrappers_keep_reflective_surface_across_source_attribute_mutations_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2415 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.113: HTMLMediaElement direct-src/source precedence matrix and cached media-wrapper object-copy breadth sweep)
+
+- [x] Broadened direct `src` versus nested `<source>` precedence coverage
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while direct media `src` is introduced, removed, restored, and flipped back to nested `<source>` candidates after those candidates are rewritten
+
+- [x] Swept object-copy and own-key breadth on cached media wrappers during precedence flips
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` identity, own markers, and `Object.assign(...)` / spread output stable while direct `src` repeatedly overrides and yields back to nested sources
+
+- [x] Verify
+  - `cargo test --lib audio_direct_src_precedence_flips_cleanly_against_nested_sources_work -- --nocapture`
+  - `cargo test --lib video_cached_media_wrappers_keep_object_copy_surface_across_direct_src_precedence_flips_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2417 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.114: HTMLMediaElement precedence churn shadow/delete and media-wrapper descriptor breadth sweep)
+
+- [x] Broadened shadow/delete parity while media source precedence keeps changing
+  - added regressions that keep `currentSrc`, `networkState`, and `readyState` aligned with explicit own accessor/data shadow, `Reflect.set(...)`, and `delete` while direct `src` and nested `<source>` candidates repeatedly replace one another
+
+- [x] Swept descriptor breadth on cached media wrappers under precedence churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` identity, prototype overrides, descriptors, `Object.hasOwn(...)`, `in`, and object-copy behavior stable while direct `src`, nested source rewrites, and `load()` keep switching the active candidate
+
+- [x] Verify
+  - `cargo test --lib audio_media_state_shadow_delete_parity_survives_source_precedence_churn_work -- --nocapture`
+  - `cargo test --lib video_cached_media_wrapper_descriptors_survive_precedence_churn_and_load_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2419 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.115: HTMLMediaElement source selection fallback matrix and media wrapper iterator/property-path residual sweep)
+
+- [x] Broadened source selection fallback coverage across more mixed candidate matrices
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while direct `src`, nested `<source src>`, nested `<source srcset>`, and `type` / `media` gating combine in longer fallback chains with repeated rewrites and removals
+
+- [x] Swept iterator and property-path residuals on cached media wrappers during fallback churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` extracted-call, iterator, bracket-access, and inherited property-path behavior live while source selection moves across direct and nested candidates
+
+- [x] Verify
+  - `cargo test --lib audio_source_selection_fallback_matrix_across_mixed_candidates_work -- --nocapture`
+  - `cargo test --lib video_media_wrapper_iterators_and_property_paths_stay_live_across_fallback_churn_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2421 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.116: HTMLMediaElement source normalization edge cases and media wrapper alias-path residual sweep)
+
+- [x] Broadened media source normalization coverage across more edge-case candidate inputs
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while direct and nested media sources use empty strings, whitespace-only values, relative-path rewrites, and mixed `src` / `srcset` normalization edge cases as precedence keeps shifting
+
+- [x] Swept alias-path residuals on cached media wrappers during source normalization churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` alias-path, grouped property access, reused callable-path, and iterator behavior live while source normalization and precedence changes repeatedly update the active media candidate
+
+- [x] Verify
+  - `cargo test --lib audio_source_normalization_edge_cases_keep_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib video_media_wrapper_alias_paths_stay_live_across_source_normalization_churn_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2423 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.117: HTMLMediaElement source reordering/disconnect matrix and media wrapper persistence sweep)
+
+- [x] Broadened media source selection coverage across reorder and disconnect churn
+  - added regressions that lock `currentSrc` across direct-`src` removal, `<source>` reordering, detach/reinsert cycles, and full source-node replacement so source precedence stays aligned while nested candidates keep moving underneath the media element
+
+- [x] Swept wrapper persistence residuals during source node churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` identity, extracted-call behavior, expando state, and explicit prototype overrides live while active source candidates are reordered, disconnected, reinserted, or replaced
+
+- [x] Verify
+  - `cargo test --lib audio_source_reorder_disconnect_and_replace_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib video_cached_media_wrappers_persist_across_source_reorder_disconnect_and_replace_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2425 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.118: HTMLMediaElement source clone/fragment insertion matrix and media wrapper callable reuse sweep)
+
+- [x] Broadened media source selection coverage across clone and fragment insertion churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while cloned `<source>` nodes are staged in `DocumentFragment`s, inserted in batches, detached, reused, and replaced, with direct `src` continuing to compete against nested candidates throughout the churn
+
+- [x] Swept remaining callable-reuse residuals on cached media wrappers during source insertion churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` raw-getter callables, iterator paths, extracted methods, and live receiver behavior stable while cloned or fragment-inserted source nodes repeatedly change the active media candidate
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_clone_and_fragment_insertion_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_callables_stay_live_across_source_clone_and_fragment_churn_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2427 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.119: HTMLMediaElement source adoption/reparent matrix and media wrapper receiver-path residual sweep)
+
+- [x] Broadened media source selection coverage across source adoption and cross-parent reparent churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while nested `<source>` candidates move between different media elements, are parked in temporary containers, and are reparented back while direct `src` keeps competing with nested candidates on each host
+
+- [x] Swept remaining receiver-path residuals on cached media wrappers during source adoption churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` alive through inherited alias objects, extracted methods, iterator paths, and descriptor-backed receiver calls while source nodes migrate across parents and repeatedly change the active media candidate
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_adoption_and_cross_parent_reparent_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_receiver_paths_stay_live_across_source_adoption_and_reparent_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2429 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.120: HTMLMediaElement source sibling/filter mutation matrix and media wrapper borrowed-call residual sweep)
+
+- [x] Broadened media source selection coverage across sibling and candidate-filter churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while non-`<source>` siblings, unsupported `type`, `media`-filtered candidates, and emptied `src` values are inserted or toggled around valid nested sources as direct `src` enters and leaves precedence
+
+- [x] Swept remaining borrowed-call residuals on cached media wrappers during candidate-filter churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` live through borrowed `call`/`apply`, prototype getter reuse, and grouped alias access while sibling structure and candidate filtering repeatedly change the active media source
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_sibling_and_filter_mutation_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_borrowed_calls_stay_live_across_source_sibling_and_filter_churn_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2431 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.121: HTMLMediaElement source batch-reset matrix and media wrapper descriptor/copy residual sweep)
+
+- [x] Broadened media source selection coverage across batch source-list reset churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while nested source lists are cleared, rebuilt in fragments, and reset in bulk through `replaceChildren(...)` as direct `src` repeatedly leaves and re-enters precedence
+
+- [x] Swept remaining descriptor and object-copy residuals on cached media wrappers during source-list resets
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` descriptor flags, `Reflect.ownKeys(...)`, `Object.assign(...)`, and object spread behavior stable while bulk source-list resets repeatedly change the active media source beneath cached wrappers
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_batch_reset_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_descriptor_and_copy_surface_stays_live_across_source_batch_resets_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2433 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.122: HTMLMediaElement source string-rebuild matrix and media wrapper expando/prototype residual sweep)
+
+- [x] Broadened media source selection coverage across string-based source-list rebuild churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while nested source lists are rebuilt with `innerHTML` and `insertAdjacentHTML`, including mixed string-driven candidate toggles as direct `src` repeatedly leaves and re-enters precedence
+
+- [x] Swept remaining expando and explicit prototype residuals on cached media wrappers during string-based source rebuilds
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` expando state, explicit prototype overrides, and object-surface parity live while string-based source rebuilds repeatedly swap the active media candidate beneath cached wrappers
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_string_rebuild_matrix_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_expando_and_prototype_stays_live_across_source_string_rebuilds_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2435 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Completed (P1.123: HTMLMediaElement mixed rebuild churn and media wrapper borrowed object-surface residual sweep)
+
+- [x] Broadened media source selection coverage across mixed string/DOM rebuild churn
+  - added regressions that lock `currentSrc`, `networkState`, and `readyState` while nested source lists are rebuilt through alternating `innerHTML`, `insertAdjacentHTML`, and explicit DOM node insertion/removal flows as direct `src` repeatedly leaves and re-enters precedence
+
+- [x] Swept remaining borrowed object-surface residuals on cached media wrappers during mixed rebuild churn
+  - added regressions that keep cached `TextTrackList` and `TimeRanges` live through borrowed descriptor reads, `Reflect.ownKeys(...)`, `Object.assign(...)`, object spread, and alias-object paths while mixed string/DOM rebuilds repeatedly swap the active media candidate beneath cached wrappers
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element::audio_source_mixed_rebuild_churn_keeps_current_src_aligned_work -- --nocapture`
+  - `cargo test --lib dom_video_element::video_media_wrapper_borrowed_object_surface_stays_live_across_mixed_rebuild_churn_work -- --nocapture`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2437 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.124: HTMLMediaElement source reset/direct-property interaction and media wrapper callable-identity residual sweep)
+
+- [ ] Broaden media source selection coverage across source reset and direct-property interaction churn
+  - verify `currentSrc`, `networkState`, and `readyState` stay aligned when bulk source rebuilds interleave with direct `src` assignments, attribute removal, and repeated `load()`/state resets while precedence keeps flipping between direct and nested candidates
+
+- [ ] Sweep remaining callable-identity residuals on cached media wrappers during source reset churn
+  - cover leftover raw-getter identity, extracted method reuse, and borrowed callable stability on `TextTrackList` and `TimeRanges` while reset-heavy media flows repeatedly rebuild source candidates beneath cached wrappers
 
 - [ ] Verify
-  - targeted media and track regressions
-  - relevant collection/prototype suites
+  - targeted reset/direct-interaction and media-wrapper callable-identity regressions
+  - relevant media suites
   - `cargo test --lib`
