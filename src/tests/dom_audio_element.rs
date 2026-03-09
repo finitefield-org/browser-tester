@@ -1827,3 +1827,70 @@ fn audio_source_mixed_rebuild_churn_keeps_current_src_aligned_work() -> Result<(
     )?;
     Ok(())
 }
+
+#[test]
+fn audio_direct_src_reset_and_load_churn_keeps_current_src_aligned_work() -> Result<()> {
+    let html = r#"
+        <audio id='player' src='/audio/direct.mp3'>
+          <source id='primary' src='/audio/primary.ogg' type='audio/ogg'>
+        </audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(player.networkState),
+              String(player.readyState)
+            ].join(':');
+          }
+
+          const before = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+
+          const afterRemovingDirect = snapshot();
+
+          player.src = '/audio/direct-2.mp3';
+          player.innerHTML = '<source id="bad" src="/audio/bad.txt" type="text/plain"><source id="rebuilt" src="/audio/rebuilt.mp3" type="audio/mpeg">';
+          player.load();
+
+          const afterResetWhileDirect = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+
+          const afterNestedRestore = snapshot();
+
+          player.src = '/audio/direct-3.mp3';
+          player.load();
+
+          const afterDirectAgain = snapshot();
+
+          player.removeAttribute('src');
+          document.getElementById('rebuilt').removeAttribute('src');
+          player.insertAdjacentHTML('beforeend', '<source id="fallback" src="/audio/fallback.wav" type="audio/wav">');
+          player.load();
+
+          const afterFallback = snapshot();
+
+          document.getElementById('result').textContent = [
+            before,
+            afterRemovingDirect,
+            afterResetWhileDirect,
+            afterNestedRestore,
+            afterDirectAgain,
+            afterFallback
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/audio/direct.mp3:1:0|https://app.local/audio/primary.ogg:1:0|https://app.local/audio/direct-2.mp3:1:0|https://app.local/audio/rebuilt.mp3:1:0|https://app.local/audio/direct-3.mp3:1:0|https://app.local/audio/fallback.wav:1:0",
+    )?;
+    Ok(())
+}

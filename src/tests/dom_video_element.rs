@@ -3066,3 +3066,89 @@ fn video_media_wrapper_borrowed_object_surface_stays_live_across_mixed_rebuild_c
     )?;
     Ok(())
 }
+
+#[test]
+fn video_cached_media_wrapper_callables_stay_stable_across_direct_src_reset_and_load_churn_work()
+-> Result<()> {
+    let html = r#"
+        <video id='player' src='/video/direct.mp4'>
+          <source id='primary' src='/video/primary.webm' type='video/webm'>
+          <track id='track-en' kind='captions' srclang='en' src='/tracks/en.vtt'>
+        </video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          player.currentTime = 2;
+
+          const tracks = player.textTracks;
+          const ranges = player.buffered;
+          const item = tracks.item;
+          const values = tracks.values;
+          const iterator = tracks[Symbol.iterator];
+          const start = ranges.start;
+          const end = ranges.end;
+          const lengthGetter = Object.getOwnPropertyDescriptor(TimeRanges.prototype, 'length').get;
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(tracks === player.textTracks),
+              String(ranges === player.buffered),
+              String(item === tracks.item),
+              String(values === tracks.values),
+              String(iterator === tracks[Symbol.iterator]),
+              String(start === ranges.start),
+              String(end === ranges.end),
+              item.call(tracks, 0).id,
+              Array.from(values.call(tracks)).map(track => track.id).join(','),
+              Array.from(iterator.call(tracks)).map(track => track.id).join(','),
+              String(lengthGetter.call(ranges)),
+              String(start.call(ranges, 0)),
+              String(end.call(ranges, 0))
+            ].join(':');
+          }
+
+          const before = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          player.currentTime = 3.5;
+
+          const afterRemovingDirect = snapshot();
+
+          player.src = '/video/direct-2.mp4';
+          player.innerHTML = '<source id="bad" src="/video/bad.txt" type="text/plain"><source id="rebuilt" src="/video/rebuilt.mp4" type="video/mp4"><track id="track-en" kind="captions" srclang="en" src="/tracks/en.vtt">';
+          player.load();
+          player.currentTime = 4.5;
+
+          const afterResetWhileDirect = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          player.currentTime = 5.5;
+
+          const afterNestedRestore = snapshot();
+
+          player.src = '/video/direct-3.mp4';
+          player.load();
+          player.currentTime = 6.5;
+
+          const afterDirectAgain = snapshot();
+
+          document.getElementById('result').textContent = [
+            before,
+            afterRemovingDirect,
+            afterResetWhileDirect,
+            afterNestedRestore,
+            afterDirectAgain
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/video/direct.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:2|https://app.local/video/primary.webm:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:3.5|https://app.local/video/direct-2.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:4.5|https://app.local/video/rebuilt.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:5.5|https://app.local/video/direct-3.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:6.5",
+    )?;
+    Ok(())
+}
